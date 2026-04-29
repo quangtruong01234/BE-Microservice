@@ -1,0 +1,33 @@
+### Test Order API - Simple Request
+POST http://localhost:3000/orders
+Content-Type: application/json
+
+{
+  "customerId": "user-001",
+  "items": [
+    { "sku": "SKU-123", "qty": 1, "price": 150000 }
+  ]
+}
+
+### Test Order API - Out of Stock (should fail)  
+POST http://localhost:3000/orders
+Content-Type: application/json
+
+{
+  "customerId": "user-002", 
+  "items": [
+    { "sku": "SKU-456", "qty": 1, "price": 95000 }
+  ]
+}
+
+### Test Order API - Multiple Items (should fail due to SKU-456)
+POST http://localhost:3000/orders
+Content-Type: application/json
+
+{
+  "customerId": "user-003",
+  "items": [
+    { "sku": "SKU-123", "qty": 2, "price": 150000 },
+    { "sku": "SKU-456", "qty": 1, "price": 95000 }
+  ]
+}

@@ -1,0 +1,400 @@
+### =======================================================
+### INVENTORY MODULE - REST API TESTS
+### =======================================================
+
+### Variables
+@baseUrl = http://localhost:3000/api/inventory
+@inventoryUrl = {{baseUrl}}/inventory
+@productUrl = http://localhost:3000/api/products
+@inventoryServiceUrl = http://localhost:3000/api/inventory
+
+### =======================================================
+### 1. INVENTORY SERVICE DIRECT APIs (Port 3002)
+### =======================================================
+
+### Health Check - Inventory Service
+GET {{inventoryServiceUrl}}
+
+### =======================================================
+### 2. INVENTORY CRUD via GATEWAY (Port 3000)
+### =======================================================
+
+### Create Inventory for Product 1
+POST {{baseUrl}}
+Content-Type: application/json
+
+{
+  "productId": 1,
+  "sku": "IPHONE15-BK-128",
+  "availableStock": 50,
+  "minimumStock": 10,
+  "location": "WAREHOUSE-A1"
+}
+
+### Create Inventory for Product 2  
+POST {{baseUrl}}
+Content-Type: application/json
+
+{
+  "productId": 2,
+  "sku": "GALAXY-S24-WH-256",
+  "availableStock": 30,
+  "minimumStock": 5,
+  "location": "WAREHOUSE-A2"
+}
+
+### Create Inventory for Product 3
+POST {{baseUrl}}
+Content-Type: application/json
+
+{
+  "productId": 3,
+  "sku": "MACBOOK-PRO-16-512",
+  "availableStock": 15,
+  "minimumStock": 3,
+  "location": "WAREHOUSE-B1"
+}
+
+### Create Low Stock Item for Testing
+POST {{inventoryUrl}}
+Content-Type: application/json
+
+{
+  "productId": 4,
+  "sku": "LOW-STOCK-TEST",
+  "availableStock": 2,
+  "minimumStock": 10,
+  "location": "WAREHOUSE-C1"
+}
+
+### =======================================================
+### 3. GET OPERATIONS
+### =======================================================
+
+### Get All Inventory Items
+GET {{inventoryUrl}}
+
+### Get Inventory by ID
+GET {{inventoryUrl}}/1
+
+### Get Inventory by Product ID
+GET {{inventoryUrl}}/product/1
+
+### Get Inventory by SKU
+GET {{inventoryUrl}}/sku/IPHONE15-BK-128
+
+### Get Low Stock Items
+GET {{inventoryUrl}}/low-stock
+
+### =======================================================
+### 4. STOCK OPERATIONS
+### =======================================================
+
+### Check Stock Availability - Sufficient Stock
+POST {{inventoryUrl}}/check-stock
+Content-Type: application/json
+
+{
+  "productId": 1,
+  "quantity": 5
+}
+
+### Check Stock Availability - Insufficient Stock
+POST {{inventoryUrl}}/check-stock
+Content-Type: application/json
+
+{
+  "productId": 1,
+  "quantity": 100
+}
+
+### Reserve Stock - Valid Request
+POST {{inventoryUrl}}/reserve-stock
+Content-Type: application/json
+
+{
+  "productId": 1,
+  "quantity": 10
+}
+
+### Check Inventory After Reservation
+GET {{inventoryUrl}}/product/1
+
+### Release Reserved Stock
+POST {{inventoryUrl}}/release-stock
+Content-Type: application/json
+
+{
+  "productId": 1,
+  "quantity": 5
+}
+
+### Check Inventory After Release
+GET {{inventoryUrl}}/product/1
+
+### =======================================================
+### 5. UPDATE OPERATIONS
+### =======================================================
+
+### Update Inventory Stock Levels
+PUT {{inventoryUrl}}/1
+Content-Type: application/json
+
+{
+  "availableStock": 75,
+  "minimumStock": 15,
+  "location": "WAREHOUSE-A1-UPDATED"
+}
+
+### Update Only Available Stock
+PUT {{inventoryUrl}}/2
+Content-Type: application/json
+
+{
+  "availableStock": 100
+}
+
+### =======================================================
+### 6. PRODUCT AGGREGATOR APIs
+### =======================================================
+
+### Get Product with Inventory by ID
+GET {{productUrl}}/1/with-inventory
+
+### Get All Products with Inventory
+GET {{productUrl}}/with-inventory/all
+
+### Get Multiple Products with Inventory
+POST {{productUrl}}/with-inventory/multiple
+Content-Type: application/json
+
+{
+  "productIds": [1, 2, 3]
+}
+
+### Check Product Stock via Product API
+GET {{productUrl}}/1/stock-check?quantity=5
+
+### Check Product Stock - Large Quantity
+GET {{productUrl}}/1/stock-check?quantity=50
+
+### =======================================================
+### 7. COMPARISON - Product vs Product+Inventory
+### =======================================================
+
+### Get Product Only (for comparison)
+GET {{productUrl}}/1
+
+### Get Product with Inventory (aggregated)
+GET {{productUrl}}/1/with-inventory
+
+### =======================================================
+### 8. ERROR SCENARIOS
+### =======================================================
+
+### Try to Create Duplicate Inventory
+POST {{inventoryUrl}}
+Content-Type: application/json
+
+{
+  "productId": 1,
+  "sku": "DUPLICATE-TEST",
+  "availableStock": 10
+}
+
+### Try to Reserve More Stock Than Available
+POST {{inventoryUrl}}/reserve-stock
+Content-Type: application/json
+
+{
+  "productId": 2,
+  "quantity": 1000
+}
+
+### Try to Get Non-existent Inventory
+GET {{inventoryUrl}}/999
+
+### Try to Get Non-existent Product Inventory
+GET {{inventoryUrl}}/product/999
+
+### Try to Check Stock for Non-existent Product
+POST {{inventoryUrl}}/check-stock
+Content-Type: application/json
+
+{
+  "productId": 999,
+  "quantity": 1
+}
+
+### Try to Release More Stock Than Reserved
+POST {{inventoryUrl}}/release-stock
+Content-Type: application/json
+
+{
+  "productId": 1,
+  "quantity": 1000
+}
+
+### =======================================================
+### 9. WORKFLOW SCENARIOS
+### =======================================================
+
+### Scenario A: Complete Order Flow
+### Step 1: Check product availability
+GET {{productUrl}}/1/with-inventory
+
+### Step 2: Check if enough stock for order
+POST {{inventoryUrl}}/check-stock
+Content-Type: application/json
+
+{
+  "productId": 1,
+  "quantity": 3
+}
+
+### Step 3: Reserve stock for order
+POST {{inventoryUrl}}/reserve-stock
+Content-Type: application/json
+
+{
+  "productId": 1,
+  "quantity": 3
+}
+
+### Step 4: Verify reservation
+GET {{inventoryUrl}}/product/1
+
+### Step 5: Complete order (or cancel and release)
+POST {{inventoryUrl}}/release-stock
+Content-Type: application/json
+
+{
+  "productId": 1,
+  "quantity": 3
+}
+
+### =======================================================
+### Scenario B: Bulk Stock Check
+### =======================================================
+
+### Check multiple products at once
+POST {{productUrl}}/with-inventory/multiple
+Content-Type: application/json
+
+{
+  "productIds": [1, 2, 3, 4]
+}
+
+### =======================================================
+### Scenario C: Low Stock Monitoring
+### =======================================================
+
+### Get all low stock items
+GET {{inventoryUrl}}/low-stock
+
+### Update stock for low stock item
+PUT {{inventoryUrl}}/4
+Content-Type: application/json
+
+{
+  "availableStock": 20,
+  "minimumStock": 10
+}
+
+### Verify low stock list is updated
+GET {{inventoryUrl}}/low-stock
+
+### =======================================================
+### 10. DELETE OPERATIONS
+### =======================================================
+
+### Soft Delete Inventory (sets isActive = false)
+DELETE {{inventoryUrl}}/4
+
+### Verify item is not in active list
+GET {{inventoryUrl}}
+
+### Try to get deleted item
+GET {{inventoryUrl}}/4
+
+### =======================================================
+### 11. VALIDATION TESTS
+### =======================================================
+
+### Invalid Request - Missing Required Fields
+POST {{inventoryUrl}}
+Content-Type: application/json
+
+{
+  "availableStock": 10
+}
+
+### Invalid Request - Negative Stock
+POST {{inventoryUrl}}
+Content-Type: application/json
+
+{
+  "productId": 5,
+  "sku": "INVALID-STOCK",
+  "availableStock": -10,
+  "minimumStock": 5
+}
+
+### Invalid Request - Empty SKU
+POST {{inventoryUrl}}
+Content-Type: application/json
+
+{
+  "productId": 6,
+  "sku": "",
+  "availableStock": 10,
+  "minimumStock": 5
+}
+
+### =======================================================
+### 12. PERFORMANCE TESTS
+### =======================================================
+
+### Batch Create Multiple Inventories
+POST {{inventoryUrl}}
+Content-Type: application/json
+
+{
+  "productId": 10,
+  "sku": "PERF-TEST-001",
+  "availableStock": 100,
+  "minimumStock": 20,
+  "location": "PERF-WAREHOUSE"
+}
+
+###
+POST {{inventoryUrl}}
+Content-Type: application/json
+
+{
+  "productId": 11,
+  "sku": "PERF-TEST-002",
+  "availableStock": 200,
+  "minimumStock": 30,
+  "location": "PERF-WAREHOUSE"
+}
+
+###
+POST {{inventoryUrl}}
+Content-Type: application/json
+
+{
+  "productId": 12,
+  "sku": "PERF-TEST-003",
+  "availableStock": 150,
+  "minimumStock": 25,
+  "location": "PERF-WAREHOUSE"
+}
+
+### Test Aggregator Performance with Multiple Products
+POST {{productUrl}}/with-inventory/multiple
+Content-Type: application/json
+
+{
+  "productIds": [1, 2, 3, 10, 11, 12]
+}

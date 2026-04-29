@@ -1,0 +1,48 @@
+import { Injectable, Logger } from "@nestjs/common";
+import { InjectRepository } from "@nestjs/typeorm";
+import { User } from "./entity/user.entity";
+import { Repository } from "typeorm";
+import { RegisterUserDto } from "./dto/register-user.dto";
+import { LoginUserDto } from "./dto/login-user.dto";
+
+@Injectable()
+export class UserService {
+  private readonly logger = new Logger(UserService.name);
+
+  constructor(
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
+  ) {}
+
+  async getAllUsers(): Promise<User[]> {
+    this.logger.log("Fetching all users");
+    return await this.userRepository.find();
+  }
+  async register(dto: RegisterUserDto): Promise<User> {
+    this.logger.log(`Register user: ${dto.username}`);
+    const user = this.userRepository.create({
+      username: dto.username,
+      email: dto.email,
+      password: dto.password,
+    });
+    return await this.userRepository.save(user);
+  }
+
+  async login(dto: LoginUserDto): Promise<User | null> {
+    this.logger.log(`Login user: ${dto.username}`);
+    const user = await this.userRepository.findOne({
+      where: { username: dto.username, password: dto.password },
+    });
+    return user || null;
+  }
+
+  async getInfo(userId: number): Promise<User | null> {
+    this.logger.log(`Get info for userId: ${userId}`);
+    return await this.userRepository.findOne({ where: { id: userId } });
+  }
+
+  getServiceInfo(): string {
+    this.logger.log("getServiceInfo called");
+    return "User Service is up and running";
+  }
+}

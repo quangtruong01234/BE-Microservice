@@ -1,0 +1,570 @@
+### ========================================
+### PRODUCT API TESTS - TCP Microservice via Gateway  
+### ========================================
+### Gateway URL - Sẽ forward requests đến Product microservice qua TCP
+@baseUrl = http://localhost:3000/api
+@productId = 1
+@categoryId = 1 
+@brandId = 1
+
+### ========================================
+### 1. CREATE BRANDS
+### ========================================
+
+### Create Apple Brand
+POST {{baseUrl}}/products/brands
+Content-Type: application/json
+
+{
+  "name": "Apple",
+  "description": "Technology products from Apple Inc."
+}
+
+### Create Samsung Brand
+POST {{baseUrl}}/products/brands
+Content-Type: application/json
+
+{
+  "name": "Samsung", 
+  "description": "Electronics and mobile devices"
+}
+
+### Create Nike Brand  
+POST {{baseUrl}}/products/brands
+Content-Type: application/json
+
+{
+  "name": "Nike",
+  "description": "Sports apparel and footwear"
+}
+
+### ========================================
+### 2. CREATE CATEGORIES
+### ========================================
+
+### Create Electronics Category
+POST {{baseUrl}}/products/categories
+Content-Type: application/json
+
+{
+  "name": "Electronics",
+  "description": "Electronic devices and gadgets"
+}
+
+### Create Fashion Category
+POST {{baseUrl}}/products/categories
+Content-Type: application/json
+
+{
+  "name": "Fashion", 
+  "description": "Clothing and accessories"
+}
+
+### Create Books Category
+POST {{baseUrl}}/products/categories
+Content-Type: application/json
+
+{
+  "name": "Books",
+  "description": "Books and educational materials"
+}
+
+### ========================================
+### 3. GET ALL BRANDS
+### ========================================
+GET {{baseUrl}}/products/brands
+
+### ========================================
+### 4. GET ALL CATEGORIES  
+### ========================================
+GET {{baseUrl}}/products/categories
+
+### ========================================
+### 5. CREATE PRODUCTS
+### ========================================
+
+### Create iPhone 14 Pro Max
+POST {{baseUrl}}/products
+Content-Type: application/json
+
+{
+  "name": "iPhone 14 Pro Max",
+  "description": "Latest iPhone with A16 Bionic chip and ProRAW camera",
+  "price": 30000000,
+  "stockQuantity": 25,
+  "sku": "IPHONE14PROMAX",
+  "brandId": 1,
+  "categoryId": 1,
+  "userId": 1,
+  "imageUrl": "https://images.unsplash.com/photo-1592750475338-74b7b21085ab?auto=format&fit=crop&q=80&w=600",
+  "likesCount": 45,
+  "commentsCount": 12,
+  "sharesCount": 8,
+  "viewCount": 850,
+  "isFeatured": true,
+  "isTrending": true,
+  "condition": "new",
+  "sellerNotes": "Sản phẩm chính hãng Apple, bảo hành 12 tháng tại các trung tâm bảo hành Apple Việt Nam. Tặng kèm ốp lưng và dán cường lực.",
+  "rating": 4.8,
+  "ratingCount": 89
+}
+
+### Create Samsung Galaxy Ultra
+POST {{baseUrl}}/products
+Content-Type: application/json
+
+{
+  "name": "Samsung Galaxy Ultra",
+  "description": "Flagship Samsung với S Pen và camera zoom 100x", 
+  "price": 28000000,
+  "stockQuantity": 18,
+  "sku": "GALAXY_ULTRA", 
+  "brandId": 2,
+  "categoryId": 1,
+  "userId": 2,
+  "imageUrl": "https://images.unsplash.com/photo-1610945265064-0e34e5519bbf?auto=format&fit=crop&q=80&w=600",
+  "likesCount": 67,
+  "commentsCount": 23,
+  "sharesCount": 15,
+  "viewCount": 1200,
+  "isFeatured": true,
+  "isTrending": false,
+  "condition": "new",
+  "sellerNotes": "Điện thoại Samsung chính hãng, bảo hành 12 tháng. Miễn phí vệ sinh máy và thay kính cường lực trong suốt thời gian bảo hành.",
+  "rating": 4.6,
+  "ratingCount": 156
+}
+
+### Create Nike Air Force 1
+POST {{baseUrl}}/products
+Content-Type: application/json
+
+{
+  "name": "Nike Air Force 1 '07",
+  "description": "Giày thể thao cổ điển Nike với thiết kế iconic và thoải mái",
+  "price": 2990000, 
+  "stockQuantity": 85,
+  "sku": "NIKE_AF1_07",
+  "brandId": 3,
+  "categoryId": 2,
+  "userId": 3,
+  "imageUrl": "https://images.unsplash.com/photo-1549298916-b41d501d3772?auto=format&fit=crop&q=80&w=600",
+  "likesCount": 234,
+  "commentsCount": 89,
+  "sharesCount": 67,
+  "viewCount": 3400,
+  "isFeatured": false,
+  "isTrending": true,
+  "condition": "new",
+  "sellerNotes": "Giày Nike chính hãng size đầy đủ từ 36-45. Có hộp và giấy tờ đầy đủ. Đổi size trong 7 ngày nếu không vừa.",
+  "rating": 4.5,
+  "ratingCount": 567
+}
+
+### Create Nike Air Jordan 1
+POST {{baseUrl}}/products
+Content-Type: application/json
+
+{
+  "name": "Air Jordan 1 Retro High",
+  "description": "Giày bóng rổ huyền thoại Jordan với phối màu Chicago Bulls",
+  "price": 4500000, 
+  "stockQuantity": 25,
+  "sku": "JORDAN_1_HIGH",
+  "brandId": 3,
+  "categoryId": 2,
+  "userId": 3,
+  "imageUrl": "https://images.unsplash.com/photo-1556906781-9a412961c28c?auto=format&fit=crop&q=80&w=600",
+  "likesCount": 445,
+  "commentsCount": 156,
+  "sharesCount": 89,
+  "viewCount": 5600,
+  "isFeatured": true,
+  "isTrending": true,
+  "condition": "new",
+  "sellerNotes": "Limited Edition Air Jordan 1 với colorway Chicago. Chỉ còn size giới hạn. Bảo hành chính hãng Nike 6 tháng.",
+  "rating": 4.9,
+  "ratingCount": 234
+}
+
+### Create MacBook Air M2
+POST {{baseUrl}}/products  
+Content-Type: application/json
+
+{
+  "name": "MacBook Air M2",
+  "description": "Laptop siêu mỏng với chip M2 mạnh mẽ",
+  "price": 32000000,
+  "stockQuantity": 12, 
+  "sku": "MACBOOK_AIR_M2",
+  "brandId": 1,
+  "categoryId": 1,
+  "userId": 1,
+  "imageUrl": "https://images.unsplash.com/photo-1541807084-5c52b6b3adef?auto=format&fit=crop&q=80&w=600",
+  "likesCount": 89,
+  "commentsCount": 34,
+  "sharesCount": 21,
+  "viewCount": 950,
+  "isFeatured": true,
+  "isTrending": true,
+  "condition": "new",
+  "sellerNotes": "MacBook Air M2 chính hãng Apple Việt Nam. Bảo hành 12 tháng + AppleCare. Tặng túi đựng laptop cao cấp và chuột không dây.",
+  "rating": 4.9,
+  "ratingCount": 203
+}
+
+### Create AirPods Pro 2
+POST {{baseUrl}}/products
+Content-Type: application/json
+
+{
+  "name": "AirPods Pro 2",
+  "description": "Tai nghe không dây với chống ồn chủ động",
+  "price": 6500000,
+  "stockQuantity": 45,
+  "sku": "AIRPODS_PRO2", 
+  "brandId": 1,
+  "categoryId": 1,
+  "userId": 1,
+  "imageUrl": "https://images.unsplash.com/photo-1606841837239-c5a1a4a07af7?auto=format&fit=crop&q=80&w=600",
+  "likesCount": 156,
+  "commentsCount": 67,
+  "sharesCount": 43,
+  "viewCount": 2100,
+  "isFeatured": false,
+  "isTrending": true,
+  "condition": "new",
+  "sellerNotes": "AirPods Pro thế hệ 2 với chip H2 mới. Thời lượng pin lên đến 30 giờ. Chống ồn tốt nhất trong phân khúc.",
+  "rating": 4.7,
+  "ratingCount": 445
+}
+
+### Create iPad Pro 12.9"
+POST {{baseUrl}}/products
+Content-Type: application/json
+
+{
+  "name": "iPad Pro 12.9\"",
+  "description": "Máy tính bảng chuyên nghiệp với chip M2",
+  "price": 26000000,
+  "stockQuantity": 8,
+  "sku": "IPAD_PRO_129", 
+  "brandId": 1,
+  "categoryId": 1,
+  "userId": 1,
+  "imageUrl": "https://images.unsplash.com/photo-1544244015-0df4b3ffc6b0?auto=format&fit=crop&q=80&w=600",
+  "likesCount": 78,
+  "commentsCount": 29,
+  "sharesCount": 18,
+  "viewCount": 720,
+  "isFeatured": true,
+  "isTrending": false,
+  "condition": "new",
+  "sellerNotes": "iPad Pro 12.9 inch với màn hình Liquid Retina XDR. Hỗ trợ Apple Pencil thế hệ 2 và Magic Keyboard. Lý tưởng cho design và video editing.",
+  "rating": 4.8,
+  "ratingCount": 167
+}
+
+### Create Gaming Laptop - ASUS ROG
+POST {{baseUrl}}/products
+Content-Type: application/json
+
+{
+  "name": "ASUS ROG Strix G15",
+  "description": "Gaming laptop với RTX 4060, AMD Ryzen 7 và màn hình 144Hz",
+  "price": 35000000,
+  "stockQuantity": 15,
+  "sku": "ASUS_ROG_G15", 
+  "categoryId": 1,
+  "userId": 4,
+  "imageUrl": "https://images.unsplash.com/photo-1593640408182-31c70c8268f5?auto=format&fit=crop&q=80&w=600",
+  "likesCount": 123,
+  "commentsCount": 45,
+  "sharesCount": 23,
+  "viewCount": 1800,
+  "isFeatured": true,
+  "isTrending": false,
+  "condition": "new",
+  "sellerNotes": "Laptop gaming ASUS ROG chính hãng. Bảo hành 2 năm toàn cầu. Tặng kèm chuột gaming và mousepad.",
+  "rating": 4.6,
+  "ratingCount": 89
+}
+
+### Create Mechanical Gaming Keyboard
+POST {{baseUrl}}/products
+Content-Type: application/json
+
+{
+  "name": "Logitech G Pro X Mechanical",
+  "description": "Bàn phím cơ gaming với switch GX Blue, RGB và thiết kế tenkeyless",
+  "price": 3200000,
+  "stockQuantity": 60,
+  "sku": "LOGI_GPROX_KB", 
+  "categoryId": 1,
+  "userId": 5,
+  "imageUrl": "https://images.unsplash.com/photo-1595225476474-87563907a212?auto=format&fit=crop&q=80&w=600",
+  "likesCount": 89,
+  "commentsCount": 34,
+  "sharesCount": 12,
+  "viewCount": 950,
+  "isFeatured": false,
+  "isTrending": true,
+  "condition": "new",
+  "sellerNotes": "Bàn phím cơ Logitech G Pro X chính hãng. Có thể thay switch. Bảo hành 2 năm. Free ship toàn quốc.",
+  "rating": 4.7,
+  "ratingCount": 156
+}
+
+### ========================================
+### 6. GET ALL PRODUCTS  
+### ========================================
+
+### Get all products with default pagination
+GET {{baseUrl}}/products
+
+### Get products with custom pagination and sorting
+GET {{baseUrl}}/products?page=1&limit=5&sortBy=price&sortOrder=ASC
+
+### ========================================
+### 7. SEARCH AND FILTER PRODUCTS
+### ========================================
+
+### Search products by name/description/sku
+GET {{baseUrl}}/products/search?search=iPhone
+
+### Search with multiple keywords
+GET {{baseUrl}}/products/search?search=Samsung Galaxy  
+
+### Filter by price range
+GET {{baseUrl}}/products?minPrice=1000000&maxPrice=30000000
+
+### Filter by active status
+GET {{baseUrl}}/products?isActive=true
+
+### Combined filters
+GET {{baseUrl}}/products?categoryId=1&minPrice=20000000&maxPrice=60000000&sortBy=price&sortOrder=ASC
+
+### ========================================
+### 8. GET SPECIFIC PRODUCTS
+### ========================================
+
+### Get product by ID
+GET {{baseUrl}}/products/{{productId}}
+
+### Get product by SKU  
+GET {{baseUrl}}/products/sku/IPHONE15PRO
+
+### Get another product by SKU
+GET {{baseUrl}}/products/sku/GALAXYS24
+
+### ========================================
+### 9. GET PRODUCTS BY CATEGORY/BRAND
+### ========================================
+
+### Get products by category (Electronics)
+GET {{baseUrl}}/products/category/{{categoryId}}
+
+### Get products by category with pagination
+GET {{baseUrl}}/products/category/{{categoryId}}?page=1&limit=3
+
+### Get products by brand (Apple)
+GET {{baseUrl}}/products/brand/{{brandId}}
+
+### Get products by brand with filters
+GET {{baseUrl}}/products/brand/{{brandId}}?minPrice=20000000&sortBy=price&sortOrder=DESC
+
+### ========================================
+### 10. UPDATE PRODUCT
+### ========================================
+
+### Update product basic info
+PATCH {{baseUrl}}/products/{{productId}}
+Content-Type: application/json
+
+{
+  "name": "iPhone 14 Pro Max - Special Edition",
+  "price": 29500000,
+  "stockQuantity": 30
+}
+
+### Update product social metrics
+PATCH {{baseUrl}}/products/{{productId}}  
+Content-Type: application/json
+
+{
+  "likesCount": 150,
+  "commentsCount": 45,
+  "sharesCount": 23,
+  "viewCount": 2500,
+  "isFeatured": true,
+  "isTrending": true
+}
+
+### Update product rating and seller notes
+PATCH {{baseUrl}}/products/{{productId}}  
+Content-Type: application/json
+
+{
+  "rating": 4.9,
+  "ratingCount": 125,
+  "sellerNotes": "Cập nhật: Sản phẩm đã được nâng cấp với phụ kiện cao cấp hơn. Bảo hành mở rộng thêm 6 tháng.",
+  "condition": "new"
+}
+
+### ========================================
+### 11. DELETE PRODUCT
+### ========================================
+
+### Delete product by ID (use carefully!)
+DELETE {{baseUrl}}/products/{{productId}}
+
+### ========================================
+### 12. BRAND MANAGEMENT
+### ========================================
+
+### Get all brands
+GET {{baseUrl}}/brands
+
+### Get brand by ID  
+GET {{baseUrl}}/products/brands/{{brandId}}
+
+### Update brand
+PATCH {{baseUrl}}/products/brands/{{brandId}}
+Content-Type: application/json
+
+{
+  "name": "Apple Inc.",
+  "description": "Updated: American multinational technology company"
+}
+
+### Delete brand
+DELETE {{baseUrl}}/products/brands/{{brandId}}
+
+### ========================================
+### 13. CATEGORY MANAGEMENT  
+### ========================================
+
+### Get all categories  
+GET {{baseUrl}}/products/categories
+
+### Get category by ID
+GET {{baseUrl}}/products/categories/{{categoryId}}
+
+### Update category
+PATCH {{baseUrl}}/products/categories/{{categoryId}}
+Content-Type: application/json
+
+{
+  "name": "Consumer Electronics", 
+  "description": "Updated: Electronic devices for consumer use"
+}
+
+### Delete category
+DELETE {{baseUrl}}/products/categories/{{categoryId}}
+
+### ========================================
+### 14. SOCIAL FEATURES TESTS
+### ========================================
+
+### Get trending products
+GET {{baseUrl}}/products?isTrending=true&sortBy=viewCount&sortOrder=DESC
+
+### Get featured products
+GET {{baseUrl}}/products?isFeatured=true&sortBy=likesCount&sortOrder=DESC
+
+### Get products with high rating
+GET {{baseUrl}}/products?minRating=4.5&sortBy=rating&sortOrder=DESC
+
+### Search products by condition
+GET {{baseUrl}}/products?condition=new
+
+### Get most liked products
+GET {{baseUrl}}/products?sortBy=likesCount&sortOrder=DESC&limit=5
+
+### Get most viewed products
+GET {{baseUrl}}/products?sortBy=viewCount&sortOrder=DESC&limit=5
+
+### ========================================
+### 15. ERROR TEST CASES
+### ========================================
+
+### Test duplicate SKU (should fail)
+POST {{baseUrl}}/products
+Content-Type: application/json
+
+{
+  "name": "Duplicate iPhone",
+  "description": "This should fail due to duplicate SKU",
+  "price": 25990000,
+  "stockQuantity": 10,
+  "sku": "IPHONE14PROMAX",
+  "categoryId": 1,
+  "userId": 1
+}
+
+### Test invalid category (should fail)
+POST {{baseUrl}}/products
+Content-Type: application/json
+
+{
+  "name": "Test Invalid Category",
+  "description": "This should fail due to invalid category",
+  "price": 100000,
+  "stockQuantity": 1,
+  "sku": "TEST-INVALID-CATEGORY",
+  "categoryId": 99999,
+  "userId": 1
+}
+
+### Get non-existent product (should fail)
+GET {{baseUrl}}/products/99999
+
+### Get non-existent SKU (should fail)
+GET {{baseUrl}}/products/sku/NON-EXISTENT-SKU
+
+### ========================================
+### USAGE NOTES:
+### 
+### Replace {{variableName}} with actual values from responses:
+### - {{productId}}: Use ID from CREATE PRODUCT response
+### - {{brandId}}: Use ID from CREATE BRAND response  
+### - {{categoryId}}: Use ID from CREATE CATEGORY response
+### 
+### New Social Commerce Fields:
+### - likesCount, commentsCount, sharesCount, viewCount: Social metrics
+### - isFeatured, isTrending: Product status flags
+### - condition: 'new', 'used', 'refurbished'
+### - sellerNotes: Detailed seller information
+### - rating: 0.00 to 5.00, ratingCount: Number of ratings
+### 
+### Recommended testing order:
+### 1. Create brands and categories first
+### 2. Create products with enhanced social data
+### 3. Test social feature endpoints (trending, featured, ratings)
+### 4. Test UPDATE operations with social metrics
+### 5. Test search/filter by social features
+### 6. Test error cases
+### 7. Clean up with DELETE operations
+### 
+### Image URLs use Unsplash for real product photos
+### All prices in VND (Vietnamese Dong)
+
+# ============================================================================
+# USER INFORMATION INTEGRATION TESTS
+# ============================================================================
+
+### Get product by ID with user information
+GET {{baseUrl}}/products/1
+Content-Type: application/json
+# Expected: Product should include user object with {id, name, email, avatar}
+
+### Get all products with user information
+GET {{baseUrl}}/products
+Content-Type: application/json
+# Expected: Each product should include user information if userId exists
+
+### Get products with inventory and user info
+GET {{baseUrl}}/products/with-inventory/all
+Content-Type: application/json
+# Expected: Products with inventory data + user information
+### ========================================

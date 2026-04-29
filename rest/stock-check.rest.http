@@ -1,0 +1,164 @@
+### Test Inventory Service HTTP Endpoints
+
+# Get all inventory (for reference)
+GET http://localhost:3002/inventory/all
+
+###
+
+# Check single product stock (GET method)
+GET http://localhost:3002/inventory/check-stock?productId=PROD001&quantity=5
+
+###
+
+# Check single product stock (POST method)  
+POST http://localhost:3002/inventory/check-stock
+Content-Type: application/json
+
+{
+  "productId": "PROD001",
+  "quantity": 5
+}
+
+###
+
+# Check multiple products stock
+POST http://localhost:3002/inventory/check-multiple-stock
+Content-Type: application/json
+
+[
+  {"productId": "PROD001", "quantity": 2},
+  {"productId": "PROD002", "quantity": 3},
+  {"productId": "PROD006", "quantity": 10}
+]
+
+###
+
+# Test with out-of-stock product
+GET http://localhost:3002/inventory/check-stock?productId=PROD007&quantity=1
+
+###
+
+# Test with non-existent product
+GET http://localhost:3002/inventory/check-stock?productId=NONEXIST&quantity=1
+
+###
+
+### Test Orders Service - HTTP Stock Checking
+
+# Create order using HTTP stock checking (should succeed)
+POST http://localhost:3001/orders/create-http
+Content-Type: application/json
+
+{
+  "customerId": "CUST001",
+  "items": [
+    {"productId": "PROD001", "qty": 2, "price": 999.99},
+    {"productId": "PROD002", "qty": 1, "price": 799.99}
+  ]
+}
+
+###
+
+# Create order using HTTP stock checking (should fail - out of stock)
+POST http://localhost:3001/orders/create-http
+Content-Type: application/json
+
+{
+  "customerId": "CUST002", 
+  "items": [
+    {"productId": "PROD007", "qty": 1, "price": 1299.99}
+  ]
+}
+
+###
+
+### Test Orders Service - TCP Stock Checking
+
+# Create order using TCP stock checking (should succeed)
+POST http://localhost:3001/orders/create-tcp
+Content-Type: application/json
+
+{
+  "customerId": "CUST003",
+  "items": [
+    {"productId": "PROD003", "qty": 2, "price": 1499.99},
+    {"productId": "PROD004", "qty": 1, "price": 299.99}
+  ]
+}
+
+###
+
+# Create order using TCP stock checking (should fail - insufficient stock)
+POST http://localhost:3001/orders/create-tcp
+Content-Type: application/json
+
+{
+  "customerId": "CUST004",
+  "items": [
+    {"productId": "PROD006", "qty": 10, "price": 49.99}
+  ]
+}
+
+###
+
+### Benchmark Test - Small Order
+
+# HTTP Benchmark Test
+POST http://localhost:3001/orders/create-http
+Content-Type: application/json
+
+{
+  "customerId": "BENCH001",
+  "items": [
+    {"productId": "PROD001", "qty": 1, "price": 999.99}
+  ]
+}
+
+###
+
+# TCP Benchmark Test  
+POST http://localhost:3001/orders/create-tcp
+Content-Type: application/json
+
+{
+  "customerId": "BENCH002",
+  "items": [
+    {"productId": "PROD001", "qty": 1, "price": 999.99}
+  ]
+}
+
+###
+
+### Benchmark Test - Large Order (Multiple Products)
+
+# HTTP Benchmark Test - Multiple Products
+POST http://localhost:3001/orders/create-http
+Content-Type: application/json
+
+{
+  "customerId": "BENCH003",
+  "items": [
+    {"productId": "PROD001", "qty": 2, "price": 999.99},
+    {"productId": "PROD002", "qty": 1, "price": 799.99},
+    {"productId": "PROD003", "qty": 1, "price": 1499.99},
+    {"productId": "PROD004", "qty": 2, "price": 299.99},
+    {"productId": "PROD005", "qty": 5, "price": 29.99}
+  ]
+}
+
+###
+
+# TCP Benchmark Test - Multiple Products
+POST http://localhost:3001/orders/create-tcp
+Content-Type: application/json
+
+{
+  "customerId": "BENCH004",
+  "items": [
+    {"productId": "PROD001", "qty": 2, "price": 999.99},
+    {"productId": "PROD002", "qty": 1, "price": 799.99},
+    {"productId": "PROD003", "qty": 1, "price": 1499.99},
+    {"productId": "PROD004", "qty": 2, "price": 299.99},
+    {"productId": "PROD005", "qty": 5, "price": 29.99}
+  ]
+}

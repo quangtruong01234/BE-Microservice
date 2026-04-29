@@ -1,0 +1,38 @@
+version: '3.8'
+services:
+  mysql_orders:
+    image: mysql:8.0
+    container_name: mysql_orders
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root1234
+      MYSQL_DATABASE: orders_db
+      MYSQL_USER: appuser
+      MYSQL_PASSWORD: apppass
+    ports:
+      - '3306:3306'
+    volumes:
+      - ./local/docker-init/mysql:/docker-entrypoint-initdb.d:ro
+
+  postgres_inventory:
+    image: postgres:15
+    container_name: postgres_inventory
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: root1234
+      POSTGRES_DB: inventory_db
+      POSTGRES_USER: root
+    ports:
+      - '5432:5432'
+    volumes:
+      - ./local/docker-init/postgres:/docker-entrypoint-initdb.d:ro
+
+  adminer:
+    image: adminer
+    restart: unless-stopped
+    ports:
+      - '8080:8080'
+
+networks:
+  default:
+    name: ecommerce_net

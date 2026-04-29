@@ -1,0 +1,16 @@
+# ========== CONFIGURATION ==========
+@baseUrl = http://localhost:3000/api
+@contentType = application/json
+
+
+### Place Order
+POST {{baseUrl}}/orders
+Content-Type: {{contentType}}
+
+{
+  "userId": 1,
+  "items": [
+    { "product_id": 2, "quantity": 1, "price": 100 }
+  ],
+  "status": "pending"
+}

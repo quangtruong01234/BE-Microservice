@@ -1,0 +1,133 @@
+### REST API để test tạo products với userId
+@baseUrl = http://localhost:3000
+
+### Create sample products with different users
+
+### Product 1 - iPhone 15 Pro (User 1)
+POST {{baseUrl}}/products
+Content-Type: application/json
+
+{
+  "name": "iPhone 15 Pro 256GB",
+  "description": "iPhone 15 Pro mới nhất với chip A17 Pro, camera 48MP và thiết kế titan cao cấp. Bảo hành chính hãng 12 tháng.",
+  "price": 28990000,
+  "stockQuantity": 25,
+  "sku": "IPHONE-15-PRO-256GB",
+  "categoryId": 1,
+  "brandId": 1,
+  "userId": 1,
+  "imageUrl": "https://images.unsplash.com/photo-1592750475338-74b7b21085ab?w=500",
+  "condition": "new",
+  "isFeatured": true,
+  "isTrending": true,
+  "rating": 4.8,
+  "ratingCount": 156,
+  "likesCount": 89,
+  "commentsCount": 23,
+  "sharesCount": 12,
+  "viewCount": 450,
+  "sellerNotes": "Hàng chính hãng VN/A, nguyên seal, bảo hành 12 tháng tại TTBH Apple"
+}
+
+### Product 2 - MacBook Air M2 (User 2)  
+POST {{baseUrl}}/products
+Content-Type: application/json
+
+{
+  "name": "MacBook Air M2 2022 13inch 256GB",
+  "description": "MacBook Air với chip M2 mạnh mẽ, thiết kế siêu mỏng nhẹ chỉ 1.24kg. Pin 18 giờ, màn hình Liquid Retina 13.6 inch.",
+  "price": 24990000,
+  "stockQuantity": 15,
+  "sku": "MACBOOK-AIR-M2-256GB",
+  "categoryId": 1,
+  "brandId": 1,
+  "userId": 2,
+  "imageUrl": "https://images.unsplash.com/photo-1541807084-5c52b6b3adef?w=500",
+  "condition": "new",
+  "isFeatured": true,
+  "rating": 4.7,
+  "ratingCount": 89,
+  "likesCount": 67,
+  "commentsCount": 18,
+  "sharesCount": 8,
+  "viewCount": 320,
+  "sellerNotes": "Bao test 7 ngày đổi trả, hỗ trợ trả góp 0% qua thẻ tín dụng"
+}
+
+### Product 3 - Samsung Galaxy S24 Ultra (User 3)
+POST {{baseUrl}}/products  
+Content-Type: application/json
+
+{
+  "name": "Samsung Galaxy S24 Ultra 512GB",
+  "description": "Galaxy S24 Ultra với camera zoom 200MP, S Pen tích hợp, màn hình Dynamic AMOLED 6.8 inch 120Hz cực nét.",
+  "price": 31990000,
+  "stockQuantity": 20,
+  "sku": "GALAXY-S24-ULTRA-512GB",
+  "categoryId": 1,
+  "brandId": 2,
+  "userId": 3,
+  "imageUrl": "https://images.unsplash.com/photo-1610945415295-d9bbf067e59c?w=500",
+  "condition": "new",
+  "isTrending": true,
+  "rating": 4.6,
+  "ratingCount": 134,
+  "likesCount": 78,
+  "commentsCount": 31,
+  "sharesCount": 15,
+  "viewCount": 680,
+  "sellerNotes": "Tặng kèm ốp lưng + dán cường lực, bảo hành 12 tháng tại Samsung"
+}
+
+### Product 4 - AirPods Pro 2 (User 4)
+POST {{baseUrl}}/products
+Content-Type: application/json
+
+{
+  "name": "AirPods Pro 2nd Generation với USB-C",
+  "description": "AirPods Pro thế hệ 2 với chip H2, chống ồn chủ động tiên tiến, âm thanh 3D và hộp sạc USB-C tiện lợi.",
+  "price": 6490000,
+  "stockQuantity": 50,
+  "sku": "AIRPODS-PRO-2-USBC",
+  "categoryId": 2,
+  "brandId": 1,
+  "userId": 4,
+  "imageUrl": "https://images.unsplash.com/photo-1606220588013-d6b0ce5fb0f0?w=500",
+  "condition": "new",
+  "rating": 4.9,
+  "ratingCount": 203,
+  "likesCount": 156,
+  "commentsCount": 42,
+  "sharesCount": 28,
+  "viewCount": 890,
+  "sellerNotes": "Hàng chính hãng Apple VN, fullbox nguyên seal"
+}
+
+### Product 5 - Gaming Setup (User 5 - Shop Official)
+POST {{baseUrl}}/products
+Content-Type: application/json
+
+{
+  "name": "Bộ PC Gaming RTX 4070 Super Complete",
+  "description": "PC Gaming hoàn chỉnh: CPU i7-13700F, GPU RTX 4070 Super, RAM 32GB, SSD 1TB, Monitor 165Hz, Keyboard, Mouse gaming.",
+  "price": 45900000,
+  "stockQuantity": 5,
+  "sku": "PC-GAMING-RTX4070S-COMPLETE",
+  "categoryId": 1,
+  "brandId": 3,
+  "userId": 5,
+  "imageUrl": "https://images.unsplash.com/photo-1593640408182-31c70c8268f5?w=500",
+  "condition": "new",
+  "isFeatured": true,
+  "rating": 4.8,
+  "ratingCount": 45,
+  "likesCount": 89,
+  "commentsCount": 67,
+  "sharesCount": 23,
+  "viewCount": 1200,
+  "sellerNotes": "Bộ PC gaming cao cấp, lắp ráp và test kỹ, bảo hành linh kiện 24 tháng. Tặng kèm Windows 11 Pro bản quyền."
+}
+
+### Test get all products after creation
+GET {{baseUrl}}/products
+Content-Type: application/json
