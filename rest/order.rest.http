@@ -8,9 +8,10 @@ POST {{baseUrl}}/orders
 Content-Type: {{contentType}}
 
 {
-  "userId": 1,
+  "userId": 2,
   "items": [
-    { "product_id": 2, "quantity": 1, "price": 100 }
+    { "product_id": 2, "quantity": 1, "price": 100 },
+    { "product_id": 3, "quantity": 2, "price": 200 }
   ],
   "status": "pending"
 }

@@ -5,6 +5,7 @@ import { Order } from "./entity/order.entity";
 import { HttpService } from "@nestjs/axios";
 import { ClientProxy } from "@nestjs/microservices";
 import { OrderItem } from "./entity/order_item.entity";
+import { EVENT } from "@app/common/constants/event";
 
 @Injectable()
 export class OrdersService {
@@ -14,6 +15,7 @@ export class OrdersService {
     // @Inject(EXCHANGE.RMQ_PUBLISHER_CHANNEL) private readonly fanoutChannel: Channel,
     private readonly httpService: HttpService,
     @Inject("INVENTORY_SERVICE") private readonly inventoryClient: ClientProxy,
+    @Inject("PAYMENTS_SERVICE") private readonly paymentClient: ClientProxy,
     @InjectRepository(Order)
     private readonly orderRepository: Repository<Order>,
     @InjectRepository(OrderItem)
@@ -43,6 +45,11 @@ export class OrdersService {
     await this.orderItemRepository.save(orderItems);
     // Gán items vào order để trả về
     order.items = orderItems;
+
+    //push to rabbitmq to notify other service
+    this.inventoryClient.emit(EVENT.ORDER_CREATED_EVENT, order);
+    this.paymentClient.emit(EVENT.ORDER_CREATED_EVENT, order);
+
     return order;
   }
 

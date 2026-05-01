@@ -2,7 +2,7 @@ import { Module } from "@nestjs/common";
 import { OrdersController } from "./orders.controller";
 import { OrdersService } from "./orders.service";
 import { ConfigModule } from "@nestjs/config";
-import { MysqlModule } from "@app/common";
+import { MysqlModule, RmqModule } from "@app/common";
 import { HttpModule } from "@nestjs/axios";
 import { ClientsModule, Transport } from "@nestjs/microservices";
 import { TypeOrmModule } from "@nestjs/typeorm";
@@ -31,8 +31,8 @@ import { NAME_SERVICE_TCP, PORT_TCP } from "libs/constant/port-tcp.constant";
         },
       },
     ]),
-    // RmqModule.register({name: "INVENTORY_SERVICE"}),
-    // RmqModule.register({name: "PAYMENTS_SERVICE"}),
+    RmqModule.register({ name: "INVENTORY_SERVICE" }),
+    RmqModule.register({ name: "PAYMENTS_SERVICE" }),
     // RmqModule.registerDirectPublisher()
     // TYPEORM_MODULE.forFeature([Order, OrderItem])
     TypeOrmModule.forRoot({

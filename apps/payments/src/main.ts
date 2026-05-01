@@ -20,15 +20,17 @@ async function bootstrap() {
     }),
   );
 
-  // // const rmqService = app.get<RmqService>(RmqService);
+  const rmqService = app.get<RmqService>(RmqService);
 
   // // // Kết nối microservice, lắng nghe trên queue 'PAYMENTS_SERVICE_QUEUE'
-  // // app.connectMicroservice(rmqService.getOptions('PAYMENTS_SERVICE_QUEUE'));
-  // const rmqService = app.get<RmqService>(RmqService);
-  //   app.connectMicroservice(rmqService.getOptionsTopic('PAYMENTS_SERVICE', false, {
+  app.connectMicroservice(rmqService.getOptions("PAYMENTS_SERVICE_QUEUE"));
+
+  // app.connectMicroservice(
+  //   rmqService.getOptionsTopic("PAYMENTS_SERVICE", false, {
   //     name: EXCHANGE.ORDERS_EXCHANGE,
-  //     type: 'fanout',
-  //   }));
+  //     type: "fanout",
+  //   }),
+  // );
   await app.startAllMicroservices();
   console.log("💳 Payments microservice is running and listening for events.");
 }

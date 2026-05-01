@@ -1,18 +1,18 @@
-import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
-import { TypeOrmModule } from '@nestjs/typeorm';
-import { Inventory } from './inventory.entity';
-import { InventoryController } from './inventory.controller';
-import { InventoryService } from './inventory.service';
-import { PostgresDatabaseModule } from '@app/database';
-
+import { Module } from "@nestjs/common";
+import { ConfigModule } from "@nestjs/config";
+import { TypeOrmModule } from "@nestjs/typeorm";
+import { Inventory } from "./inventory.entity";
+import { InventoryController } from "./inventory.controller";
+import { InventoryService } from "./inventory.service";
+import { PostgresDatabaseModule } from "@app/database";
+import { RmqService } from "@app/common";
 
 @Module({
   imports: [
-    // ConfigModule.forRoot({
-    //   isGlobal: true,
-    //   envFilePath: './local/nodeB/.env',
-    // }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: "./local/nodeB/.env",
+    }),
     // TypeOrmModule.forRoot({
     //   type: 'postgres',
     //   host: process.env.PG_HOST || 'localhost',
@@ -24,10 +24,20 @@ import { PostgresDatabaseModule } from '@app/database';
     //   entities: [Inventory],
     //   synchronize: true, // Chỉ dùng cho dev, không nên dùng production
     // }),
-    PostgresDatabaseModule,
+    TypeOrmModule.forRoot({
+      type: "mysql",
+      host: process.env.MYSQL_HOST,
+      port: Number(process.env.MYSQL_PORT),
+      username: process.env.MYSQL_USER,
+      password: process.env.MYSQL_PASSWORD,
+      database: process.env.MYSQL_DATABASE,
+      entities: [Inventory],
+      synchronize: true,
+    }),
+    // PostgresDatabaseModule,
     TypeOrmModule.forFeature([Inventory]),
   ],
   controllers: [InventoryController],
-  providers: [InventoryService],
+  providers: [InventoryService, RmqService],
 })
 export class InventoryModule {}
