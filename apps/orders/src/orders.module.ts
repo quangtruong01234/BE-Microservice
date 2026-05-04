@@ -31,9 +31,9 @@ import { NAME_SERVICE_TCP, PORT_TCP } from "libs/constant/port-tcp.constant";
         },
       },
     ]),
-    RmqModule.register({ name: "INVENTORY_SERVICE" }),
-    RmqModule.register({ name: "PAYMENTS_SERVICE" }),
-    // RmqModule.registerDirectPublisher()
+    // RmqModule.register({ name: "INVENTORY_SERVICE" }),
+    // RmqModule.register({ name: "PAYMENTS_SERVICE" }),
+    RmqModule.registerDirectPublisher(),
     // TYPEORM_MODULE.forFeature([Order, OrderItem])
     TypeOrmModule.forRoot({
       type: "mysql",

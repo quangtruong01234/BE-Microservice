@@ -1,4 +1,9 @@
-import { Inject, Injectable, Logger } from "@nestjs/common";
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  Logger,
+} from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Order } from "./entity/order.entity";
@@ -6,16 +11,19 @@ import { HttpService } from "@nestjs/axios";
 import { ClientProxy } from "@nestjs/microservices";
 import { OrderItem } from "./entity/order_item.entity";
 import { EVENT } from "@app/common/constants/event";
+import { EXCHANGE } from "@app/common/constants/exchange";
+import { Channel } from "amqplib";
 
 @Injectable()
 export class OrdersService {
   private readonly logger = new Logger(OrdersService.name);
 
   constructor(
-    // @Inject(EXCHANGE.RMQ_PUBLISHER_CHANNEL) private readonly fanoutChannel: Channel,
+    @Inject(EXCHANGE.RMQ_PUBLISHER_CHANNEL)
+    private readonly fanoutChannel: Channel,
     private readonly httpService: HttpService,
     @Inject("INVENTORY_SERVICE") private readonly inventoryClient: ClientProxy,
-    @Inject("PAYMENTS_SERVICE") private readonly paymentClient: ClientProxy,
+    // @Inject("PAYMENTS_SERVICE") private readonly paymentClient: ClientProxy,
     @InjectRepository(Order)
     private readonly orderRepository: Repository<Order>,
     @InjectRepository(OrderItem)
@@ -30,6 +38,11 @@ export class OrdersService {
     userId: number,
     items: Array<{ product_id: number; quantity: number; price: number }>,
   ): Promise<Order> {
+    //1. check stock in inventory
+    const isStockAvailable = true; //call api --> inventory
+    if (!isStockAvailable) {
+      throw new BadRequestException("Not enough stock for the req items...");
+    }
     const total = items.reduce(
       (sum, item) => sum + item.price * item.quantity,
       0,
@@ -47,8 +60,23 @@ export class OrdersService {
     order.items = orderItems;
 
     //push to rabbitmq to notify other service
-    this.inventoryClient.emit(EVENT.ORDER_CREATED_EVENT, order);
-    this.paymentClient.emit(EVENT.ORDER_CREATED_EVENT, order);
+    // this.inventoryClient.emit(EVENT.ORDER_CREATED_EVENT, order);
+    // this.paymentClient.emit(EVENT.ORDER_CREATED_EVENT, order);
+
+    // Publish event to EVENT BUS via FANOUT exchange
+    const exchangeName = EXCHANGE.ORDERS_EXCHANGE;
+    const routingKey = EVENT.ORDER_CREATED_EVENT;
+
+    const eventPayload = {
+      data: order,
+      pattern: routingKey,
+    };
+
+    this.fanoutChannel.publish(
+      exchangeName,
+      routingKey,
+      Buffer.from(JSON.stringify(eventPayload)),
+    );
 
     return order;
   }
