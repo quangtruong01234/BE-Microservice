@@ -9,9 +9,23 @@ import { OrderModule } from "./order/order.module";
 import { ProductModule } from "./product/product.module";
 import { CachedModule } from "@app/cached";
 import { NAME_SERVICE_TCP, PORT_TCP } from "libs/constant/port-tcp.constant";
+import { APP_GUARD } from "@nestjs/core";
+import { CustomRateLimitGuard } from "./common/guards/rate-limit.guard";
+import { JwtModule } from "@nestjs/jwt";
+import { JwtAuthGuard } from "./common/guards/jwt-auth.guard";
+import { RoleAuthGuard } from "./common/guards/role-auth.guard";
 
 @Module({
   imports: [
+    JwtModule.register({
+      global: true,
+      secret: process.env.JWT_SECRET || "your-secret-key",
+      signOptions: {
+        expiresIn: process.env.JWT_EXPIRES_IN
+          ? Number(process.env.JWT_EXPIRES_IN)
+          : "1h",
+      },
+    }),
     ClientsModule.register([
       {
         name: NAME_SERVICE_TCP.ORDERS_SERVICE, // Tên token để inject
@@ -53,7 +67,21 @@ import { NAME_SERVICE_TCP, PORT_TCP } from "libs/constant/port-tcp.constant";
     CachedModule,
   ],
   controllers: [GatewayController],
-  providers: [GatewayService],
+  providers: [
+    GatewayService,
+    {
+      provide: APP_GUARD,
+      useClass: CustomRateLimitGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: JwtAuthGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: RoleAuthGuard,
+    },
+  ],
   exports: [ClientsModule],
 })
 export class GatewayModule {}

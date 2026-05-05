@@ -8,7 +8,7 @@ import {
   USER_MESSAGE_PATTERN,
 } from "libs/constant/message-pattern.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
-import { MicroserviceErrorHandler } from "../common/microservice-error.handler";
+import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
 
 export abstract class BaseAggregatorService {
   protected logger = new Logger(BaseAggregatorService.name);

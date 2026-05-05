@@ -7,7 +7,7 @@ import { firstValueFrom } from "rxjs";
 @Injectable()
 export class GatewayService {
   private readonly logger = new Logger(GatewayService.name);
-
+  private readonly startTime = Date.now();
   constructor(
     @Inject(TCP.ORDERS_SERVICE) private readonly ordersClient: ClientProxy,
   ) {}
@@ -24,5 +24,26 @@ export class GatewayService {
       `[GATEWAY] Received response from Orders Service: ${JSON.stringify(result)}`,
     );
     return result;
+  }
+
+  getHeath() {
+    const uptime = Math.floor((Date.now() - this.startTime) / 1000);
+    const memUsage = process.memoryUsage();
+
+    return {
+      status: "UP",
+      timestamp: new Date().toISOString(),
+      uptime,
+      memory: {
+        used: Math.round(memUsage.heapUsed / 1024 / 1024), //MB
+        total: Math.round(memUsage.heapTotal / 1024 / 1024), //MB
+      },
+      services: {
+        orders: "UP",
+        inventory: "UP",
+        user: "UP",
+        product: "UP",
+      },
+    };
   }
 }
