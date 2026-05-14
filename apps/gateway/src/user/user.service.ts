@@ -38,27 +38,17 @@ export class UserService {
     }
   }
 
-  async login(dto: LoginUserDto): Promise<any> {
-    try {
-      // this.logger.log(`User login attempt: ${dto.email}`);
-      const userFound = await firstValueFrom(
-        this.userClient
-          .send({ cmd: USER_MESSAGE_PATTERN.LOGIN_USER }, dto)
-          .pipe(
-            timeout(10000),
-            catchError((error) => throwError(() => error)),
-          ),
-      );
-
-      //generate JWT token
-
-      const token = this.generateJwtToken(userFound);
-      userFound.token = token;
-
-      return userFound;
-    } catch (error) {
-      MicroserviceErrorHandler.handleError(error, "login user", "User Service");
-    }
+  async login(dto: LoginUserDto): Promise<{ user: any; token: string }> {
+    const userFound = await firstValueFrom(
+      this.userClient.send({ cmd: USER_MESSAGE_PATTERN.LOGIN_USER }, dto).pipe(
+        timeout(10000),
+        catchError((error) => throwError(() => error)),
+      ),
+    ).catch((error) =>
+      MicroserviceErrorHandler.handleError(error, "login user", "User Service"),
+    );
+    const token = this.generateJwtToken(userFound);
+    return { user: userFound, token };
   }
 
   generateJwtToken(user: any): string {

@@ -1,4 +1,5 @@
-import { Controller, Post, Body, Get, Param } from "@nestjs/common";
+import { Controller, Post, Body, Get, Param, Res } from "@nestjs/common";
+import { Response } from "express";
 import { UserService } from "./user.service";
 import { RegisterUserDto, LoginUserDto } from "./dto/user.dto";
 import {
@@ -10,6 +11,15 @@ import {
 } from "@nestjs/swagger";
 import { Public } from "../common/decorators/public.decorator";
 import { Roles } from "../common/decorators/roles.decorator";
+
+const COOKIE_NAME = "access_token";
+const COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: "lax" as const,
+  maxAge: 60 * 60 * 1000, // 1 hour in ms
+  path: "/",
+};
 
 @ApiTags("User")
 @ApiBearerAuth("bearer")
@@ -29,13 +39,29 @@ export class UserController {
 
   @Post("login")
   @Public()
-  @ApiOperation({ summary: "Login user" })
+  @ApiOperation({ summary: "Login user — sets HttpOnly access_token cookie" })
   @ApiBody({ type: LoginUserDto })
   @ApiResponse({ status: 200, description: "Login successful." })
   @ApiResponse({ status: 401, description: "Unauthorized." })
-  async login(@Body() dto: LoginUserDto) {
-    return await this.userService.login(dto);
+  async login(
+    @Body() dto: LoginUserDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { user, token } = await this.userService.login(dto);
+    res.cookie(COOKIE_NAME, token, COOKIE_OPTIONS);
+    const { password: _password, ...safeUser } = user;
+    return safeUser;
   }
+
+  @Post("logout")
+  @Public()
+  @ApiOperation({ summary: "Logout — clears access_token cookie" })
+  @ApiResponse({ status: 200, description: "Logged out." })
+  async logout(@Res({ passthrough: true }) res: Response) {
+    res.clearCookie(COOKIE_NAME, { path: "/" });
+    return { message: "Logged out successfully" };
+  }
+
   @Get("all")
   @Roles("admin")
   @ApiOperation({ summary: "Get all users" })

@@ -1,11 +1,22 @@
-import { Module } from '@nestjs/common';
-import { UserService } from './user.service';
-import { UserController } from './user.controller';
-import { forwardRef } from '@nestjs/common';
-import { GatewayModule } from '../gateway.module';
+import { Module } from "@nestjs/common";
+import { ClientsModule, Transport } from "@nestjs/microservices";
+import { NAME_SERVICE_TCP, PORT_TCP } from "libs/constant/port-tcp.constant";
+import { UserService } from "./user.service";
+import { UserController } from "./user.controller";
 
 @Module({
-  imports: [forwardRef(() => GatewayModule)],
+  imports: [
+    ClientsModule.register([
+      {
+        name: NAME_SERVICE_TCP.USER_SERVICE,
+        transport: Transport.TCP,
+        options: {
+          host: "localhost",
+          port: PORT_TCP.USER_TCP_PORT,
+        },
+      },
+    ]),
+  ],
   controllers: [UserController],
   providers: [UserService],
 })

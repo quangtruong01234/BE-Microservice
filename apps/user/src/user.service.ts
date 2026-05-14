@@ -1,9 +1,10 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, UnauthorizedException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { User } from "./entity/user.entity";
 import { Repository } from "typeorm";
 import { RegisterUserDto } from "./dto/register-user.dto";
 import { LoginUserDto } from "./dto/login-user.dto";
+import * as bcrypt from "bcryptjs";
 
 @Injectable()
 export class UserService {
@@ -20,20 +21,28 @@ export class UserService {
   }
   async register(dto: RegisterUserDto): Promise<User> {
     this.logger.log(`Register user: ${dto.username}`);
+    const hashedPassword = await bcrypt.hash(dto.password, 10);
     const user = this.userRepository.create({
       username: dto.username,
       email: dto.email,
-      password: dto.password,
+      password: hashedPassword,
     });
     return await this.userRepository.save(user);
   }
 
-  async login(dto: LoginUserDto): Promise<User | null> {
+  async login(dto: LoginUserDto): Promise<User> {
     this.logger.log(`Login user: ${dto.username}`);
     const user = await this.userRepository.findOne({
-      where: { username: dto.username, password: dto.password },
+      where: { username: dto.username },
     });
-    return user || null;
+    if (!user) {
+      throw new UnauthorizedException("Invalid username or password");
+    }
+    const isMatch = await bcrypt.compare(dto.password, user.password);
+    if (!isMatch) {
+      throw new UnauthorizedException("Invalid username or password");
+    }
+    return user;
   }
 
   async getInfo(userId: number): Promise<User | null> {

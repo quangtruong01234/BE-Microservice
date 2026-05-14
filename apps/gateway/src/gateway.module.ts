@@ -77,10 +77,10 @@ import { RoleAuthGuard } from "./common/guards/role-auth.guard";
       provide: APP_GUARD,
       useClass: JwtAuthGuard,
     },
-    {
-      provide: APP_GUARD,
-      useClass: RoleAuthGuard,
-    },
+    // {
+    //   provide: APP_GUARD,
+    //   useClass: RoleAuthGuard,
+    // },
   ],
   exports: [ClientsModule],
 })

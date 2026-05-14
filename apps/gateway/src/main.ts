@@ -1,14 +1,17 @@
 import { NestFactory } from "@nestjs/core";
 import { GatewayModule } from "./gateway.module";
 import * as dotenv from "dotenv";
+import * as cookieParser from "cookie-parser";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import { HttpExceptionFilter } from "./common/filters/http-exception.filter";
 import { ResponseInterceptor } from "./common/interceptor/response.interceptor";
 import { ValidationPipe } from "@nestjs/common";
-
 async function bootstrap() {
   dotenv.config();
   const app = await NestFactory.create(GatewayModule);
+  app.use(
+    (cookieParser as unknown as () => import("express").RequestHandler)(),
+  );
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -17,7 +20,10 @@ async function bootstrap() {
   );
   app.useGlobalFilters(new HttpExceptionFilter());
   app.useGlobalInterceptors(new ResponseInterceptor());
-  app.enableCors();
+  app.enableCors({
+    origin: process.env.FRONTEND_URL || "http://localhost:5173",
+    credentials: true,
+  });
   app.setGlobalPrefix("api");
   const config = new DocumentBuilder()
     .setTitle("Ecommerce API")
