@@ -2,7 +2,6 @@ import { Injectable, Inject, Logger } from "@nestjs/common";
 import { ClientProxy } from "@nestjs/microservices";
 import { RegisterUserDto, LoginUserDto } from "./dto/user.dto";
 import { firstValueFrom, timeout, catchError } from "rxjs";
-import { throwError } from "rxjs";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { USER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";

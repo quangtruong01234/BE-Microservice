@@ -17,23 +17,23 @@ export enum OrderStatus {
 @Entity("orders")
 export class Order {
   @PrimaryGeneratedColumn("increment")
-  id: number;
+  id!: number;
 
   @Column({ type: "bigint" })
-  user_id: number;
+  user_id!: number;
 
   @Column({ type: "enum", enum: OrderStatus, default: OrderStatus.PENDING })
   status?: OrderStatus;
 
   @Column({ type: "decimal", precision: 12, scale: 2 })
-  total: number;
+  total!: number;
 
   @CreateDateColumn({ type: "datetime" })
-  created_at: Date;
+  created_at!: Date;
 
   @UpdateDateColumn({ type: "datetime" })
-  updated_at: Date;
+  updated_at!: Date;
 
   @OneToMany(() => OrderItem, (item) => item.order, { cascade: true })
-  items: OrderItem[];
+  items!: OrderItem[];
 }

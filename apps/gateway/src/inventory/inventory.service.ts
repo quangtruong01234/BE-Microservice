@@ -1,7 +1,6 @@
 import { Injectable, Inject, Logger } from "@nestjs/common";
 import { ClientProxy } from "@nestjs/microservices";
 import { firstValueFrom, timeout, catchError } from "rxjs";
-import { throwError } from "rxjs";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { INVENTORY_MESSAGE_PATTERNS } from "libs/constant/message-pattern-inventory.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
@@ -25,7 +24,9 @@ export class InventoryService {
           .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_CREATE, data)
           .pipe(
             timeout(10000),
-            catchError((error) => throwError(() => error)),
+            catchError((err: unknown) => {
+              throw err;
+            }),
           ),
       )) as unknown;
     } catch (error) {
@@ -44,7 +45,9 @@ export class InventoryService {
           .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_FIND_ALL, {})
           .pipe(
             timeout(10000),
-            catchError((error) => throwError(() => error)),
+            catchError((err: unknown) => {
+              throw err;
+            }),
           ),
       )) as unknown;
     } catch (error) {
@@ -63,7 +66,9 @@ export class InventoryService {
           .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_FIND_ONE, id)
           .pipe(
             timeout(10000),
-            catchError((error) => throwError(() => error)),
+            catchError((err: unknown) => {
+              throw err;
+            }),
           ),
       )) as unknown;
     } catch (error) {
@@ -85,7 +90,9 @@ export class InventoryService {
           )
           .pipe(
             timeout(10000),
-            catchError((error) => throwError(() => error)),
+            catchError((err: unknown) => {
+              throw err;
+            }),
           ),
       )) as unknown;
     } catch (error) {
@@ -104,7 +111,9 @@ export class InventoryService {
           .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_FIND_BY_SKU, sku)
           .pipe(
             timeout(10000),
-            catchError((error) => throwError(() => error)),
+            catchError((err: unknown) => {
+              throw err;
+            }),
           ),
       )) as unknown;
     } catch (error) {
@@ -123,7 +132,9 @@ export class InventoryService {
           .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_UPDATE, { id, update })
           .pipe(
             timeout(10000),
-            catchError((error) => throwError(() => error)),
+            catchError((err: unknown) => {
+              throw err;
+            }),
           ),
       )) as unknown;
     } catch (error) {
@@ -142,7 +153,9 @@ export class InventoryService {
           .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_REMOVE, id)
           .pipe(
             timeout(10000),
-            catchError((error) => throwError(() => error)),
+            catchError((err: unknown) => {
+              throw err;
+            }),
           ),
       )) as unknown;
     } catch (error) {
@@ -164,7 +177,9 @@ export class InventoryService {
           })
           .pipe(
             timeout(10000),
-            catchError((error) => throwError(() => error)),
+            catchError((err: unknown) => {
+              throw err;
+            }),
           ),
       )) as unknown;
     } catch (error) {
@@ -186,7 +201,9 @@ export class InventoryService {
           })
           .pipe(
             timeout(10000),
-            catchError((error) => throwError(() => error)),
+            catchError((err: unknown) => {
+              throw err;
+            }),
           ),
       )) as unknown;
     } catch (error) {
@@ -208,7 +225,9 @@ export class InventoryService {
           })
           .pipe(
             timeout(10000),
-            catchError((error) => throwError(() => error)),
+            catchError((err: unknown) => {
+              throw err;
+            }),
           ),
       )) as unknown;
     } catch (error) {
@@ -227,7 +246,9 @@ export class InventoryService {
           .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_GET_LOW_STOCK, {})
           .pipe(
             timeout(10000),
-            catchError((error) => throwError(() => error)),
+            catchError((err: unknown) => {
+              throw err;
+            }),
           ),
       )) as unknown;
     } catch (error) {

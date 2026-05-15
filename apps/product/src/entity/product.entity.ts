@@ -13,57 +13,57 @@ import { Category } from "./category.entity";
 @Entity("products")
 export class Product {
   @PrimaryGeneratedColumn("increment", { type: "bigint" })
-  id: number;
+  id!: number;
 
   @Column({ type: "varchar", length: 255 })
-  name: string;
+  name!: string;
 
   @Column({ type: "text", nullable: true })
   description?: string;
 
   @Column({ type: "decimal", precision: 12, scale: 2, default: 0 })
-  price: number;
+  price!: number;
 
   @Column({ type: "int", default: 0, name: "stock_quantity" })
-  stockQuantity: number;
+  stockQuantity!: number;
 
   @Column({ type: "varchar", length: 100, unique: true })
-  sku: string;
+  sku!: string;
 
   @Column({ type: "bigint", nullable: true, name: "brand_id" })
   brandId?: number;
 
   @Column({ type: "bigint", name: "category_id" })
-  categoryId: number;
+  categoryId!: number;
 
   @Column({ type: "bigint", nullable: true, name: "user_id" })
-  userId?: number; // ID của người tạo sản phẩm
+  userId?: number;
 
   @Column({ type: "varchar", length: 1000, nullable: true, name: "image_url" })
   imageUrl?: string;
 
   @Column({ type: "boolean", default: true, name: "is_active" })
-  isActive: boolean;
+  isActive!: boolean;
 
   // Social engagement metrics
   @Column({ type: "int", default: () => "0", name: "likes_count" })
-  likesCount: number;
+  likesCount!: number;
 
   @Column({ type: "int", default: () => "0", name: "comments_count" })
-  commentsCount: number;
+  commentsCount!: number;
 
   @Column({ type: "int", default: () => "0", name: "shares_count" })
-  sharesCount: number;
+  sharesCount!: number;
 
   @Column({ type: "int", default: () => "0", name: "view_count" })
-  viewCount: number;
+  viewCount!: number;
 
   // Product status for timeline/feed
   @Column({ type: "boolean", default: () => "FALSE", name: "is_featured" })
-  isFeatured: boolean;
+  isFeatured!: boolean;
 
   @Column({ type: "boolean", default: () => "FALSE", name: "is_trending" })
-  isTrending: boolean;
+  isTrending!: boolean;
 
   // Product condition and seller info
   @Column({
@@ -73,10 +73,10 @@ export class Product {
     default: () => "'new'",
     name: "condition",
   })
-  condition?: string; // 'new', 'used', 'refurbished'
+  condition?: string;
 
   @Column({ type: "text", nullable: true, name: "seller_notes" })
-  sellerNotes?: string; // Ghi chú từ người bán
+  sellerNotes?: string;
 
   // Rating system
   @Column({
@@ -86,16 +86,16 @@ export class Product {
     default: () => "0.00",
     name: "rating",
   })
-  rating: number;
+  rating!: number;
 
   @Column({ type: "int", default: () => "0", name: "rating_count" })
-  ratingCount: number;
+  ratingCount!: number;
 
   @CreateDateColumn({ type: "timestamp", name: "created_at" })
-  createdAt: Date;
+  createdAt!: Date;
 
   @UpdateDateColumn({ type: "timestamp", name: "updated_at" })
-  updatedAt: Date;
+  updatedAt!: Date;
 
   // Relations
   @ManyToOne(() => Brand, { nullable: true, onDelete: "SET NULL" })
@@ -104,5 +104,5 @@ export class Product {
 
   @ManyToOne(() => Category, { nullable: false, onDelete: "RESTRICT" })
   @JoinColumn({ name: "category_id" })
-  category: Category;
+  category!: Category;
 }

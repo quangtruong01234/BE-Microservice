@@ -10,36 +10,36 @@ import {
 @Entity("inventory_v2")
 export class Inventory {
   @PrimaryGeneratedColumn("increment", { type: "bigint" })
-  id: number;
+  id!: number;
 
   @Column({ type: "bigint", unique: true, name: "product_id", nullable: false })
   @Index("idx_inventory_product_id")
-  productId: number;
+  productId!: number;
 
   @Column({ type: "varchar", length: 100, unique: true, nullable: false })
   @Index("idx_inventory_sku")
-  sku: string;
+  sku!: string;
 
   @Column({ type: "int", default: 0, name: "available_stock" })
-  availableStock: number;
+  availableStock!: number;
 
   @Column({ type: "int", default: 0, name: "reserved_stock" })
-  reservedStock: number;
+  reservedStock!: number;
 
   @Column({ type: "int", default: 0, name: "minimum_stock" })
-  minimumStock: number;
+  minimumStock!: number;
 
   @Column({ type: "varchar", length: 50, nullable: true })
   location?: string;
 
   @Column({ type: "boolean", default: true, name: "is_active" })
-  isActive: boolean;
+  isActive!: boolean;
 
   @CreateDateColumn({ type: "timestamp", name: "created_at" })
-  createdAt: Date;
+  createdAt!: Date;
 
   @UpdateDateColumn({ type: "timestamp", name: "updated_at" })
-  updatedAt: Date;
+  updatedAt!: Date;
 
   // Computed fields
   get totalStock(): number {

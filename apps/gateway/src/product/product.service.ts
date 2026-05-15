@@ -1,7 +1,6 @@
 import { Injectable, Inject, Logger } from "@nestjs/common";
 import { ClientProxy } from "@nestjs/microservices";
-import { firstValueFrom, timeout, catchError } from "rxjs";
-import { throwError } from "rxjs";
+import { firstValueFrom, timeout, catchError, of } from "rxjs";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
 import { INVENTORY_MESSAGE_PATTERNS } from "libs/constant/message-pattern-inventory.constant";
@@ -106,8 +105,8 @@ export class ProductService {
           .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_CREATE, dto)
           .pipe(
             timeout(10000),
-            catchError((error) => {
-              return throwError(() => error);
+            catchError((err: unknown) => {
+              throw err;
             }),
           ),
       )) as ProductData;
@@ -140,7 +139,9 @@ export class ProductService {
           .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_ALL, query)
           .pipe(
             timeout(10000),
-            catchError((error) => throwError(() => error)),
+            catchError((err: unknown) => {
+              throw err;
+            }),
           ),
       )) as ProductData;
 
@@ -186,7 +187,9 @@ export class ProductService {
           .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_ID, id)
           .pipe(
             timeout(10000),
-            catchError((error) => throwError(() => error)),
+            catchError((err: unknown) => {
+              throw err;
+            }),
           ),
       )) as ProductData;
 
@@ -218,7 +221,9 @@ export class ProductService {
           .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_SKU, sku)
           .pipe(
             timeout(10000),
-            catchError((error) => throwError(() => error)),
+            catchError((err: unknown) => {
+              throw err;
+            }),
           ),
       )) as unknown;
     } catch (error) {
@@ -240,7 +245,9 @@ export class ProductService {
           })
           .pipe(
             timeout(10000),
-            catchError((error) => throwError(() => error)),
+            catchError((err: unknown) => {
+              throw err;
+            }),
           ),
       )) as unknown;
     } catch (error) {
@@ -323,9 +330,9 @@ export class ProductService {
   async getAllCategories(): Promise<unknown> {
     try {
       this.logger.log("Fetching all categories");
-      const result = await firstValueFrom(
+      const result = (await firstValueFrom(
         this.productClient.send(PRODUCT_MESSAGE_PATTERNS.CATEGORY_FIND_ALL, {}),
-      );
+      )) as unknown as unknown[];
       this.logger.log(`Found ${result?.length ?? 0} categories`);
       return result;
     } catch (error) {
@@ -351,7 +358,7 @@ export class ProductService {
       this.logger.debug(`Aggregating data for product ID: ${productId}`);
 
       // Fetch product and inventory data in parallel (Aggregator Pattern)
-      const [product, inventory] = await Promise.all([
+      const [product, inventory] = (await Promise.all([
         this.getProductById(productId).catch((err: unknown) => {
           this.logger.warn(
             `Product service error for ID ${productId}: ${err instanceof Error ? err.message : String(err)}`,
@@ -369,7 +376,7 @@ export class ProductService {
           );
           return null;
         }),
-      ]);
+      ])) as [unknown, unknown];
 
       // If product doesn't exist, return null
       if (!product) {
@@ -387,7 +394,7 @@ export class ProductService {
         ...(enrichedProduct as unknown as ProductWithInventory),
         inventory: inventory
           ? (this.enrichInventoryData(
-              inventory,
+              inventory as InventoryData,
             ) as unknown as ProductWithInventory["inventory"])
           : null,
       };
@@ -435,7 +442,7 @@ export class ProductService {
       }
 
       // Fetch products and inventory data in parallel
-      const [products, inventoryItems] = await Promise.all([
+      const [products, inventoryItems] = (await Promise.all([
         Promise.all(productIds.map((id) => this.getProductById(id))),
         firstValueFrom(
           this.inventoryClient.send(
@@ -443,8 +450,8 @@ export class ProductService {
             productIds,
           ),
         ),
-      ]);
-      const typedInventoryItems = inventoryItems as unknown as InventoryData[];
+      ])) as [unknown[], unknown];
+      const typedInventoryItems = inventoryItems as InventoryData[];
 
       // Create inventory map for quick lookup
       const inventoryMap = new Map<number, InventoryData>();
@@ -500,12 +507,12 @@ export class ProductService {
       const productIds = products.map((product) => product.id as number);
 
       // Fetch inventory data for all products
-      const inventoryItems = await firstValueFrom(
+      const inventoryItems = (await firstValueFrom(
         this.inventoryClient.send(
           INVENTORY_MESSAGE_PATTERNS.INVENTORY_GET_BY_PRODUCT_IDS,
           productIds,
         ),
-      );
+      )) as unknown as InventoryData[];
 
       // Create inventory map
       const inventoryMap = new Map<number, InventoryData>();
@@ -588,12 +595,12 @@ export class ProductService {
           .send({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, userId)
           .pipe(
             timeout(5000),
-            catchError((error) => {
+            catchError((err: unknown) => {
               this.logger.warn(
                 `Failed to fetch user info for userId: ${userId}`,
-                error,
+                err instanceof Error ? err.message : String(err),
               );
-              return throwError(() => null);
+              return of(null);
             }),
           ),
       )) as UserData | null;
@@ -655,12 +662,12 @@ export class ProductService {
                 .send({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, userId)
                 .pipe(
                   timeout(5000),
-                  catchError((error) => {
+                  catchError((err: unknown) => {
                     this.logger.warn(
                       `Failed to fetch user info for userId: ${userId}`,
-                      error,
+                      err instanceof Error ? err.message : String(err),
                     );
-                    return throwError(() => null);
+                    return of(null);
                   }),
                 ),
             )) as UserData | null;

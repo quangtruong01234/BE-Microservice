@@ -10,21 +10,21 @@ import { Order } from "./order.entity";
 @Entity("order_items")
 export class OrderItem {
   @PrimaryGeneratedColumn("increment")
-  id: number;
+  id!: number;
 
   @Column({ type: "bigint" })
-  order_id: number;
+  order_id!: number;
 
   @Column({ type: "bigint" })
-  product_id: number;
+  product_id!: number;
 
   @Column({ type: "int" })
-  quantity: number;
+  quantity!: number;
 
   @Column({ type: "decimal", precision: 12, scale: 2 })
-  price: number;
+  price!: number;
 
   @ManyToOne(() => Order, (order) => order.items)
   @JoinColumn({ name: "order_id" })
-  order: Order;
+  order!: Order;
 }

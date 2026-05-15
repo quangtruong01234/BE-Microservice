@@ -11,24 +11,24 @@ import { Product } from "./product.entity";
 @Entity("brands")
 export class Brand {
   @PrimaryGeneratedColumn("increment", { type: "bigint" })
-  id: number;
+  id!: number;
 
   @Column({ type: "varchar", length: 255, nullable: false })
-  name: string;
+  name!: string;
 
   @Column({ type: "text", nullable: true })
   description?: string;
 
   @Column({ type: "boolean", default: true, name: "is_active" })
-  isActive: boolean;
+  isActive!: boolean;
 
   @CreateDateColumn({ type: "timestamp", name: "created_at" })
-  createdAt: Date;
+  createdAt!: Date;
 
   @UpdateDateColumn({ type: "timestamp", name: "updated_at" })
-  updatedAt: Date;
+  updatedAt!: Date;
 
   // Relations
   @OneToMany(() => Product, (product) => product.brand)
-  products: Product[];
+  products!: Product[];
 }
