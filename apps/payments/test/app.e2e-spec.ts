@@ -1,9 +1,9 @@
-import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication } from '@nestjs/common';
-import * as request from 'supertest';
-import { PaymentsModule } from './../src/payments.module';
+import { Test, TestingModule } from "@nestjs/testing";
+import { INestApplication } from "@nestjs/common";
+import * as request from "supertest";
+import { PaymentsModule } from "./../src/payments.module";
 
-describe('PaymentsController (e2e)', () => {
+describe("PaymentsController (e2e)", () => {
   let app: INestApplication;
 
   beforeEach(async () => {
@@ -15,10 +15,10 @@ describe('PaymentsController (e2e)', () => {
     await app.init();
   });
 
-  it('/ (GET)', () => {
+  it("/ (GET)", () => {
     return request(app.getHttpServer())
-      .get('/')
+      .get("/")
       .expect(200)
-      .expect('Hello World!');
+      .expect("Hello World!");
   });
 });

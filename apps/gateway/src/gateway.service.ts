@@ -12,14 +12,14 @@ export class GatewayService {
     @Inject(TCP.ORDERS_SERVICE) private readonly ordersClient: ClientProxy,
   ) {}
 
-  async createOrder(payload: any) {
+  async createOrder(payload: unknown): Promise<unknown> {
     // Dùng .send() để thực hiện RPC - gửi request và đợi response
     const resultObservable = this.ordersClient.send(
       { cmd: CMD.CREATE_ORDER },
       payload,
     );
     // Chuyển Observable thành Promise để có thể await
-    const result = await firstValueFrom(resultObservable);
+    const result = (await firstValueFrom(resultObservable)) as unknown;
     this.logger.log(
       `[GATEWAY] Received response from Orders Service: ${JSON.stringify(result)}`,
     );

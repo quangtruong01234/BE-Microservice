@@ -1,12 +1,12 @@
-import { Global, Module } from '@nestjs/common';
-import { createPool, Pool } from 'mysql2/promise';
+import { Global, Module } from "@nestjs/common";
+import { createPool, Pool } from "mysql2/promise";
 
 @Global()
 @Module({
   providers: [
     {
-      provide: 'MYSQL_POOL',
-      useFactory: async () => {
+      provide: "MYSQL_POOL",
+      useFactory: () => {
         const pool: Pool = createPool({
           host: process.env.MYSQL_HOST,
           port: Number(process.env.MYSQL_PORT),
@@ -21,6 +21,6 @@ import { createPool, Pool } from 'mysql2/promise';
       },
     },
   ],
-  exports: ['MYSQL_POOL'],
+  exports: ["MYSQL_POOL"],
 })
 export class MysqlModule {}

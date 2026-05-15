@@ -2,7 +2,6 @@ import { NestFactory } from "@nestjs/core";
 import { RmqService } from "@app/common";
 import { InventoryModule } from "./inventory.module";
 import { Transport, MicroserviceOptions } from "@nestjs/microservices";
-import { ValidationPipe } from "@nestjs/common";
 import { PORT_TCP } from "libs/constant/port-tcp.constant";
 import { AllRpcExceptionFilter } from "./filters/rpc-exception.filter";
 
@@ -39,4 +38,4 @@ async function bootstrap() {
   );
   console.log("   📨 RabbitMQ Consumer: INVENTORY_SERVICE_QUEUE");
 }
-bootstrap();
+void bootstrap();

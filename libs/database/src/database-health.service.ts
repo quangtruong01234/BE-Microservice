@@ -1,6 +1,6 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
-import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource } from 'typeorm';
+import { Injectable, OnModuleInit } from "@nestjs/common";
+import { InjectDataSource } from "@nestjs/typeorm";
+import { DataSource } from "typeorm";
 
 @Injectable()
 export class DatabaseHealthService implements OnModuleInit {
@@ -11,34 +11,37 @@ export class DatabaseHealthService implements OnModuleInit {
 
   async onModuleInit() {
     try {
-      console.log('🔌 Testing database connection...');
-      console.log('Database config:', {
+      console.log("🔌 Testing database connection...");
+      console.log("Database config:", {
         host: process.env.MYSQL_HOST,
         port: process.env.MYSQL_PORT,
         database: process.env.MYSQL_DATABASE,
         user: process.env.MYSQL_USER,
       });
 
-      // Test connection
-      await this.dataSource.query('SELECT 1 as test');
-      console.log('✅ Database connection successful!');
+      await this.dataSource.query("SELECT 1 as test");
+      console.log("✅ Database connection successful!");
 
-      // Check if tables exist
-      const tables = await this.dataSource.query('SHOW TABLES');
-      console.log('📋 Existing tables:', tables.map(t => Object.values(t)[0]));
-
+      const tables =
+        await this.dataSource.query<Record<string, unknown>[]>("SHOW TABLES");
+      console.log(
+        "📋 Existing tables:",
+        tables.map((t) => Object.values(t)[0]),
+      );
     } catch (error) {
-      console.error('❌ Database connection failed:', error.message);
-      console.error('Full error:', error);
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error("❌ Database connection failed:", msg);
+      console.error("Full error:", error);
     }
   }
 
-  async checkTables() {
+  async checkTables(): Promise<unknown[]> {
     try {
-      const result = await this.dataSource.query('SHOW TABLES');
-      return result.map(row => Object.values(row)[0]);
+      const result =
+        await this.dataSource.query<Record<string, unknown>[]>("SHOW TABLES");
+      return result.map((row) => Object.values(row)[0]);
     } catch (error) {
-      console.error('Error checking tables:', error);
+      console.error("Error checking tables:", error);
       return [];
     }
   }
@@ -46,9 +49,9 @@ export class DatabaseHealthService implements OnModuleInit {
   async createTablesIfNeeded() {
     try {
       const tables = await this.checkTables();
-      
-      if (!tables.includes('brands')) {
-        console.log('📝 Creating brands table...');
+
+      if (!tables.includes("brands")) {
+        console.log("📝 Creating brands table...");
         await this.dataSource.query(`
           CREATE TABLE brands (
             id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -61,8 +64,8 @@ export class DatabaseHealthService implements OnModuleInit {
         `);
       }
 
-      if (!tables.includes('categories')) {
-        console.log('📝 Creating categories table...');
+      if (!tables.includes("categories")) {
+        console.log("📝 Creating categories table...");
         await this.dataSource.query(`
           CREATE TABLE categories (
             id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -75,9 +78,9 @@ export class DatabaseHealthService implements OnModuleInit {
         `);
       }
 
-      console.log('✅ Tables checked/created successfully');
+      console.log("✅ Tables checked/created successfully");
     } catch (error) {
-      console.error('❌ Error creating tables:', error);
+      console.error("❌ Error creating tables:", error);
     }
   }
 }

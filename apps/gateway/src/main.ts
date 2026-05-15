@@ -42,4 +42,4 @@ async function bootstrap() {
   await app.listen(port);
   console.log(`Gateway listening on http://localhost:${port}`);
 }
-bootstrap();
+void bootstrap();

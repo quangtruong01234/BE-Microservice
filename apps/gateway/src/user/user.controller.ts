@@ -46,10 +46,11 @@ export class UserController {
   async login(
     @Body() dto: LoginUserDto,
     @Res({ passthrough: true }) res: Response,
-  ) {
+  ): Promise<Record<string, unknown>> {
     const { user, token } = await this.userService.login(dto);
     res.cookie(COOKIE_NAME, token, COOKIE_OPTIONS);
-    const { password: _password, ...safeUser } = user;
+    const safeUser: Record<string, unknown> = { ...user };
+    delete safeUser["password"];
     return safeUser;
   }
 
@@ -57,7 +58,7 @@ export class UserController {
   @Public()
   @ApiOperation({ summary: "Logout — clears access_token cookie" })
   @ApiResponse({ status: 200, description: "Logged out." })
-  async logout(@Res({ passthrough: true }) res: Response) {
+  logout(@Res({ passthrough: true }) res: Response) {
     res.clearCookie(COOKIE_NAME, { path: "/" });
     return { message: "Logged out successfully" };
   }

@@ -7,9 +7,20 @@ import {
   Injectable,
 } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
-import { Observable } from "rxjs";
 import { RATE_LIMIT_OPTIONS_KEY } from "../decorators/rate-limit.decorator";
 import { Request } from "express";
+
+interface RateLimitInfo {
+  limit: number;
+  current: number;
+  remaining: number;
+  resetTime: number;
+}
+
+interface RequestWithRateLimit extends Request {
+  rateLimit?: RateLimitInfo;
+  user?: { id?: string | number };
+}
 
 @Injectable()
 export class CustomRateLimitGuard implements CanActivate {
@@ -21,24 +32,22 @@ export class CustomRateLimitGuard implements CanActivate {
   ) {}
   async canActivate(context: ExecutionContext): Promise<boolean> {
     try {
-      // Get custom limit từ decorator nếu có
       const decoratorOptions = this.reflector.get<{
         limit?: number;
         ttl?: number;
       }>(RATE_LIMIT_OPTIONS_KEY, context.getHandler());
 
-      const limit = decoratorOptions?.limit || this.defaultLimit;
-      const ttl = decoratorOptions?.ttl || this.defaultTtl;
+      const limit = decoratorOptions?.limit ?? this.defaultLimit;
+      const ttl = decoratorOptions?.ttl ?? this.defaultTtl;
 
-      const request = context.switchToHttp().getRequest<Request>();
+      const request = context.switchToHttp().getRequest<RequestWithRateLimit>();
       const identifier = this.getIdentifier(request);
       const key = `throttle:${identifier}`;
 
-      const current = await this.cachedService.incr(key); //atomic increment
+      const current = await this.cachedService.incr(key);
 
       if (current === 1) {
-        // Set TTL lần đầu tiên
-        await this.cachedService.expire(key, ttl); //60s
+        await this.cachedService.expire(key, ttl);
       }
 
       if (current > limit) {
@@ -53,8 +62,7 @@ export class CustomRateLimitGuard implements CanActivate {
         );
       }
 
-      // Thêm info vào request object để dùng sau
-      (request as any).rateLimit = {
+      request.rateLimit = {
         limit,
         current,
         remaining: limit - current,
@@ -66,23 +74,16 @@ export class CustomRateLimitGuard implements CanActivate {
         throw error;
       }
 
-      // Nếu Redis có lỗi, cho phép request đi qua
       console.warn("Rate limit check failed:", error);
       return true;
     }
   }
 
-  /**
-   * Lấy identifier để rate limit
-   * Ưu tiên: userId (nếu đã auth) > IP address
-   */
-  private getIdentifier(request: Request): string {
-    // Nếu user đã authenticate, giới hạn per user
-    if ((request as any).user?.id) {
-      return `user:${(request as any).user.id}`;
+  private getIdentifier(request: RequestWithRateLimit): string {
+    if (request.user?.id) {
+      return `user:${String(request.user.id)}`;
     }
 
-    // Nếu không, giới hạn per IP
     const ip =
       request.ip ||
       (request.headers["x-forwarded-for"] as string)?.split(",")[0] ||

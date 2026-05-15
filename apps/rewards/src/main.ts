@@ -32,4 +32,4 @@ async function bootstrap() {
   await app.startAllMicroservices();
   console.log("🎁 Rewards microservice is running and listening for events.");
 }
-bootstrap();
+void bootstrap();

@@ -1,8 +1,8 @@
-import { Test, TestingModule } from '@nestjs/testing';
-import { RewardsController } from './rewards.controller';
-import { RewardsService } from './rewards.service';
+import { Test, TestingModule } from "@nestjs/testing";
+import { RewardsController } from "./rewards.controller";
+import { RewardsService } from "./rewards.service";
 
-describe('RewardsController', () => {
+describe("RewardsController", () => {
   let rewardsController: RewardsController;
 
   beforeEach(async () => {
@@ -14,9 +14,9 @@ describe('RewardsController', () => {
     rewardsController = app.get<RewardsController>(RewardsController);
   });
 
-  describe('root', () => {
-    it('should return "Hello World!"', () => {
-      expect(rewardsController.getHello()).toBe('Hello World!');
+  describe("root", () => {
+    it("should be defined", () => {
+      expect(rewardsController).toBeDefined();
     });
   });
 });

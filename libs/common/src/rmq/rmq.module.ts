@@ -7,12 +7,6 @@ import * as amqp from "amqplib";
 
 interface RmqModuleOptions {
   name: string;
-  // exchange: string;
-}
-
-interface RmqPublisherOptions {
-  name: string;
-  exchange: string;
 }
 
 @Module({

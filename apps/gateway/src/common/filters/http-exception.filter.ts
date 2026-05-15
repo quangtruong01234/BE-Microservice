@@ -40,8 +40,12 @@ export class HttpExceptionFilter implements ExceptionFilter {
         typeof exceptionResponse === "object" &&
         exceptionResponse !== null
       ) {
-        message = (exceptionResponse as any).message || exception.message;
-        error = (exceptionResponse as any).error || exception.constructor.name;
+        const body = exceptionResponse as {
+          message?: string | string[];
+          error?: string;
+        };
+        message = body.message ?? exception.message;
+        error = body.error ?? exception.constructor.name;
       } else {
         message = exception.message;
         error = exception.constructor.name;
@@ -53,9 +57,13 @@ export class HttpExceptionFilter implements ExceptionFilter {
       error = exception.constructor.name;
     } else if (typeof exception === "object" && exception !== null) {
       // Handle microservice error objects
-      const errorObj = exception as any;
+      const errorObj = exception as {
+        statusCode?: unknown;
+        status?: unknown;
+        message?: string | string[];
+        error?: string;
+      };
 
-      // Extract status code (ensure it's a number)
       if (typeof errorObj.statusCode === "number") {
         status = errorObj.statusCode;
       } else if (typeof errorObj.status === "number") {
@@ -64,12 +72,11 @@ export class HttpExceptionFilter implements ExceptionFilter {
         status = HttpStatus.INTERNAL_SERVER_ERROR;
       }
 
-      // Extract message
-      message = errorObj.message || errorObj.error || "Internal server error";
-      error = errorObj.error || "MicroserviceError";
+      message = errorObj.message ?? errorObj.error ?? "Internal server error";
+      error = errorObj.error ?? "MicroserviceError";
 
       this.logger.error(
-        `Microservice error: Status=${status}, Message=${message}`,
+        `Microservice error: Status=${status}, Message=${Array.isArray(message) ? message.join(", ") : message}`,
         undefined,
         `${request.method} ${request.url}`,
       );

@@ -1,5 +1,5 @@
-import { IsOptional, IsString, IsNumber, IsBoolean } from 'class-validator';
-import { Transform, Type } from 'class-transformer';
+import { IsOptional, IsString, IsNumber, IsBoolean } from "class-validator";
+import { Transform, Type } from "class-transformer";
 
 export class GetProductsQueryDto {
   @IsOptional()
@@ -37,26 +37,26 @@ export class GetProductsQueryDto {
   maxPrice?: number;
 
   @IsOptional()
-  @Transform(({ value }) => value === 'true')
+  @Transform(({ value }) => value === "true")
   @IsBoolean()
   isActive?: boolean;
 
   @IsOptional()
   @IsString()
-  sortBy?: string = 'createdAt';
+  sortBy?: string = "createdAt";
 
   @IsOptional()
   @IsString()
-  sortOrder?: 'ASC' | 'DESC' = 'DESC';
+  sortOrder?: "ASC" | "DESC" = "DESC";
 
   // Social features filters
   @IsOptional()
-  @Transform(({ value }) => value === 'true')
+  @Transform(({ value }) => value === "true")
   @IsBoolean()
   isFeatured?: boolean;
 
   @IsOptional()
-  @Transform(({ value }) => value === 'true')
+  @Transform(({ value }) => value === "true")
   @IsBoolean()
   isTrending?: boolean;
 

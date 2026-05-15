@@ -36,4 +36,4 @@ async function bootstrap() {
     `Orders microservice is listening on port ${PORT_TCP.ORDERS_TCP_PORT}`,
   );
 }
-bootstrap();
+void bootstrap();

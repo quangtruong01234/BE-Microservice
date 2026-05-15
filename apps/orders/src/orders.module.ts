@@ -2,7 +2,7 @@ import { Module } from "@nestjs/common";
 import { OrdersController } from "./orders.controller";
 import { OrdersService } from "./orders.service";
 import { ConfigModule } from "@nestjs/config";
-import { MysqlModule, RmqModule } from "@app/common";
+import { RmqModule } from "@app/common";
 import { HttpModule } from "@nestjs/axios";
 import { ClientsModule, Transport } from "@nestjs/microservices";
 import { TypeOrmModule } from "@nestjs/typeorm";

@@ -9,6 +9,26 @@ import { JwtService } from "@nestjs/jwt";
 import { Request } from "express";
 import { IS_PUBLIC_KEY } from "../decorators/public.decorator";
 
+interface JwtPayload {
+  sub?: number;
+  id?: number;
+  username?: string;
+  email?: string;
+  roles?: string[];
+  permissions?: string[];
+}
+
+interface RequestWithUser extends Request {
+  user?: {
+    id: number | undefined;
+    username: string | undefined;
+    email: string | undefined;
+    roles: string[];
+    permissions: string[];
+  };
+  cookies?: Record<string, string>;
+}
+
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
   constructor(
@@ -26,7 +46,7 @@ export class JwtAuthGuard implements CanActivate {
       return true;
     }
 
-    const request = context.switchToHttp().getRequest<Request>();
+    const request = context.switchToHttp().getRequest<RequestWithUser>();
     const token = this.extractToken(request);
 
     if (!token) {
@@ -34,13 +54,13 @@ export class JwtAuthGuard implements CanActivate {
     }
 
     try {
-      const payload = await this.jwtService.verifyAsync(token);
-      (request as any).user = {
-        id: payload.sub || payload.id,
+      const payload = await this.jwtService.verifyAsync<JwtPayload>(token);
+      request.user = {
+        id: payload.sub ?? payload.id,
         username: payload.username,
         email: payload.email,
-        roles: payload.roles || [],
-        permissions: payload.permissions || [],
+        roles: payload.roles ?? [],
+        permissions: payload.permissions ?? [],
       };
       return true;
     } catch (error) {
@@ -49,14 +69,10 @@ export class JwtAuthGuard implements CanActivate {
     }
   }
 
-  private extractToken(request: Request): string | null {
-    // 1. HttpOnly cookie (primary — browser sends automatically)
-    const cookieToken = (request as any).cookies?.access_token as
-      | string
-      | undefined;
+  private extractToken(request: RequestWithUser): string | null {
+    const cookieToken = request.cookies?.access_token;
     if (cookieToken) return cookieToken;
 
-    // 2. Authorization header fallback (Swagger / API clients)
     const authHeader = request.headers.authorization;
     if (!authHeader) return null;
     const [type, token] = authHeader.split(" ");

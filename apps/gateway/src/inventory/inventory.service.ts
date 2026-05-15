@@ -17,17 +17,17 @@ export class InventoryService {
     private readonly inventoryClient: ClientProxy,
   ) {}
 
-  async create(data: any) {
+  async create(data: unknown): Promise<unknown> {
     try {
       this.logger.log(`Creating inventory: ${JSON.stringify(data)}`);
-      return await firstValueFrom(
+      return (await firstValueFrom(
         this.inventoryClient
           .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_CREATE, data)
           .pipe(
             timeout(10000),
             catchError((error) => throwError(() => error)),
           ),
-      );
+      )) as unknown;
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -37,16 +37,16 @@ export class InventoryService {
     }
   }
 
-  async findAll() {
+  async findAll(): Promise<unknown> {
     try {
-      return await firstValueFrom(
+      return (await firstValueFrom(
         this.inventoryClient
           .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_FIND_ALL, {})
           .pipe(
             timeout(10000),
             catchError((error) => throwError(() => error)),
           ),
-      );
+      )) as unknown;
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -56,16 +56,16 @@ export class InventoryService {
     }
   }
 
-  async findOne(id: number) {
+  async findOne(id: number): Promise<unknown> {
     try {
-      return await firstValueFrom(
+      return (await firstValueFrom(
         this.inventoryClient
           .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_FIND_ONE, id)
           .pipe(
             timeout(10000),
             catchError((error) => throwError(() => error)),
           ),
-      );
+      )) as unknown;
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -75,9 +75,9 @@ export class InventoryService {
     }
   }
 
-  async findByProductId(productId: number) {
+  async findByProductId(productId: number): Promise<unknown> {
     try {
-      return await firstValueFrom(
+      return (await firstValueFrom(
         this.inventoryClient
           .send(
             INVENTORY_MESSAGE_PATTERNS.INVENTORY_FIND_BY_PRODUCT_ID,
@@ -87,7 +87,7 @@ export class InventoryService {
             timeout(10000),
             catchError((error) => throwError(() => error)),
           ),
-      );
+      )) as unknown;
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -97,16 +97,16 @@ export class InventoryService {
     }
   }
 
-  async findBySku(sku: string) {
+  async findBySku(sku: string): Promise<unknown> {
     try {
-      return await firstValueFrom(
+      return (await firstValueFrom(
         this.inventoryClient
           .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_FIND_BY_SKU, sku)
           .pipe(
             timeout(10000),
             catchError((error) => throwError(() => error)),
           ),
-      );
+      )) as unknown;
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -116,16 +116,16 @@ export class InventoryService {
     }
   }
 
-  async update(id: number, update: any) {
+  async update(id: number, update: unknown): Promise<unknown> {
     try {
-      return await firstValueFrom(
+      return (await firstValueFrom(
         this.inventoryClient
           .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_UPDATE, { id, update })
           .pipe(
             timeout(10000),
             catchError((error) => throwError(() => error)),
           ),
-      );
+      )) as unknown;
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -135,16 +135,16 @@ export class InventoryService {
     }
   }
 
-  async remove(id: number) {
+  async remove(id: number): Promise<unknown> {
     try {
-      return await firstValueFrom(
+      return (await firstValueFrom(
         this.inventoryClient
           .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_REMOVE, id)
           .pipe(
             timeout(10000),
             catchError((error) => throwError(() => error)),
           ),
-      );
+      )) as unknown;
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -154,9 +154,9 @@ export class InventoryService {
     }
   }
 
-  async checkStock(productId: number, quantity: number) {
+  async checkStock(productId: number, quantity: number): Promise<unknown> {
     try {
-      return await firstValueFrom(
+      return (await firstValueFrom(
         this.inventoryClient
           .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_CHECK_STOCK, {
             productId,
@@ -166,7 +166,7 @@ export class InventoryService {
             timeout(10000),
             catchError((error) => throwError(() => error)),
           ),
-      );
+      )) as unknown;
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -176,9 +176,9 @@ export class InventoryService {
     }
   }
 
-  async reserveStock(productId: number, quantity: number) {
+  async reserveStock(productId: number, quantity: number): Promise<unknown> {
     try {
-      return await firstValueFrom(
+      return (await firstValueFrom(
         this.inventoryClient
           .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK, {
             productId,
@@ -188,7 +188,7 @@ export class InventoryService {
             timeout(10000),
             catchError((error) => throwError(() => error)),
           ),
-      );
+      )) as unknown;
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -198,9 +198,9 @@ export class InventoryService {
     }
   }
 
-  async releaseStock(productId: number, quantity: number) {
+  async releaseStock(productId: number, quantity: number): Promise<unknown> {
     try {
-      return await firstValueFrom(
+      return (await firstValueFrom(
         this.inventoryClient
           .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK, {
             productId,
@@ -210,7 +210,7 @@ export class InventoryService {
             timeout(10000),
             catchError((error) => throwError(() => error)),
           ),
-      );
+      )) as unknown;
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -220,16 +220,16 @@ export class InventoryService {
     }
   }
 
-  async getLowStock() {
+  async getLowStock(): Promise<unknown> {
     try {
-      return await firstValueFrom(
+      return (await firstValueFrom(
         this.inventoryClient
           .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_GET_LOW_STOCK, {})
           .pipe(
             timeout(10000),
             catchError((error) => throwError(() => error)),
           ),
-      );
+      )) as unknown;
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,

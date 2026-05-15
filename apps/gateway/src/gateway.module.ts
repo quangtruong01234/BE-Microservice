@@ -2,7 +2,6 @@ import { Module } from "@nestjs/common";
 import { ClientsModule, Transport } from "@nestjs/microservices";
 import { GatewayController } from "./gateway.controller";
 import { GatewayService } from "./gateway.service";
-import { TCP } from "@app/common/constants/TCP";
 import { InventoryModule } from "./inventory/inventory.module";
 import { UserModule } from "./user/user.module";
 import { OrderModule } from "./order/order.module";
@@ -13,7 +12,6 @@ import { APP_GUARD } from "@nestjs/core";
 import { CustomRateLimitGuard } from "./common/guards/rate-limit.guard";
 import { JwtModule } from "@nestjs/jwt";
 import { JwtAuthGuard } from "./common/guards/jwt-auth.guard";
-import { RoleAuthGuard } from "./common/guards/role-auth.guard";
 
 @Module({
   imports: [

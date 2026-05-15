@@ -1,5 +1,13 @@
-import { IsString, IsNumber, IsOptional, IsBoolean, Min, Max, IsIn } from 'class-validator';
-import { Type } from 'class-transformer';
+import {
+  IsString,
+  IsNumber,
+  IsOptional,
+  IsBoolean,
+  Min,
+  Max,
+  IsIn,
+} from "class-validator";
+import { Type } from "class-transformer";
 
 export class CreateProductDto {
   @IsString()
@@ -82,8 +90,8 @@ export class CreateProductDto {
   // Product condition and seller info
   @IsOptional()
   @IsString()
-  @IsIn(['new', 'used', 'refurbished'])
-  condition?: string = 'new';
+  @IsIn(["new", "used", "refurbished"])
+  condition?: string = "new";
 
   @IsOptional()
   @IsString()

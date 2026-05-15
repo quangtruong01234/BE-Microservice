@@ -1,9 +1,9 @@
-import { Controller, Get, Logger } from '@nestjs/common';
-import { UserService } from './user.service';
-import { MessagePattern, Payload } from '@nestjs/microservices';
-import { RegisterUserDto } from './dto/register-user.dto';
-import { LoginUserDto } from './dto/login-user.dto';
-import { USER_MESSAGE_PATTERN } from 'libs/constant/message-pattern.constant';
+import { Controller, Logger } from "@nestjs/common";
+import { UserService } from "./user.service";
+import { MessagePattern, Payload } from "@nestjs/microservices";
+import { RegisterUserDto } from "./dto/register-user.dto";
+import { LoginUserDto } from "./dto/login-user.dto";
+import { USER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 
 @Controller()
 export class UserController {

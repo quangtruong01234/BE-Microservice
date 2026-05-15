@@ -1,22 +1,20 @@
-import { Controller, Post, Body, Logger, Get } from "@nestjs/common";
+import { Controller, Post, Body, Get } from "@nestjs/common";
+
 import { GatewayService } from "./gateway.service";
-import { ApiBody, ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
+import { ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
 import { RateLimit } from "./common/decorators/rate-limit.decorator";
 import { Public } from "./common/decorators/public.decorator";
 
 @ApiTags("Gateway")
 @Controller("gateway")
-// @Controller("orders") // test 40
 export class GatewayController {
-  private readonly logger = new Logger(GatewayController.name);
-
   constructor(private readonly gatewayService: GatewayService) {}
 
   @Post()
   // @ApiOperation({ summary: 'Place a new order' })
   // @ApiBody({ type: CreateOrderDto })
   // @ApiResponse({ status: 201, description: 'Order created successfully' })
-  async createOrder(@Body() payload: any) {
+  async createOrder(@Body() payload: unknown): Promise<unknown> {
     return await this.gatewayService.createOrder(payload);
   }
 
@@ -43,7 +41,7 @@ export class GatewayController {
     },
   })
   @ApiResponse({ status: 429, description: "Too many requests" })
-  async getHealth() {
-    return await this.gatewayService.getHeath();
+  getHealth() {
+    return this.gatewayService.getHeath();
   }
 }

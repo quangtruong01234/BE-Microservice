@@ -116,14 +116,21 @@ export class InventoryController {
   }
 
   @EventPattern(EVENT.ORDER_CREATED_EVENT)
-  handleOrderCreated(@Payload() data: any, @Ctx() context: RmqContext) {
-    this.logger.log(`[INVENTORY] Received event for order: ${data.id}`);
+  handleOrderCreated(
+    @Payload() data: { id?: string | number },
+    @Ctx() context: RmqContext,
+  ) {
+    this.logger.log(
+      `[INVENTORY] Received event for order: ${String(data.id ?? "")}`,
+    );
 
     // ... Logic nghiệp vụ: gọi this.inventoryService để trừ kho ...
     // Ví dụ: await this.inventoryService.deductStock(data.products);
 
     // Quan trọng: Xác nhận đã xử lý xong message
     this.rmqService.ack(context);
-    this.logger.log(`[INVENTORY] Acknowledged event for order ${data.id}`);
+    this.logger.log(
+      `[INVENTORY] Acknowledged event for order ${String(data.id ?? "")}`,
+    );
   }
 }

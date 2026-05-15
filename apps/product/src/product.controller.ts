@@ -1,12 +1,12 @@
-import { Controller } from '@nestjs/common';
-import { MessagePattern, Payload } from '@nestjs/microservices';
-import { ProductService } from './product.service';
-import { CreateProductDto } from './dto/create-product.dto';
-import { UpdateProductDto } from './dto/update-product.dto';
-import { CreateBrandDto } from './dto/create-brand.dto';
-import { CreateCategoryDto } from './dto/create-category.dto';
-import { GetProductsQueryDto } from './dto/get-products-query.dto';
-import { PRODUCT_MESSAGE_PATTERNS } from 'libs/constant/message-pattern-product.constant';
+import { Controller } from "@nestjs/common";
+import { MessagePattern, Payload } from "@nestjs/microservices";
+import { ProductService } from "./product.service";
+import { CreateProductDto } from "./dto/create-product.dto";
+import { UpdateProductDto } from "./dto/update-product.dto";
+import { CreateBrandDto } from "./dto/create-brand.dto";
+import { CreateCategoryDto } from "./dto/create-category.dto";
+import { GetProductsQueryDto } from "./dto/get-products-query.dto";
+import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
 
 @Controller()
 export class ProductController {
@@ -37,7 +37,9 @@ export class ProductController {
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_UPDATE)
-  async updateProduct(@Payload() data: { id: number; updateProductDto: UpdateProductDto }) {
+  async updateProduct(
+    @Payload() data: { id: number; updateProductDto: UpdateProductDto },
+  ) {
     const { id, updateProductDto } = data;
     return this.productService.updateProduct(id, updateProductDto);
   }
@@ -48,13 +50,17 @@ export class ProductController {
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_CATEGORY)
-  async findProductsByCategory(@Payload() data: { categoryId: number; query: GetProductsQueryDto }) {
+  async findProductsByCategory(
+    @Payload() data: { categoryId: number; query: GetProductsQueryDto },
+  ) {
     const { categoryId, query } = data;
     return this.productService.findProductsByCategory(categoryId, query);
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_BRAND)
-  async findProductsByBrand(@Payload() data: { brandId: number; query: GetProductsQueryDto }) {
+  async findProductsByBrand(
+    @Payload() data: { brandId: number; query: GetProductsQueryDto },
+  ) {
     const { brandId, query } = data;
     return this.productService.findProductsByBrand(brandId, query);
   }

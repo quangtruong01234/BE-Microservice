@@ -1,107 +1,112 @@
-import { Inject, Injectable } from '@nestjs/common';
-import Redis from 'ioredis';
+import { Inject, Injectable } from "@nestjs/common";
+import Redis from "ioredis";
 
 @Injectable()
 export class CachedService {
-    constructor(@Inject('REDIS_CLIENT') private readonly redis: Redis) { }
+  constructor(@Inject("REDIS_CLIENT") private readonly redis: Redis) {}
 
-    async setFooBar() {
-        await this.redis.set('foo', 'bar');
-        const result = await this.redis.get('foo');
-        console.log(result); 
-    }
-  
-    async get(key: string): Promise<string | null> {
-        return await this.redis.get(key);
-    }
+  async setFooBar() {
+    await this.redis.set("foo", "bar");
+    const result = await this.redis.get("foo");
+    console.log(result);
+  }
 
-    async set(key: string, value: string, expireSeconds?: number): Promise<'OK'> {
-        if (expireSeconds) {
-            return await this.redis.set(key, value, 'EX', expireSeconds);
-        }
-        return await this.redis.set(key, value);
-    }
+  async get(key: string): Promise<string | null> {
+    return await this.redis.get(key);
+  }
 
-    async del(key: string): Promise<number> {
-        return await this.redis.del(key);
+  async set(key: string, value: string, expireSeconds?: number): Promise<"OK"> {
+    if (expireSeconds) {
+      return await this.redis.set(key, value, "EX", expireSeconds);
     }
+    return await this.redis.set(key, value);
+  }
 
-    async exists(key: string): Promise<number> {
-        return await this.redis.exists(key);
-    }
+  async del(key: string): Promise<number> {
+    return await this.redis.del(key);
+  }
 
-    async expire(key: string, seconds: number): Promise<number> {
-        return await this.redis.expire(key, seconds);
-    }
+  async exists(key: string): Promise<number> {
+    return await this.redis.exists(key);
+  }
 
-    async incr(key: string): Promise<number> {
-        return await this.redis.incr(key);
-    }
+  async expire(key: string, seconds: number): Promise<number> {
+    return await this.redis.expire(key, seconds);
+  }
 
-    async decr(key: string): Promise<number> {
-        return await this.redis.decr(key);
-    }
+  async incr(key: string): Promise<number> {
+    return await this.redis.incr(key);
+  }
 
-    // Hashes
-    async hget(hash: string, field: string): Promise<string | null> {
-        return await this.redis.hget(hash, field);
-    }
+  async decr(key: string): Promise<number> {
+    return await this.redis.decr(key);
+  }
 
-    async hset(hash: string, field: string, value: string): Promise<number> {
-        return await this.redis.hset(hash, field, value);
-    }
+  // Hashes
+  async hget(hash: string, field: string): Promise<string | null> {
+    return await this.redis.hget(hash, field);
+  }
 
-    async hdel(hash: string, field: string): Promise<number> {
-        return await this.redis.hdel(hash, field);
-    }
+  async hset(hash: string, field: string, value: string): Promise<number> {
+    return await this.redis.hset(hash, field, value);
+  }
 
-    async hgetall(hash: string): Promise<Record<string, string>> {
-        return await this.redis.hgetall(hash);
-    }
+  async hdel(hash: string, field: string): Promise<number> {
+    return await this.redis.hdel(hash, field);
+  }
 
-    // Lists
-    async lpush(key: string, ...values: string[]): Promise<number> {
-        return await this.redis.lpush(key, ...values);
-    }
+  async hgetall(hash: string): Promise<Record<string, string>> {
+    return await this.redis.hgetall(hash);
+  }
 
-    async rpush(key: string, ...values: string[]): Promise<number> {
-        return await this.redis.rpush(key, ...values);
-    }
+  // Lists
+  async lpush(key: string, ...values: string[]): Promise<number> {
+    return await this.redis.lpush(key, ...values);
+  }
 
-    async lpop(key: string): Promise<string | null> {
-        return await this.redis.lpop(key);
-    }
+  async rpush(key: string, ...values: string[]): Promise<number> {
+    return await this.redis.rpush(key, ...values);
+  }
 
-    async rpop(key: string): Promise<string | null> {
-        return await this.redis.rpop(key);
-    }
+  async lpop(key: string): Promise<string | null> {
+    return await this.redis.lpop(key);
+  }
 
-    // Sets
-    async sadd(key: string, ...members: string[]): Promise<number> {
-        return await this.redis.sadd(key, ...members);
-    }
+  async rpop(key: string): Promise<string | null> {
+    return await this.redis.rpop(key);
+  }
 
-    async srem(key: string, ...members: string[]): Promise<number> {
-        return await this.redis.srem(key, ...members);
-    }
+  // Sets
+  async sadd(key: string, ...members: string[]): Promise<number> {
+    return await this.redis.sadd(key, ...members);
+  }
 
-    async smembers(key: string): Promise<string[]> {
-        return await this.redis.smembers(key);
-    }
+  async srem(key: string, ...members: string[]): Promise<number> {
+    return await this.redis.srem(key, ...members);
+  }
 
-    // Sorted Sets
-    async zadd(key: string, ...args: (string | number)[]): Promise<number> {
-        return await this.redis.zadd(key, ...args);
-    }
+  async smembers(key: string): Promise<string[]> {
+    return await this.redis.smembers(key);
+  }
 
-    async zrange(key: string, start: number, stop: number, withScores = false): Promise<string[]> {
-        if (withScores) {
-            return await this.redis.zrange(key, start, stop, 'WITHSCORES');
-        }
-        return await this.redis.zrange(key, start, stop);
-    }
+  // Sorted Sets
+  async zadd(key: string, ...args: (string | number)[]): Promise<number> {
+    return await this.redis.zadd(key, ...args);
+  }
 
-    async zrem(key: string, ...members: string[]): Promise<number> {
-        return await this.redis.zrem(key, ...members);
+  async zrange(
+    key: string,
+    start: number,
+    stop: number,
+    withScores = false,
+  ): Promise<string[]> {
+    if (withScores) {
+      return await this.redis.zrange(key, start, stop, "WITHSCORES");
     }
+    return await this.redis.zrange(key, start, stop);
+  }
+
+  async zrem(key: string, ...members: string[]): Promise<number> {
+    return await this.redis.zrem(key, ...members);
+  }
 }

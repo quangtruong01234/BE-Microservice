@@ -34,4 +34,4 @@ async function bootstrap() {
   await app.startAllMicroservices();
   console.log("💳 Payments microservice is running and listening for events.");
 }
-bootstrap();
+void bootstrap();
