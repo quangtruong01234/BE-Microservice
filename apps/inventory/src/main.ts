@@ -2,7 +2,7 @@ import { NestFactory } from "@nestjs/core";
 import { RmqService } from "@app/common";
 import { InventoryModule } from "./inventory.module";
 import { Transport, MicroserviceOptions } from "@nestjs/microservices";
-import { PORT_TCP } from "libs/constant/port-tcp.constant";
+import { PORT_TCP, TCP_HOST } from "libs/constant/port-tcp.constant";
 import { AllRpcExceptionFilter } from "./filters/rpc-exception.filter";
 
 async function bootstrap() {
@@ -16,7 +16,7 @@ async function bootstrap() {
   app.connectMicroservice<MicroserviceOptions>({
     transport: Transport.TCP,
     options: {
-      host: "localhost",
+      host: TCP_HOST,
       port: PORT_TCP.INVENTORY_TCP_PORT,
     },
   });

@@ -7,7 +7,7 @@ import { HttpExceptionFilter } from "./common/filters/http-exception.filter";
 import { ResponseInterceptor } from "./common/interceptor/response.interceptor";
 import { ValidationPipe } from "@nestjs/common";
 async function bootstrap() {
-  dotenv.config();
+  dotenv.config({ path: "./local/nodeA/.env" });
   const app = await NestFactory.create(GatewayModule);
   app.use(
     (cookieParser as unknown as () => import("express").RequestHandler)(),

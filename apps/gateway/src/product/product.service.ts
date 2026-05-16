@@ -119,6 +119,29 @@ export class ProductService {
       this.logger.log(
         `Product created successfully with ID: ${String(result?.id ?? "")}`,
       );
+
+      if (result?.id) {
+        try {
+          await firstValueFrom(
+            this.inventoryClient
+              .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_CREATE, {
+                productId: Number(result.id),
+                sku: dto.sku,
+                availableStock: dto.stockQuantity ?? 0,
+                minimumStock: 0,
+              })
+              .pipe(timeout(10000)),
+          );
+          this.logger.log(
+            `Inventory created for product ID: ${String(result.id)}`,
+          );
+        } catch (invErr) {
+          this.logger.warn(
+            `Failed to create inventory for product ${String(result.id)}: ${String(invErr)}`,
+          );
+        }
+      }
+
       return result;
     } catch (error) {
       MicroserviceErrorHandler.handleError(
@@ -611,7 +634,7 @@ export class ProductService {
         user: user
           ? {
               id: user.id,
-              name: user.name ?? user.username,
+              name: user.username,
               email: user.email,
               avatar: user.avatar,
             }

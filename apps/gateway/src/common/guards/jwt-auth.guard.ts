@@ -18,17 +18,6 @@ interface JwtPayload {
   permissions?: string[];
 }
 
-interface RequestWithUser extends Request {
-  user?: {
-    id: number | undefined;
-    username: string | undefined;
-    email: string | undefined;
-    roles: string[];
-    permissions: string[];
-  };
-  cookies?: Record<string, string>;
-}
-
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
   constructor(
@@ -46,7 +35,7 @@ export class JwtAuthGuard implements CanActivate {
       return true;
     }
 
-    const request = context.switchToHttp().getRequest<RequestWithUser>();
+    const request = context.switchToHttp().getRequest<Request>();
     const token = this.extractToken(request);
 
     if (!token) {
@@ -56,9 +45,9 @@ export class JwtAuthGuard implements CanActivate {
     try {
       const payload = await this.jwtService.verifyAsync<JwtPayload>(token);
       request.user = {
-        id: payload.sub ?? payload.id,
-        username: payload.username,
-        email: payload.email,
+        id: payload.sub ?? payload.id ?? 0,
+        username: payload.username ?? "",
+        email: payload.email ?? "",
         roles: payload.roles ?? [],
         permissions: payload.permissions ?? [],
       };
@@ -69,8 +58,10 @@ export class JwtAuthGuard implements CanActivate {
     }
   }
 
-  private extractToken(request: RequestWithUser): string | null {
-    const cookieToken = request.cookies?.access_token;
+  private extractToken(request: Request): string | null {
+    const cookieToken = (
+      request.cookies as unknown as Record<string, string | undefined>
+    )["access_token"];
     if (cookieToken) return cookieToken;
 
     const authHeader = request.headers.authorization;

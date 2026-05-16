@@ -1,3 +1,5 @@
+export const TCP_HOST = "localhost";
+
 export const PORT_TCP = {
   PRODUCT_TCP_PORT: 3006,
   PAYMENT_TCP_PORT: 3005,

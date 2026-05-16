@@ -17,10 +17,15 @@ export class MicroserviceErrorHandler {
     operation: string,
     serviceName: string = "Microservice",
   ): never {
-    this.logger.error(`${serviceName} ${operation} failed:`, error);
+    const errorSummary =
+      error instanceof Error
+        ? `${error.constructor.name}: ${error.message}`
+        : JSON.stringify(error);
+    this.logger.error(`${serviceName} ${operation} failed: ${errorSummary}`);
 
     const err = error as ErrorLike;
-    const rpcError = (err?.response as ErrorLike) ?? err;
+    const rpcError =
+      (err?.response != null ? (err.response as ErrorLike) : null) ?? err;
 
     const statusCode = this.extractStatusCode(rpcError);
     const message = this.extractErrorMessage(rpcError);
@@ -40,25 +45,35 @@ export class MicroserviceErrorHandler {
       return error.status;
     }
 
-    if (typeof error.name === "string") {
-      switch (error.name) {
+    const errorTypeName =
+      (typeof error.name === "string" ? error.name : null) ??
+      (typeof error.error === "string" ? error.error : null);
+
+    if (errorTypeName) {
+      switch (errorTypeName) {
         case "ConflictException":
         case "RpcException.ConflictException":
+        case "Conflict":
           return HttpStatus.CONFLICT;
         case "NotFoundException":
         case "RpcException.NotFoundException":
+        case "Not Found":
           return HttpStatus.NOT_FOUND;
         case "BadRequestException":
         case "RpcException.BadRequestException":
+        case "Bad Request":
           return HttpStatus.BAD_REQUEST;
         case "UnauthorizedException":
         case "RpcException.UnauthorizedException":
+        case "Unauthorized":
           return HttpStatus.UNAUTHORIZED;
         case "ForbiddenException":
         case "RpcException.ForbiddenException":
+        case "Forbidden":
           return HttpStatus.FORBIDDEN;
         case "UnprocessableEntityException":
         case "RpcException.UnprocessableEntityException":
+        case "Unprocessable Entity":
           return HttpStatus.UNPROCESSABLE_ENTITY;
       }
     }
@@ -122,11 +137,11 @@ export class MicroserviceErrorHandler {
   }
 
   private static extractErrorMessage(error: ErrorLike): string {
-    if (typeof error.message === "string") {
+    if (typeof error.message === "string" && error.message.trim() !== "") {
       return this.cleanupErrorMessage(error.message);
     }
 
-    if (Array.isArray(error.message)) {
+    if (Array.isArray(error.message) && error.message.length > 0) {
       return (error.message as string[]).join(", ");
     }
 
@@ -135,16 +150,19 @@ export class MicroserviceErrorHandler {
       if (Array.isArray(response.message)) {
         return (response.message as string[]).join(", ");
       }
-      if (typeof response.message === "string") {
+      if (
+        typeof response.message === "string" &&
+        response.message.trim() !== ""
+      ) {
         return this.cleanupErrorMessage(response.message);
       }
     }
 
-    if (typeof error.error === "string") {
+    if (typeof error.error === "string" && error.error.trim() !== "") {
       return error.error;
     }
 
-    return "Operation failed";
+    return "Service unavailable";
   }
 
   private static cleanupErrorMessage(message: string): string {

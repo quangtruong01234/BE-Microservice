@@ -7,7 +7,9 @@ import {
   USER_MESSAGE_PATTERN,
 } from "libs/constant/message-pattern.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
+import { CMD } from "@app/common/constants/cmd";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
+import { CreateOrderDto } from "./dto/create-order.dto";
 
 export abstract class BaseAggregatorService {
   protected logger = new Logger(BaseAggregatorService.name);
@@ -35,6 +37,27 @@ export class OrderService {
     private readonly userClient: ClientProxy,
     @Inject(CachedService) private readonly redisService: CachedService,
   ) {}
+
+  async createOrder(userId: number, dto: CreateOrderDto): Promise<unknown> {
+    try {
+      return (await firstValueFrom(
+        this.ordersClient
+          .send({ cmd: CMD.CREATE_ORDER }, { userId, items: dto.items })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      )) as unknown;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "create order",
+        "Orders Service",
+      );
+    }
+  }
 
   async getOrderByUser(userId: string): Promise<unknown> {
     const cacheKey = `order_user:${userId}`;

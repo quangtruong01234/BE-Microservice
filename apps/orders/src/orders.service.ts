@@ -9,9 +9,11 @@ import { Repository } from "typeorm";
 import { Order } from "./entity/order.entity";
 import { HttpService } from "@nestjs/axios";
 import { ClientProxy } from "@nestjs/microservices";
+import { firstValueFrom } from "rxjs";
 import { OrderItem } from "./entity/order_item.entity";
 import { EVENT } from "@app/common/constants/event";
 import { EXCHANGE } from "@app/common/constants/exchange";
+import { INVENTORY_MESSAGE_PATTERNS } from "libs/constant/message-pattern-inventory.constant";
 import { Channel } from "amqplib";
 
 @Injectable()
@@ -39,9 +41,21 @@ export class OrdersService {
     items: Array<{ product_id: number; quantity: number; price: number }>,
   ): Promise<Order> {
     //1. check stock in inventory
-    const isStockAvailable = true; //call api --> inventory
-    if (!isStockAvailable) {
-      throw new BadRequestException("Not enough stock for the req items...");
+    for (const item of items) {
+      const result = await firstValueFrom(
+        this.inventoryClient.send<{
+          available: boolean;
+          availableStock: number;
+        }>(INVENTORY_MESSAGE_PATTERNS.INVENTORY_CHECK_STOCK, {
+          productId: item.product_id,
+          quantity: item.quantity,
+        }),
+      );
+      if (!result.available) {
+        throw new BadRequestException(
+          `Insufficient stock for product ${item.product_id}: requested ${item.quantity}, available ${result.availableStock}`,
+        );
+      }
     }
     const total = items.reduce(
       (sum, item) => sum + item.price * item.quantity,

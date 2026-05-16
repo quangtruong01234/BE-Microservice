@@ -116,21 +116,42 @@ export class InventoryController {
   }
 
   @EventPattern(EVENT.ORDER_CREATED_EVENT)
-  handleOrderCreated(
-    @Payload() data: { id?: string | number },
+  async handleOrderCreated(
+    @Payload()
+    data: {
+      data: {
+        id: number;
+        user_id: number;
+        items: { product_id: number; quantity: number }[];
+      };
+    },
     @Ctx() context: RmqContext,
   ) {
+    const order = data.data;
     this.logger.log(
-      `[INVENTORY] Received event for order: ${String(data.id ?? "")}`,
+      `[INVENTORY] Processing order_created for order ${order.id}`,
     );
 
-    // ... Logic nghiệp vụ: gọi this.inventoryService để trừ kho ...
-    // Ví dụ: await this.inventoryService.deductStock(data.products);
+    if (Array.isArray(order.items)) {
+      for (const item of order.items) {
+        const reserved = await this.inventoryService.reserveStock(
+          item.product_id,
+          item.quantity,
+        );
+        if (reserved) {
+          await this.inventoryService.consumeReservedStock(
+            item.product_id,
+            item.quantity,
+          );
+        } else {
+          this.logger.warn(
+            `[INVENTORY] Insufficient stock for product ${item.product_id} (qty: ${item.quantity}) in order ${order.id}`,
+          );
+        }
+      }
+    }
 
-    // Quan trọng: Xác nhận đã xử lý xong message
     this.rmqService.ack(context);
-    this.logger.log(
-      `[INVENTORY] Acknowledged event for order ${String(data.id ?? "")}`,
-    );
+    this.logger.log(`[INVENTORY] Deducted stock for order ${order.id}`);
   }
 }

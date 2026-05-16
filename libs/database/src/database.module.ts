@@ -1,5 +1,5 @@
 import { Module } from "@nestjs/common";
-import { ConfigModule } from "@nestjs/config";
+import { ConfigModule, ConfigService } from "@nestjs/config";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { DatabaseHealthService } from "./database-health.service";
 
@@ -9,19 +9,23 @@ import { DatabaseHealthService } from "./database-health.service";
       isGlobal: true,
       envFilePath: "./local/nodeA/.env",
     }),
-    TypeOrmModule.forRoot({
-      type: "mysql",
-      host: process.env.MYSQL_HOST,
-      port: Number(process.env.MYSQL_PORT),
-      username: process.env.MYSQL_USER,
-      password: process.env.MYSQL_PASSWORD,
-      database: process.env.MYSQL_DATABASE,
-      autoLoadEntities: true,
-      synchronize: true, // Bật lại để tạo bảng với schema mới
-      logging: ["error", "warn", "info", "schema"],
-      ssl: process.env.MYSQL_HOST?.includes("aivencloud.com")
-        ? { rejectUnauthorized: false }
-        : false,
+    TypeOrmModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        type: "mysql" as const,
+        host: config.get<string>("MYSQL_HOST"),
+        port: Number(config.get<string>("MYSQL_PORT")),
+        username: config.get<string>("MYSQL_USER"),
+        password: config.get<string>("MYSQL_PASSWORD"),
+        database: config.get<string>("MYSQL_DATABASE"),
+        autoLoadEntities: true,
+        synchronize: true,
+        logging: ["error", "warn", "info", "schema"] as const,
+        ssl: config.get<string>("MYSQL_HOST")?.includes("aivencloud.com")
+          ? { rejectUnauthorized: false }
+          : false,
+      }),
     }),
   ],
   providers: [DatabaseHealthService],

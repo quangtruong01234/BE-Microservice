@@ -8,7 +8,11 @@ import { ClientsModule, Transport } from "@nestjs/microservices";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { OrderItem } from "./entity/order_item.entity";
 import { Order } from "./entity/order.entity";
-import { NAME_SERVICE_TCP, PORT_TCP } from "libs/constant/port-tcp.constant";
+import {
+  NAME_SERVICE_TCP,
+  PORT_TCP,
+  TCP_HOST,
+} from "libs/constant/port-tcp.constant";
 
 @Module({
   imports: [
@@ -26,7 +30,7 @@ import { NAME_SERVICE_TCP, PORT_TCP } from "libs/constant/port-tcp.constant";
         name: NAME_SERVICE_TCP.INVENTORY_SERVICE,
         transport: Transport.TCP,
         options: {
-          host: "localhost",
+          host: TCP_HOST,
           port: PORT_TCP.INVENTORY_TCP_PORT, // Default port for inventory service
         },
       },

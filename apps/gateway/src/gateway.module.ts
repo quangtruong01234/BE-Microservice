@@ -7,7 +7,11 @@ import { UserModule } from "./user/user.module";
 import { OrderModule } from "./order/order.module";
 import { ProductModule } from "./product/product.module";
 import { CachedModule } from "@app/cached";
-import { NAME_SERVICE_TCP, PORT_TCP } from "libs/constant/port-tcp.constant";
+import {
+  NAME_SERVICE_TCP,
+  PORT_TCP,
+  TCP_HOST,
+} from "libs/constant/port-tcp.constant";
 import { APP_GUARD } from "@nestjs/core";
 import { CustomRateLimitGuard } from "./common/guards/rate-limit.guard";
 import { JwtModule } from "@nestjs/jwt";
@@ -29,7 +33,7 @@ import { JwtAuthGuard } from "./common/guards/jwt-auth.guard";
         name: NAME_SERVICE_TCP.ORDERS_SERVICE, // Tên token để inject
         transport: Transport.TCP,
         options: {
-          host: "localhost", // Hoặc địa chỉ IP của Orders service
+          host: TCP_HOST, // Hoặc địa chỉ IP của Orders service
           port: PORT_TCP.ORDERS_TCP_PORT, // Port mà Orders service sẽ lắng nghe
         },
       },
@@ -37,7 +41,7 @@ import { JwtAuthGuard } from "./common/guards/jwt-auth.guard";
         name: NAME_SERVICE_TCP.INVENTORY_SERVICE,
         transport: Transport.TCP,
         options: {
-          host: "localhost",
+          host: TCP_HOST,
           port: PORT_TCP.INVENTORY_TCP_PORT,
         },
       },
@@ -45,7 +49,7 @@ import { JwtAuthGuard } from "./common/guards/jwt-auth.guard";
         name: NAME_SERVICE_TCP.USER_SERVICE,
         transport: Transport.TCP,
         options: {
-          host: "localhost",
+          host: TCP_HOST,
           port: PORT_TCP.USER_TCP_PORT,
         },
       },
@@ -53,7 +57,7 @@ import { JwtAuthGuard } from "./common/guards/jwt-auth.guard";
         name: NAME_SERVICE_TCP.PRODUCT_SERVICE,
         transport: Transport.TCP,
         options: {
-          host: "localhost",
+          host: TCP_HOST,
           port: PORT_TCP.PRODUCT_TCP_PORT,
         },
       },

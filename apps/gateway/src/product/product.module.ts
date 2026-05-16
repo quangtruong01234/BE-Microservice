@@ -2,7 +2,11 @@ import { Module } from "@nestjs/common";
 import { ClientsModule, Transport } from "@nestjs/microservices";
 import { ProductController } from "./product.controller";
 import { ProductService } from "./product.service";
-import { NAME_SERVICE_TCP, PORT_TCP } from "libs/constant/port-tcp.constant";
+import {
+  NAME_SERVICE_TCP,
+  PORT_TCP,
+  TCP_HOST,
+} from "libs/constant/port-tcp.constant";
 
 @Module({
   imports: [
@@ -11,7 +15,7 @@ import { NAME_SERVICE_TCP, PORT_TCP } from "libs/constant/port-tcp.constant";
         name: NAME_SERVICE_TCP.PRODUCT_SERVICE,
         transport: Transport.TCP,
         options: {
-          host: "localhost",
+          host: TCP_HOST,
           port: PORT_TCP.PRODUCT_TCP_PORT,
         },
       },
@@ -19,7 +23,7 @@ import { NAME_SERVICE_TCP, PORT_TCP } from "libs/constant/port-tcp.constant";
         name: NAME_SERVICE_TCP.INVENTORY_SERVICE,
         transport: Transport.TCP,
         options: {
-          host: "localhost",
+          host: TCP_HOST,
           port: PORT_TCP.INVENTORY_TCP_PORT,
         },
       },
@@ -27,7 +31,7 @@ import { NAME_SERVICE_TCP, PORT_TCP } from "libs/constant/port-tcp.constant";
         name: NAME_SERVICE_TCP.USER_SERVICE,
         transport: Transport.TCP,
         options: {
-          host: "localhost",
+          host: TCP_HOST,
           port: PORT_TCP.USER_TCP_PORT,
         },
       },

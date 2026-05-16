@@ -19,7 +19,6 @@ interface RateLimitInfo {
 
 interface RequestWithRateLimit extends Request {
   rateLimit?: RateLimitInfo;
-  user?: { id?: string | number };
 }
 
 @Injectable()

@@ -47,8 +47,8 @@ export class UserService {
   }
 
   async login(dto: LoginUserDto): Promise<{ user: UserData; token: string }> {
-    const userFound =
-      ((await firstValueFrom(
+    try {
+      const userFound = (await firstValueFrom(
         this.userClient
           .send({ cmd: USER_MESSAGE_PATTERN.LOGIN_USER }, dto)
           .pipe(
@@ -57,15 +57,12 @@ export class UserService {
               throw err;
             }),
           ),
-      ).catch((error) =>
-        MicroserviceErrorHandler.handleError(
-          error,
-          "login user",
-          "User Service",
-        ),
-      )) as UserData) ?? {};
-    const token = this.generateJwtToken(userFound);
-    return { user: userFound, token };
+      )) as UserData;
+      const token = this.generateJwtToken(userFound);
+      return { user: userFound, token };
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(error, "login user", "User Service");
+    }
   }
 
   generateJwtToken(user: UserData): string {

@@ -2,7 +2,7 @@ import { NestFactory } from "@nestjs/core";
 import { UserModule } from "./user.module";
 import { MicroserviceOptions, Transport } from "@nestjs/microservices";
 import * as dotenv from "dotenv";
-import { PORT_TCP } from "libs/constant/port-tcp.constant";
+import { PORT_TCP, TCP_HOST } from "libs/constant/port-tcp.constant";
 import { AllRpcExceptionFilter } from "./filters/rpc-exception.filter";
 
 async function bootstrap() {
@@ -12,7 +12,7 @@ async function bootstrap() {
     {
       transport: Transport.TCP,
       options: {
-        host: "localhost",
+        host: TCP_HOST,
         port: PORT_TCP.USER_TCP_PORT, // Port phải khớp với cấu hình ở GatewayModule
       },
     },

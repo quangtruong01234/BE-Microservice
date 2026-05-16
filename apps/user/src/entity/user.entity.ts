@@ -20,10 +20,10 @@ export class User {
   @Column({ unique: true })
   email!: string;
 
-  @Column({ nullable: true })
+  @Column({ type: "varchar", nullable: true })
   name!: string | null;
 
-  @Column({ nullable: true })
+  @Column({ type: "varchar", nullable: true })
   avatar!: string | null;
 
   @Column({ default: true })
