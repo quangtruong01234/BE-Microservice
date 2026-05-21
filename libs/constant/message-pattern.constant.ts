@@ -29,7 +29,7 @@ export const PRODUCT_MESSAGE_PATTERN = {
 
 export const ORDER_MESSAGE_PATTERN = {
   GET_ORDERS_BY_USER: "get_orders_by_user",
-  // Thêm các pattern khác nếu cần
+  GET_ORDER_BY_ID: "get_order_by_id",
 };
 
 // Có thể bổ sung thêm các service khác như INVENTORY_MESSAGE_PATTERN nếu cần

@@ -59,6 +59,19 @@ export class OrderService {
     }
   }
 
+  async getOrderById(orderId: string): Promise<unknown> {
+    const id = Number(orderId);
+    if (isNaN(id)) throw new Error("Invalid orderId");
+    return (await firstValueFrom(
+      this.ordersClient.send(ORDER_MESSAGE_PATTERN.GET_ORDER_BY_ID, id).pipe(
+        timeout(10000),
+        catchError((err: unknown) => {
+          throw err;
+        }),
+      ),
+    )) as unknown;
+  }
+
   async getOrderByUser(userId: string): Promise<unknown> {
     const cacheKey = `order_user:${userId}`;
     const cached = await this.redisService.get(cacheKey);

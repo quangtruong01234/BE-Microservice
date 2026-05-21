@@ -41,6 +41,13 @@ export class OrderController {
     return await this.orderService.createOrder(userId, dto);
   }
 
+  @Get(":id")
+  @ApiOperation({ summary: "Get a single order by id" })
+  @ApiResponse({ status: 200, description: "Order details with status." })
+  async getOrderById(@Param("id") id: string): Promise<unknown> {
+    return await this.orderService.getOrderById(id);
+  }
+
   @Get("user/:id")
   @ApiOperation({ summary: "Get orders and user info by user id" })
   @ApiResponse({ status: 200, description: "Order and user info." })

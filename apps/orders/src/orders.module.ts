@@ -37,6 +37,7 @@ import {
     ]),
     // RmqModule.register({ name: "INVENTORY_SERVICE" }),
     // RmqModule.register({ name: "PAYMENTS_SERVICE" }),
+    RmqModule,
     RmqModule.registerDirectPublisher(),
     // TYPEORM_MODULE.forFeature([Order, OrderItem])
     TypeOrmModule.forRoot({

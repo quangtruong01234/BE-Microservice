@@ -6,7 +6,7 @@ import {
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
-import { Order } from "./entity/order.entity";
+import { Order, OrderStatus } from "./entity/order.entity";
 import { HttpService } from "@nestjs/axios";
 import { ClientProxy } from "@nestjs/microservices";
 import { firstValueFrom } from "rxjs";
@@ -101,5 +101,17 @@ export class OrdersService {
       relations: ["items"],
     });
     return orders;
+  }
+
+  async getOrderById(orderId: number): Promise<Order | null> {
+    return this.orderRepository.findOne({
+      where: { id: orderId },
+      relations: ["items"],
+    });
+  }
+
+  async updateOrderStatus(orderId: number, status: OrderStatus): Promise<void> {
+    await this.orderRepository.update({ id: orderId }, { status });
+    this.logger.log(`[ORDERS] Order ${orderId} status updated to ${status}`);
   }
 }

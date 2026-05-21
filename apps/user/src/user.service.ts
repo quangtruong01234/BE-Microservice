@@ -47,7 +47,15 @@ export class UserService {
 
   async getInfo(userId: number): Promise<User | null> {
     this.logger.log(`Get info for userId: ${userId}`);
-    return await this.userRepository.findOne({ where: { id: userId } });
+    const select = {
+      id: true,
+      username: true,
+      email: true,
+      name: true,
+      avatar: true,
+      isActive: true,
+    };
+    return await this.userRepository.findOne({ where: { id: userId }, select });
   }
 
   getServiceInfo(): string {

@@ -1,7 +1,10 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Inject, Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
+import { Channel } from "amqplib";
 import { Payment, PaymentStatus } from "./entity/payment.entity";
+import { EXCHANGE } from "@app/common/constants/exchange";
+import { EVENT } from "@app/common/constants/event";
 
 @Injectable()
 export class PaymentsService {
@@ -10,6 +13,8 @@ export class PaymentsService {
   constructor(
     @InjectRepository(Payment)
     private readonly paymentRepository: Repository<Payment>,
+    @Inject(EXCHANGE.RMQ_PUBLISHER_CHANNEL)
+    private readonly publisherChannel: Channel,
   ) {}
 
   async processPayment(order: {
@@ -28,7 +33,6 @@ export class PaymentsService {
     });
     await this.paymentRepository.save(payment);
 
-    // Simulate async processing (e.g., payment gateway call)
     await new Promise((resolve) => setTimeout(resolve, 200));
 
     await this.paymentRepository.update(payment.id, {
@@ -37,6 +41,26 @@ export class PaymentsService {
 
     this.logger.log(
       `[PAYMENTS] Payment ${payment.id} completed for order ${orderId}`,
+    );
+
+    await this.publisherChannel.assertExchange(
+      EXCHANGE.PAYMENTS_EXCHANGE,
+      "fanout",
+      { durable: true },
+    );
+    this.publisherChannel.publish(
+      EXCHANGE.PAYMENTS_EXCHANGE,
+      EVENT.PAYMENT_COMPLETED_EVENT,
+      Buffer.from(
+        JSON.stringify({
+          data: { orderId },
+          pattern: EVENT.PAYMENT_COMPLETED_EVENT,
+        }),
+      ),
+    );
+
+    this.logger.log(
+      `[PAYMENTS] Emitted payment_completed for order ${orderId}`,
     );
   }
 }
