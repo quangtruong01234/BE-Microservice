@@ -5,15 +5,18 @@ import {
   ForbiddenException,
 } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
-import { ROLES_KEY } from "../decorators/roles.decorator";
 import { IS_PUBLIC_KEY } from "../decorators/public.decorator";
+import {
+  CHECK_PERMISSION_KEY,
+  PermissionMeta,
+} from "../decorators/check-permission.decorator";
+import { ac } from "../../../../user/src/rbac/grants";
 
 interface RequestUser {
   id?: number;
-  username?: string;
   email?: string;
-  roles?: string[];
-  permissions?: string[];
+  role?: string;
+  grants?: unknown[];
 }
 
 interface RequestWithUser {
@@ -35,33 +38,47 @@ export class RoleAuthGuard implements CanActivate {
       return true;
     }
 
-    const requiredRoles = this.reflector.getAllAndOverride<string[]>(
-      ROLES_KEY,
+    const permission = this.reflector.getAllAndOverride<PermissionMeta>(
+      CHECK_PERMISSION_KEY,
       [context.getHandler(), context.getClass()],
     );
+
+    // No @CheckPermission — skip permission check, allow through
+    if (!permission) {
+      return true;
+    }
 
     const request = context.switchToHttp().getRequest<RequestWithUser>();
     const user = request.user;
 
     if (!user) {
-      console.log("RolesGuard: User not found in request");
       throw new ForbiddenException("User not authenticated");
     }
 
-    const hasRole = requiredRoles
-      ? requiredRoles.some((role) => user.roles?.includes(role))
-      : true;
+    const role = user.role ?? "user";
+    const { resource, action } = permission;
 
-    if (!hasRole) {
-      console.log("RolesGuard: Access denied");
+    // action format: 'create:own' | 'read:any' | etc.
+    const [verb, possession] = action.split(":") as [string, string];
+    const methodName =
+      `${verb}${possession.charAt(0).toUpperCase()}${possession.slice(1)}` as keyof ReturnType<
+        typeof ac.can
+      >;
+
+    const query = ac.can(role);
+    if (typeof query[methodName] !== "function") {
+      throw new ForbiddenException(`Unknown action: ${action}`);
+    }
+
+    const perm = (query[methodName] as (resource: string) => { granted: boolean })(resource);
+
+    if (!perm.granted) {
       throw new ForbiddenException({
         message: "Insufficient permissions",
-        required: { roles: requiredRoles },
-        current: { roles: user.roles },
+        required: { role, resource, action },
       });
     }
 
-    console.log("RolesGuard: Access granted");
     return true;
   }
 }

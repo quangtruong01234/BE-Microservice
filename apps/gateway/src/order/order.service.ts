@@ -4,6 +4,7 @@ import { CachedService } from "@app/cached";
 import { firstValueFrom, timeout, catchError } from "rxjs";
 import {
   ORDER_MESSAGE_PATTERN,
+  PAYMENT_MESSAGE_PATTERN,
   USER_MESSAGE_PATTERN,
 } from "libs/constant/message-pattern.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
@@ -35,6 +36,8 @@ export class OrderService {
     private readonly ordersClient: ClientProxy,
     @Inject(NAME_SERVICE_TCP.USER_SERVICE)
     private readonly userClient: ClientProxy,
+    @Inject(NAME_SERVICE_TCP.PAYMENT_SERVICE)
+    private readonly paymentsClient: ClientProxy,
     @Inject(CachedService) private readonly redisService: CachedService,
   ) {}
 
@@ -110,5 +113,20 @@ export class OrderService {
     const result = { orders: results[0], user: results[1] };
     await this.redisService.set(cacheKey, JSON.stringify(result), 300);
     return result;
+  }
+
+  async getPaymentUrl(
+    orderId: number,
+  ): Promise<{ order_url: string | null; status: string | null }> {
+    return (await firstValueFrom(
+      this.paymentsClient
+        .send(PAYMENT_MESSAGE_PATTERN.GET_PAYMENT_URL, { orderId })
+        .pipe(
+          timeout(10000),
+          catchError((err: unknown) => {
+            throw err;
+          }),
+        ),
+    )) as { order_url: string | null; status: string | null };
   }
 }

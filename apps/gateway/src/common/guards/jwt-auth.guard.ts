@@ -9,13 +9,18 @@ import { JwtService } from "@nestjs/jwt";
 import { Request } from "express";
 import { IS_PUBLIC_KEY } from "../decorators/public.decorator";
 
+interface RoleGrant {
+  resourceId: number;
+  actions: string[];
+  attributes: string;
+  conditions: string;
+}
+
 interface JwtPayload {
-  sub?: number;
-  id?: number;
-  username?: string;
+  userId?: number;
   email?: string;
-  roles?: string[];
-  permissions?: string[];
+  role?: string;
+  grants?: RoleGrant[];
 }
 
 @Injectable()
@@ -45,11 +50,10 @@ export class JwtAuthGuard implements CanActivate {
     try {
       const payload = await this.jwtService.verifyAsync<JwtPayload>(token);
       request.user = {
-        id: payload.sub ?? payload.id ?? 0,
-        username: payload.username ?? "",
+        id: payload.userId ?? 0,
         email: payload.email ?? "",
-        roles: payload.roles ?? [],
-        permissions: payload.permissions ?? [],
+        role: payload.role ?? "user",
+        grants: payload.grants ?? [],
       };
       return true;
     } catch (error) {

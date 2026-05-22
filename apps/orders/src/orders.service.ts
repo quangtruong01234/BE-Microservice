@@ -73,10 +73,6 @@ export class OrdersService {
     // Gán items vào order để trả về
     order.items = orderItems;
 
-    //push to rabbitmq to notify other service
-    // this.inventoryClient.emit(EVENT.ORDER_CREATED_EVENT, order);
-    // this.paymentClient.emit(EVENT.ORDER_CREATED_EVENT, order);
-
     // Publish event to EVENT BUS via FANOUT exchange
     const exchangeName = EXCHANGE.ORDERS_EXCHANGE;
     const routingKey = EVENT.ORDER_CREATED_EVENT;

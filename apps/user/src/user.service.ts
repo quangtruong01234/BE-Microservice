@@ -1,6 +1,12 @@
-import { Injectable, Logger, UnauthorizedException } from "@nestjs/common";
+import {
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  UnauthorizedException,
+} from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { User } from "./entity/user.entity";
+import { Role, RoleName, RoleStatus } from "./entity/role.entity";
 import { Repository } from "typeorm";
 import { RegisterUserDto } from "./dto/register-user.dto";
 import { LoginUserDto } from "./dto/login-user.dto";
@@ -13,6 +19,8 @@ export class UserService {
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(Role)
+    private readonly roleRepository: Repository<Role>,
   ) {}
 
   async getAllUsers(): Promise<User[]> {
@@ -21,11 +29,20 @@ export class UserService {
   }
   async register(dto: RegisterUserDto): Promise<User> {
     this.logger.log(`Register user: ${dto.username}`);
+    const defaultRole = await this.roleRepository.findOne({
+      where: { rol_name: RoleName.USER, rol_status: RoleStatus.ACTIVE },
+    });
+    if (!defaultRole) {
+      throw new InternalServerErrorException(
+        "Default role not found, please run seed",
+      );
+    }
     const hashedPassword = await bcrypt.hash(dto.password, 10);
     const user = this.userRepository.create({
       username: dto.username,
       email: dto.email,
       password: hashedPassword,
+      role: defaultRole,
     });
     return await this.userRepository.save(user);
   }

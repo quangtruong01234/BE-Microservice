@@ -41,6 +41,7 @@
     "@nestjs/typeorm": "^11.0.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/cookie-parser": "^1.4.10",
+    "accesscontrol": "^2.2.1",
     "amqp-connection-manager": "^5.0.0",
     "amqplib": "^0.10.9",
     "axios": "^1.13.2",

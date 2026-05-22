@@ -5,6 +5,7 @@ import {
   Param,
   Post,
   Req,
+  UseGuards,
   ValidationPipe,
 } from "@nestjs/common";
 import { Request } from "express";
@@ -17,6 +18,7 @@ import {
   ApiBearerAuth,
 } from "@nestjs/swagger";
 import { CreateOrderDto } from "./dto/create-order.dto";
+import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 
 @ApiTags("Order")
 @ApiBearerAuth("bearer")
@@ -53,5 +55,15 @@ export class OrderController {
   @ApiResponse({ status: 200, description: "Order and user info." })
   async getOrderByUser(@Param("id") id: string): Promise<unknown> {
     return await this.orderService.getOrderByUser(id);
+  }
+
+  @Get(":id/payment-url")
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: "Get ZaloPay payment URL for an order" })
+  @ApiResponse({ status: 200, description: "Payment URL and status." })
+  async getPaymentUrl(
+    @Param("id") id: string,
+  ): Promise<{ order_url: string | null; status: string | null }> {
+    return await this.orderService.getPaymentUrl(+id);
   }
 }

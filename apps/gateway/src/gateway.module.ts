@@ -16,17 +16,18 @@ import { APP_GUARD } from "@nestjs/core";
 import { CustomRateLimitGuard } from "./common/guards/rate-limit.guard";
 import { JwtModule } from "@nestjs/jwt";
 import { JwtAuthGuard } from "./common/guards/jwt-auth.guard";
+import { RoleAuthGuard } from "./common/guards/role-auth.guard";
 
 @Module({
   imports: [
-    JwtModule.register({
+    JwtModule.registerAsync({
       global: true,
-      secret: process.env.JWT_SECRET || "your-secret-key",
-      signOptions: {
-        expiresIn: process.env.JWT_EXPIRES_IN
-          ? Number(process.env.JWT_EXPIRES_IN)
-          : "1h",
-      },
+      useFactory: () => ({
+        secret: process.env.JWT_SECRET,
+        signOptions: {
+          expiresIn: (process.env.JWT_EXPIRES_IN ?? "1h") as "7d",
+        },
+      }),
     }),
     ClientsModule.register([
       {
@@ -61,6 +62,14 @@ import { JwtAuthGuard } from "./common/guards/jwt-auth.guard";
           port: PORT_TCP.PRODUCT_TCP_PORT,
         },
       },
+      {
+        name: NAME_SERVICE_TCP.PAYMENT_SERVICE,
+        transport: Transport.TCP,
+        options: {
+          host: TCP_HOST,
+          port: PORT_TCP.PAYMENT_TCP_PORT,
+        },
+      },
     ]),
     InventoryModule,
     UserModule,
@@ -79,10 +88,10 @@ import { JwtAuthGuard } from "./common/guards/jwt-auth.guard";
       provide: APP_GUARD,
       useClass: JwtAuthGuard,
     },
-    // {
-    //   provide: APP_GUARD,
-    //   useClass: RoleAuthGuard,
-    // },
+    {
+      provide: APP_GUARD,
+      useClass: RoleAuthGuard,
+    },
   ],
   exports: [ClientsModule],
 })

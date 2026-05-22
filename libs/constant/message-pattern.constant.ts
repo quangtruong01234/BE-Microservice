@@ -32,4 +32,8 @@ export const ORDER_MESSAGE_PATTERN = {
   GET_ORDER_BY_ID: "get_order_by_id",
 };
 
+export const PAYMENT_MESSAGE_PATTERN = {
+  GET_PAYMENT_URL: "get_payment_url",
+};
+
 // Có thể bổ sung thêm các service khác như INVENTORY_MESSAGE_PATTERN nếu cần

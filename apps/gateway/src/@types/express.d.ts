@@ -2,10 +2,9 @@ declare namespace Express {
   interface Request {
     user?: {
       id: number;
-      username: string;
       email: string;
-      roles: string[];
-      permissions: string[];
+      role: string;
+      grants: unknown[];
     };
     rateLimit?: {
       limit: number;

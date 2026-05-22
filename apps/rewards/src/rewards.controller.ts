@@ -12,11 +12,10 @@ export class RewardsController {
   @EventPattern(EVENT.ORDER_CREATED_EVENT)
   async handleOrderCreated(
     @Payload()
-    data: { data: { id: number; user_id: number; total: number } },
+    order: { id: number; user_id: number; total: number },
     @Ctx() context: RmqContext,
   ) {
     void context;
-    const order = data.data;
     this.logger.log(`[REWARDS] Received order_created for order: ${order.id}`);
     await this.rewardsService.addRewards(order);
   }

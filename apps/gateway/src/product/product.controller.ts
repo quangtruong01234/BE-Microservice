@@ -28,6 +28,8 @@ import {
   ApiParam,
   ApiQuery,
 } from "@nestjs/swagger";
+import { CheckPermission } from "../common/decorators/check-permission.decorator";
+import { Public } from "../common/decorators/public.decorator";
 
 @ApiTags("Products")
 @Controller("products")
@@ -39,6 +41,7 @@ export class ProductController {
   // ============================================================================
 
   @Post()
+  @CheckPermission("product", "create:own")
   @ApiOperation({ summary: "Create new product" })
   @ApiBody({ type: CreateProductDto })
   @ApiResponse({ status: 201, description: "Product created successfully." })
@@ -52,6 +55,7 @@ export class ProductController {
   }
 
   @Get()
+  @Public()
   @ApiOperation({ summary: "Get all products with filtering and pagination" })
   @ApiResponse({ status: 200, description: "Products retrieved successfully." })
   @ApiResponse({

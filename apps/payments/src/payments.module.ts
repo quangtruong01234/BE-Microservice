@@ -16,7 +16,6 @@ import { Payment } from "./entity/payment.entity";
     PostgresDatabaseModule,
     TypeOrmModule.forFeature([Payment]),
     RmqModule,
-    RmqModule.registerDirectPublisher(),
   ],
   controllers: [PaymentsController],
   providers: [PaymentsService],

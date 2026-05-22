@@ -29,6 +29,12 @@ export class Payment {
   })
   status!: PaymentStatus;
 
+  @Column({ type: "varchar", length: 500, nullable: true })
+  order_url!: string | null;
+
+  @Column({ type: "varchar", length: 255, nullable: true })
+  zp_trans_token!: string | null;
+
   @CreateDateColumn({ type: "timestamp" })
   created_at!: Date;
 }

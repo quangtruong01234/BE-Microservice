@@ -7,10 +7,23 @@ import { USER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
 import { JwtService } from "@nestjs/jwt";
 
+type RoleGrant = {
+  resourceId: number;
+  actions: string[];
+  attributes: string;
+  conditions: string;
+};
+
+type UserRole = {
+  rol_name: "admin" | "shop" | "user";
+  rol_grants: RoleGrant[];
+};
+
 type UserData = {
   id?: string | number;
   username?: string;
   email?: string;
+  role?: UserRole | null;
   [key: string]: unknown;
 };
 
@@ -67,11 +80,10 @@ export class UserService {
 
   generateJwtToken(user: UserData): string {
     const payload = {
-      sub: user.id,
-      username: user.username,
+      userId: user.id,
       email: user.email,
-      roles: ["admin"],
-      permissions: ["user:READ", "user:WRITE", "profile:READ", "profile:WRITE"],
+      role: user.role?.rol_name ?? "user",
+      grants: user.role?.rol_grants ?? [],
     };
     return this.jwtService.sign(payload);
   }

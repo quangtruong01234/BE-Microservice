@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get } from "@nestjs/common";
+import { Controller, Post, Body, Get, Query } from "@nestjs/common";
 
 import { GatewayService } from "./gateway.service";
 import { ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
@@ -16,6 +16,15 @@ export class GatewayController {
   // @ApiResponse({ status: 201, description: 'Order created successfully' })
   async createOrder(@Body() payload: unknown): Promise<unknown> {
     return await this.gatewayService.createOrder(payload);
+  }
+
+  @Get("payment-result")
+  @Public()
+  paymentResult(
+    @Query() query: Record<string, string>,
+  ): { status: string; transId: string; amount: string } {
+    const status = query["status"] === "1" ? "success" : "failed";
+    return { status, transId: query["apptransid"], amount: query["amount"] };
   }
 
   @Get("health")
