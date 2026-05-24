@@ -6,6 +6,9 @@ import { PostgresDatabaseModule } from "@app/database";
 import { PaymentsController } from "./payments.controller";
 import { PaymentsService } from "./payments.service";
 import { Payment } from "./entity/payment.entity";
+import { ZaloPayService } from "./zalopay/zalopay.service";
+import { VNPayStrategy } from "./vnpay/vnpay.service";
+import { PaymentGatewayFactory } from "./payment-gateway.factory";
 
 @Module({
   imports: [
@@ -18,6 +21,11 @@ import { Payment } from "./entity/payment.entity";
     RmqModule,
   ],
   controllers: [PaymentsController],
-  providers: [PaymentsService],
+  providers: [
+    PaymentsService,
+    ZaloPayService,
+    VNPayStrategy,
+    PaymentGatewayFactory,
+  ],
 })
 export class PaymentsModule {}

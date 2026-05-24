@@ -70,7 +70,9 @@ export class RoleAuthGuard implements CanActivate {
       throw new ForbiddenException(`Unknown action: ${action}`);
     }
 
-    const perm = (query[methodName] as (resource: string) => { granted: boolean })(resource);
+    const perm = (
+      query[methodName] as (resource: string) => { granted: boolean }
+    )(resource);
 
     if (!perm.granted) {
       throw new ForbiddenException({

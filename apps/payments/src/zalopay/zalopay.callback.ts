@@ -1,5 +1,5 @@
-import { generateMac } from './zalopay.helper';
-import { zaloPayConfig } from './zalopay.config';
+import { generateMac } from "./zalopay.helper";
+import { zaloPayConfig } from "./zalopay.config";
 
 interface ZaloPayCallbackData {
   app_trans_id: string;
@@ -8,13 +8,13 @@ interface ZaloPayCallbackData {
   embed_data: string;
 }
 
-export function handleZaloPayCallback(body: {
-  data: string;
-  mac: string;
-}): { return_code: number; return_message: string } {
+export function handleZaloPayCallback(body: { data: string; mac: string }): {
+  return_code: number;
+  return_message: string;
+} {
   const expectedMac = generateMac(body.data, zaloPayConfig.key2);
   if (body.mac !== expectedMac) {
-    return { return_code: -1, return_message: 'mac not equal' };
+    return { return_code: -1, return_message: "mac not equal" };
   }
 
   const callbackData: ZaloPayCallbackData = JSON.parse(body.data);
@@ -25,5 +25,5 @@ export function handleZaloPayCallback(body: {
     `[ZaloPay callback] orderId=${orderId} amount=${callbackData.amount} transId=${callbackData.app_trans_id}`,
   );
 
-  return { return_code: 1, return_message: 'success' };
+  return { return_code: 1, return_message: "success" };
 }

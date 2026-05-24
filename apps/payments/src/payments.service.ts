@@ -2,23 +2,24 @@ import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Payment, PaymentStatus } from "./entity/payment.entity";
-import { ZaloPayService } from "./zalopay/zalopay.service";
+import { PaymentGatewayFactory } from "./payment-gateway.factory";
 
 @Injectable()
 export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
-  private readonly zaloPayService = new ZaloPayService();
 
   constructor(
     @InjectRepository(Payment)
     private readonly paymentRepository: Repository<Payment>,
+    private readonly factory: PaymentGatewayFactory,
   ) {}
 
   async processPayment(
     orderId: string,
     amount: number,
     description: string,
-  ): Promise<{ order_url?: string; zp_trans_token?: string }> {
+  ): Promise<{ paymentUrl: string; transactionId: string }> {
+    void description;
     this.logger.log(`[PAYMENTS] Processing payment for order ${orderId}...`);
 
     const payment = this.paymentRepository.create({
@@ -28,17 +29,16 @@ export class PaymentsService {
     });
     await this.paymentRepository.save(payment);
 
-    const result = await this.zaloPayService.createOrder(orderId, amount, description);
-    if (result.return_code !== 1) {
-      throw new Error(result.return_message);
-    }
+    const result = await this.factory
+      .getStrategy()
+      .createPayment({ id: orderId, total: amount });
 
     await this.paymentRepository.update(
       { order_id: Number(orderId) },
-      { order_url: result.order_url ?? null, zp_trans_token: result.zp_trans_token ?? null },
+      { order_url: result.paymentUrl, zp_trans_token: result.transactionId },
     );
 
-    return { order_url: result.order_url, zp_trans_token: result.zp_trans_token };
+    return result;
   }
 
   async getPaymentUrl(

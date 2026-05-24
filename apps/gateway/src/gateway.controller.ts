@@ -20,9 +20,11 @@ export class GatewayController {
 
   @Get("payment-result")
   @Public()
-  paymentResult(
-    @Query() query: Record<string, string>,
-  ): { status: string; transId: string; amount: string } {
+  paymentResult(@Query() query: Record<string, string>): {
+    status: string;
+    transId: string;
+    amount: string;
+  } {
     const status = query["status"] === "1" ? "success" : "failed";
     return { status, transId: query["apptransid"], amount: query["amount"] };
   }

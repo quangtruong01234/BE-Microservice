@@ -18,24 +18,12 @@
     "strictBindCallApply": false,
     "noFallthroughCasesInSwitch": false,
     "paths": {
-      "@app/cached": [
-        "libs/cached/src"
-      ],
-      "@app/cached/*": [
-        "libs/cached/src/*"
-      ],
-      "@app/common": [
-        "libs/common/src"
-      ],
-      "@app/common/*": [
-        "libs/common/src/*"
-      ],
-      "@app/database": [
-        "libs/database/src"
-      ],
-      "@app/database/*": [
-        "libs/database/src/*"
-      ]
+      "@app/cached": ["libs/cached/src"],
+      "@app/cached/*": ["libs/cached/src/*"],
+      "@app/common": ["libs/common/src"],
+      "@app/common/*": ["libs/common/src/*"],
+      "@app/database": ["libs/database/src"],
+      "@app/database/*": ["libs/database/src/*"]
     }
   }
 }

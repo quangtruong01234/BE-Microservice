@@ -5,7 +5,11 @@ import { PaymentsModule } from "./payments.module";
 import { ValidationPipe } from "@nestjs/common";
 import { EXCHANGE } from "@app/common/constants/exchange";
 import { AllRpcExceptionFilter } from "./filters/rpc-exception.filter";
-import { PAYMENTS_HTTP_PORT, PORT_TCP, TCP_HOST } from "libs/constant/port-tcp.constant";
+import {
+  PAYMENTS_HTTP_PORT,
+  PORT_TCP,
+  TCP_HOST,
+} from "libs/constant/port-tcp.constant";
 
 async function bootstrap() {
   const app = await NestFactory.create(PaymentsModule);
@@ -40,6 +44,8 @@ async function bootstrap() {
   );
   await app.startAllMicroservices();
   await app.listen(PAYMENTS_HTTP_PORT);
-  console.log(`💳 Payments microservice is running. HTTP on :${PAYMENTS_HTTP_PORT}`);
+  console.log(
+    `💳 Payments microservice is running. HTTP on :${PAYMENTS_HTTP_PORT}`,
+  );
 }
 void bootstrap();
