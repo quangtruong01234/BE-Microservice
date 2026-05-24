@@ -1,9 +1,14 @@
 import { Body, Controller, Logger, Post, SetMetadata } from "@nestjs/common";
-import { Ctx, EventPattern, MessagePattern, Payload, RmqContext } from "@nestjs/microservices";
+import {
+  Ctx,
+  EventPattern,
+  MessagePattern,
+  Payload,
+  RmqContext,
+} from "@nestjs/microservices";
 import { PaymentsService } from "./payments.service";
 import { EVENT } from "@app/common/constants/event";
 import { handleZaloPayCallback } from "./zalopay/zalopay.callback";
-import { PAYMENT_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 
 const Public = () => SetMetadata("isPublic", true);
 
@@ -28,18 +33,20 @@ export class PaymentsController {
     );
   }
 
-  @MessagePattern(PAYMENT_MESSAGE_PATTERN.GET_PAYMENT_URL)
-  async getPaymentUrl(
+  @MessagePattern("get_payment_url")
+  getPaymentUrl(
     @Payload() data: { orderId: number },
   ): Promise<{ order_url: string | null; status: string | null }> {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call
     return this.paymentsService.getPaymentUrl(data.orderId);
   }
 
   @Post("zalopay/callback")
   @Public()
-  async zaloPayCallback(
-    @Body() body: { data: string; mac: string },
-  ): Promise<{ return_code: number; return_message: string }> {
+  zaloPayCallback(@Body() body: { data: string; mac: string }): {
+    return_code: number;
+    return_message: string;
+  } {
     return handleZaloPayCallback(body);
   }
 }
