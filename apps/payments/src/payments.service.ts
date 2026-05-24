@@ -18,7 +18,7 @@ export class PaymentsService {
     orderId: string,
     amount: number,
     description: string,
-  ): Promise<{ paymentUrl: string; transactionId: string }> {
+  ): Promise<{ paymentUrl: string; transactionId: string; appTransId: string }> {
     void description;
     this.logger.log(`[PAYMENTS] Processing payment for order ${orderId}...`);
 
@@ -29,16 +29,16 @@ export class PaymentsService {
     });
     await this.paymentRepository.save(payment);
 
-    const result = await this.factory
+    const { paymentUrl, transactionId, appTransId } = await this.factory
       .getStrategy()
       .createPayment({ id: orderId, total: amount });
 
     await this.paymentRepository.update(
       { order_id: Number(orderId) },
-      { order_url: result.paymentUrl, zp_trans_token: result.transactionId },
+      { order_url: paymentUrl, zp_trans_token: transactionId, appTransId },
     );
 
-    return result;
+    return { paymentUrl, transactionId, appTransId };
   }
 
   async getPaymentUrl(

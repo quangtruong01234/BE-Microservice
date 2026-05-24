@@ -18,11 +18,13 @@ interface ZaloPayCreateOrderResponse {
 export class ZaloPayService implements IPaymentStrategy {
   async createPayment(
     order: PaymentOrder,
-  ): Promise<{ paymentUrl: string; transactionId: string }> {
+  ): Promise<{ paymentUrl: string; transactionId: string; appTransId: string }> {
+    const appTransId = generateTransId(zaloPayConfig.appId);
     const result = await this.createOrder(
       String(order.id),
       order.total,
       `Payment for order ${order.id}`,
+      appTransId,
     );
     if (result.return_code !== 1) {
       throw new Error(result.return_message);
@@ -30,6 +32,7 @@ export class ZaloPayService implements IPaymentStrategy {
     return {
       paymentUrl: result.order_url ?? "",
       transactionId: result.zp_trans_token ?? "",
+      appTransId,
     };
   }
 
@@ -56,8 +59,9 @@ export class ZaloPayService implements IPaymentStrategy {
     orderId: string,
     amount: number,
     description: string,
+    transId?: string,
   ): Promise<ZaloPayCreateOrderResponse> {
-    const appTransId = generateTransId(zaloPayConfig.appId);
+    const appTransId = transId ?? generateTransId(zaloPayConfig.appId);
     const appTime = Date.now();
     const embedData = JSON.stringify({
       redirecturl:
