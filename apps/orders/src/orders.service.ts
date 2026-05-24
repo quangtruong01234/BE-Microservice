@@ -9,7 +9,7 @@ import { Repository } from "typeorm";
 import { Order, OrderStatus } from "./entity/order.entity";
 import { HttpService } from "@nestjs/axios";
 import { ClientProxy } from "@nestjs/microservices";
-import { firstValueFrom } from "rxjs";
+import { catchError, firstValueFrom, throwError, timeout } from "rxjs";
 import { OrderItem } from "./entity/order_item.entity";
 import { EVENT } from "@app/common/constants/event";
 import { EXCHANGE } from "@app/common/constants/exchange";
@@ -43,13 +43,18 @@ export class OrdersService {
     //1. check stock in inventory
     for (const item of items) {
       const result = await firstValueFrom(
-        this.inventoryClient.send<{
-          available: boolean;
-          availableStock: number;
-        }>(INVENTORY_MESSAGE_PATTERNS.INVENTORY_CHECK_STOCK, {
-          productId: item.product_id,
-          quantity: item.quantity,
-        }),
+        this.inventoryClient
+          .send<{
+            available: boolean;
+            availableStock: number;
+          }>(INVENTORY_MESSAGE_PATTERNS.INVENTORY_CHECK_STOCK, {
+            productId: item.product_id,
+            quantity: item.quantity,
+          })
+          .pipe(
+            timeout(5000),
+            catchError((e: unknown) => throwError(() => e)),
+          ),
       );
       if (!result.available) {
         throw new BadRequestException(
