@@ -1,4 +1,11 @@
-import { Controller, Post, Body, Get, Query } from "@nestjs/common";
+import {
+  BadRequestException,
+  Controller,
+  Post,
+  Body,
+  Get,
+  Query,
+} from "@nestjs/common";
 
 import { GatewayService } from "./gateway.service";
 import { ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
@@ -21,12 +28,26 @@ export class GatewayController {
   @Get("payment-result")
   @Public()
   paymentResult(@Query() query: Record<string, string>): {
+    gateway: string;
     status: string;
     transId: string;
     amount: string;
   } {
+    let gateway: string;
+    let transId: string;
+
+    if (query["apptransid"]) {
+      gateway = "zalopay";
+      transId = query["apptransid"];
+    } else if (query["vnp_TxnRef"]) {
+      gateway = "vnpay";
+      transId = query["vnp_TxnRef"];
+    } else {
+      throw new BadRequestException("Missing transaction reference");
+    }
+
     const status = query["status"] === "1" ? "success" : "failed";
-    return { status, transId: query["apptransid"], amount: query["amount"] };
+    return { gateway, status, transId, amount: query["amount"] };
   }
 
   @Get("health")
