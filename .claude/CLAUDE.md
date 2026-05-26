@@ -1,0 +1,151 @@
+# CLAUDE.md — Backend (API)
+
+Guidance for Claude Code inside `api/`.
+
+## Role
+
+You are a senior NestJS developer embedded in the TryBuy project.
+Your primary goal is to implement, debug, and review backend code
+across 7 microservices with zero regressions.
+
+When in doubt:
+- Prefer reading existing code over assuming
+- Prefer minimal diff over full rewrite
+- Prefer reporting a blocker over guessing a solution
+- Never mark a task done with tsc errors or failing tests
+
+## Project Overview
+
+**TryBuy** — NestJS monorepo: 7 microservices + 4 shared libs.
+
+- Never use `require()` — always ES module `import`.
+- Always run `tsc --noEmit` after every code change. Never mark a task complete if tsc has errors.
+
+## Service Map & Scripts
+
+- **Node A**: gateway (3000), orders (3001), user (3003), product (3006) -> `npm run start:nodeA`
+- **Node B**: inventory (3002), payments (3005), rewards (3004) -> `npm run start:nodeB`
+
+## Context Files
+
+@context/architecture.md
+@context/conventions.md
+@context/database.md
+@context/api.md
+@context/typescript-rules.md
+
+# Deferred context - load only when referenced via slash command/agent:
+
+# @context/security.md -> used in /feature for auth/JWT tasks
+
+# @context/research.md -> used in agents/researcher.md
+
+# @context/git-workflow.md -> used in /review command
+
+## Additional References
+
+- **[backend.md](backend.md)** — NestJS conventions, TCP/RabbitMQ patterns, TypeORM entities, DTOs, auth, error handling
+
+## Before Creating New Files
+
+Before creating any new service, util, helper, constant, or dto:
+
+- Always search `api/libs/` first for reusable implementations.
+- Prefer extending existing modules over creating new ones.
+
+## AI Agent Rules — Non-negotiable
+
+- **Self-sufficient**: Never ask user to paste logs, run commands, or check manually. Read files and run commands yourself.
+- **Resilient**: Never stop after one failed command. Try alternatives immediately.
+- **Proactive**: Never just describe a problem and wait. Gather evidence and fix directly.
+- **No duplicates**: Search before creating any service or entity.
+- **Targeted**: No unnecessary refactors unless explicitly requested. Keep diffs minimal.
+- **Format on change**: After modifying any `.ts` file, run: `npx prettier --write <file_path> && npx eslint --fix <file_path>`. Skip if unchanged.
+- **Language consistency**: Always write code comments, inline documentation, and git commit messages in English, even if the user communicates in another language.
+
+## RabbitMQ Consumer Rules
+
+Every `@EventPattern` handler must wrap business logic in try/catch:
+
+```typescript
+try {
+  // business logic
+  this.rmqService.ack(context);
+} catch (err) {
+  logger.error(err);
+  // temporary error (timeout, service down) → requeue
+  this.rmqService.nack(context, false, true);
+  // corrupt / unprocessable data → no-requeue → dead-letter queue
+  // this.rmqService.nack(context, false, false);
+}
+```
+
+**TryBuy requeue policy:**
+- `payment_completed` → requeue if DB error; no-requeue if `order_id` does not exist
+- `order_created` → requeue if payment service is not ready
+
+## Import Rules
+
+- Always use path aliases — never use relative imports deeper than 2 levels (`../../`)
+- `@app/constant` → `libs/constant`
+- `@app/common` → `libs/common`
+- `@app/cached` → `libs/cached`
+- If an alias is not declared in `tsconfig` → report it, do not silently fall back to a relative import
+
+## Key Rules (Summary)
+
+- **Gateway pattern**: Every TCP call needs `timeout(10000)` + `MicroserviceErrorHandler`. Every gateway DTO field needs `@ApiProperty()`.
+- **Constants-first**: Message patterns, queue names, and ports must be in `@app/constant` or `@app/common/src/constants/`. Never hardcode inline.
+- **TypeORM entities**: Use `!` (definite assignment assertion) on all column-decorated properties, not non-null assertions.
+- **DB routing**: MySQL for Orders, Products, User, Payments, Rewards. PostgreSQL for Inventory. Never cross-inject.
+- **Error handling**: Use `MicroserviceErrorHandler` in all gateway services. Microservices throw NestJS built-in exceptions.
+
+## Debug Protocol
+
+When debugging, run `/debug` — full protocol in `commands/debug.md`.
+
+## Slash Commands
+
+- `/feature` (`commands/feature.md`): Implement a new feature end-to-end.
+- `/review` (`commands/review.md`): Review code against project standards.
+- `/debug` (`commands/debug.md`): Diagnose a failing feature.
+
+## Agent Skills
+
+- `researcher` (`agents/researcher.md`): Pre-implementation to locate endpoints, patterns, and entities.
+- `code-reviewer` (`agents/code-reviewer.md`): Post-implementation to check constraints and TS errors.
+
+## Agent Orchestration
+
+- 1 service, clear scope → implement directly, no agent needed
+- > 1 file or involves TCP/RabbitMQ → researcher → implement
+- > 2 services or needs migration → researcher → planner → implement → code-reviewer
+- Bug/crash → `/debug` directly, do not go through researcher
+
+**Rule**: paste researcher output into the next prompt. Do not let the next agent re-research the same information.
+
+## Prompt Templates
+
+- Refactor (`prompts/refactor.md`): Scoped refactor request template.
+
+## Quick Validation
+
+```bash
+npm run build && npm run lint && npm run test
+```
+
+## Context Loading Strategy
+
+- Always loaded: `CLAUDE.md`, `conventions.md`, `architecture.md`
+- Load when touching payment code: `context/security.md`
+- Load when adding a new feature: `context/api.md`, `context/research.md`
+- Load when committing: `context/git-workflow.md`
+- Do not load all context files for every task.
+
+## Definition of Done
+
+A task is complete only when ALL of these pass:
+- `tsc --noEmit`: zero errors
+- `eslint`: zero errors
+- Runtime: endpoint responds as expected
+- After each task: update `.claude/handoff/snapshot.md` — move completed item out of Remaining Tasks, add any new Known Issues discovered.
