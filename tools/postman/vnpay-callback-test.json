@@ -1,0 +1,293 @@
+{
+  "info": {
+    "_postman_id": "b3f1e2d4-a5c6-4789-bcde-f01234567890",
+    "name": "VNPay Callback Test",
+    "description": "End-to-end test for the VNPay IPN callback flow.\n\n## Required environment variables\n| Variable | Value | Source |\n|---|---|---|\n| `base_url` | `http://localhost:3000` | Gateway HTTP |\n| `vnpay_hash_secret` | your VNP_HASH_SECRET | local/nodeB/.env |\n| `vnpay_tmn_code` | your VNP_TMN_CODE | local/nodeB/.env |\n| `jwt_token` | JWT from POST /api/user/login | Login first |\n\n## Flow\n1. Create order → stores `orderId` as collection variable\n2. VNPay IPN callback → pre-request script fetches the payment URL to resolve `appTransId` (= `vnp_TxnRef`), computes HMAC-SHA512 automatically\n3. Verify payment status → `status` should be `completed`\n\n## Important notes\n- Request 2 calls `GET /api/order/:id/payment-url` internally (pm.sendRequest) to extract the real `vnp_TxnRef`. If the payments service has not processed `order_created` yet (RabbitMQ async), `order_url` will be null — wait 1-2 s and retry.\n- `vnp_Amount` in the IPN body is hardcoded to `10000000` (100,000 VND × 100). Adjust to match your actual order total if needed.\n- The VNPay callback endpoint is on the payments service HTTP port (3007), not the gateway (3000).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Create Order",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const res = pm.response.json();",
+              "",
+              "// Gateway wraps the order — adjust the path if your response shape differs.",
+              "// Common shapes: res.id | res.order.id | res.data.id",
+              "const orderId = res && (res.id || (res.order && res.order.id) || (res.data && res.data.id));",
+              "",
+              "pm.test('Order created successfully', function () {",
+              "    pm.response.to.have.status(201);",
+              "    pm.expect(orderId).to.be.a('number').and.to.be.above(0);",
+              "});",
+              "",
+              "if (orderId) {",
+              "    pm.collectionVariables.set('orderId', String(orderId));",
+              "    console.log('[CreateOrder] orderId set to:', orderId);",
+              "} else {",
+              "    console.warn('[CreateOrder] Could not extract orderId from response:', JSON.stringify(res));",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Cookie",
+            "value": "access_token={{jwt_token}}",
+            "description": "Set jwt_token env var after POST /api/user/login"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"items\": [\n    {\n      \"product_id\": 1,\n      \"quantity\": 1,\n      \"price\": 100000\n    }\n  ]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{base_url}}/api/order",
+          "host": ["{{base_url}}"],
+          "path": ["api", "order"]
+        },
+        "description": "Creates an order via the gateway. The gateway forwards it to the orders service over TCP, which emits `order_created` on RabbitMQ. The payments service picks it up asynchronously and creates the payment record (including `appTransId` = `vnp_TxnRef`).\n\nThe test script extracts `orderId` and stores it as a collection variable for use in requests 2 and 3.\n\n**Body**: `CreateOrderDto` — `items[]` with `product_id`, `quantity`, `price`."
+      }
+    },
+    {
+      "name": "2. VNPay IPN Callback",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// ------------------------------------------------------------------",
+              "// VNPay IPN pre-request script",
+              "// 1. Fetches GET /api/order/:id/payment-url to resolve appTransId",
+              "//    (= vnp_TxnRef stored in the payment record)",
+              "// 2. Builds the full IPN body",
+              "// 3. Computes HMAC-SHA512 over alphabetically sorted params",
+              "// 4. Injects the signed body into the request",
+              "// ------------------------------------------------------------------",
+              "",
+              "const baseUrl = pm.environment.get('base_url') || 'http://localhost:3000';",
+              "const orderId  = pm.collectionVariables.get('orderId');",
+              "const hashSecret = pm.environment.get('vnpay_hash_secret');",
+              "const tmnCode    = pm.environment.get('vnpay_tmn_code');",
+              "",
+              "if (!orderId)    { throw new Error('[VNPay] orderId not set — run request 1 first.'); }",
+              "if (!hashSecret) { throw new Error('[VNPay] vnpay_hash_secret env var not set.'); }",
+              "if (!tmnCode)    { throw new Error('[VNPay] vnpay_tmn_code env var not set.'); }",
+              "",
+              "// Step 1 — resolve the appTransId (= vnp_TxnRef) from the payment record.",
+              "// The payments service sets this asynchronously after receiving order_created.",
+              "// If order_url is null, the event hasn't been processed yet — wait and retry.",
+              "pm.sendRequest(",
+              "    { url: baseUrl + '/api/order/' + orderId + '/payment-url', method: 'GET' },",
+              "    function (err, res) {",
+              "        if (err) { throw new Error('[VNPay] fetch payment-url failed: ' + err); }",
+              "",
+              "        const json = res.json();",
+              "        const orderUrl = json && json.order_url;",
+              "",
+              "        if (!orderUrl) {",
+              "            throw new Error(",
+              "                '[VNPay] order_url is null for orderId=' + orderId +",
+              "                '. The payments service may not have processed order_created yet.' +",
+              "                ' Wait 1-2 s and re-run this request.'",
+              "            );",
+              "        }",
+              "",
+              "        // Extract vnp_TxnRef from the VNPay payment URL query string.",
+              "        var appTransId;",
+              "        try {",
+              "            appTransId = new URL(orderUrl).searchParams.get('vnp_TxnRef');",
+              "        } catch (_) {",
+              "            var m = orderUrl.match(/[?&]vnp_TxnRef=([^&]+)/);",
+              "            appTransId = m ? decodeURIComponent(m[1]) : null;",
+              "        }",
+              "",
+              "        if (!appTransId) {",
+              "            throw new Error('[VNPay] Could not extract vnp_TxnRef from: ' + orderUrl);",
+              "        }",
+              "",
+              "        pm.collectionVariables.set('appTransId', appTransId);",
+              "        console.log('[VNPay] Resolved appTransId (vnp_TxnRef):', appTransId);",
+              "",
+              "        // Step 2 — build IPN params (all string values, matching VNPay IPN spec).",
+              "        var now = new Date();",
+              "        var pad = function(n) { return String(n).padStart(2, '0'); };",
+              "        var payDate = '' +",
+              "            now.getFullYear() +",
+              "            pad(now.getMonth() + 1) +",
+              "            pad(now.getDate()) +",
+              "            pad(now.getHours()) +",
+              "            pad(now.getMinutes()) +",
+              "            pad(now.getSeconds());",
+              "",
+              "        // vnp_Amount = order total in VND × 100.",
+              "        // Hardcoded to 10000000 (= 100,000 VND). Adjust if your test order differs.",
+              "        var params = {",
+              "            vnp_Amount:            '10000000',",
+              "            vnp_BankCode:          'NCB',",
+              "            vnp_BankTranNo:        'VNP' + Date.now(),",
+              "            vnp_CardType:          'ATM',",
+              "            vnp_CurrCode:          'VND',",
+              "            vnp_OrderInfo:         'Payment for order ' + orderId,",
+              "            vnp_PayDate:           payDate,",
+              "            vnp_ResponseCode:      '00',",
+              "            vnp_TmnCode:           tmnCode,",
+              "            vnp_TransactionNo:     'TEST123',",
+              "            vnp_TransactionStatus: '00',",
+              "            vnp_TxnRef:            appTransId",
+              "        };",
+              "",
+              "        // Step 3 — HMAC-SHA512 over alphabetically sorted params.",
+              "        // Algorithm mirrors VNPay SDK verifyReturnUrl internals:",
+              "        //   sort keys → join as 'key=value&...' → HmacSHA512(hashData, secret)",
+              "        // Exclude vnp_SecureHash and vnp_SecureHashType from the hash input.",
+              "        var sortedKeys = Object.keys(params).sort();",
+              "        var hashData   = sortedKeys.map(function(k) { return k + '=' + params[k]; }).join('&');",
+              "        var computedHash = CryptoJS.HmacSHA512(hashData, hashSecret).toString();",
+              "",
+              "        console.log('[VNPay] hashData:',     hashData);",
+              "        console.log('[VNPay] computedHash:', computedHash);",
+              "",
+              "        // Step 4 — inject signed body into the request.",
+              "        var bodyObj = Object.assign({}, params, { vnp_SecureHash: computedHash });",
+              "",
+              "        pm.request.body.update({",
+              "            mode: 'raw',",
+              "            raw: JSON.stringify(bodyObj, null, 2),",
+              "            options: { raw: { language: 'json' } }",
+              "        });",
+              "    }",
+              ");"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('IPN accepted by payments service', function () {",
+              "    pm.response.to.have.status(201);",
+              "    const body = pm.response.json();",
+              "    pm.expect(body).to.have.property('RspCode');",
+              "    pm.expect(body.RspCode).to.equal('00');",
+              "    pm.expect(body.Message).to.equal('Confirm Success');",
+              "});",
+              "",
+              "if (pm.response.code === 201) {",
+              "    const body = pm.response.json();",
+              "    if (body.RspCode === '97') {",
+              "        console.error('[VNPay] Checksum failed — hash mismatch. Check vnpay_hash_secret env var.');",
+              "    } else if (body.RspCode === '01') {",
+              "        console.error('[VNPay] DB error — payment record not found for this vnp_TxnRef. Check appTransId.');",
+              "    }",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:3007/vnpay/callback",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3007",
+          "path": ["vnpay", "callback"]
+        },
+        "description": "Simulates a VNPay IPN (Instant Payment Notification) POST sent by VNPay servers after a successful payment.\n\n**Endpoint**: `POST http://localhost:3007/vnpay/callback`\n- Port 3007 = `PAYMENTS_HTTP_PORT` (payments service HTTP, not gateway)\n- No authentication required (`@Public()`)\n\n**Pre-request script** (runs automatically):\n1. Calls `GET {{base_url}}/api/order/:orderId/payment-url` to resolve the real `appTransId` (= `vnp_TxnRef`) from the payment record stored in DB\n2. Builds all VNPay IPN fields\n3. Computes `vnp_SecureHash` via HMAC-SHA512 using `vnpay_hash_secret` env var\n4. Injects the fully signed JSON body before the request fires\n\n**Expected response**: `{ \"RspCode\": \"00\", \"Message\": \"Confirm Success\" }`\n\n**Failure responses**:\n- `RspCode: \"97\"` → checksum failed (wrong `vnpay_hash_secret`)\n- `RspCode: \"01\"` → payment not found (wrong `vnp_TxnRef` or payment not created yet)\n\n**Note**: The body shown in the editor (`{}`) is replaced entirely by the pre-request script. Do not edit it manually."
+      }
+    },
+    {
+      "name": "3. Verify Payment Status",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Payment status is completed', function () {",
+              "    pm.response.to.have.status(200);",
+              "    const body = pm.response.json();",
+              "    pm.expect(body).to.have.property('status');",
+              "    pm.expect(body.status).to.equal('completed');",
+              "});",
+              "",
+              "pm.test('order_url is present', function () {",
+              "    const body = pm.response.json();",
+              "    pm.expect(body.order_url).to.be.a('string').and.not.empty;",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Cookie",
+            "value": "access_token={{jwt_token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/order/{{orderId}}/payment-url",
+          "host": ["{{base_url}}"],
+          "path": ["api", "order", "{{orderId}}", "payment-url"]
+        },
+        "description": "Fetches the payment status for the order created in request 1.\n\nAfter a successful IPN callback (request 2), the payments service sets `status = COMPLETED` on the payment record and emits `payment_completed` on RabbitMQ. The orders service then sets the order status to `COMPLETED`.\n\n**Expected response**: `{ \"order_url\": \"https://...\", \"status\": \"completed\" }`\n\nIf `status` is still `pending`, the IPN callback did not reach the DB — check request 2's response and console logs."
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3000",
+      "type": "string",
+      "description": "Gateway base URL"
+    },
+    {
+      "key": "orderId",
+      "value": "",
+      "type": "string",
+      "description": "Set by the test script of request 1"
+    },
+    {
+      "key": "appTransId",
+      "value": "",
+      "type": "string",
+      "description": "Set by the pre-request script of request 2 (= vnp_TxnRef extracted from payment URL)"
+    }
+  ]
+}
