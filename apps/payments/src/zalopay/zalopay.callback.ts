@@ -1,6 +1,6 @@
 import { Logger } from "@nestjs/common";
 import { generateMac } from "./zalopay.helper";
-import { zaloPayConfig } from "./zalopay.config";
+import { getZaloPayConfig } from "./zalopay.config";
 import { PaymentsService } from "../payments.service";
 
 const logger = new Logger("ZaloPayCallback");
@@ -17,7 +17,7 @@ export async function handleZaloPayCallback(
   body: { data: string; mac: string },
   paymentsService: PaymentsService,
 ): Promise<{ return_code: number; return_message: string }> {
-  const expectedMac = generateMac(body.data, zaloPayConfig.key2);
+  const expectedMac = generateMac(body.data, getZaloPayConfig().key2);
   if (body.mac !== expectedMac) {
     return { return_code: -1, return_message: "mac not matched" };
   }

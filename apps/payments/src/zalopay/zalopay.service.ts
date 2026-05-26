@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import { zaloPayConfig } from "./zalopay.config";
+import { getZaloPayConfig } from "./zalopay.config";
 import { generateTransId, generateMac } from "./zalopay.helper";
 import {
   IPaymentStrategy,
@@ -16,10 +16,13 @@ interface ZaloPayCreateOrderResponse {
 
 @Injectable()
 export class ZaloPayService implements IPaymentStrategy {
-  async createPayment(
-    order: PaymentOrder,
-  ): Promise<{ paymentUrl: string; transactionId: string; appTransId: string }> {
-    const appTransId = generateTransId(zaloPayConfig.appId);
+  async createPayment(order: PaymentOrder): Promise<{
+    paymentUrl: string;
+    transactionId: string;
+    appTransId: string;
+  }> {
+    const config = getZaloPayConfig();
+    const appTransId = generateTransId(config.appId);
     const result = await this.createOrder(
       String(order.id),
       order.total,
@@ -36,10 +39,12 @@ export class ZaloPayService implements IPaymentStrategy {
     };
   }
 
+  // eslint-disable-next-line @typescript-eslint/require-await
   async verifyCallback(
     payload: CallbackPayload,
   ): Promise<{ orderId: string; success: boolean }> {
-    const expectedMac = generateMac(payload.data, zaloPayConfig.key2);
+    const config = getZaloPayConfig();
+    const expectedMac = generateMac(payload.data, config.key2);
     if (payload.mac !== expectedMac) {
       return { orderId: "", success: false };
     }
@@ -61,18 +66,17 @@ export class ZaloPayService implements IPaymentStrategy {
     description: string,
     transId?: string,
   ): Promise<ZaloPayCreateOrderResponse> {
-    const appTransId = transId ?? generateTransId(zaloPayConfig.appId);
+    const config = getZaloPayConfig();
+    const appTransId = transId ?? generateTransId(config.appId);
     const appTime = Date.now();
     const embedData = JSON.stringify({
-      redirecturl:
-        process.env.ZALOPAY_REDIRECT_URL ||
-        "http://localhost:3000/api/gateway/payment-result",
+      redirecturl: config.redirectUrl,
       orderId,
     });
     const item = "[]";
 
     const body = {
-      app_id: zaloPayConfig.appId,
+      app_id: config.appId,
       app_trans_id: appTransId,
       app_user: "trybuy_user",
       app_time: appTime,
@@ -93,7 +97,7 @@ export class ZaloPayService implements IPaymentStrategy {
       body.item,
     ].join("|");
 
-    const mac = generateMac(hmacInput, zaloPayConfig.key1);
+    const mac = generateMac(hmacInput, config.key1);
 
     const params = new URLSearchParams({
       app_id: String(body.app_id),
@@ -108,7 +112,7 @@ export class ZaloPayService implements IPaymentStrategy {
       mac,
     });
 
-    const response = await fetch(`${zaloPayConfig.endpoint}/create`, {
+    const response = await fetch(`${config.endpoint}/create`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: params.toString(),

@@ -57,7 +57,7 @@ export class VNPayStrategy implements IPaymentStrategy {
   verifyCallback(
     payload: unknown,
   ): Promise<{ orderId: string; success: boolean }> {
-    const result = this.vnpay.verifyReturnUrl(payload as ReturnQueryFromVNPay);
+    const result = this.vnpay.verifyIpnCall(payload as ReturnQueryFromVNPay);
     return Promise.resolve({
       orderId: String(result.vnp_TxnRef),
       success: result.isVerified && result.isSuccess,

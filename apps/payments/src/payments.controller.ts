@@ -1,4 +1,12 @@
-import { Body, Controller, Logger, Post, SetMetadata } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Get,
+  Logger,
+  Post,
+  Query,
+  SetMetadata,
+} from "@nestjs/common";
 import {
   Ctx,
   EventPattern,
@@ -7,8 +15,10 @@ import {
   RmqContext,
 } from "@nestjs/microservices";
 import { PaymentsService } from "./payments.service";
+import { VNPayStrategy } from "./vnpay/vnpay.service";
 import { EVENT } from "@app/common/constants/event";
 import { handleZaloPayCallback } from "./zalopay/zalopay.callback";
+import { handleVNPayCallback } from "./vnpay/vnpay.callback";
 
 const Public = () => SetMetadata("isPublic", true);
 
@@ -16,7 +26,10 @@ const Public = () => SetMetadata("isPublic", true);
 export class PaymentsController {
   private readonly logger = new Logger(PaymentsController.name);
 
-  constructor(private readonly paymentsService: PaymentsService) {}
+  constructor(
+    private readonly paymentsService: PaymentsService,
+    private readonly vnpayStrategy: VNPayStrategy,
+  ) {}
 
   @EventPattern(EVENT.ORDER_CREATED_EVENT)
   async handleOrderCreated(
@@ -46,5 +59,35 @@ export class PaymentsController {
     @Body() body: { data: string; mac: string },
   ): Promise<{ return_code: number; return_message: string }> {
     return handleZaloPayCallback(body, this.paymentsService);
+  }
+
+  @Post("vnpay/callback")
+  @Public()
+  async vnpayCallback(
+    @Body() body: Record<string, string>,
+  ): Promise<{ RspCode: string; Message: string }> {
+    return handleVNPayCallback(
+      body as { vnp_TxnRef: string; vnp_TransactionNo: string } & Record<
+        string,
+        string
+      >,
+      this.vnpayStrategy,
+      this.paymentsService,
+    );
+  }
+
+  @Get("vnpay/callback")
+  @Public()
+  async vnpayIpnCallback(
+    @Query() query: Record<string, string>,
+  ): Promise<{ RspCode: string; Message: string }> {
+    return handleVNPayCallback(
+      query as { vnp_TxnRef: string; vnp_TransactionNo: string } & Record<
+        string,
+        string
+      >,
+      this.vnpayStrategy,
+      this.paymentsService,
+    );
   }
 }

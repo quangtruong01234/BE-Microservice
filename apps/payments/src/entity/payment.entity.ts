@@ -32,8 +32,13 @@ export class Payment {
   @Column({ type: "text", nullable: true })
   order_url!: string | null;
 
-  @Column({ type: "varchar", length: 255, nullable: true })
-  zp_trans_token!: string | null;
+  @Column({
+    name: "transaction_id",
+    type: "varchar",
+    length: 255,
+    nullable: true,
+  })
+  transaction_id!: string | null;
 
   @Column({ name: "app_trans_id", type: "varchar", length: 50, nullable: true })
   appTransId!: string | null;

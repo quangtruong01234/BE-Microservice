@@ -37,23 +37,38 @@ export class PaymentsService {
     void description;
     this.logger.log(`[PAYMENTS] Processing payment for order ${orderId}...`);
 
-    const payment = this.paymentRepository.create({
-      order_id: Number(orderId),
-      amount,
-      status: PaymentStatus.PENDING,
-    });
-    await this.paymentRepository.save(payment);
+    try {
+      const payment = this.paymentRepository.create({
+        order_id: Number(orderId),
+        amount,
+        status: PaymentStatus.PENDING,
+      });
+      await this.paymentRepository.save(payment);
+      this.logger.log("[PAYMENTS] payment record saved");
 
-    const { paymentUrl, transactionId, appTransId } = await this.factory
-      .getStrategy()
-      .createPayment({ id: orderId, total: amount });
+      const { paymentUrl, transactionId, appTransId } = await this.factory
+        .getStrategy()
+        .createPayment({ id: orderId, total: amount });
+      this.logger.log(
+        "[PAYMENTS] createPayment done, appTransId=" + appTransId,
+      );
 
-    await this.paymentRepository.update(
-      { order_id: Number(orderId) },
-      { order_url: paymentUrl, zp_trans_token: transactionId, appTransId },
-    );
+      const updateResult = await this.paymentRepository.update(
+        { order_id: Number(orderId) },
+        { order_url: paymentUrl, transaction_id: transactionId, appTransId },
+      );
+      this.logger.log("[PAYMENTS] payment record updated with appTransId");
+      if (updateResult.affected === 0) {
+        throw new InternalServerErrorException(
+          "Failed to persist appTransId — payment row not found by order_id",
+        );
+      }
 
-    return { paymentUrl, transactionId, appTransId };
+      return { paymentUrl, transactionId, appTransId };
+    } catch (err: unknown) {
+      this.logger.error("[PAYMENTS] processPayment failed", err);
+      throw err;
+    }
   }
 
   async completeZaloPayPayment(
@@ -71,7 +86,7 @@ export class PaymentsService {
 
     await this.paymentRepository.update(
       { appTransId },
-      { status: PaymentStatus.COMPLETED, zp_trans_token: zpTransId },
+      { status: PaymentStatus.COMPLETED, transaction_id: zpTransId },
     );
 
     const updated = await this.paymentRepository.findOne({
@@ -93,6 +108,52 @@ export class PaymentsService {
 
     this.logger.log(
       `[PAYMENTS] Payment completed orderId=${updated.order_id} appTransId=${appTransId}`,
+    );
+    return updated;
+  }
+
+  async completeVNPayPayment(
+    vnpTxnRef: string,
+    vnpTransactionNo: string,
+  ): Promise<Payment> {
+    const payment = await this.paymentRepository.findOne({
+      where: { appTransId: vnpTxnRef },
+    });
+    if (!payment) {
+      throw new NotFoundException(
+        `Payment with vnp_TxnRef ${vnpTxnRef} not found`,
+      );
+    }
+
+    const updateResult = await this.paymentRepository.update(
+      { appTransId: vnpTxnRef },
+      { status: PaymentStatus.COMPLETED, transaction_id: vnpTransactionNo },
+    );
+    if (updateResult.affected === 0) {
+      throw new NotFoundException(
+        `Payment update affected 0 rows for vnp_TxnRef ${vnpTxnRef}`,
+      );
+    }
+
+    const updated = await this.paymentRepository.findOne({
+      where: { appTransId: vnpTxnRef },
+    });
+    if (!updated) {
+      throw new InternalServerErrorException("Payment update failed");
+    }
+
+    const eventPayload = {
+      data: { orderId: updated.order_id, amount: updated.amount },
+      pattern: EVENT.PAYMENT_COMPLETED_EVENT,
+    };
+    this.fanoutChannel.publish(
+      EXCHANGE.PAYMENTS_EXCHANGE,
+      EVENT.PAYMENT_COMPLETED_EVENT,
+      Buffer.from(JSON.stringify(eventPayload)),
+    );
+
+    this.logger.log(
+      `[PAYMENTS] VNPay payment completed orderId=${updated.order_id} vnp_TxnRef=${vnpTxnRef}`,
     );
     return updated;
   }

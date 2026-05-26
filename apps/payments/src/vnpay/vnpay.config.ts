@@ -10,5 +10,6 @@ export function getVNPayConfig() {
     hashSecret: requireEnv("VNP_HASH_SECRET"),
     url: requireEnv("VNP_URL"),
     returnUrl: requireEnv("VNP_RETURN_URL"),
+    ipnUrl: requireEnv("VNPAY_IPN_URL"),
   };
 }
