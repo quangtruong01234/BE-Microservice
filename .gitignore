@@ -56,5 +56,8 @@ pids
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
-.claude
+# Claude AI workflow
+.claude/handoff/
+.claude/settings.local.json
+.claude/commands/test-*.md
 
