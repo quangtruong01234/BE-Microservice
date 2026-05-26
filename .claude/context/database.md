@@ -2,8 +2,8 @@
 
 ## Overview
 
-- **MySQL 8** (:3306) -> orders, user, product, payments, rewards
-- **PostgreSQL** (:5432) -> inventory
+- **MySQL 8** (:3306) -> orders, user, product
+- **PostgreSQL** (:5432) -> inventory, payments, rewards
 - **Adminer** (:8080) -> DB admin UI
 
 Start: `docker-compose up -d`  
@@ -92,27 +92,6 @@ File: `api/apps/orders/src/entity/order_item.entity.ts`
 
 ---
 
-### Payment (`payments` service)
-
-File: `api/apps/payments/src/entity/payment.entity.ts`
-
-- `id` (int, PK, auto)
-- `order_id` (int), `amount` (decimal)
-- `status` (enum: PENDING, COMPLETED, FAILED)
-- `created_at` (datetime, auto)
-
----
-
-### RewardPoint (`rewards` service)
-
-File: `api/apps/rewards/src/entity/reward_point.entity.ts`
-
-- `id` (int, PK, auto)
-- `user_id` (int), `order_id` (int), `points` (int)
-- `created_at` (datetime, auto)
-
----
-
 ## PostgreSQL Entities
 
 ### Inventory (`inventory` service)
@@ -129,6 +108,30 @@ Getters: `totalStock` = availableStock + reservedStock, `isLowStock` = available
 
 ---
 
+### Payment (`payments` service)
+
+File: `api/apps/payments/src/entity/payment.entity.ts`
+
+- `id` (int, PK, auto)
+- `order_id` (bigint), `amount` (decimal 12,2)
+- `status` (enum: PENDING, COMPLETED, FAILED)
+- `order_url` (text, nullable)
+- `transaction_id` (varchar 255, nullable — stores ZaloPay zp_trans_token or VNPay vnp_TransactionNo)
+- `app_trans_id` (varchar 50, nullable — ZaloPay/VNPay transaction reference used for lookup)
+- `created_at` (timestamp, auto)
+
+---
+
+### RewardPoint (`rewards` service)
+
+File: `api/apps/rewards/src/entity/reward_point.entity.ts`
+
+- `id` (int, PK, auto)
+- `user_id` (int), `order_id` (int), `points` (int)
+- `created_at` (datetime, auto)
+
+---
+
 ## Migration Files
 
 Run order: DDL files first -> migration files -> seed files.
@@ -142,3 +145,4 @@ Run order: DDL files first -> migration files -> seed files.
 - `add_user_id_to_products.sql` (MySQL) -> adds userId (seller FK) to products
 - `add_variants_to_products.sql` (MySQL) -> product variants support
 - `create_sample_users.sql` (MySQL) -> seed data
+- `payments_full_migration.sql` (PostgreSQL) -> payments table

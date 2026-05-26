@@ -97,7 +97,7 @@ try {
 - **Gateway pattern**: Every TCP call needs `timeout(10000)` + `MicroserviceErrorHandler`. Every gateway DTO field needs `@ApiProperty()`.
 - **Constants-first**: Message patterns, queue names, and ports must be in `@app/constant` or `@app/common/src/constants/`. Never hardcode inline.
 - **TypeORM entities**: Use `!` (definite assignment assertion) on all column-decorated properties, not non-null assertions.
-- **DB routing**: MySQL for Orders, Products, User, Payments, Rewards. PostgreSQL for Inventory. Never cross-inject.
+- **DB routing**: MySQL for Orders, Products, User. PostgreSQL for Inventory, Payments, Rewards. Never cross-inject.
 - **Error handling**: Use `MicroserviceErrorHandler` in all gateway services. Microservices throw NestJS built-in exceptions.
 
 ## Debug Protocol
@@ -141,6 +141,8 @@ npm run build && npm run lint && npm run test
 - Load when adding a new feature: `context/api.md`, `context/research.md`
 - Load when committing: `context/git-workflow.md`
 - Do not load all context files for every task.
+- When prompt does not specify context: load snapshot.md + conventions.md + architecture.md only.
+  Do NOT auto-load all context/ files.
 
 ## Definition of Done
 
