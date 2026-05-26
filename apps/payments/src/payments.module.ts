@@ -19,6 +19,7 @@ import { PaymentGatewayFactory } from "./payment-gateway.factory";
     PostgresDatabaseModule,
     TypeOrmModule.forFeature([Payment]),
     RmqModule,
+    RmqModule.registerDirectPublisher(),
   ],
   controllers: [PaymentsController],
   providers: [

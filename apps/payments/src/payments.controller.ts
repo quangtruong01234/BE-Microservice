@@ -37,16 +37,14 @@ export class PaymentsController {
   getPaymentUrl(
     @Payload() data: { orderId: number },
   ): Promise<{ order_url: string | null; status: string | null }> {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call
     return this.paymentsService.getPaymentUrl(data.orderId);
   }
 
   @Post("zalopay/callback")
   @Public()
-  zaloPayCallback(@Body() body: { data: string; mac: string }): {
-    return_code: number;
-    return_message: string;
-  } {
-    return handleZaloPayCallback(body);
+  async zaloPayCallback(
+    @Body() body: { data: string; mac: string },
+  ): Promise<{ return_code: number; return_message: string }> {
+    return handleZaloPayCallback(body, this.paymentsService);
   }
 }
