@@ -48,10 +48,10 @@ export class OrdersController {
 
   @EventPattern(EVENT.PAYMENT_COMPLETED_EVENT)
   async handlePaymentCompleted(
-    @Payload() data: { data: { orderId: number } },
+    @Payload() data: { orderId: number },
     @Ctx() context: RmqContext,
   ) {
-    const orderId = data.data.orderId;
+    const orderId = data.orderId;
     this.logger.log(`[ORDERS] payment_completed received for order ${orderId}`);
     await this.ordersService.updateOrderStatus(orderId, OrderStatus.COMPLETED);
     this.rmqService.ack(context);
