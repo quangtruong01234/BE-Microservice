@@ -1,0 +1,23 @@
+{
+  "hooks": {
+    "PostToolUse": [],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && npx tsc --noEmit 2>&1 | tail -20",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "[console]::beep(1000, 300); Add-Type -AssemblyName System.Windows.Forms; $n = New-Object System.Windows.Forms.NotifyIcon; $n.Icon = [System.Drawing.SystemIcons]::Information; $n.Visible = $true; $n.ShowBalloonTip(5000, 'Claude Code', 'Claude code xong rồi master', [System.Windows.Forms.ToolTipIcon]::Info); Start-Sleep 5; $n.Dispose()",
+            "shell": "powershell",
+            "async": true,
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
