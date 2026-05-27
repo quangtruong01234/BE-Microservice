@@ -19,6 +19,7 @@ import { TypeOrmModule } from "@nestjs/typeorm";
       autoLoadEntities: true,
       synchronize: true, // Re-enabled after fixing entity issues
       logging: false,
+      extra: { max: parseInt(process.env.PG_POOL_SIZE || "10", 10) },
     }),
   ],
   exports: [TypeOrmModule],

@@ -3,5 +3,6 @@ export const EXCHANGE = {
   EVENT_BUS: "EVENT_BUS",
   ORDERS_EXCHANGE: "order.fanout",
   PAYMENTS_EXCHANGE: "payment.fanout",
+  INVENTORY_EXCHANGE: "inventory.fanout",
   RMQ_PUBLISHER_CHANNEL: "RMQ_PUBLISHER_CHANNEL",
 };
