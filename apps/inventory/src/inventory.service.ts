@@ -1,12 +1,16 @@
 import {
   Injectable,
+  Inject,
   Logger,
   NotFoundException,
   ConflictException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, QueryFailedError } from "typeorm";
+import { Channel } from "amqplib";
 import { Inventory } from "./inventory.entity";
+import { EXCHANGE } from "@app/common/constants/exchange";
+import { EVENT } from "@app/common/constants/event";
 
 export interface CreateInventoryDto {
   productId: number;
@@ -39,7 +43,21 @@ export class InventoryService {
   constructor(
     @InjectRepository(Inventory)
     private readonly inventoryRepository: Repository<Inventory>,
+    @Inject(EXCHANGE.RMQ_PUBLISHER_CHANNEL)
+    private readonly fanoutChannel: Channel,
   ) {}
+
+  private emitStockChanged(productId: number, availableStock: number): void {
+    const eventPayload = {
+      data: { productId, availableStock },
+      pattern: EVENT.INVENTORY_STOCK_CHANGED_EVENT,
+    };
+    this.fanoutChannel.publish(
+      EXCHANGE.INVENTORY_EXCHANGE,
+      EVENT.INVENTORY_STOCK_CHANGED_EVENT,
+      Buffer.from(JSON.stringify(eventPayload)),
+    );
+  }
 
   async create(data: CreateInventoryDto): Promise<Inventory> {
     try {
@@ -163,17 +181,26 @@ export class InventoryService {
   }
 
   async reserveStock(productId: number, quantity: number): Promise<boolean> {
-    const inventory = await this.findByProductId(productId);
+    const result = await this.inventoryRepository
+      .createQueryBuilder()
+      .update(Inventory)
+      .set({
+        availableStock: () => `available_stock - ${quantity}`,
+        reservedStock: () => `reserved_stock + ${quantity}`,
+      })
+      .where("product_id = :productId", { productId })
+      .andWhere("available_stock >= :quantity", { quantity })
+      .andWhere("is_active = true")
+      .execute();
 
-    if (!inventory || inventory.availableStock < quantity) {
+    if (result.affected === 0) {
       return false;
     }
 
-    await this.inventoryRepository.update(inventory.id, {
-      availableStock: inventory.availableStock - quantity,
-      reservedStock: inventory.reservedStock + quantity,
-    });
-
+    const updated = await this.findByProductId(productId);
+    if (updated) {
+      this.emitStockChanged(productId, updated.availableStock);
+    }
     return true;
   }
 
@@ -184,11 +211,13 @@ export class InventoryService {
       return false;
     }
 
+    const updatedAvailableStock = inventory.availableStock + quantity;
     await this.inventoryRepository.update(inventory.id, {
-      availableStock: inventory.availableStock + quantity,
+      availableStock: updatedAvailableStock,
       reservedStock: inventory.reservedStock - quantity,
     });
 
+    this.emitStockChanged(productId, updatedAvailableStock);
     return true;
   }
 
@@ -206,6 +235,7 @@ export class InventoryService {
       reservedStock: inventory.reservedStock - quantity,
     });
 
+    this.emitStockChanged(productId, inventory.availableStock);
     return true;
   }
 
