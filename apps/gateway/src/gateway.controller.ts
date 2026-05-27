@@ -46,8 +46,16 @@ export class GatewayController {
       throw new BadRequestException("Missing transaction reference");
     }
 
-    const status = query["status"] === "1" ? "success" : "failed";
-    return { gateway, status, transId, amount: query["amount"] };
+    let status: string;
+    let amount: string;
+    if (gateway === "zalopay") {
+      status = query["status"] === "1" ? "success" : "failed";
+      amount = query["amount"];
+    } else {
+      status = query["vnp_ResponseCode"] === "00" ? "success" : "failed";
+      amount = query["vnp_Amount"];
+    }
+    return { gateway, status, transId, amount };
   }
 
   @Get("health")

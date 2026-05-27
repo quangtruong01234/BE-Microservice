@@ -1,16 +1,30 @@
-import { Inject, Injectable, Logger } from "@nestjs/common";
+import {
+  ForbiddenException,
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from "@nestjs/common";
 import { ClientProxy } from "@nestjs/microservices";
-import { CachedService } from "@app/cached";
 import { firstValueFrom, timeout, catchError } from "rxjs";
 import {
   ORDER_MESSAGE_PATTERN,
   PAYMENT_MESSAGE_PATTERN,
-  USER_MESSAGE_PATTERN,
 } from "libs/constant/message-pattern.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { CMD } from "@app/common/constants/cmd";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
 import { CreateOrderDto } from "./dto/create-order.dto";
+
+interface OrderResponse {
+  id: number;
+  user_id: number;
+  status: string;
+  total: number;
+  items: unknown[];
+  created_at: string;
+  updated_at: string;
+}
 
 export abstract class BaseAggregatorService {
   protected logger = new Logger(BaseAggregatorService.name);
@@ -34,11 +48,8 @@ export class OrderService {
   constructor(
     @Inject(NAME_SERVICE_TCP.ORDERS_SERVICE)
     private readonly ordersClient: ClientProxy,
-    @Inject(NAME_SERVICE_TCP.USER_SERVICE)
-    private readonly userClient: ClientProxy,
     @Inject(NAME_SERVICE_TCP.PAYMENT_SERVICE)
     private readonly paymentsClient: ClientProxy,
-    @Inject(CachedService) private readonly redisService: CachedService,
   ) {}
 
   async createOrder(userId: number, dto: CreateOrderDto): Promise<unknown> {
@@ -62,57 +73,71 @@ export class OrderService {
     }
   }
 
-  async getOrderById(orderId: string): Promise<unknown> {
+  async getOrderById(
+    orderId: string,
+    callerId: number,
+    callerRole: string,
+  ): Promise<OrderResponse> {
     const id = Number(orderId);
-    if (isNaN(id)) throw new Error("Invalid orderId");
-    return (await firstValueFrom(
+    if (isNaN(id)) {
+      MicroserviceErrorHandler.handleError(
+        new Error("Invalid orderId"),
+        "get order by id",
+        "Orders Service",
+      );
+    }
+    const order = (await firstValueFrom(
       this.ordersClient.send(ORDER_MESSAGE_PATTERN.GET_ORDER_BY_ID, id).pipe(
         timeout(10000),
         catchError((err: unknown) => {
           throw err;
         }),
       ),
-    )) as unknown;
+    )) as OrderResponse | null;
+
+    if (!order) {
+      throw new NotFoundException(`Order ${id} not found`);
+    }
+
+    if (callerRole !== "admin" && order.user_id !== callerId) {
+      throw new ForbiddenException("You do not have access to this order");
+    }
+
+    return order;
   }
 
-  async getOrderByUser(userId: string): Promise<unknown> {
-    const cacheKey = `order_user:${userId}`;
-    const cached = await this.redisService.get(cacheKey);
-    if (cached) {
-      return JSON.parse(cached) as unknown;
-    }
+  async getOrderByUser(
+    userId: string,
+    page: number,
+    limit: number,
+  ): Promise<{
+    data: unknown[];
+    total: number;
+    page: number;
+    limit: number;
+  }> {
     const uid = Number(userId);
     if (isNaN(uid)) {
-      throw new Error("Invalid userId");
+      MicroserviceErrorHandler.handleError(
+        new Error("Invalid userId"),
+        "get orders by user",
+        "Orders Service",
+      );
     }
-
-    // Aggregator: gọi các service con và tổng hợp kết quả
-    const results = await Promise.all([
-      (await firstValueFrom(
-        this.ordersClient
-          .send(ORDER_MESSAGE_PATTERN.GET_ORDERS_BY_USER, uid)
-          .pipe(
-            timeout(5000),
-            catchError(() => {
-              throw new Error("Orders service unavailable");
-            }),
-          ),
-      )) as unknown,
-      (await firstValueFrom(
-        this.userClient
-          .send({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, uid)
-          .pipe(
-            timeout(5000),
-            catchError(() => {
-              throw new Error("User service unavailable");
-            }),
-          ),
-      )) as unknown,
-    ]);
-
-    const result = { orders: results[0], user: results[1] };
-    await this.redisService.set(cacheKey, JSON.stringify(result), 300);
-    return result;
+    return (await firstValueFrom(
+      this.ordersClient
+        .send(ORDER_MESSAGE_PATTERN.GET_ORDERS_BY_USER, {
+          userId: uid,
+          page,
+          limit,
+        })
+        .pipe(
+          timeout(10000),
+          catchError((err: unknown) => {
+            throw err;
+          }),
+        ),
+    )) as { data: unknown[]; total: number; page: number; limit: number };
   }
 
   async getPaymentUrl(
