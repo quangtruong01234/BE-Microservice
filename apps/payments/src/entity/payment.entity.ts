@@ -16,7 +16,7 @@ export class Payment {
   @PrimaryGeneratedColumn("increment")
   id!: number;
 
-  @Column({ type: "bigint" })
+  @Column({ type: "bigint", unique: true })
   order_id!: number;
 
   @Column({ type: "decimal", precision: 12, scale: 2 })

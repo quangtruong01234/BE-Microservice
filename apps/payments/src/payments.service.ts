@@ -38,6 +38,20 @@ export class PaymentsService {
     this.logger.log(`[PAYMENTS] Processing payment for order ${orderId}...`);
 
     try {
+      const existing = await this.paymentRepository.findOne({
+        where: { order_id: Number(orderId) },
+      });
+      if (existing) {
+        this.logger.warn(
+          `[PAYMENTS] Duplicate order_id ${orderId} detected, skipping`,
+        );
+        return {
+          paymentUrl: existing.order_url ?? "",
+          transactionId: existing.transaction_id ?? "",
+          appTransId: existing.appTransId ?? "",
+        };
+      }
+
       const payment = this.paymentRepository.create({
         order_id: Number(orderId),
         amount,
