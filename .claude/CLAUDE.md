@@ -28,11 +28,12 @@ When in doubt:
 
 ## Context Files
 
-@context/architecture.md
-@context/conventions.md
-@context/database.md
-@context/api.md
-@context/typescript-rules.md
+# Context files — load manually per task, do NOT auto-load all:
+# @context/architecture.md  — load when touching service boundaries
+# @context/conventions.md   — load when writing new code
+# @context/database.md      — load when touching entities/migrations
+# @context/api.md           — load when adding endpoints
+# @context/typescript-rules.md — load when fixing TS errors
 
 # Deferred context - load only when referenced via slash command/agent:
 
@@ -150,4 +151,6 @@ A task is complete only when ALL of these pass:
 - `tsc --noEmit`: zero errors
 - `eslint`: zero errors
 - Runtime: endpoint responds as expected
+- If task adds/modifies an endpoint: suggest manual test command or Postman request to verify
+- If task fixes a bug: verify the original symptom no longer occurs before marking done
 - After each task: update `.claude/handoff/snapshot.md` — move completed item out of Remaining Tasks, add any new Known Issues discovered.
