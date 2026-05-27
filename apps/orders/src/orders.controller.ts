@@ -37,8 +37,14 @@ export class OrdersController {
   }
 
   @MessagePattern("get_orders_by_user")
-  async getOrdersByUser(@Payload() userId: number) {
-    return await this.ordersService.getOrdersByUser(userId);
+  async getOrdersByUser(
+    @Payload() payload: { userId: number; page: number; limit: number },
+  ) {
+    return await this.ordersService.getOrdersByUser(
+      payload.userId,
+      payload.page,
+      payload.limit,
+    );
   }
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.GET_ORDER_BY_ID)

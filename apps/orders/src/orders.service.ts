@@ -96,12 +96,19 @@ export class OrdersService {
     return order;
   }
 
-  async getOrdersByUser(userId: number): Promise<Order[]> {
-    const orders = await this.orderRepository.find({
+  async getOrdersByUser(
+    userId: number,
+    page: number = 1,
+    limit: number = 10,
+  ): Promise<{ data: Order[]; total: number; page: number; limit: number }> {
+    const [data, total] = await this.orderRepository.findAndCount({
       where: { user_id: userId },
       relations: ["items"],
+      order: { created_at: "DESC" },
+      skip: (page - 1) * limit,
+      take: limit,
     });
-    return orders;
+    return { data, total, page, limit };
   }
 
   async getOrderById(orderId: number): Promise<Order | null> {
