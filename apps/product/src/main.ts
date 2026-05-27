@@ -1,29 +1,39 @@
 import { NestFactory } from "@nestjs/core";
-import { ProductModule } from "./product.module";
 import { MicroserviceOptions, Transport } from "@nestjs/microservices";
-import * as dotenv from "dotenv";
+import { ProductModule } from "./product.module";
+import { RmqService } from "@app/common";
+import { QUEUES } from "@app/common/constants/queues";
+import { EXCHANGE } from "@app/common/constants/exchange";
 import { PORT_TCP, TCP_HOST } from "libs/constant/port-tcp.constant";
 import { AllRpcExceptionFilter } from "./filters/rpc-exception.filter";
 
 async function bootstrap() {
-  dotenv.config({ path: "./local/nodeA/.env" });
-  const app = await NestFactory.createMicroservice<MicroserviceOptions>(
-    ProductModule,
-    {
-      transport: Transport.TCP,
-      options: {
-        host: TCP_HOST,
-        port: PORT_TCP.PRODUCT_TCP_PORT,
-      },
-    },
+  const app = await NestFactory.create(ProductModule);
+
+  const rmqService = app.get<RmqService>(RmqService);
+
+  app.connectMicroservice<MicroserviceOptions>(
+    rmqService.getOptionsTopic(QUEUES.INVENTORY_EVENTS, false, {
+      name: EXCHANGE.INVENTORY_EXCHANGE,
+      type: "fanout",
+    }),
   );
 
-  // Enable global RPC exception filter
+  app.connectMicroservice<MicroserviceOptions>({
+    transport: Transport.TCP,
+    options: {
+      host: TCP_HOST,
+      port: PORT_TCP.PRODUCT_TCP_PORT,
+    },
+  });
+
   app.useGlobalFilters(new AllRpcExceptionFilter());
 
-  await app.listen();
-  console.log(
-    `Product microservice is listening on port ${PORT_TCP.PRODUCT_TCP_PORT}`,
-  );
+  await app.startAllMicroservices();
+  await app.listen(PORT_TCP.PRODUCT_TCP_PORT + 100);
+
+  console.log("✅ Product service is running:");
+  console.log(`   🔌 TCP Microservice: localhost:${PORT_TCP.PRODUCT_TCP_PORT}`);
+  console.log(`   📨 RabbitMQ Consumer: ${QUEUES.INVENTORY_EVENTS}`);
 }
 void bootstrap();

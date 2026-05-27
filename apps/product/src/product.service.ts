@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   ConflictException,
 } from "@nestjs/common";
@@ -16,6 +17,8 @@ import { GetProductsQueryDto } from "./dto/get-products-query.dto";
 
 @Injectable()
 export class ProductService {
+  private readonly logger = new Logger(ProductService.name);
+
   constructor(
     @InjectRepository(Product)
     private readonly productRepository: Repository<Product>,
@@ -24,6 +27,25 @@ export class ProductService {
     @InjectRepository(Category)
     private readonly categoryRepository: Repository<Category>,
   ) {}
+
+  async updateStockQuantity(
+    productId: number,
+    availableStock: number,
+  ): Promise<void> {
+    const result = await this.productRepository.update(
+      { id: productId },
+      { stockQuantity: availableStock },
+    );
+    if (result.affected === 0) {
+      this.logger.warn(
+        `[PRODUCT] Product ${productId} not found for stock update`,
+      );
+      throw new NotFoundException(`Product ${productId} not found`);
+    }
+    this.logger.log(
+      `[PRODUCT] Updated stockQuantity for product ${productId} to ${availableStock}`,
+    );
+  }
 
   // Product methods
   async createProduct(createProductDto: CreateProductDto): Promise<Product> {

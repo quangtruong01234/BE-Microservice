@@ -1,6 +1,14 @@
-import { Controller } from "@nestjs/common";
-import { MessagePattern, Payload } from "@nestjs/microservices";
+import { Controller, Logger, NotFoundException } from "@nestjs/common";
+import {
+  Ctx,
+  EventPattern,
+  MessagePattern,
+  Payload,
+  RmqContext,
+} from "@nestjs/microservices";
 import { ProductService } from "./product.service";
+import { RmqService } from "@app/common";
+import { EVENT } from "@app/common/constants/event";
 import { CreateProductDto } from "./dto/create-product.dto";
 import { UpdateProductDto } from "./dto/update-product.dto";
 import { CreateBrandDto } from "./dto/create-brand.dto";
@@ -10,7 +18,12 @@ import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.
 
 @Controller()
 export class ProductController {
-  constructor(private readonly productService: ProductService) {}
+  private readonly logger = new Logger(ProductController.name);
+
+  constructor(
+    private readonly productService: ProductService,
+    private readonly rmqService: RmqService,
+  ) {}
 
   // ============================================================================
   // PRODUCT MESSAGE PATTERNS
@@ -106,5 +119,38 @@ export class ProductController {
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.CATEGORY_FIND_BY_ID)
   async findCategoryById(@Payload() id: number) {
     return this.productService.findCategoryById(id);
+  }
+
+  // ============================================================================
+  // EVENT HANDLERS
+  // ============================================================================
+
+  @EventPattern(EVENT.INVENTORY_STOCK_CHANGED_EVENT)
+  async handleInventoryStockChanged(
+    @Payload() data: { productId: number; availableStock: number },
+    @Ctx() context: RmqContext,
+  ): Promise<void> {
+    const { productId, availableStock } = data;
+    this.logger.log(
+      `[PRODUCT] inventory.stock_changed received: product ${productId}, availableStock ${availableStock}`,
+    );
+    try {
+      await this.productService.updateStockQuantity(productId, availableStock);
+      this.rmqService.ack(context);
+    } catch (err: unknown) {
+      this.logger.error(
+        `[PRODUCT] Failed to update stock for product ${productId}`,
+        err instanceof Error ? err.stack : String(err),
+      );
+      const channel = context.getChannelRef() as {
+        nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
+      };
+      const originalMsg = context.getMessage();
+      if (err instanceof NotFoundException) {
+        channel.nack(originalMsg, false, false);
+      } else {
+        channel.nack(originalMsg, false, true);
+      }
+    }
   }
 }
