@@ -56,7 +56,15 @@ export class OrderService {
     try {
       return (await firstValueFrom(
         this.ordersClient
-          .send({ cmd: CMD.CREATE_ORDER }, { userId, items: dto.items })
+          .send(
+            { cmd: CMD.CREATE_ORDER },
+            {
+              userId,
+              payment_method: dto.payment_method,
+              shipping_address: dto.shipping_address,
+              items: dto.items,
+            },
+          )
           .pipe(
             timeout(10000),
             catchError((err: unknown) => {
@@ -167,6 +175,29 @@ export class OrderService {
         "Orders Service",
       );
     }
+  }
+
+  async getOrderInvoice(
+    orderId: number,
+    requestingUserId: number,
+  ): Promise<Buffer> {
+    const result = await firstValueFrom(
+      this.ordersClient
+        .send<{
+          type: string;
+          data: number[];
+        }>(ORDER_MESSAGE_PATTERN.GET_ORDER_INVOICE, {
+          orderId,
+          requestingUserId,
+        })
+        .pipe(
+          timeout(10000),
+          catchError((err: unknown) => {
+            throw err;
+          }),
+        ),
+    );
+    return Buffer.from(result.data);
   }
 
   async getPaymentUrl(
