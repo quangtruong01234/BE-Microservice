@@ -9,7 +9,7 @@ import {
 import { OrdersService } from "./orders.service";
 import { CMD } from "@app/common/constants/cmd";
 import { EVENT } from "@app/common/constants/event";
-import { OrderStatus } from "./entity/order.entity";
+import { OrderStatus, PaymentMethod } from "./entity/order.entity";
 import { RmqService } from "@app/common";
 import { ORDER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 
@@ -26,6 +26,8 @@ export class OrdersController {
     @Payload()
     payload: {
       userId: number;
+      payment_method: PaymentMethod;
+      shipping_address: string;
       items: {
         product_id: number;
         product_name: string;
@@ -37,8 +39,13 @@ export class OrdersController {
     this.logger.log(
       `[ORDERS] Received create_order request with payload: ${JSON.stringify(payload)}`,
     );
-    const { userId, items } = payload;
-    return await this.ordersService.placeOrder(userId, items);
+    const { userId, payment_method, shipping_address, items } = payload;
+    return await this.ordersService.placeOrder(
+      userId,
+      payment_method,
+      shipping_address,
+      items,
+    );
   }
 
   @MessagePattern("get_orders_by_user")
@@ -70,6 +77,16 @@ export class OrdersController {
       payload.orderId,
       payload.callerId,
       payload.callerRole,
+    );
+  }
+
+  @MessagePattern({ cmd: ORDER_MESSAGE_PATTERN.GET_ORDER_INVOICE })
+  async getOrderInvoice(
+    @Payload() data: { orderId: number; requestingUserId: number },
+  ): Promise<Buffer> {
+    return await this.ordersService.generateInvoice(
+      data.orderId,
+      data.requestingUserId,
     );
   }
 

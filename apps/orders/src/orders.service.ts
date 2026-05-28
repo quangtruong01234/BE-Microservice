@@ -8,7 +8,7 @@ import {
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
-import { Order, OrderStatus } from "./entity/order.entity";
+import { Order, OrderStatus, PaymentMethod } from "./entity/order.entity";
 import { HttpService } from "@nestjs/axios";
 import { ClientProxy } from "@nestjs/microservices";
 import { catchError, firstValueFrom, throwError, timeout } from "rxjs";
@@ -16,6 +16,10 @@ import { OrderItem } from "./entity/order_item.entity";
 import { EVENT } from "@app/common/constants/event";
 import { EXCHANGE } from "@app/common/constants/exchange";
 import { INVENTORY_MESSAGE_PATTERNS } from "libs/constant/message-pattern-inventory.constant";
+import { USER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
+import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
+import { generateInvoicePdf } from "./invoice/invoice.generator";
+import { GhnService } from "./ghn/ghn.service";
 import { Channel } from "amqplib";
 
 @Injectable()
@@ -26,20 +30,27 @@ export class OrdersService {
     @Inject(EXCHANGE.RMQ_PUBLISHER_CHANNEL)
     private readonly fanoutChannel: Channel,
     private readonly httpService: HttpService,
-    @Inject("INVENTORY_SERVICE") private readonly inventoryClient: ClientProxy,
+    @Inject(NAME_SERVICE_TCP.INVENTORY_SERVICE)
+    private readonly inventoryClient: ClientProxy,
+    @Inject(NAME_SERVICE_TCP.USER_SERVICE)
+    private readonly userClient: ClientProxy,
     // @Inject("PAYMENTS_SERVICE") private readonly paymentClient: ClientProxy,
     @InjectRepository(Order)
     private readonly orderRepository: Repository<Order>,
     @InjectRepository(OrderItem)
     private readonly orderItemRepository: Repository<OrderItem>,
+    private readonly ghnService: GhnService,
   ) {}
 
   async onModuleInit() {
     await this.inventoryClient.connect();
+    await this.userClient.connect();
   }
 
   async placeOrder(
     userId: number,
+    payment_method: PaymentMethod,
+    shipping_address: string,
     items: Array<{
       product_id: number;
       product_name: string;
@@ -75,7 +86,13 @@ export class OrdersService {
     );
     // Tạo order trước
     const order = await this.orderRepository.save(
-      this.orderRepository.create({ user_id: userId, total }),
+      this.orderRepository.create({
+        user_id: userId,
+        total,
+        payment_method,
+        shipping_address,
+        cod_amount: payment_method === PaymentMethod.COD ? total : null,
+      }),
     );
     // Tạo order_items với order_id vừa tạo
     const orderItems = items.map((item) =>
@@ -90,7 +107,7 @@ export class OrdersService {
     const routingKey = EVENT.ORDER_CREATED_EVENT;
 
     const eventPayload = {
-      data: order,
+      data: { ...order, payment_method: order.payment_method },
       pattern: routingKey,
     };
 
@@ -99,6 +116,12 @@ export class OrdersService {
       routingKey,
       Buffer.from(JSON.stringify(eventPayload)),
     );
+
+    if (order.payment_method === PaymentMethod.COD) {
+      const ghnCode = await this.ghnService.createShippingOrder(order);
+      await this.orderRepository.update(order.id, { ghn_order_code: ghnCode });
+      order.ghn_order_code = ghnCode;
+    }
 
     return order;
   }
@@ -169,5 +192,35 @@ export class OrdersService {
 
     this.logger.log(`[ORDERS] Order ${orderId} canceled by user ${callerId}`);
     return order;
+  }
+
+  async generateInvoice(
+    orderId: number,
+    requestingUserId: number,
+  ): Promise<Buffer> {
+    const order = await this.orderRepository.findOne({
+      where: { id: orderId },
+      relations: ["items"],
+    });
+    if (!order) {
+      throw new NotFoundException(`Order ${orderId} not found`);
+    }
+    if (Number(order.user_id) !== requestingUserId) {
+      throw new ForbiddenException("You do not have access to this order");
+    }
+    const user = await firstValueFrom(
+      this.userClient
+        .send<{
+          id: number;
+          username: string;
+          email: string;
+          name: string | null;
+        }>({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, order.user_id)
+        .pipe(
+          timeout(10000),
+          catchError((e: unknown) => throwError(() => e)),
+        ),
+    );
+    return generateInvoicePdf(order, user);
   }
 }

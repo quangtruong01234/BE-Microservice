@@ -13,6 +13,7 @@ import {
   PORT_TCP,
   TCP_HOST,
 } from "libs/constant/port-tcp.constant";
+import { GhnModule } from "./ghn/ghn.module";
 
 @Module({
   imports: [
@@ -31,12 +32,21 @@ import {
         transport: Transport.TCP,
         options: {
           host: TCP_HOST,
-          port: PORT_TCP.INVENTORY_TCP_PORT, // Default port for inventory service
+          port: PORT_TCP.INVENTORY_TCP_PORT,
+        },
+      },
+      {
+        name: NAME_SERVICE_TCP.USER_SERVICE,
+        transport: Transport.TCP,
+        options: {
+          host: TCP_HOST,
+          port: PORT_TCP.USER_TCP_PORT,
         },
       },
     ]),
     // RmqModule.register({ name: "INVENTORY_SERVICE" }),
     // RmqModule.register({ name: "PAYMENTS_SERVICE" }),
+    GhnModule,
     RmqModule,
     RmqModule.registerDirectPublisher(),
     // TYPEORM_MODULE.forFeature([Order, OrderItem])
