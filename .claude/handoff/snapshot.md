@@ -29,10 +29,16 @@ Base URL: http://localhost:3000 | Swagger: /doc
 - Cancel order: PATCH /api/order/:id/cancel — status transition PENDING/PROCESSING → CANCELED, ownership check, RabbitMQ emit ORDER_CANCELED_EVENT → inventory releases stock
 - Inventory RabbitMQ fanout fix: main.ts switched to getOptionsTopic() with ORDERS_EXCHANGE binding; inventory.controller.ts removed spurious data.data unwrap in handleOrderCreated and handleOrderCanceled — order_created and order_canceled events now consumed correctly; verified reserve/release stock end-to-end
 - PDF Invoice (partial): product_name added to order_items (entity + migration applied to Aiven DB); pdfkit + @types/pdfkit installed; invoice generator + get_order_invoice TCP handler + GET /api/order/:id/invoice gateway endpoint implemented (not yet tested)
+- PDF Invoice — implemented and zero tsc/ESLint errors confirmed; curl test deferred (not blocking)
+- GHN + COD schema: 4 new columns on orders table (payment_method ENUM zalopay|vnpay|cod, shipping_address VARCHAR 500, cod_amount DECIMAL nullable, ghn_order_code VARCHAR nullable); OrderStatus extended with SHIPPED + DELIVERING; PaymentMethod enum added; migration applied to Aiven DB (55 existing rows backfilled with DEFAULT then dropped)
+- GHN + COD implementation: GhnService + GhnModule created (apps/orders/src/ghn/); orders.service.ts calls GHN immediately for COD orders — GHN failure is non-fatal (try/catch, order saved with ghn_order_code=null); payment_method added explicitly to order_created event payload; payments service skips COD orders via guard clause (payment_method === 'cod') before any DB/logging work
+- GHN URL fix: GHN_API_URL corrected to https://dev-online-gateway.ghn.vn/shiip/public-api in local/nodeA/.env
 
 ## Active Tasks
 
-- PDF Invoice — verify endpoint: call GET /api/order/:id/invoice with valid JWT, confirm PDF downloads correctly with proper headers (Content-Type: application/pdf, Content-Disposition: attachment)
+- GHN + COD — re-verify COD order creation end-to-end after URL fix (expect ghn_order_code non-null in DB)
+- GHN webhook handler — POST from GHN → update order status (SHIPPED/DELIVERING/COMPLETED) + emit payment_completed for COD when delivered
+- ZaloPay/VNPay → GHN — call GHN after payment_completed event (currently order goes straight to COMPLETED; needs PROCESSING → GHN → SHIPPED)
 
 ## Known Issues
 
@@ -49,11 +55,16 @@ Base URL: http://localhost:3000 | Swagger: /doc
 - @Payload() in NestJS RabbitMQ @EventPattern handlers = packet.data already unwrapped — access data.productId directly, never data.data.productId
 - COD payment handled via GHN cod_amount — not a separate payment service
 - Nginx config routes /zalopay/callback + /vnpay/callback → port 3007, all else → port 3000
+- GHN shipping_address format (pipe-delimited): "name|phone|address|ward|district|province"
+- GHN env vars in local/nodeA/.env: GHN_API_URL=https://dev-online-gateway.ghn.vn/shiip/public-api, GHN_API_TOKEN, GHN_SHOP_ID=200481
+- GHN failure is non-fatal: order persists with ghn_order_code=null, retry manually
+- PaymentMethod enum re-declared locally in gateway DTO (tech debt — sync with orders entity later)
+- payments service: guard clause (payment_method === 'cod') skips COD orders before any DB/logging work
 
 ## Backlog (priority order)
 
 - [ ] PDF invoice — test + verify download endpoint (implementation done)
-- [ ] Shipping GHN + COD — GHN API integration, cod_amount for cash payment, GHN webhook → order/payment status update
+- [~] Shipping GHN + COD — schema + COD flow done; webhook handler + ZaloPay/VNPay→GHN pending
 - [ ] Payment option selection — user selects ZaloPay / VNPay / COD at checkout
 - [ ] Social feed — Post/Like/Comment/Chat/Notifications (new social service, port 3008, Node A)
 - [ ] Nginx config — ready at nginx.conf, apply on production deploy only
