@@ -4,13 +4,18 @@ import { InventoryModule } from "./inventory.module";
 import { Transport, MicroserviceOptions } from "@nestjs/microservices";
 import { PORT_TCP, TCP_HOST } from "libs/constant/port-tcp.constant";
 import { AllRpcExceptionFilter } from "./filters/rpc-exception.filter";
+import { EXCHANGE } from "@app/common/constants/exchange";
 
 async function bootstrap() {
   const app = await NestFactory.create(InventoryModule);
 
-  // // Get RMQ service for message queue communication
   const rmqService = app.get<RmqService>(RmqService);
-  app.connectMicroservice(rmqService.getOptions("INVENTORY_SERVICE_QUEUE"));
+  app.connectMicroservice(
+    rmqService.getOptionsTopic("INVENTORY_SERVICE", false, {
+      name: EXCHANGE.ORDERS_EXCHANGE,
+      type: "fanout",
+    }),
+  );
 
   // Add TCP microservice for direct communication
   app.connectMicroservice<MicroserviceOptions>({

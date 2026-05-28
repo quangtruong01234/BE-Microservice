@@ -118,15 +118,12 @@ export class InventoryController {
   @EventPattern(EVENT.ORDER_CANCELED_EVENT)
   async handleOrderCanceled(
     @Payload()
-    data: {
-      data: {
-        orderId: number;
-        items: { product_id: number; quantity: number }[];
-      };
+    order: {
+      orderId: number;
+      items: { product_id: number; quantity: number }[];
     },
     @Ctx() context: RmqContext,
   ) {
-    const order = data.data;
     this.logger.log(
       `[INVENTORY] Processing order_canceled for order ${order.orderId}`,
     );
@@ -173,16 +170,13 @@ export class InventoryController {
   @EventPattern(EVENT.ORDER_CREATED_EVENT)
   async handleOrderCreated(
     @Payload()
-    data: {
-      data: {
-        id: number;
-        user_id: number;
-        items: { product_id: number; quantity: number }[];
-      };
+    order: {
+      id: number;
+      user_id: number;
+      items: { product_id: number; quantity: number }[];
     },
     @Ctx() context: RmqContext,
   ) {
-    const order = data.data;
     this.logger.log(
       `[INVENTORY] Processing order_created for order ${order.id}`,
     );
