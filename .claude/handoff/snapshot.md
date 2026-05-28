@@ -27,6 +27,7 @@ Base URL: http://localhost:3000 | Swagger: /doc
 - Task #3 (race condition fix): reserveStock() atomic via single UPDATE WHERE available_stock >= qty — PostgreSQL row lock prevents oversell
 - Task #4 verified: reserve triggers stockQuantity 4→3, release triggers 3→4 confirmed live
 - Cancel order: PATCH /api/order/:id/cancel — status transition PENDING/PROCESSING → CANCELED, ownership check, RabbitMQ emit ORDER_CANCELED_EVENT → inventory releases stock
+- Inventory RabbitMQ fanout fix: main.ts switched to getOptionsTopic() with ORDERS_EXCHANGE binding; inventory.controller.ts removed spurious data.data unwrap in handleOrderCreated and handleOrderCanceled — order_created and order_canceled events now consumed correctly; verified reserve/release stock end-to-end
 
 ## Active Tasks
 
@@ -34,8 +35,7 @@ _No active tasks._
 
 ## Known Issues
 
-- MicroserviceErrorHandler 502: BadRequestException và ForbiddenException từ microservices qua TCP không được map đúng HTTP status code — fallback về 502 thay vì 400/403. Pre-existing bug, cần fix riêng.
-- Inventory RabbitMQ fanout: inventory.main.ts subscribe bằng getOptions("INVENTORY_SERVICE_QUEUE") thay vì getOptionsTopic() với ORDERS_EXCHANGE — order_created và order_canceled events không được inventory consume. Pre-existing bug, cần fix riêng.
+- MicroserviceErrorHandler 502: BadRequestException and ForbiddenException from microservices over TCP are not correctly mapped to HTTP status codes — falls back to 502 instead of 400/403. Pre-existing bug, needs a dedicated fix.
 
 ## Key Conventions
 
@@ -51,8 +51,8 @@ _No active tasks._
 
 ## Backlog (priority order)
 
-- [ ] Hóa đơn PDF — generate PDF from order data, download endpoint
+- [ ] PDF invoice — generate PDF from order data, download endpoint
 - [ ] Shipping GHN + COD — GHN API integration, cod_amount for cash payment, GHN webhook → order/payment status update
-- [ ] Payment option selection — user chọn ZaloPay / VNPay / COD khi checkout
-- [ ] Social feed — Post/Like/Comment/Chat/Noti (new social service, port 3008, Node A)
+- [ ] Payment option selection — user selects ZaloPay / VNPay / COD at checkout
+- [ ] Social feed — Post/Like/Comment/Chat/Notifications (new social service, port 3008, Node A)
 - [ ] Nginx config — ready at nginx.conf, apply on production deploy only

@@ -47,10 +47,10 @@ TypeORM entities require definite assignment assertion (`!`) because properties 
 | `@CreateDateColumn`       | `createdAt!: Date`      | `createdAt: Date` (TS error) |
 
 ```typescript
-// ✅ Correct entity
+// ✅ Correct entity (int PK — default for most tables)
 @Entity()
 export class User {
-  @PrimaryGeneratedColumn('increment', { type: 'bigint' })
+  @PrimaryGeneratedColumn()
   id!: number;
 
   @Column({ nullable: false })
@@ -124,7 +124,8 @@ async handleOrderCreated(
 
 ## TypeORM Entity Conventions
 
-- `@PrimaryGeneratedColumn('increment', { type: 'bigint' })` for IDs
+- `@PrimaryGeneratedColumn()` (int) for IDs — default for all entities
+- **Exception**: `@PrimaryGeneratedColumn('increment', { type: 'bigint' })` only for `orders`, `order_items`, `payments` (high-volume transaction tables). FK columns pointing to these tables (`order_id` in `order_items` and `payments`) must also be `bigint`.
 - Column names: snake_case (`name: 'created_at'`), properties: camelCase
 - `@CreateDateColumn` / `@UpdateDateColumn` on every entity
 - Store both raw FK column (`brandId`) and the relation object (`brand`)

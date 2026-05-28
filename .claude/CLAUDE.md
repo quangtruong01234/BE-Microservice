@@ -28,20 +28,42 @@ When in doubt:
 
 ## Context Files
 
-# Context files — load manually per task, do NOT auto-load all:
-# @context/architecture.md  — load when touching service boundaries
-# @context/conventions.md   — load when writing new code
-# @context/database.md      — load when touching entities/migrations
-# @context/api.md           — load when adding endpoints
-# @context/typescript-rules.md — load when fixing TS errors
+Always loaded (auto-imported every session):
 
-# Deferred context - load only when referenced via slash command/agent:
+@context/conventions.md
+@context/architecture.md
+@handoff/snapshot.md
 
-# @context/security.md -> used in /feature for auth/JWT tasks
+Load on demand — read with the Read tool when the task touches the relevant area:
 
-# @context/research.md -> used in agents/researcher.md
+| File | When to load |
+|---|---|
+| `context/database.md` | entity / migration / column / table / schema |
+| `context/api.md` | endpoint / route / DTO / swagger / API |
+| `context/security.md` | payment / zalopay / vnpay / JWT / auth / cookie / guard |
+| `context/typescript-rules.md` | tsc / type error / any / return type / eslint |
+| `context/git-workflow.md` | commit |
+| `context/research.md` | pre-implementation spanning > 1 service |
+| `backend.md` | NestJS / TCP / RabbitMQ / @MessagePattern / @EventPattern detail |
 
-# @context/git-workflow.md -> used in /review command
+Do NOT use `@` for the on-demand group above — load them explicitly with the Read tool.
+
+## Auto-context (when user does not tag a context file)
+
+Match keywords in the prompt → read the corresponding file with the Read tool. Do NOT ask the user.
+
+| Keywords in prompt | File to read |
+|---|---|
+| entity, migration, column, table, schema | `context/database.md` |
+| endpoint, route, DTO, swagger, API | `context/api.md` |
+| payment, zalopay, vnpay, JWT, auth, cookie, guard | `context/security.md` |
+| tsc, type error, any, return type, eslint | `context/typescript-rules.md` |
+| commit | `context/git-workflow.md` |
+| TCP, RabbitMQ, message pattern, event, @MessagePattern, @EventPattern | `backend.md` |
+
+- No keyword match → use only the 3 always-loaded files; do not load extras.
+- Multiple keywords match → load all matching files.
+- User tags a file manually → that tag always takes priority over auto-context.
 
 ## Additional References
 
@@ -134,6 +156,10 @@ When debugging, run `/debug` — full protocol in `commands/debug.md`.
 ```bash
 npm run build && npm run lint && npm run test
 ```
+
+## Shell Rules
+
+- Do not chain multiple `curl` calls in one shell invocation — causes hang/timeout. Run each command separately.
 
 ## Context Loading Strategy
 

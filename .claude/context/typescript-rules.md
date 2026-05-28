@@ -1,7 +1,7 @@
 # TypeScript Rules — Strict (follow always)
 
 - **No `any`**: never use `any` type — use `unknown` then narrow, or define a proper interface
-- **No `any` in method signatures or interface params** — dùng `unknown` rồi cast, hoặc định nghĩa local interface để narrow type.
+- **No `any` in method signatures or interface params** — use `unknown` then cast, or define a local interface to narrow the type.
   ```typescript
   // ❌ Wrong
   verifyCallback(payload: any): Promise<...>

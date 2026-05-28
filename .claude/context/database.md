@@ -11,6 +11,15 @@ Manual migrations: `api/database/*.sql`
 
 ---
 
+## ID Type Convention
+
+- **Default**: `int` (`@PrimaryGeneratedColumn()`) for all PKs and FKs.
+- **Exceptions** (high-volume transaction tables): `orders`, `order_items`, `payments` use `bigint` PK (`@PrimaryGeneratedColumn('increment', { type: 'bigint' })`).
+- FK columns that reference a `bigint` PK must also be `bigint` — e.g., `order_id` in `order_items` and `payments`.
+- All other FKs (brandId, categoryId, userId, productId, etc.) stay `int`.
+
+---
+
 ## MySQL Entities
 
 ### User (`user` service)
@@ -68,7 +77,7 @@ Relations: `OneToMany` -> Product
 
 ---
 
-### Order (`orders` service)
+### Order (`orders` service) — bigint PK
 
 File: `api/apps/orders/src/entity/order.entity.ts`
 Relations: `OneToMany` -> OrderItem
@@ -81,12 +90,12 @@ Relations: `OneToMany` -> OrderItem
 
 ---
 
-### OrderItem (`orders` service)
+### OrderItem (`orders` service) — bigint PK
 
 File: `api/apps/orders/src/entity/order_item.entity.ts`
 
-- `id` (int, PK, auto)
-- `order_id` (int, FK -> Order)
+- `id` (bigint, PK, auto)
+- `order_id` (bigint, FK -> Order — bigint because Order.id is bigint)
 - `product_id` (int)
 - `quantity` (int), `price` (decimal)
 
@@ -108,12 +117,12 @@ Getters: `totalStock` = availableStock + reservedStock, `isLowStock` = available
 
 ---
 
-### Payment (`payments` service)
+### Payment (`payments` service) — bigint FK
 
 File: `api/apps/payments/src/entity/payment.entity.ts`
 
 - `id` (int, PK, auto)
-- `order_id` (bigint), `amount` (decimal 12,2)
+- `order_id` (bigint — FK to orders.id which is bigint), `amount` (decimal 12,2)
 - `status` (enum: PENDING, COMPLETED, FAILED)
 - `order_url` (text, nullable)
 - `transaction_id` (varchar 255, nullable — stores ZaloPay zp_trans_token or VNPay vnp_TransactionNo)

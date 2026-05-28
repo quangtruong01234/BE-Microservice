@@ -47,6 +47,24 @@ async getProduct(id: string): Promise<ProductResponseDto> {
 - All port numbers → `api/libs/constant/src/port-tcp.constant.ts`
 - **Never hardcode** pattern strings or port numbers inline
 
+## Backend: RabbitMQ @EventPattern — Payload Unwrapping
+
+NestJS automatically unwraps the RabbitMQ envelope before `@Payload()` receives it. Fields are accessed **directly** from `data` — never through `data.data`. This was the root cause of a real bug (Task 8 follow-up).
+
+```typescript
+// ✅ Correct — access fields directly
+@EventPattern(EVENT.ORDER_CREATED_EVENT)
+async handleOrderCreated(@Payload() data: OrderCreatedEvent): Promise<void> {
+  const orderId = data.orderId;       // ✅
+  const productId = data.productId;   // ✅
+}
+
+// ❌ Wrong — data.data does not exist, always undefined
+async handleOrderCreated(@Payload() data: unknown): Promise<void> {
+  const orderId = (data as any).data.orderId; // ❌ undefined bug
+}
+```
+
 ## Backend: TypeORM Entity Rules
 
 ```typescript

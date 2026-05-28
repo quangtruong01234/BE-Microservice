@@ -13,7 +13,7 @@ Auth: HttpOnly cookie set on login. Protected routes require the cookie (sent au
 **Public (no auth):**
 - POST /api/user/register
 - POST /api/user/login
-- GET /api/products/ và các GET products không có Cookie tag
+- GET /api/products/ and all GET product endpoints without a Cookie tag
 - GET /api/inventory/ (read-only)
 - GET /api/gateway/health
 
@@ -30,7 +30,7 @@ Auth: HttpOnly cookie set on login. Protected routes require the cookie (sent au
 **Role: admin only:**
 - GET /api/user/all
 
-> Khi thêm endpoint mới: phải khai báo vào đúng zone ở đây trước khi implement Guard.
+> When adding a new endpoint: declare it in the correct zone here before implementing the guard.
 
 ---
 

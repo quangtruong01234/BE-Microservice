@@ -14,6 +14,20 @@ Example: `/debug port 3001 not listening, AggregateError`
 
 ---
 
+## Known Issues — read BEFORE debugging
+
+If the symptom matches either item below, this is a **known pre-existing bug** — report it immediately instead of running a full diagnostic.
+
+### (a) MicroserviceErrorHandler maps wrong HTTP status
+
+`BadRequestException` and `ForbiddenException` from TCP microservices are not correctly mapped to 400/403 — gateway falls back to **502**. Any 502 from the gateway where the business logic looks correct should be suspected as this cause.
+
+### (b) Inventory not consuming `order_created` / `order_canceled`
+
+If `inventory.main.ts` uses `getOptions("INVENTORY_SERVICE_QUEUE")` instead of `getOptionsTopic()` with `ORDERS_EXCHANGE`, the service subscribes to the wrong queue and receives no events from Orders. Check `apps/inventory/src/main.ts` first.
+
+---
+
 - If a file path is uncertain, glob/search for it; do not ask
 - After every fix: run `npx tsc --noEmit` — never mark done if it has errors
 
@@ -39,6 +53,8 @@ State each as: "If X is the cause, then changing Y will fix it."
 ---
 
 ## Diagnostic Sequence
+
+Environment: **Windows + PowerShell**. Default to Windows commands; only fall back to Linux/Mac variants if the Windows command does not exist.
 
 Run ALL steps relevant to the symptom before forming any conclusion.
 

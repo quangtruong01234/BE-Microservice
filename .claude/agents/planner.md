@@ -31,7 +31,7 @@ Read the following files to ensure the plan does not create duplicates:
 
 ## Overview
 
-- **Affected services**: danh sách service bị chạm
+- **Affected services**: list of services touched
 - **New TCP message patterns**: tên constant cần thêm vào `libs/constant/`
 - **New RabbitMQ events**: tên event cần thêm vào `libs/common/src/constants/event.ts`
 - **Schema changes**: yes (list tables) / no
