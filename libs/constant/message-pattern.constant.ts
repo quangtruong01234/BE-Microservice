@@ -31,6 +31,7 @@ export const ORDER_MESSAGE_PATTERN = {
   GET_ORDERS_BY_USER: "get_orders_by_user",
   GET_ORDER_BY_ID: "get_order_by_id",
   CANCEL_ORDER: "cancel_order",
+  GET_ORDER_INVOICE: "get_order_invoice",
 };
 
 export const PAYMENT_MESSAGE_PATTERN = {

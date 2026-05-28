@@ -7,10 +7,11 @@ import {
   Post,
   Query,
   Req,
+  Res,
   UseGuards,
   ValidationPipe,
 } from "@nestjs/common";
-import { Request } from "express";
+import { Request, Response } from "express";
 import { OrderService } from "./order.service";
 import {
   ApiTags,
@@ -44,6 +45,27 @@ export class OrderController {
   ): Promise<unknown> {
     const userId = req.user?.id ?? 0;
     return await this.orderService.createOrder(userId, dto);
+  }
+
+  @Get(":id/invoice")
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: "Download PDF invoice for an order (owner only)" })
+  @ApiResponse({ status: 200, description: "PDF invoice file." })
+  @ApiResponse({ status: 403, description: "Forbidden — not the order owner." })
+  @ApiResponse({ status: 404, description: "Order not found." })
+  async getOrderInvoice(
+    @Param("id") id: string,
+    @Req() req: Request,
+    @Res() res: Response,
+  ): Promise<void> {
+    const userId = req.user?.id ?? 0;
+    const pdfBuffer = await this.orderService.getOrderInvoice(+id, userId);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="invoice-${id}.pdf"`,
+    );
+    res.end(pdfBuffer);
   }
 
   @Get(":id")
