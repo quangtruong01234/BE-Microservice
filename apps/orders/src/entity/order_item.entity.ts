@@ -18,6 +18,9 @@ export class OrderItem {
   @Column({ type: "bigint" })
   product_id!: number;
 
+  @Column({ name: "product_name" })
+  product_name!: string;
+
   @Column({ type: "int" })
   quantity!: number;
 

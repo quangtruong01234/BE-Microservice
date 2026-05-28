@@ -40,7 +40,12 @@ export class OrdersService {
 
   async placeOrder(
     userId: number,
-    items: Array<{ product_id: number; quantity: number; price: number }>,
+    items: Array<{
+      product_id: number;
+      product_name: string;
+      quantity: number;
+      price: number;
+    }>,
   ): Promise<Order> {
     //1. check stock in inventory
     for (const item of items) {

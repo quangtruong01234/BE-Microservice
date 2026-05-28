@@ -26,7 +26,12 @@ export class OrdersController {
     @Payload()
     payload: {
       userId: number;
-      items: { product_id: number; quantity: number; price: number }[];
+      items: {
+        product_id: number;
+        product_name: string;
+        quantity: number;
+        price: number;
+      }[];
     },
   ) {
     this.logger.log(
