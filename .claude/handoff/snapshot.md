@@ -26,6 +26,7 @@ Base URL: http://localhost:3000 | Swagger: /doc
 - Task #4 (sync): Inventory → Product stock sync via RabbitMQ FANOUT — INVENTORY_STOCK_CHANGED_EVENT + INVENTORY_EVENTS queue + INVENTORY_EXCHANGE constants added; inventory emits after reserve/release/consume; product switched to hybrid mode (TCP + RabbitMQ consumer) with ack/nack logic (NotFoundException → no-requeue, DB error → requeue); fixed @Payload() handler to use data directly (not data.data) — verified reserve/release both sync stockQuantity correctly
 - Task #3 (race condition fix): reserveStock() atomic via single UPDATE WHERE available_stock >= qty — PostgreSQL row lock prevents oversell
 - Task #4 verified: reserve triggers stockQuantity 4→3, release triggers 3→4 confirmed live
+- Cancel order: PATCH /api/order/:id/cancel — status transition PENDING/PROCESSING → CANCELED, ownership check, RabbitMQ emit ORDER_CANCELED_EVENT → inventory releases stock
 
 ## Active Tasks
 
@@ -33,7 +34,8 @@ _No active tasks._
 
 ## Known Issues
 
-_No known issues._
+- MicroserviceErrorHandler 502: BadRequestException và ForbiddenException từ microservices qua TCP không được map đúng HTTP status code — fallback về 502 thay vì 400/403. Pre-existing bug, cần fix riêng.
+- Inventory RabbitMQ fanout: inventory.main.ts subscribe bằng getOptions("INVENTORY_SERVICE_QUEUE") thay vì getOptionsTopic() với ORDERS_EXCHANGE — order_created và order_canceled events không được inventory consume. Pre-existing bug, cần fix riêng.
 
 ## Key Conventions
 
@@ -44,11 +46,13 @@ _No known issues._
 - Each prompt: 1 task only, report files changed
 - Archive reference: .claude/handoff/archive/2026-05-rbac-payment.md
 - @Payload() in NestJS RabbitMQ @EventPattern handlers = packet.data already unwrapped — access data.productId directly, never data.data.productId
+- COD payment handled via GHN cod_amount — not a separate payment service
+- Nginx config routes /zalopay/callback + /vnpay/callback → port 3007, all else → port 3000
 
-## Upcoming — Social Feed (4-day plan)
+## Backlog (priority order)
 
-- Day 1: social service (new) — Post/Like/Comment entities, TCP handlers, gateway endpoints, migration SQL
-- Day 2: social FE — feed page, create post, tag product, like/comment UI
-- Day 3: realtime noti (WebSocket) + product like (likesCount) + rating endpoint (verified buyer only)
-- Day 4: chat realtime — Conversation/Message entities, WebSocket handler, FE chat UI
-- Decision: social service on Node A, port TBD (next after 3006)
+- [ ] Hóa đơn PDF — generate PDF from order data, download endpoint
+- [ ] Shipping GHN + COD — GHN API integration, cod_amount for cash payment, GHN webhook → order/payment status update
+- [ ] Payment option selection — user chọn ZaloPay / VNPay / COD khi checkout
+- [ ] Social feed — Post/Like/Comment/Chat/Noti (new social service, port 3008, Node A)
+- [ ] Nginx config — ready at nginx.conf, apply on production deploy only
