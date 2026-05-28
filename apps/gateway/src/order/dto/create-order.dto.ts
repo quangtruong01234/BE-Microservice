@@ -1,11 +1,22 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { IsArray, IsInt, IsNumber, Min, ValidateNested } from "class-validator";
+import {
+  IsArray,
+  IsInt,
+  IsNumber,
+  IsString,
+  Min,
+  ValidateNested,
+} from "class-validator";
 import { Type } from "class-transformer";
 
 export class OrderItemDto {
   @ApiProperty({ description: "Product ID", example: 1 })
   @IsInt()
   product_id!: number;
+
+  @ApiProperty({ description: "Product name", example: "iPhone 15 Pro" })
+  @IsString()
+  product_name!: string;
 
   @ApiProperty({ description: "Quantity", example: 2 })
   @IsInt()
