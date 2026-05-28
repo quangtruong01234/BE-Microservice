@@ -154,3 +154,17 @@ A task is complete only when ALL of these pass:
 - If task adds/modifies an endpoint: suggest manual test command or Postman request to verify
 - If task fixes a bug: verify the original symptom no longer occurs before marking done
 - After each task: update `.claude/handoff/snapshot.md` — move completed item out of Remaining Tasks, add any new Known Issues discovered.
+
+## Test Accounts
+
+Stored in: `api/test-accounts.md`
+
+When creating a new test account during any task (register, seed, or manual creation), always append it to `api/test-accounts.md` immediately using this format:
+
+## <username>
+- Password: <password>
+- User ID: <id>
+- Role: <role>
+- Created: <date or task context>
+
+Do not push test-accounts.md to git. Verify .gitignore includes it.

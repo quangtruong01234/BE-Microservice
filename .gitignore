@@ -60,3 +60,6 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 .claude/settings.local.json
 .claude/commands/test-*.md
 
+# Local test data
+test-accounts.md
+
