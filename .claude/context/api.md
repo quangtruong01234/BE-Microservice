@@ -23,6 +23,7 @@ Auth: HttpOnly cookie set on login. Protected routes require the cookie (sent au
 - DELETE /api/products/:id
 - POST /api/order/
 - GET /api/order/user/:id
+- PATCH /api/order/:id/cancel
 - POST /api/inventory/reserve-stock
 - POST /api/inventory/release-stock
 
