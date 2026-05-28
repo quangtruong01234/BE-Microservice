@@ -19,5 +19,58 @@
         ]
       }
     ]
+  },
+  "permissions": {
+    "allow": [
+      "Read(**)",
+
+      "Edit(apps/**)",
+      "Edit(libs/**)",
+      "Edit(.claude/**)",
+      "Edit(database/**)",
+      "Edit(tsconfig*.json)",
+      "Edit(nest-cli.json)",
+      "Edit(.env.example)",
+
+      "Bash(npm run start:nodeA)",
+      "Bash(npm run start:nodeB)",
+      "Bash(npm run build*)",
+      "Bash(npm run lint*)",
+      "Bash(npm run test*)",
+      "Bash(npx tsc *)",
+      "Bash(npx eslint *)",
+      "Bash(npx prettier *)",
+      "Bash(cat *)",
+      "Bash(ls *)",
+      "Bash(grep *)",
+      "Bash(rg *)",
+      "Bash(find *)",
+      "Bash(curl *)",
+      "Bash(netstat *)",
+      "Bash(ss *)",
+      "Bash(docker-compose ps)",
+      "Bash(docker-compose logs *)",
+      "Bash(git status)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git add *)",
+      "Bash(git commit*)",
+      "Bash(git rev-parse*)"
+    ],
+    "deny": [
+      "Edit(.env)",
+      "Edit(.env.local)",
+      "Edit(.env.production)",
+      "Bash(rm -rf *)",
+      "Bash(npm install *)",
+      "Bash(npm uninstall *)",
+      "Bash(yarn *)",
+      "Bash(pnpm *)",
+      "Bash(bun *)",
+      "Bash(git push*)",
+      "Bash(git reset --hard*)",
+      "Bash(docker-compose down*)",
+      "Bash(docker-compose up*)"
+    ]
   }
 }
