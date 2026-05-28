@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  Patch,
   Post,
   Query,
   Req,
@@ -77,6 +78,27 @@ export class OrderController {
       query.page ?? 1,
       query.limit ?? 10,
     );
+  }
+
+  @Patch(":id/cancel")
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth("bearer")
+  @ApiOperation({ summary: "Cancel an order (owner or admin only)" })
+  @ApiResponse({ status: 200, description: "Order canceled successfully." })
+  @ApiResponse({
+    status: 400,
+    description: "Order cannot be canceled (invalid status).",
+  })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  @ApiResponse({ status: 403, description: "Forbidden — not the order owner." })
+  @ApiResponse({ status: 404, description: "Order not found." })
+  async cancelOrder(
+    @Param("id") id: string,
+    @Req() req: Request,
+  ): Promise<unknown> {
+    const callerId = req.user?.id ?? 0;
+    const callerRole = req.user?.role ?? "user";
+    return await this.orderService.cancelOrder(+id, callerId, callerRole);
   }
 
   @Get(":id/payment-url")

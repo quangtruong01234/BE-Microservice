@@ -99,7 +99,7 @@ export class OrderService {
       throw new NotFoundException(`Order ${id} not found`);
     }
 
-    if (callerRole !== "admin" && order.user_id !== callerId) {
+    if (callerRole !== "admin" && Number(order.user_id) !== callerId) {
       throw new ForbiddenException("You do not have access to this order");
     }
 
@@ -138,6 +138,35 @@ export class OrderService {
           }),
         ),
     )) as { data: unknown[]; total: number; page: number; limit: number };
+  }
+
+  async cancelOrder(
+    orderId: number,
+    callerId: number,
+    callerRole: string,
+  ): Promise<OrderResponse> {
+    try {
+      return (await firstValueFrom(
+        this.ordersClient
+          .send(ORDER_MESSAGE_PATTERN.CANCEL_ORDER, {
+            orderId,
+            callerId,
+            callerRole,
+          })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      )) as OrderResponse;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "cancel order",
+        "Orders Service",
+      );
+    }
   }
 
   async getPaymentUrl(
