@@ -28,10 +28,11 @@ Base URL: http://localhost:3000 | Swagger: /doc
 - Task #4 verified: reserve triggers stockQuantity 4→3, release triggers 3→4 confirmed live
 - Cancel order: PATCH /api/order/:id/cancel — status transition PENDING/PROCESSING → CANCELED, ownership check, RabbitMQ emit ORDER_CANCELED_EVENT → inventory releases stock
 - Inventory RabbitMQ fanout fix: main.ts switched to getOptionsTopic() with ORDERS_EXCHANGE binding; inventory.controller.ts removed spurious data.data unwrap in handleOrderCreated and handleOrderCanceled — order_created and order_canceled events now consumed correctly; verified reserve/release stock end-to-end
+- PDF Invoice (partial): product_name added to order_items (entity + migration applied to Aiven DB); pdfkit + @types/pdfkit installed; invoice generator + get_order_invoice TCP handler + GET /api/order/:id/invoice gateway endpoint implemented (not yet tested)
 
 ## Active Tasks
 
-_No active tasks._
+- PDF Invoice — verify endpoint: call GET /api/order/:id/invoice with valid JWT, confirm PDF downloads correctly with proper headers (Content-Type: application/pdf, Content-Disposition: attachment)
 
 ## Known Issues
 
@@ -51,7 +52,7 @@ _No active tasks._
 
 ## Backlog (priority order)
 
-- [ ] PDF invoice — generate PDF from order data, download endpoint
+- [ ] PDF invoice — test + verify download endpoint (implementation done)
 - [ ] Shipping GHN + COD — GHN API integration, cod_amount for cash payment, GHN webhook → order/payment status update
 - [ ] Payment option selection — user selects ZaloPay / VNPay / COD at checkout
 - [ ] Social feed — Post/Like/Comment/Chat/Notifications (new social service, port 3008, Node A)

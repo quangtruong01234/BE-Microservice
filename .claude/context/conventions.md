@@ -67,28 +67,54 @@ async handleOrderCreated(@Payload() data: unknown): Promise<void> {
 
 ## Backend: TypeORM Entity Rules
 
-```typescript
-@Entity()
-export class Product {
-  @PrimaryGeneratedColumn()
-  id!: number;              // ! allowed here (TypeORM guarantees)
+TypeORM hydrates properties at runtime, not in the constructor. Use `!` (definite assignment assertion) on every decorated column so TypeScript's `strictPropertyInitialization` does not error.
 
-  @Column()
+| Column config | Correct | Wrong |
+|---|---|---|
+| `nullable: false` | `name!: string` | `name: string` (TS error) |
+| `nullable: true` | `name!: string \| null` | `name?: string` (hides null) |
+| `@PrimaryGeneratedColumn` | `id!: number` | `id: number` (TS error) |
+| `@CreateDateColumn` | `createdAt!: Date` | `createdAt: Date` (TS error) |
+
+```typescript
+// ✅ Correct
+@Entity()
+export class User {
+  @PrimaryGeneratedColumn()
+  id!: number;
+
+  @Column({ nullable: false })
   name!: string;
 
-  @ManyToOne(() => Brand, brand => brand.products)
-  brand!: Brand;
+  @Column({ nullable: true })
+  avatar!: string | null;
+
+  @CreateDateColumn({ name: 'created_at' })
+  createdAt!: Date;
 }
+
+// ❌ Wrong — missing ! causes TS error
+@Column({ nullable: false })
+name: string;
+
+// ❌ Wrong — ? hides null, causes runtime bugs
+@Column({ nullable: true })
+avatar?: string;
+
+// ❌ Wrong — initializer bypasses TypeORM hydration
+@Column({ nullable: true })
+avatar: string | null = null;
 ```
 
-- Use `!` for TypeORM-decorated properties
-- Computed properties (getters) do not need `!`
+**Rule**: `!` in entity files is definite assignment assertion — TypeORM assigns at runtime. This is the one exception to the "no `!`" rule. Computed properties (getters) do not need `!`.
 
 ## Backend: DTOs
 
-- Gateway DTOs: use `class-validator` decorators + `@ApiProperty()` on every field
-- Microservice DTOs: `class-validator` only (no Swagger needed)
+- Gateway DTOs: `class-validator` decorators + `@ApiProperty()` / `@ApiPropertyOptional()` on every field
+- Microservice DTOs: `class-validator` only — no Swagger decorators
 - Use `@IsOptional()` + `?` for partial update fields
+- Query DTOs: provide defaults, use `@Type(() => Number)` for numeric query params
+- Numeric bounds: `@Min(0)` for prices/stock, `@Min(1) @Max(100)` for pagination
 - Update DTOs must use `PartialType` — never redeclare fields from the Create DTO:
 
 ```typescript
@@ -100,7 +126,36 @@ export class UpdateProductDto extends PartialType(CreateProductDto) {}
 // ❌ Wrong — do not redeclare all fields from CreateDto
 ```
 
-## Logging Rules
+## Backend: Response Shape
+
+Paginated list:
+
+```typescript
+{ items: T[], total: number, page: number, limit: number }
+```
+
+Error (from `HttpExceptionFilter`):
+
+```json
+{
+  "statusCode": 404,
+  "status": "error",
+  "error": "Not Found",
+  "message": "...",
+  "data": null,
+  "timestamp": "...",
+  "path": "...",
+  "method": "..."
+}
+```
+
+## Backend: Authentication
+
+- All routes are JWT-protected by default via global `JwtAuthGuard`
+- Mark public endpoints with `@Public()` from `common/decorators/public.decorator.ts`
+- User payload available as `req.user` after guard
+
+## Backend: Logging & Error Handling
 
 - `console.log()` is banned in production code — use NestJS `Logger` instead:
 
@@ -116,6 +171,9 @@ this.logger.error('message', error.stack);
 throw new InternalServerErrorException('message');
 throw new NotFoundException('resource not found');
 ```
+
+- Use `MicroserviceErrorHandler.handleError(error, operation, serviceName)` in all gateway services
+- Never expose raw DB errors, stack traces, or internal paths to the HTTP response body
 
 ## General Rules
 

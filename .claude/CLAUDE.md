@@ -67,7 +67,7 @@ Match keywords in the prompt → read the corresponding file with the Read tool.
 
 ## Additional References
 
-- **[backend.md](backend.md)** — NestJS conventions, TCP/RabbitMQ patterns, TypeORM entities, DTOs, auth, error handling
+- **[backend.md](backend.md)** — File naming, folder structure, TCP/RabbitMQ call patterns, gateway route checklist, entity int/bigint convention, API testing
 
 ## Before Creating New Files
 

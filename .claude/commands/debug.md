@@ -58,39 +58,29 @@ Environment: **Windows + PowerShell**. Default to Windows commands; only fall ba
 
 Run ALL steps relevant to the symptom before forming any conclusion.
 
-### Step 0 — Baseline (always run first, ~10 seconds)
+### Step 1 — Baseline, then map symptom to layer
+
+Run these before anything else (~10 seconds):
 
 ```bash
-# Which ports are actually listening?
-netstat -ano | findstr "LISTENING" | findstr -E "300[0-9]"   # Windows
-ss -tlnp | grep -E "300[0-9]"                                 # Linux/Mac
-
-# TypeScript errors right now?
-cd api && npx tsc --noEmit 2>&1 | head -40
-
-# Is dist/ built and fresh? (stale dist = wrong runtime behavior)
-ls -lt api/dist/apps/ 2>/dev/null | head -10
+netstat -ano | findstr "LISTENING" | findstr -E "300[0-9]"
+npx tsc --noEmit 2>&1 | head -40
+ls -lt api/dist/apps/
 ```
-
-Decision:
 
 - Port missing → go to **Step 2** immediately
 - tsc errors → fix them first; do not proceed until clean
 - dist/ missing → rebuild before any other investigation
 
----
-
-### Step 1 — Map symptom to layer
-
-| Symptom                                             | Start at                                 |
-| --------------------------------------------------- | ---------------------------------------- |
-| HTTP 4xx / 5xx from gateway                         | Step 3: Gateway layer                    |
-| `AggregateError` / TCP timeout / empty message      | Step 2: TCP checks                       |
-| Wrong data returned                                 | Message pattern constant + handler logic |
-| Event not processed (stock / payments not updating) | Step 4: RabbitMQ checks                  |
-| 401 Unauthorized                                    | Step 6: Auth checks                      |
-| Frontend fetch failing / CORS error                 | Step 5: Frontend checks                  |
-| DB error / missing data in table                    | Step 7: Database checks                  |
+| Symptom | Start at |
+|---|---|
+| HTTP 4xx / 5xx from gateway | Step 3: Gateway layer |
+| `AggregateError` / TCP timeout / empty message | Step 2: TCP checks |
+| Wrong data returned | Message pattern constant + handler logic |
+| Event not processed (stock / payments not updating) | Step 4: RabbitMQ checks |
+| 401 Unauthorized | Step 6: Auth checks |
+| Frontend fetch failing / CORS error | Step 5: Frontend checks |
+| DB error / missing data in table | Step 7: Database checks |
 
 ---
 
@@ -160,8 +150,8 @@ Read in this order:
 ### Step 7 — Database
 
 ```bash
-docker-compose ps                    # are containers running?
-docker-compose logs db --tail=20     # any DB startup errors?
+docker-compose ps
+docker-compose logs db --tail=20
 ```
 
 Then check:
@@ -170,21 +160,6 @@ Then check:
 - Has migration SQL in `api/database/*.sql` been applied to the DB?
 - DB routing: Orders/Products → MySQL. Inventory → PostgreSQL. Never cross-inject modules.
 - TypeORM sync issue? Compare entity field `name:` value with actual column name in Adminer (`http://localhost:8080`)
-
----
-
-## Known Error → Cause Map
-
-| Error                             | Most likely cause                            | Where to look                                  |
-| --------------------------------- | -------------------------------------------- | ---------------------------------------------- |
-| `AggregateError` (empty message)  | TCP port not listening                       | `main.ts` port config, stale `dist/`, `.env`   |
-| `Cannot find module`              | Missing build or wrong tsconfig path         | `dist/` exists? `tsconfig.json` paths?         |
-| `Connection refused` (DB)         | Docker not running                           | `docker-compose up -d`                         |
-| `Nest can't resolve dependencies` | Missing provider in module                   | `imports`/`providers` array in `*.module.ts`   |
-| `@MessagePattern` not hit         | Pattern constant mismatch                    | Compare gateway send vs service handler import |
-| `401 Unauthorized`                | Cookie not sent or guard missing `@Public()` | `credentials: 'include'`, `JwtAuthGuard`       |
-| Frontend fetch error              | CORS or missing credentials                  | Gateway CORS config, `credentials: 'include'`  |
-| Empty RabbitMQ handler            | Missing `ack` or wrong event constant        | `rmqService.ack(context)`, `EVENT.*` constant  |
 
 ---
 
