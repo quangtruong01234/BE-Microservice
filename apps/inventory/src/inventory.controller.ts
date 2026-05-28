@@ -1,4 +1,4 @@
-import { Controller, Logger } from "@nestjs/common";
+import { Controller, Logger, NotFoundException } from "@nestjs/common";
 import {
   Ctx,
   EventPattern,
@@ -113,6 +113,61 @@ export class InventoryController {
     this.logger.log(`[INVENTORY-TCP] Remove inventory id ${id}`);
     const success = await this.inventoryService.remove(id);
     return { success };
+  }
+
+  @EventPattern(EVENT.ORDER_CANCELED_EVENT)
+  async handleOrderCanceled(
+    @Payload()
+    data: {
+      data: {
+        orderId: number;
+        items: { product_id: number; quantity: number }[];
+      };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    const order = data.data;
+    this.logger.log(
+      `[INVENTORY] Processing order_canceled for order ${order.orderId}`,
+    );
+
+    try {
+      if (Array.isArray(order.items)) {
+        for (const item of order.items) {
+          const released = await this.inventoryService.releaseStock(
+            item.product_id,
+            item.quantity,
+          );
+          if (released) {
+            this.logger.log(
+              `[INVENTORY] Released ${item.quantity} units of product ${item.product_id} for canceled order ${order.orderId}`,
+            );
+          } else {
+            this.logger.warn(
+              `[INVENTORY] Failed to release stock for product ${item.product_id} (qty: ${item.quantity}) in order ${order.orderId}`,
+            );
+          }
+        }
+      }
+      this.rmqService.ack(context);
+      this.logger.log(
+        `[INVENTORY] Released stock for canceled order ${order.orderId}`,
+      );
+    } catch (err: unknown) {
+      this.logger.error(
+        `[INVENTORY] Error processing order_canceled for order ${order.orderId}`,
+        err instanceof Error ? err.stack : String(err),
+      );
+      const channel = context.getChannelRef() as {
+        nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
+      };
+      const originalMsg = context.getMessage();
+      if (err instanceof NotFoundException) {
+        channel.nack(originalMsg, false, false);
+      } else {
+        channel.nack(originalMsg, false, true);
+      }
+    }
   }
 
   @EventPattern(EVENT.ORDER_CREATED_EVENT)
