@@ -34,10 +34,11 @@ export class PaymentsController {
   @EventPattern(EVENT.ORDER_CREATED_EVENT)
   async handleOrderCreated(
     @Payload()
-    order: { id: number; total: number },
+    order: { id: number; total: number; payment_method?: string },
     @Ctx() context: RmqContext,
   ) {
     void context;
+    if (order.payment_method === "cod") return;
     this.logger.log(`[PAYMENTS] Received order_created for order: ${order.id}`);
     await this.paymentsService.processPayment(
       String(order.id),
