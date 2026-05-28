@@ -1,8 +1,10 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Inject,
   Injectable,
   Logger,
+  NotFoundException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
@@ -121,5 +123,46 @@ export class OrdersService {
   async updateOrderStatus(orderId: number, status: OrderStatus): Promise<void> {
     await this.orderRepository.update({ id: orderId }, { status });
     this.logger.log(`[ORDERS] Order ${orderId} status updated to ${status}`);
+  }
+
+  async cancelOrder(
+    orderId: number,
+    callerId: number,
+    callerRole: string,
+  ): Promise<Order> {
+    const order = await this.getOrderById(orderId);
+    if (!order) {
+      throw new NotFoundException(`Order ${orderId} not found`);
+    }
+
+    if (
+      order.status !== OrderStatus.PENDING &&
+      order.status !== OrderStatus.PROCESSING
+    ) {
+      throw new BadRequestException("Order cannot be canceled");
+    }
+
+    if (callerRole !== "admin" && Number(order.user_id) !== callerId) {
+      throw new ForbiddenException(
+        "You do not have permission to cancel this order",
+      );
+    }
+
+    await this.updateOrderStatus(orderId, OrderStatus.CANCELED);
+    order.status = OrderStatus.CANCELED;
+
+    this.fanoutChannel.publish(
+      EXCHANGE.ORDERS_EXCHANGE,
+      EVENT.ORDER_CANCELED_EVENT,
+      Buffer.from(
+        JSON.stringify({
+          data: { orderId: order.id, items: order.items },
+          pattern: EVENT.ORDER_CANCELED_EVENT,
+        }),
+      ),
+    );
+
+    this.logger.log(`[ORDERS] Order ${orderId} canceled by user ${callerId}`);
+    return order;
   }
 }

@@ -52,6 +52,22 @@ export class OrdersController {
     return await this.ordersService.getOrderById(orderId);
   }
 
+  @MessagePattern(ORDER_MESSAGE_PATTERN.CANCEL_ORDER)
+  async cancelOrder(
+    @Payload()
+    payload: {
+      orderId: number;
+      callerId: number;
+      callerRole: string;
+    },
+  ) {
+    return await this.ordersService.cancelOrder(
+      payload.orderId,
+      payload.callerId,
+      payload.callerRole,
+    );
+  }
+
   @EventPattern(EVENT.PAYMENT_COMPLETED_EVENT)
   async handlePaymentCompleted(
     @Payload() data: { orderId: number },
