@@ -8,6 +8,7 @@ import { OrderModule } from "./order/order.module";
 import { ProductModule } from "./product/product.module";
 import { GhnWebhookModule } from "./ghn/ghn-webhook.module";
 import { PaymentOptionsModule } from "./payment-options/payment-options.module";
+import { NotificationGatewayModule } from "./notification/notification.module";
 import { CachedModule } from "@app/cached";
 import {
   NAME_SERVICE_TCP,
@@ -72,6 +73,22 @@ import { RoleAuthGuard } from "./common/guards/role-auth.guard";
           port: PORT_TCP.PAYMENT_TCP_PORT,
         },
       },
+      {
+        name: NAME_SERVICE_TCP.SOCIAL_SERVICE,
+        transport: Transport.TCP,
+        options: {
+          host: TCP_HOST,
+          port: PORT_TCP.SOCIAL_TCP_PORT,
+        },
+      },
+      {
+        name: NAME_SERVICE_TCP.NOTIFICATION_SERVICE,
+        transport: Transport.TCP,
+        options: {
+          host: TCP_HOST,
+          port: PORT_TCP.NOTIFICATION_TCP_PORT,
+        },
+      },
     ]),
     InventoryModule,
     UserModule,
@@ -80,6 +97,7 @@ import { RoleAuthGuard } from "./common/guards/role-auth.guard";
     CachedModule,
     GhnWebhookModule,
     PaymentOptionsModule,
+    NotificationGatewayModule,
   ],
   controllers: [GatewayController],
   providers: [

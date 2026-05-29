@@ -10,6 +10,7 @@ import { firstValueFrom, timeout, catchError } from "rxjs";
 import {
   ORDER_MESSAGE_PATTERN,
   PAYMENT_MESSAGE_PATTERN,
+  USER_MESSAGE_PATTERN,
 } from "libs/constant/message-pattern.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { CMD } from "@app/common/constants/cmd";
@@ -42,6 +43,13 @@ export abstract class BaseAggregatorService {
   }
 }
 
+interface BuyerInfo {
+  id: number;
+  username: string;
+  email: string;
+  name: string | null;
+}
+
 @Injectable()
 export class OrderService {
   private readonly logger = new Logger(OrderService.name);
@@ -50,6 +58,8 @@ export class OrderService {
     private readonly ordersClient: ClientProxy,
     @Inject(NAME_SERVICE_TCP.PAYMENT_SERVICE)
     private readonly paymentsClient: ClientProxy,
+    @Inject(NAME_SERVICE_TCP.USER_SERVICE)
+    private readonly userClient: ClientProxy,
   ) {}
 
   async createOrder(userId: number, dto: CreateOrderDto): Promise<unknown> {
@@ -229,5 +239,64 @@ export class OrderService {
         "Payments Service",
       );
     }
+  }
+
+  async getAdminOrders(
+    page: number,
+    limit: number,
+  ): Promise<{
+    data: (OrderResponse & { buyer: BuyerInfo | null })[];
+    total: number;
+    page: number;
+    limit: number;
+  }> {
+    const result = (await firstValueFrom(
+      this.ordersClient
+        .send(ORDER_MESSAGE_PATTERN.GET_ALL_ORDERS, { page, limit })
+        .pipe(
+          timeout(10000),
+          catchError((err: unknown) => {
+            throw err;
+          }),
+        ),
+    )) as { data: OrderResponse[]; total: number; page: number; limit: number };
+
+    const userIds = [...new Set(result.data.map((o) => Number(o.user_id)))];
+
+    let buyers: BuyerInfo[] = [];
+    if (userIds.length > 0) {
+      try {
+        buyers = (await firstValueFrom(
+          this.userClient
+            .send({ cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS }, userIds)
+            .pipe(
+              timeout(10000),
+              catchError((err: unknown) => {
+                throw err;
+              }),
+            ),
+        )) as BuyerInfo[];
+      } catch (error) {
+        MicroserviceErrorHandler.handleError(
+          error,
+          "get users by ids",
+          "User Service",
+        );
+      }
+    }
+
+    const buyerMap = new Map<number, BuyerInfo>(buyers.map((b) => [b.id, b]));
+
+    const data = result.data.map((order) => ({
+      ...order,
+      buyer: buyerMap.get(Number(order.user_id)) ?? null,
+    }));
+
+    return {
+      data,
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+    };
   }
 }

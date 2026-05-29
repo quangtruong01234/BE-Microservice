@@ -23,12 +23,28 @@ import {
 import { CreateOrderDto } from "./dto/create-order.dto";
 import { GetOrdersByUserQueryDto } from "./dto/get-orders-query.dto";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
+import { CheckPermission } from "../common/decorators/check-permission.decorator";
 
 @ApiTags("Order")
 @ApiBearerAuth("bearer")
 @Controller("order")
 export class OrderController {
   constructor(private readonly orderService: OrderService) {}
+
+  @Get("admin/orders")
+  @UseGuards(JwtAuthGuard)
+  @CheckPermission("order", "read:any")
+  @ApiOperation({
+    summary: "Admin: list all orders with buyer info (paginated)",
+  })
+  @ApiResponse({ status: 200, description: "Paginated order list with buyer." })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  @ApiResponse({ status: 403, description: "Forbidden — admin only." })
+  async getAdminOrders(
+    @Query(ValidationPipe) query: GetOrdersByUserQueryDto,
+  ): Promise<unknown> {
+    return this.orderService.getAdminOrders(query.page ?? 1, query.limit ?? 20);
+  }
 
   @Post()
   @ApiOperation({ summary: "Place a new order (requires auth cookie)" })
