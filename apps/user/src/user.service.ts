@@ -7,7 +7,7 @@ import {
 import { InjectRepository } from "@nestjs/typeorm";
 import { User } from "./entity/user.entity";
 import { Role, RoleName, RoleStatus } from "./entity/role.entity";
-import { Repository } from "typeorm";
+import { In, Repository } from "typeorm";
 import { RegisterUserDto } from "./dto/register-user.dto";
 import { LoginUserDto } from "./dto/login-user.dto";
 import * as bcrypt from "bcryptjs";
@@ -73,6 +73,23 @@ export class UserService {
       isActive: true,
     };
     return await this.userRepository.findOne({ where: { id: userId }, select });
+  }
+
+  async getUsersByIds(
+    userIds: number[],
+  ): Promise<
+    Pick<User, "id" | "username" | "email" | "name" | "avatar" | "isActive">[]
+  > {
+    if (userIds.length === 0) return [];
+    const select = {
+      id: true,
+      username: true,
+      email: true,
+      name: true,
+      avatar: true,
+      isActive: true,
+    };
+    return this.userRepository.find({ where: { id: In(userIds) }, select });
   }
 
   getServiceInfo(): string {

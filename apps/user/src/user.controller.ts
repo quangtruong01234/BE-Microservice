@@ -28,6 +28,11 @@ export class UserController {
     return await this.userService.getAllUsers();
   }
 
+  @MessagePattern({ cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS })
+  async getUsersByIds(@Payload() userIds: number[]): Promise<unknown> {
+    return this.userService.getUsersByIds(userIds);
+  }
+
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.LOGIN_USER })
   async login(@Payload() payload: LoginUserDto) {
     this.logger.log(`[USER-TCP] Login user`);
