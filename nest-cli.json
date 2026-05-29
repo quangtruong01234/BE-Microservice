@@ -108,6 +108,24 @@
       "compilerOptions": {
         "tsConfigPath": "apps/user/tsconfig.app.json"
       }
+    },
+    "social": {
+      "type": "application",
+      "root": "apps/social",
+      "entryFile": "main",
+      "sourceRoot": "apps/social/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/social/tsconfig.app.json"
+      }
+    },
+    "notification": {
+      "type": "application",
+      "root": "apps/notification",
+      "entryFile": "main",
+      "sourceRoot": "apps/notification/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/notification/tsconfig.app.json"
+      }
     }
   }
 }

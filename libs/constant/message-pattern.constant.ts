@@ -1,6 +1,7 @@
 export const USER_MESSAGE_PATTERN = {
   GET_USER_INFO: "get_user_info",
   GET_ALL_USERS: "get_all_users",
+  GET_USERS_BY_IDS: "get_users_by_ids",
   REGISTER_USER: "register_user",
   LOGIN_USER: "login_user",
 };
@@ -30,6 +31,7 @@ export const PRODUCT_MESSAGE_PATTERN = {
 export const ORDER_MESSAGE_PATTERN = {
   GET_ORDERS_BY_USER: "get_orders_by_user",
   GET_ORDER_BY_ID: "get_order_by_id",
+  GET_ALL_ORDERS: "get_all_orders",
   CANCEL_ORDER: "cancel_order",
   GET_ORDER_INVOICE: "get_order_invoice",
   GHN_WEBHOOK: "handle_ghn_webhook",
@@ -38,6 +40,11 @@ export const ORDER_MESSAGE_PATTERN = {
 export const PAYMENT_MESSAGE_PATTERN = {
   GET_PAYMENT_URL: "get_payment_url",
   GET_PAYMENT_OPTIONS: "get_payment_options",
+};
+
+export const NOTIFICATION_MESSAGE_PATTERN = {
+  GET_USER_NOTIFICATIONS: "get_user_notifications",
+  MARK_NOTIFICATION_READ: "mark_notification_read",
 };
 
 // Có thể bổ sung thêm các service khác như INVENTORY_MESSAGE_PATTERN nếu cần

@@ -26,7 +26,9 @@
     "start:payments": "nest start payments --watch",
     "start:rewards": "nest start rewards --watch",
     "start:product": "nest start product --watch",
-    "start:nodeA": "concurrently -n GATEWAY,ORDERS,USER,PRODUCT -c blue,green,pink,yellow \"npm run start:gateway\" \"npm run start:orders\" \"npm run start:user\" \"npm run start:product\"",
+    "start:social": "nest start social --watch",
+    "start:notification": "nest start notification --watch",
+    "start:nodeA": "concurrently -n GATEWAY,ORDERS,USER,PRODUCT,SOCIAL,NOTIF -c blue,green,pink,yellow,cyan,magenta \"npm run start:gateway\" \"npm run start:orders\" \"npm run start:user\" \"npm run start:product\" \"npm run start:social\" \"npm run start:notification\"",
     "start:nodeB": "concurrently -n INVENTORY,PAYMENTS,REWARDS -c yellow,magenta,cyan \"npm run start:inventory\" \"npm run start:payments\" \"npm run start:rewards\""
   },
   "dependencies": {
