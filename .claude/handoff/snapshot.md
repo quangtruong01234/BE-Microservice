@@ -28,21 +28,25 @@ Base URL: http://localhost:3000 | Swagger: /doc
 - Task #4 verified: reserve triggers stockQuantity 4→3, release triggers 3→4 confirmed live
 - Cancel order: PATCH /api/order/:id/cancel — status transition PENDING/PROCESSING → CANCELED, ownership check, RabbitMQ emit ORDER_CANCELED_EVENT → inventory releases stock
 - Inventory RabbitMQ fanout fix: main.ts switched to getOptionsTopic() with ORDERS_EXCHANGE binding; inventory.controller.ts removed spurious data.data unwrap in handleOrderCreated and handleOrderCanceled — order_created and order_canceled events now consumed correctly; verified reserve/release stock end-to-end
-- PDF Invoice (partial): product_name added to order_items (entity + migration applied to Aiven DB); pdfkit + @types/pdfkit installed; invoice generator + get_order_invoice TCP handler + GET /api/order/:id/invoice gateway endpoint implemented (not yet tested)
-- PDF Invoice — implemented and zero tsc/ESLint errors confirmed; curl test deferred (not blocking)
+- PDF Invoice: product_name added to order_items; pdfkit installed; invoice generator + TCP handler + GET /api/order/:id/invoice implemented; TCP pattern mismatch fixed (controller had { cmd: ... } wrapper, gateway sends string) — verified HTTP 200, Content-Type: application/pdf, 1874 bytes, 1-page PDF for order 62
 - GHN + COD schema: 4 new columns on orders table (payment_method ENUM zalopay|vnpay|cod, shipping_address VARCHAR 500, cod_amount DECIMAL nullable, ghn_order_code VARCHAR nullable); OrderStatus extended with SHIPPED + DELIVERING; PaymentMethod enum added; migration applied to Aiven DB (55 existing rows backfilled with DEFAULT then dropped)
 - GHN + COD implementation: GhnService + GhnModule created (apps/orders/src/ghn/); orders.service.ts calls GHN immediately for COD orders — GHN failure is non-fatal (try/catch, order saved with ghn_order_code=null); payment_method added explicitly to order_created event payload; payments service skips COD orders via guard clause (payment_method === 'cod') before any DB/logging work
 - GHN URL fix: GHN_API_URL corrected to https://dev-online-gateway.ghn.vn/shiip/public-api in local/nodeA/.env
+- GHN COD E2E verified: order 61 ghn_order_code="LXD9YM" non-null in DB
+- GHN cod_amount cast fix: Math.round(Number(order.cod_amount ?? 0)) in ghn.service.ts — TypeORM returns DECIMAL as string, GHN expects int
+- Task B: GHN webhook handler — POST /ghn/webhook (gateway, no auth, excluded from /api prefix); orders TCP handler maps GHN status → SHIPPED/DELIVERING/COMPLETED; emits payment_completed for COD delivered orders; 8 files changed, tsc + ESLint clean; verified 3 status transitions live
+- Task C: ZaloPay/VNPay → GHN post-payment — handlePaymentCompleted() now calls GHN (cod_amount=0, non-fatal) and sets status=PROCESSING instead of COMPLETED; COD orders short-circuit (already COMPLETED via GHN webhook → no-op); 2 files changed; verified order 62 ghn_order_code="LXD6U9" non-null, status=processing
+- GHN + COD shipping flow fully complete end-to-end
+- MicroserviceErrorHandler fixed (2-layer): (1) HttpToRpcExceptionFilter mới trong libs/common — catches HttpException, re-throws as RpcException({ statusCode, message }); (2) gateway MicroserviceErrorHandler thêm err?.error unwrap; @UseFilters applied trên OrdersController; verified 403/404/200 đúng cho invoice endpoint
+- Tech debt: payments/inventory/rewards/product controllers chưa có @UseFilters(HttpToRpcExceptionFilter) — apply khi gặp bug tương tự
 
 ## Active Tasks
 
-- GHN + COD — re-verify COD order creation end-to-end after URL fix (expect ghn_order_code non-null in DB)
-- GHN webhook handler — POST from GHN → update order status (SHIPPED/DELIVERING/COMPLETED) + emit payment_completed for COD when delivered
-- ZaloPay/VNPay → GHN — call GHN after payment_completed event (currently order goes straight to COMPLETED; needs PROCESSING → GHN → SHIPPED)
+(none)
 
 ## Known Issues
 
-- MicroserviceErrorHandler 502: BadRequestException and ForbiddenException from microservices over TCP are not correctly mapped to HTTP status codes — falls back to 502 instead of 400/403. Pre-existing bug, needs a dedicated fix.
+(none)
 
 ## Key Conventions
 
@@ -63,8 +67,8 @@ Base URL: http://localhost:3000 | Swagger: /doc
 
 ## Backlog (priority order)
 
-- [ ] PDF invoice — test + verify download endpoint (implementation done)
-- [~] Shipping GHN + COD — schema + COD flow done; webhook handler + ZaloPay/VNPay→GHN pending
+- [x] PDF invoice — verified working: HTTP 200, application/pdf, 1-page PDF generated correctly
+- [x] Shipping GHN + COD — fully complete: COD flow, webhook handler, ZaloPay/VNPay→GHN post-payment
 - [ ] Payment option selection — user selects ZaloPay / VNPay / COD at checkout
 - [ ] Social feed — Post/Like/Comment/Chat/Notifications (new social service, port 3008, Node A)
 - [ ] Nginx config — ready at nginx.conf, apply on production deploy only
