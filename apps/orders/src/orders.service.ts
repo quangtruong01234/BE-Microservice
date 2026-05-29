@@ -150,6 +150,19 @@ export class OrdersService {
     return { data, total, page, limit };
   }
 
+  async getAllOrders(
+    page: number = 1,
+    limit: number = 10,
+  ): Promise<{ data: Order[]; total: number; page: number; limit: number }> {
+    const [data, total] = await this.orderRepository.findAndCount({
+      relations: ["items"],
+      order: { created_at: "DESC" },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+    return { data, total, page, limit };
+  }
+
   async getOrderById(orderId: number): Promise<Order | null> {
     return this.orderRepository.findOne({
       where: { id: orderId },

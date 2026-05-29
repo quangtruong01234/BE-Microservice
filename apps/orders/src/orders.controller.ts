@@ -65,6 +65,13 @@ export class OrdersController {
     );
   }
 
+  @MessagePattern(ORDER_MESSAGE_PATTERN.GET_ALL_ORDERS)
+  async getAllOrders(
+    @Payload() payload: { page: number; limit: number },
+  ): Promise<unknown> {
+    return this.ordersService.getAllOrders(payload.page, payload.limit);
+  }
+
   @MessagePattern(ORDER_MESSAGE_PATTERN.GET_ORDER_BY_ID)
   async getOrderById(@Payload() orderId: number) {
     return await this.ordersService.getOrderById(orderId);
