@@ -181,3 +181,31 @@ throw new NotFoundException('resource not found');
 - Prefer extending existing modules over creating new ones
 - No unnecessary refactors unless explicitly requested
 - Minimal diff — do not reformat or rename things outside the task scope
+
+---
+
+## Common TCP Bugs (đã gặp, phải tránh)
+
+### 1. @MessagePattern — dùng string, không dùng { cmd: } wrapper
+❌ Sai: `@MessagePattern({ cmd: ORDER_MESSAGE_PATTERN.GET_ORDER_INVOICE })`
+✅ Đúng: `@MessagePattern(ORDER_MESSAGE_PATTERN.GET_ORDER_INVOICE)`
+
+Gateway gọi `.send(PATTERN_STRING, data)` → chỉ match với `@MessagePattern(string)`.
+`{ cmd: }` wrapper gây mismatch → TCP server trả "no matching handler" ngay lập tức → gateway 500.
+Kiểm tra cả 2 phía (controller + gateway send) mỗi khi tạo TCP handler mới.
+
+### 2. HttpToRpcExceptionFilter — bắt buộc trên mọi microservice controller
+Mọi `@Controller` trong microservice phải có `@UseFilters(new HttpToRpcExceptionFilter())`.
+Nếu thiếu: `ForbiddenException`/`BadRequestException` bị NestJS swallow → gateway nhận 500/502 thay vì 403/400.
+Filter nằm tại: `libs/common/src/filters/http-to-rpc-exception.filter.ts`
+Tech debt hiện tại: payments, inventory, rewards, product controllers chưa có filter này.
+
+### 3. DECIMAL column từ TypeORM trả về string
+TypeORM serialize DECIMAL/NUMERIC columns thành string (`"222.00"`), không phải number.
+Khi truyền sang external API expecting number: `Math.round(Number(value ?? 0))`.
+Áp dụng cho: `cod_amount`, `price`, `total`, bất kỳ DECIMAL column nào.
+
+### 4. @Payload() trong RabbitMQ @EventPattern — không unwrap data.data
+NestJS strips packet envelope trước khi deliver.
+❌ Sai: `data.data.orderId`
+✅ Đúng: `data.orderId`

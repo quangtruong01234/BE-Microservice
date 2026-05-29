@@ -3,7 +3,7 @@
 TryBuy — NestJS monorepo, 7 microservices + 4 shared libs.
 Transport: TCP (sync) + RabbitMQ FANOUT (async).
 DB: MySQL 8 (orders/user/product) + PostgreSQL (inventory/payments/rewards). Cache: Redis.
-Node A: gateway:3000, orders:3001, user:3003, product:3006
+Node A: gateway:3000, orders:3001, user:3003, product:3006, social:3008, notification:3009
 Node B: inventory:3002, payments:3005, rewards:3004
 Base URL: http://localhost:3000 | Swagger: /doc
 
@@ -31,14 +31,19 @@ Base URL: http://localhost:3000 | Swagger: /doc
 - PDF Invoice: product_name added to order_items; pdfkit installed; invoice generator + TCP handler + GET /api/order/:id/invoice implemented; TCP pattern mismatch fixed (controller had { cmd: ... } wrapper, gateway sends string) — verified HTTP 200, Content-Type: application/pdf, 1874 bytes, 1-page PDF for order 62
 - GHN + COD schema: 4 new columns on orders table (payment_method ENUM zalopay|vnpay|cod, shipping_address VARCHAR 500, cod_amount DECIMAL nullable, ghn_order_code VARCHAR nullable); OrderStatus extended with SHIPPED + DELIVERING; PaymentMethod enum added; migration applied to Aiven DB (55 existing rows backfilled with DEFAULT then dropped)
 - GHN + COD implementation: GhnService + GhnModule created (apps/orders/src/ghn/); orders.service.ts calls GHN immediately for COD orders — GHN failure is non-fatal (try/catch, order saved with ghn_order_code=null); payment_method added explicitly to order_created event payload; payments service skips COD orders via guard clause (payment_method === 'cod') before any DB/logging work
+- Admin orders endpoint: GET /api/order/admin/orders — @CheckPermission('order','read:any'), TCP to orders (GET_ALL_ORDERS), batch TCP to user (GET_USERS_BY_IDS), merges buyer:{name,email} into each order
 - GHN URL fix: GHN_API_URL corrected to https://dev-online-gateway.ghn.vn/shiip/public-api in local/nodeA/.env
 - GHN COD E2E verified: order 61 ghn_order_code="LXD9YM" non-null in DB
 - GHN cod_amount cast fix: Math.round(Number(order.cod_amount ?? 0)) in ghn.service.ts — TypeORM returns DECIMAL as string, GHN expects int
-- Task B: GHN webhook handler — POST /ghn/webhook (gateway, no auth, excluded from /api prefix); orders TCP handler maps GHN status → SHIPPED/DELIVERING/COMPLETED; emits payment_completed for COD delivered orders; 8 files changed, tsc + ESLint clean; verified 3 status transitions live
-- Task C: ZaloPay/VNPay → GHN post-payment — handlePaymentCompleted() now calls GHN (cod_amount=0, non-fatal) and sets status=PROCESSING instead of COMPLETED; COD orders short-circuit (already COMPLETED via GHN webhook → no-op); 2 files changed; verified order 62 ghn_order_code="LXD6U9" non-null, status=processing
+- GHN webhook handler (Task B): POST /ghn/webhook (gateway, @Public(), excluded from /api prefix); TCP handler GHN_WEBHOOK in orders maps picking/picked→SHIPPED, delivering→DELIVERING, delivered→COMPLETED; emits payment_completed for COD delivered orders; 8 files changed; verified 3 status transitions live
+- ZaloPay/VNPay → GHN post-payment (Task C): handlePaymentCompleted() calls GHN (cod_amount=0, non-fatal) and sets status=PROCESSING instead of COMPLETED; COD orders short-circuit (already COMPLETED via GHN webhook → no-op); verified order 62 ghn_order_code="LXD6U9" non-null, status=processing
 - GHN + COD shipping flow fully complete end-to-end
-- MicroserviceErrorHandler fixed (2-layer): (1) HttpToRpcExceptionFilter mới trong libs/common — catches HttpException, re-throws as RpcException({ statusCode, message }); (2) gateway MicroserviceErrorHandler thêm err?.error unwrap; @UseFilters applied trên OrdersController; verified 403/404/200 đúng cho invoice endpoint
-- Tech debt: payments/inventory/rewards/product controllers chưa có @UseFilters(HttpToRpcExceptionFilter) — apply khi gặp bug tương tự
+- PDF invoice verified: TCP pattern fix (removed { cmd: } wrapper from @MessagePattern in orders controller); GET /api/order/:id/invoice → 200, Content-Type: application/pdf, 1874 bytes, 1-page PDF for order 62
+- MicroserviceErrorHandler fixed (2-layer): HttpToRpcExceptionFilter in libs/common catches HttpException → re-throws as RpcException({ statusCode, message }); gateway MicroserviceErrorHandler adds err?.error unwrap; @UseFilters(HttpToRpcExceptionFilter) on OrdersController; verified 403/404/200 correct for invoice endpoint
+- Payment option selection: payment_methods table in payments PostgreSQL (id, key VARCHAR unique, name, description, is_active BOOLEAN default true); seeded zalopay/vnpay/cod rows via Node pg script; TCP GET_PAYMENT_OPTIONS handler in payments service; GET /api/payment/options (@Public()) returns active rows from DB via TCP; verified response correct
+- Social service scaffolded: apps/social/, port 3008, Node A, MySQL TypeORM, TCP, SOCIAL_SERVICE client trong gateway
+- Notification service fully implemented: entity (notifications table, 7 columns, MySQL), RabbitMQ consumers (payment_completed + order_canceled → save notification cho buyer), REST GET /api/notifications (paginated, JwtAuthGuard), PATCH /api/notifications/:id/read; end-to-end verified — event → DB → REST → mark-as-read all pass
+- Admin orders endpoint: GET /api/order/admin/orders?page=1&limit=20 — parallel fetch orders + buyer info (batch TCP to user service), @CheckPermission('order','read:any') guard, 200/403 verified; note: role relation leak trong buyer object (tech debt)
 
 ## Active Tasks
 
@@ -46,7 +51,7 @@ Base URL: http://localhost:3000 | Swagger: /doc
 
 ## Known Issues
 
-(none)
+- PAYMENTS_SERVICE + REWARDS_SERVICE queues: old payment_completed events bị nack+requeue loop — cần purge queue hoặc investigate rewards handler
 
 ## Key Conventions
 
@@ -64,11 +69,14 @@ Base URL: http://localhost:3000 | Swagger: /doc
 - GHN failure is non-fatal: order persists with ghn_order_code=null, retry manually
 - PaymentMethod enum re-declared locally in gateway DTO (tech debt — sync with orders entity later)
 - payments service: guard clause (payment_method === 'cod') skips COD orders before any DB/logging work
+- payment_methods table: active methods controlled by is_active column in DB — PAYMENT_GATEWAY env no longer drives the options endpoint
+- Tech debt: payments/inventory/rewards/product controllers chưa có @UseFilters(HttpToRpcExceptionFilter) — apply khi gặp 502 bug tương tự
 
 ## Backlog (priority order)
 
 - [x] PDF invoice — verified working: HTTP 200, application/pdf, 1-page PDF generated correctly
 - [x] Shipping GHN + COD — fully complete: COD flow, webhook handler, ZaloPay/VNPay→GHN post-payment
-- [ ] Payment option selection — user selects ZaloPay / VNPay / COD at checkout
-- [ ] Social feed — Post/Like/Comment/Chat/Notifications (new social service, port 3008, Node A)
-- [ ] Nginx config — ready at nginx.conf, apply on production deploy only
+- [x] Payment option selection — GET /api/payment/options returns active rows from payment_methods DB table
+- [x] Notification service — fully complete
+- [ ] Social feed (port 3008, Node A) — Post/Like/Comment/Chat (scaffold done)
+- [ ] Nginx config — production only
