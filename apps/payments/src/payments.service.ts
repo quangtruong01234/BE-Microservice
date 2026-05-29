@@ -9,6 +9,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Channel } from "amqplib";
 import { Payment, PaymentStatus } from "./entity/payment.entity";
+import { PaymentMethod } from "./entity/payment-method.entity";
 import { PaymentGatewayFactory } from "./payment-gateway.factory";
 import { EXCHANGE } from "@app/common/constants/exchange";
 import { EVENT } from "@app/common/constants/event";
@@ -20,6 +21,8 @@ export class PaymentsService {
   constructor(
     @InjectRepository(Payment)
     private readonly paymentRepository: Repository<Payment>,
+    @InjectRepository(PaymentMethod)
+    private readonly paymentMethodRepository: Repository<PaymentMethod>,
     private readonly factory: PaymentGatewayFactory,
     @Inject(EXCHANGE.RMQ_PUBLISHER_CHANNEL)
     private readonly fanoutChannel: Channel,
@@ -182,5 +185,19 @@ export class PaymentsService {
       order_url: payment?.order_url ?? null,
       status: payment?.status ?? null,
     };
+  }
+
+  async getPaymentOptions(): Promise<
+    Array<{ id: string; name: string; description: string }>
+  > {
+    const methods = await this.paymentMethodRepository.find({
+      where: { is_active: true },
+      order: { id: "ASC" },
+    });
+    return methods.map((m) => ({
+      id: m.key,
+      name: m.name,
+      description: m.description,
+    }));
   }
 }

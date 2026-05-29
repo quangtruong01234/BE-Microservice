@@ -19,6 +19,7 @@ import { VNPayStrategy } from "./vnpay/vnpay.service";
 import { EVENT } from "@app/common/constants/event";
 import { handleZaloPayCallback } from "./zalopay/zalopay.callback";
 import { handleVNPayCallback } from "./vnpay/vnpay.callback";
+import { PAYMENT_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 
 const Public = () => SetMetadata("isPublic", true);
 
@@ -52,6 +53,13 @@ export class PaymentsController {
     @Payload() data: { orderId: number },
   ): Promise<{ order_url: string | null; status: string | null }> {
     return this.paymentsService.getPaymentUrl(data.orderId);
+  }
+
+  @MessagePattern(PAYMENT_MESSAGE_PATTERN.GET_PAYMENT_OPTIONS)
+  getPaymentOptions(): Promise<
+    Array<{ id: string; name: string; description: string }>
+  > {
+    return this.paymentsService.getPaymentOptions();
   }
 
   @Post("zalopay/callback")

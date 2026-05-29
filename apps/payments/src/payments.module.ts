@@ -6,6 +6,7 @@ import { PostgresDatabaseModule } from "@app/database";
 import { PaymentsController } from "./payments.controller";
 import { PaymentsService } from "./payments.service";
 import { Payment } from "./entity/payment.entity";
+import { PaymentMethod } from "./entity/payment-method.entity";
 import { ZaloPayService } from "./zalopay/zalopay.service";
 import { VNPayStrategy } from "./vnpay/vnpay.service";
 import { PaymentGatewayFactory } from "./payment-gateway.factory";
@@ -17,7 +18,7 @@ import { PaymentGatewayFactory } from "./payment-gateway.factory";
       envFilePath: "./local/nodeB/.env",
     }),
     PostgresDatabaseModule,
-    TypeOrmModule.forFeature([Payment]),
+    TypeOrmModule.forFeature([Payment, PaymentMethod]),
     RmqModule,
     RmqModule.registerDirectPublisher(),
   ],
