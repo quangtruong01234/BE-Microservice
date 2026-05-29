@@ -32,10 +32,12 @@ export const ORDER_MESSAGE_PATTERN = {
   GET_ORDER_BY_ID: "get_order_by_id",
   CANCEL_ORDER: "cancel_order",
   GET_ORDER_INVOICE: "get_order_invoice",
+  GHN_WEBHOOK: "handle_ghn_webhook",
 };
 
 export const PAYMENT_MESSAGE_PATTERN = {
   GET_PAYMENT_URL: "get_payment_url",
+  GET_PAYMENT_OPTIONS: "get_payment_options",
 };
 
 // Có thể bổ sung thêm các service khác như INVENTORY_MESSAGE_PATTERN nếu cần
