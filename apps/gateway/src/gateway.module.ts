@@ -6,6 +6,8 @@ import { InventoryModule } from "./inventory/inventory.module";
 import { UserModule } from "./user/user.module";
 import { OrderModule } from "./order/order.module";
 import { ProductModule } from "./product/product.module";
+import { GhnWebhookModule } from "./ghn/ghn-webhook.module";
+import { PaymentOptionsModule } from "./payment-options/payment-options.module";
 import { CachedModule } from "@app/cached";
 import {
   NAME_SERVICE_TCP,
@@ -76,6 +78,8 @@ import { RoleAuthGuard } from "./common/guards/role-auth.guard";
     OrderModule,
     ProductModule,
     CachedModule,
+    GhnWebhookModule,
+    PaymentOptionsModule,
   ],
   controllers: [GatewayController],
   providers: [

@@ -5,7 +5,7 @@ import * as cookieParser from "cookie-parser";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import { HttpExceptionFilter } from "./common/filters/http-exception.filter";
 import { ResponseInterceptor } from "./common/interceptor/response.interceptor";
-import { ValidationPipe } from "@nestjs/common";
+import { RequestMethod, ValidationPipe } from "@nestjs/common";
 async function bootstrap() {
   dotenv.config({ path: "./local/nodeA/.env" });
   const app = await NestFactory.create(GatewayModule);
@@ -24,7 +24,9 @@ async function bootstrap() {
     origin: process.env.FRONTEND_URL || "http://localhost:5173",
     credentials: true,
   });
-  app.setGlobalPrefix("api");
+  app.setGlobalPrefix("api", {
+    exclude: [{ path: "ghn/webhook", method: RequestMethod.POST }],
+  });
   const config = new DocumentBuilder()
     .setTitle("Ecommerce API")
     .setDescription("API docs")

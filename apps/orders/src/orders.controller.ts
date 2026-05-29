@@ -1,4 +1,9 @@
-import { Controller, Logger } from "@nestjs/common";
+import {
+  Controller,
+  Logger,
+  NotFoundException,
+  UseFilters,
+} from "@nestjs/common";
 import {
   Ctx,
   EventPattern,
@@ -9,10 +14,11 @@ import {
 import { OrdersService } from "./orders.service";
 import { CMD } from "@app/common/constants/cmd";
 import { EVENT } from "@app/common/constants/event";
-import { OrderStatus, PaymentMethod } from "./entity/order.entity";
-import { RmqService } from "@app/common";
+import { PaymentMethod } from "./entity/order.entity";
+import { HttpToRpcExceptionFilter, RmqService } from "@app/common";
 import { ORDER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 
+@UseFilters(new HttpToRpcExceptionFilter())
 @Controller("orders")
 export class OrdersController {
   private readonly logger = new Logger(OrdersController.name);
@@ -80,13 +86,23 @@ export class OrdersController {
     );
   }
 
-  @MessagePattern({ cmd: ORDER_MESSAGE_PATTERN.GET_ORDER_INVOICE })
+  @MessagePattern(ORDER_MESSAGE_PATTERN.GET_ORDER_INVOICE)
   async getOrderInvoice(
     @Payload() data: { orderId: number; requestingUserId: number },
   ): Promise<Buffer> {
     return await this.ordersService.generateInvoice(
       data.orderId,
       data.requestingUserId,
+    );
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.GHN_WEBHOOK)
+  async handleGhnWebhook(
+    @Payload() payload: { ghnOrderCode: string; ghnStatus: string },
+  ): Promise<void> {
+    await this.ordersService.handleGhnWebhook(
+      payload.ghnOrderCode,
+      payload.ghnStatus,
     );
   }
 
@@ -97,7 +113,22 @@ export class OrdersController {
   ) {
     const orderId = data.orderId;
     this.logger.log(`[ORDERS] payment_completed received for order ${orderId}`);
-    await this.ordersService.updateOrderStatus(orderId, OrderStatus.COMPLETED);
-    this.rmqService.ack(context);
+    try {
+      await this.ordersService.handlePaymentCompleted(orderId);
+      this.rmqService.ack(context);
+    } catch (err) {
+      this.logger.error(
+        `[ORDERS] handlePaymentCompleted failed for order ${orderId}: ${err}`,
+      );
+      const channel = context.getChannelRef() as {
+        nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
+      };
+      const originalMsg = context.getMessage();
+      if (err instanceof NotFoundException) {
+        channel.nack(originalMsg, false, false); // no-requeue: order not found
+      } else {
+        channel.nack(originalMsg, false, true); // requeue: transient error
+      }
+    }
   }
 }

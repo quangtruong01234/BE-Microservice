@@ -24,8 +24,16 @@ export class MicroserviceErrorHandler {
     this.logger.error(`${serviceName} ${operation} failed: ${errorSummary}`);
 
     const err = error as ErrorLike;
+    // Unwrap NestJS RpcException shape: { error: <inner>, message: '...' }
+    // where <inner> contains { statusCode, message }
     const rpcError =
-      (err?.response != null ? (err.response as ErrorLike) : null) ?? err;
+      (err?.response != null && typeof err.response === "object"
+        ? (err.response as ErrorLike)
+        : null) ??
+      (err?.error != null && typeof err.error === "object"
+        ? err.error
+        : null) ??
+      err;
 
     const statusCode = this.extractStatusCode(rpcError);
     const message = this.extractErrorMessage(rpcError);

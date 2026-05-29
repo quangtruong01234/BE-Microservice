@@ -1,6 +1,8 @@
 import { Module } from "@nestjs/common";
+import { APP_FILTER } from "@nestjs/core";
 import { OrdersController } from "./orders.controller";
 import { OrdersService } from "./orders.service";
+import { AllRpcExceptionFilter } from "./filters/rpc-exception.filter";
 import { ConfigModule } from "@nestjs/config";
 import { RmqModule } from "@app/common";
 import { HttpModule } from "@nestjs/axios";
@@ -63,6 +65,9 @@ import { GhnModule } from "./ghn/ghn.module";
     TypeOrmModule.forFeature([Order, OrderItem]),
   ],
   controllers: [OrdersController],
-  providers: [OrdersService],
+  providers: [
+    OrdersService,
+    { provide: APP_FILTER, useClass: AllRpcExceptionFilter },
+  ],
 })
 export class OrdersModule {}

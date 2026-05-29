@@ -4,7 +4,6 @@ import { MicroserviceOptions, Transport } from "@nestjs/microservices";
 import { ValidationPipe } from "@nestjs/common";
 import * as dotenv from "dotenv";
 import { PORT_TCP, TCP_HOST } from "libs/constant/port-tcp.constant";
-import { AllRpcExceptionFilter } from "./filters/rpc-exception.filter";
 import { RmqService } from "@app/common";
 import { EXCHANGE } from "@app/common/constants/exchange";
 
@@ -13,7 +12,6 @@ async function bootstrap() {
 
   const app = await NestFactory.create(OrdersModule);
 
-  app.useGlobalFilters(new AllRpcExceptionFilter());
   app.useGlobalPipes(
     new ValidationPipe({
       transform: true,

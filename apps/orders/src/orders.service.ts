@@ -118,9 +118,18 @@ export class OrdersService {
     );
 
     if (order.payment_method === PaymentMethod.COD) {
-      const ghnCode = await this.ghnService.createShippingOrder(order);
-      await this.orderRepository.update(order.id, { ghn_order_code: ghnCode });
-      order.ghn_order_code = ghnCode;
+      try {
+        const ghnCode = await this.ghnService.createShippingOrder(order);
+        await this.orderRepository.update(order.id, {
+          ghn_order_code: ghnCode,
+        });
+        order.ghn_order_code = ghnCode;
+      } catch (err) {
+        this.logger.error(
+          `GHN createShippingOrder failed for order ${order.id}: ${err}`,
+        );
+        // order already saved — return without ghn_order_code, retry later
+      }
     }
 
     return order;
@@ -151,6 +160,43 @@ export class OrdersService {
   async updateOrderStatus(orderId: number, status: OrderStatus): Promise<void> {
     await this.orderRepository.update({ id: orderId }, { status });
     this.logger.log(`[ORDERS] Order ${orderId} status updated to ${status}`);
+  }
+
+  async handlePaymentCompleted(orderId: number): Promise<void> {
+    const order = await this.orderRepository.findOne({
+      where: { id: orderId },
+      relations: ["items"],
+    });
+
+    if (!order) {
+      this.logger.warn(
+        `[ORDERS] payment_completed: order ${orderId} not found`,
+      );
+      throw new NotFoundException(`Order ${orderId} not found`);
+    }
+
+    // COD orders: payment_completed is emitted by GHN webhook on delivery,
+    // status is already COMPLETED at that point — nothing to do here
+    if (order.payment_method === PaymentMethod.COD) {
+      this.logger.log(
+        `[ORDERS] payment_completed: COD order ${orderId} already processed by GHN webhook`,
+      );
+      return;
+    }
+
+    // ZaloPay/VNPay: create GHN shipping order (cod_amount = null → 0 in GHN payload)
+    try {
+      const ghnCode = await this.ghnService.createShippingOrder(order);
+      await this.orderRepository.update(order.id, { ghn_order_code: ghnCode });
+      order.ghn_order_code = ghnCode;
+      this.logger.log(`[ORDERS] GHN order created for ${orderId}: ${ghnCode}`);
+    } catch (err) {
+      this.logger.error(
+        `[ORDERS] GHN createShippingOrder failed for order ${orderId}: ${err}`,
+      );
+    }
+
+    await this.updateOrderStatus(orderId, OrderStatus.PROCESSING);
   }
 
   async cancelOrder(
@@ -192,6 +238,59 @@ export class OrdersService {
 
     this.logger.log(`[ORDERS] Order ${orderId} canceled by user ${callerId}`);
     return order;
+  }
+
+  async handleGhnWebhook(
+    ghnOrderCode: string,
+    ghnStatus: string,
+  ): Promise<void> {
+    const order = await this.orderRepository.findOne({
+      where: { ghn_order_code: ghnOrderCode },
+    });
+
+    if (!order) {
+      this.logger.warn(
+        `[GHN] Order not found for ghn_order_code: ${ghnOrderCode}`,
+      );
+      return;
+    }
+
+    let newStatus: OrderStatus;
+    const normalized = ghnStatus.toLowerCase();
+    if (normalized === "picking" || normalized === "picked") {
+      newStatus = OrderStatus.SHIPPED;
+    } else if (normalized === "delivering") {
+      newStatus = OrderStatus.DELIVERING;
+    } else if (normalized === "delivered") {
+      newStatus = OrderStatus.COMPLETED;
+    } else {
+      this.logger.log(
+        `[GHN] Unhandled status "${ghnStatus}" for order ${order.id} — skipping`,
+      );
+      return;
+    }
+
+    await this.orderRepository.update(order.id, { status: newStatus });
+    this.logger.log(`[GHN] Order ${order.id} status updated to ${newStatus}`);
+
+    if (
+      newStatus === OrderStatus.COMPLETED &&
+      order.payment_method === PaymentMethod.COD
+    ) {
+      this.fanoutChannel.publish(
+        EXCHANGE.PAYMENTS_EXCHANGE,
+        EVENT.PAYMENT_COMPLETED_EVENT,
+        Buffer.from(
+          JSON.stringify({
+            data: { orderId: order.id, amount: order.total },
+            pattern: EVENT.PAYMENT_COMPLETED_EVENT,
+          }),
+        ),
+      );
+      this.logger.log(
+        `[GHN] payment_completed emitted for COD order ${order.id}`,
+      );
+    }
   }
 
   async generateInvoice(

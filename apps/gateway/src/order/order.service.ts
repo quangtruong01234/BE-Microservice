@@ -181,37 +181,53 @@ export class OrderService {
     orderId: number,
     requestingUserId: number,
   ): Promise<Buffer> {
-    const result = await firstValueFrom(
-      this.ordersClient
-        .send<{
-          type: string;
-          data: number[];
-        }>(ORDER_MESSAGE_PATTERN.GET_ORDER_INVOICE, {
-          orderId,
-          requestingUserId,
-        })
-        .pipe(
-          timeout(10000),
-          catchError((err: unknown) => {
-            throw err;
-          }),
-        ),
-    );
-    return Buffer.from(result.data);
+    try {
+      const result = await firstValueFrom(
+        this.ordersClient
+          .send<{
+            type: string;
+            data: number[];
+          }>(ORDER_MESSAGE_PATTERN.GET_ORDER_INVOICE, {
+            orderId,
+            requestingUserId,
+          })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      );
+      return Buffer.from(result.data);
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "get order invoice",
+        "Orders Service",
+      );
+    }
   }
 
   async getPaymentUrl(
     orderId: number,
   ): Promise<{ order_url: string | null; status: string | null }> {
-    return (await firstValueFrom(
-      this.paymentsClient
-        .send(PAYMENT_MESSAGE_PATTERN.GET_PAYMENT_URL, { orderId })
-        .pipe(
-          timeout(10000),
-          catchError((err: unknown) => {
-            throw err;
-          }),
-        ),
-    )) as { order_url: string | null; status: string | null };
+    try {
+      return (await firstValueFrom(
+        this.paymentsClient
+          .send(PAYMENT_MESSAGE_PATTERN.GET_PAYMENT_URL, { orderId })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      )) as { order_url: string | null; status: string | null };
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "get payment url",
+        "Payments Service",
+      );
+    }
   }
 }

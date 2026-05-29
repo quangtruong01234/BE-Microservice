@@ -49,7 +49,7 @@ export class GhnService {
       to_ward_name,
       to_district_name,
       to_province_name,
-      cod_amount: order.cod_amount ?? 0,
+      cod_amount: Math.round(Number(order.cod_amount ?? 0)),
       weight: 500,
       service_type_id: 2,
       payment_type_id: 2,
