@@ -9,6 +9,7 @@ import { ProductModule } from "./product/product.module";
 import { GhnWebhookModule } from "./ghn/ghn-webhook.module";
 import { PaymentOptionsModule } from "./payment-options/payment-options.module";
 import { NotificationGatewayModule } from "./notification/notification.module";
+import { SocialGatewayModule } from "./social/social.module";
 import { CachedModule } from "@app/cached";
 import {
   NAME_SERVICE_TCP,
@@ -98,6 +99,7 @@ import { RoleAuthGuard } from "./common/guards/role-auth.guard";
     GhnWebhookModule,
     PaymentOptionsModule,
     NotificationGatewayModule,
+    SocialGatewayModule,
   ],
   controllers: [GatewayController],
   providers: [
