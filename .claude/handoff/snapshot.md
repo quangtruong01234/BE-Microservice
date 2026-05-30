@@ -50,6 +50,8 @@ Base URL: http://localhost:3000 | Swagger: /doc
 - Social Reply tree: TypeORM materialized-path, createReply/getReplies (findDescendantsTree depth 5), infinite nesting verified
 - Product multi-category: refactored ManyToOne → ManyToMany, junction table product_categories, categoryIds[] in DTO; createProduct/updateProduct/findAll/findById all use relations: ['categories']; E2E verified (5 steps pass)
 - Production hardening: trust proxy via getHttpAdapter().getInstance() trong gateway main.ts; CORS đã dùng env var (no change); PM2 ecosystem.config.js cho nodeA + nodeB; nginx/trybuy.conf với Let's Encrypt + WebSocket headers
+- WebSocket WS-1: NotificationWsGateway added to notification service — @WebSocketGateway(3010), JWT auth on handleConnection, client.join(`user:${userId}`), sendToUser() helper; JwtModule.registerAsync added to NotificationModule; port 3010 binds automatically on app start
+- WebSocket WS-2: NotificationService injects NotificationWsGateway; saveNotification() calls wsGateway.sendToUser(userId, saved) fire-and-forget after DB save — ack/nack logic unchanged
 
 ## Active Tasks
 
@@ -78,6 +80,10 @@ Base URL: http://localhost:3000 | Swagger: /doc
 - payment_methods table: active methods controlled by is_active column in DB — PAYMENT_GATEWAY env no longer drives the options endpoint
 - Tech debt: payments/inventory/rewards/product controllers chưa có @UseFilters(HttpToRpcExceptionFilter) — apply khi gặp 502 bug tương tự
 - Deploy checklist: `pm2 start ecosystem.config.js --env production` → `pm2 save && pm2 startup`; thay yourdomain.com trong nginx/trybuy.conf trước khi deploy
+- WebSocket port: notification service binds Socket.io on port 3010 (separate from TCP)
+- WS auth: JWT passed via handshake.auth.token or handshake.query.token
+- WS rooms: each user joins room `user:{userId}` on connect
+- WS emit is fire-and-forget — never await, never throw on offline user
 
 ## Backlog (priority order)
 
@@ -90,8 +96,20 @@ Base URL: http://localhost:3000 | Swagger: /doc
 - [x] Social Comment CRUD Phase 3 — Comment entity (comments table already in migration SQL); createComment/getComments/deleteComment TCP handlers; POST/GET /api/social/posts/:id/comments + DELETE /api/social/comments/:id; SocialCommentController added to gateway; SOCIAL_MESSAGE_PATTERN extended with CREATE_COMMENT/GET_COMMENTS/DELETE_COMMENT
 - [x] Social feed Phase 2 — Like ✓, Comment ✓, Reply tree ✓ | Chat defer WebSocket
 - [ ] reply_count trên getComments response
-- [ ] WebSocket real-time (Socket.io, cần WebSocket gateway riêng)
+- [x] WebSocket WS-1 — NotificationWsGateway setup (port 3010, JWT, rooms)
+- [x] WebSocket WS-2 — in-process emit after saveNotification()
+- [ ] WebSocket WS-3 — nginx location /socket.io → port 3010
+- [ ] WebSocket WS-4 — wire comment/reply events → notification + WS push
 - [ ] Wire notification cho comment/reply events
-- [x] Nginx config — nginx/trybuy.conf, Let's Encrypt + same-server
-  setup, WebSocket upgrade headers included; thay yourdomain.com
-  trước khi deploy
+- [x] Nginx config — nginx/trybuy.conf + nginx/trybuy-local.conf,
+  Let's Encrypt setup, WebSocket headers, routing verified E2E:
+  /api/* → port 3000 ✓, /zalopay/callback → port 3007 ✓,
+  trust proxy + CORS env var + PM2 ecosystem.config.js included
+- [ ] Cloudinary signed upload — image/video for product + social post (extensible for comment/chat)
+  - Approach: client uploads directly to Cloudinary (zero server bandwidth)
+  - Server: POST /api/upload/signature (gateway, JwtAuthGuard) → returns signed params
+  - Env vars: CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET
+  - Product: add imageUrl[] field to CreateProductDto + entity (nullable)
+  - Social post: add imageUrl[] + videoUrl field to CreatePostDto + entity (nullable)
+  - Cloudinary folder convention: trybuy/products/, trybuy/posts/
+  - Future: same /api/upload/signature endpoint reusable for comment + chat (change folder param)
