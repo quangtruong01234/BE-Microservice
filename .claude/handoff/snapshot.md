@@ -44,6 +44,8 @@ Base URL: http://localhost:3000 | Swagger: /doc
 - Social service scaffolded: apps/social/, port 3008, Node A, MySQL TypeORM, TCP, SOCIAL_SERVICE client trong gateway
 - Notification service fully implemented: entity (notifications table, 7 columns, MySQL), RabbitMQ consumers (payment_completed + order_canceled → save notification cho buyer), REST GET /api/notifications (paginated, JwtAuthGuard), PATCH /api/notifications/:id/read; end-to-end verified — event → DB → REST → mark-as-read all pass
 - Admin orders endpoint: GET /api/order/admin/orders?page=1&limit=20 — parallel fetch orders + buyer info (batch TCP to user service), @CheckPermission('order','read:any') guard, 200/403 verified; note: role relation leak trong buyer object (tech debt)
+- Social Post CRUD Phase 1: SOCIAL_MESSAGE_PATTERN added (4 patterns); social.service.ts (createPost/getPosts/getPostById/deletePost), social.controller.ts (@MessagePattern + @UseFilters(HttpToRpcExceptionFilter)), social.module.ts (TypeOrmModule.forFeature([Post])); gateway social/ module (SocialGatewayService + SocialController: POST/GET/GET:id/DELETE /api/social/posts); SocialGatewayModule imported into gateway.module.ts
+- Social Comment Tree: TypeORM materialized-path, infinite nesting, createComment/createReply/getComments/getReplies/deleteComment; reply depth mặc định 5 levels
 
 ## Active Tasks
 
@@ -78,5 +80,10 @@ Base URL: http://localhost:3000 | Swagger: /doc
 - [x] Shipping GHN + COD — fully complete: COD flow, webhook handler, ZaloPay/VNPay→GHN post-payment
 - [x] Payment option selection — GET /api/payment/options returns active rows from payment_methods DB table
 - [x] Notification service — fully complete
-- [ ] Social feed (port 3008, Node A) — Post/Like/Comment/Chat (scaffold done)
+- [x] Social Post CRUD Phase 1 — POST/GET/GET:id/DELETE /api/social/posts fully wired
+- [x] Social Like/Unlike Phase 2 — PostLike entity, likePost/unlikePost TCP handlers, POST/DELETE /api/social/posts/:id/like; ER_DUP_ENTRY → ConflictException
+- [x] Social Comment CRUD Phase 3 — Comment entity (comments table already in migration SQL); createComment/getComments/deleteComment TCP handlers; POST/GET /api/social/posts/:id/comments + DELETE /api/social/comments/:id; SocialCommentController added to gateway; SOCIAL_MESSAGE_PATTERN extended with CREATE_COMMENT/GET_COMMENTS/DELETE_COMMENT
+- [x] Social Reply Phase 4 — Comment entity refactored to @Tree("materialized-path") with @TreeParent/@TreeChildren; migration SQL recreated with mpath+parentId FK; DataSource injected in SocialService, treeRepo getter for createReply/getReplies; getComments updated to filter parent IS NULL; POST/GET /api/social/comments/:id/replies in gateway; CREATE_REPLY/GET_REPLIES added to SOCIAL_MESSAGE_PATTERN
+- [ ] Social Chat Phase 5
+- [ ] WebSocket / real-time: new comments + replies push to clients (Socket.io, cần WebSocket gateway riêng)
 - [ ] Nginx config — production only
