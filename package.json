@@ -39,8 +39,10 @@
     "@nestjs/jwt": "^11.0.2",
     "@nestjs/microservices": "^11.1.7",
     "@nestjs/platform-express": "^11.0.1",
+    "@nestjs/platform-socket.io": "^11.1.24",
     "@nestjs/swagger": "^11.2.3",
     "@nestjs/typeorm": "^11.0.0",
+    "@nestjs/websockets": "^11.1.24",
     "@types/bcryptjs": "^2.4.6",
     "@types/cookie-parser": "^1.4.10",
     "accesscontrol": "^2.2.1",
@@ -59,6 +61,7 @@
     "redis": "^5.10.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
+    "socket.io": "^4.8.3",
     "swagger-ui-express": "^5.0.1",
     "typeorm": "^0.3.27",
     "vnpay": "^2.5.0"
