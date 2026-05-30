@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { ClientsModule, Transport } from "@nestjs/microservices";
+import { JwtModule } from "@nestjs/jwt";
 import { RmqModule } from "@app/common";
 import {
   NAME_SERVICE_TCP,
@@ -10,6 +11,7 @@ import {
 } from "libs/constant/port-tcp.constant";
 import { NotificationController } from "./notification.controller";
 import { NotificationService } from "./notification.service";
+import { NotificationWsGateway } from "./notification.ws-gateway";
 import { Notification } from "./entities/notification.entity";
 
 @Module({
@@ -39,9 +41,15 @@ import { Notification } from "./entities/notification.entity";
         },
       },
     ]),
+    JwtModule.registerAsync({
+      useFactory: () => ({
+        secret: process.env.JWT_SECRET,
+      }),
+    }),
     RmqModule,
   ],
   controllers: [NotificationController],
-  providers: [NotificationService],
+  providers: [NotificationService, NotificationWsGateway],
+  exports: [NotificationWsGateway],
 })
 export class NotificationModule {}

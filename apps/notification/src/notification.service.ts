@@ -2,6 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Notification } from "./entities/notification.entity";
+import { NotificationWsGateway } from "./notification.ws-gateway";
 
 @Injectable()
 export class NotificationService {
@@ -10,6 +11,7 @@ export class NotificationService {
   constructor(
     @InjectRepository(Notification)
     private readonly notificationRepository: Repository<Notification>,
+    private readonly wsGateway: NotificationWsGateway,
   ) {}
 
   async saveNotification(
@@ -24,7 +26,8 @@ export class NotificationService {
       order_id: orderId,
       message,
     });
-    await this.notificationRepository.save(notification);
+    const saved = await this.notificationRepository.save(notification);
+    this.wsGateway.sendToUser(userId, saved);
     this.logger.log(
       `[NOTIFICATION] Saved type=${type} orderId=${orderId} userId=${userId}`,
     );
