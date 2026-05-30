@@ -47,4 +47,17 @@ export const NOTIFICATION_MESSAGE_PATTERN = {
   MARK_NOTIFICATION_READ: "mark_notification_read",
 };
 
-// Có thể bổ sung thêm các service khác như INVENTORY_MESSAGE_PATTERN nếu cần
+export const SOCIAL_MESSAGE_PATTERN = {
+  CREATE_POST: "social_create_post",
+  GET_POSTS: "social_get_posts",
+  GET_POSTS_BY_USER: "social_get_posts_by_user",
+  GET_POST_BY_ID: "social_get_post_by_id",
+  DELETE_POST: "social_delete_post",
+  LIKE_POST: "social_like_post",
+  UNLIKE_POST: "social_unlike_post",
+  CREATE_COMMENT: "social_create_comment",
+  GET_COMMENTS: "social_get_comments",
+  DELETE_COMMENT: "social_delete_comment",
+  CREATE_REPLY: "social_create_reply",
+  GET_REPLIES: "social_get_replies",
+};
