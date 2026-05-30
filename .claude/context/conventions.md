@@ -126,6 +126,18 @@ export class UpdateProductDto extends PartialType(CreateProductDto) {}
 // ❌ Wrong — do not redeclare all fields from CreateDto
 ```
 
+**Required DTO property initialization:**
+- Use `declare` for required properties in DTO classes to avoid `strictPropertyInitialization` errors
+- ❌ `name: string` (TS error under strict mode)
+- ❌ `name!: string` (violates no-`!` rule — `!` is reserved for TypeORM entities)
+- ✅ `declare name: string`
+
+**Gateway DTO file naming:**
+- File name: `<domain>.dto.ts` — no suffixes like `-simple`, `-gateway`
+- One DTO file per domain in the gateway
+- ❌ `product-simple.dto.ts`, `product-gateway.dto.ts`
+- ✅ `product.dto.ts`
+
 ## Backend: Response Shape
 
 Paginated list:

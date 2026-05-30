@@ -45,7 +45,11 @@ Base URL: http://localhost:3000 | Swagger: /doc
 - Notification service fully implemented: entity (notifications table, 7 columns, MySQL), RabbitMQ consumers (payment_completed + order_canceled → save notification cho buyer), REST GET /api/notifications (paginated, JwtAuthGuard), PATCH /api/notifications/:id/read; end-to-end verified — event → DB → REST → mark-as-read all pass
 - Admin orders endpoint: GET /api/order/admin/orders?page=1&limit=20 — parallel fetch orders + buyer info (batch TCP to user service), @CheckPermission('order','read:any') guard, 200/403 verified; note: role relation leak trong buyer object (tech debt)
 - Social Post CRUD Phase 1: SOCIAL_MESSAGE_PATTERN added (4 patterns); social.service.ts (createPost/getPosts/getPostById/deletePost), social.controller.ts (@MessagePattern + @UseFilters(HttpToRpcExceptionFilter)), social.module.ts (TypeOrmModule.forFeature([Post])); gateway social/ module (SocialGatewayService + SocialController: POST/GET/GET:id/DELETE /api/social/posts); SocialGatewayModule imported into gateway.module.ts
-- Social Comment Tree: TypeORM materialized-path, infinite nesting, createComment/createReply/getComments/getReplies/deleteComment; reply depth mặc định 5 levels
+- Social Like/Unlike: likePost/unlikePost + Redis caching (INCR/DECR like_count, SET/DEL liked flag); response trả likeCount mới nhất; getPosts + getPostsByUser đều kèm likeCount (cache-aside)
+- Social Comment: createComment/getComments/deleteComment (top-level only, parent IS NULL)
+- Social Reply tree: TypeORM materialized-path, createReply/getReplies (findDescendantsTree depth 5), infinite nesting verified
+- Product multi-category: refactored ManyToOne → ManyToMany, junction table product_categories, categoryIds[] in DTO; createProduct/updateProduct/findAll/findById all use relations: ['categories']; E2E verified (5 steps pass)
+- Production hardening: trust proxy via getHttpAdapter().getInstance() trong gateway main.ts; CORS đã dùng env var (no change); PM2 ecosystem.config.js cho nodeA + nodeB; nginx/trybuy.conf với Let's Encrypt + WebSocket headers
 
 ## Active Tasks
 
@@ -73,6 +77,7 @@ Base URL: http://localhost:3000 | Swagger: /doc
 - payments service: guard clause (payment_method === 'cod') skips COD orders before any DB/logging work
 - payment_methods table: active methods controlled by is_active column in DB — PAYMENT_GATEWAY env no longer drives the options endpoint
 - Tech debt: payments/inventory/rewards/product controllers chưa có @UseFilters(HttpToRpcExceptionFilter) — apply khi gặp 502 bug tương tự
+- Deploy checklist: `pm2 start ecosystem.config.js --env production` → `pm2 save && pm2 startup`; thay yourdomain.com trong nginx/trybuy.conf trước khi deploy
 
 ## Backlog (priority order)
 
@@ -83,7 +88,10 @@ Base URL: http://localhost:3000 | Swagger: /doc
 - [x] Social Post CRUD Phase 1 — POST/GET/GET:id/DELETE /api/social/posts fully wired
 - [x] Social Like/Unlike Phase 2 — PostLike entity, likePost/unlikePost TCP handlers, POST/DELETE /api/social/posts/:id/like; ER_DUP_ENTRY → ConflictException
 - [x] Social Comment CRUD Phase 3 — Comment entity (comments table already in migration SQL); createComment/getComments/deleteComment TCP handlers; POST/GET /api/social/posts/:id/comments + DELETE /api/social/comments/:id; SocialCommentController added to gateway; SOCIAL_MESSAGE_PATTERN extended with CREATE_COMMENT/GET_COMMENTS/DELETE_COMMENT
-- [x] Social Reply Phase 4 — Comment entity refactored to @Tree("materialized-path") with @TreeParent/@TreeChildren; migration SQL recreated with mpath+parentId FK; DataSource injected in SocialService, treeRepo getter for createReply/getReplies; getComments updated to filter parent IS NULL; POST/GET /api/social/comments/:id/replies in gateway; CREATE_REPLY/GET_REPLIES added to SOCIAL_MESSAGE_PATTERN
-- [ ] Social Chat Phase 5
-- [ ] WebSocket / real-time: new comments + replies push to clients (Socket.io, cần WebSocket gateway riêng)
-- [ ] Nginx config — production only
+- [x] Social feed Phase 2 — Like ✓, Comment ✓, Reply tree ✓ | Chat defer WebSocket
+- [ ] reply_count trên getComments response
+- [ ] WebSocket real-time (Socket.io, cần WebSocket gateway riêng)
+- [ ] Wire notification cho comment/reply events
+- [x] Nginx config — nginx/trybuy.conf, Let's Encrypt + same-server
+  setup, WebSocket upgrade headers included; thay yourdomain.com
+  trước khi deploy
