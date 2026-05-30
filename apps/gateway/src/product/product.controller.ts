@@ -19,7 +19,7 @@ import {
   GetProductsQueryDto,
   CreateBrandDto,
   CreateCategoryDto,
-} from "./dto/product-simple.dto";
+} from "./dto/product.dto";
 import {
   ApiTags,
   ApiOperation,

@@ -1,543 +1,617 @@
-import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
   IsString,
   IsNumber,
   IsOptional,
-  IsEnum,
   IsBoolean,
-  IsDateString,
   IsArray,
+  ArrayMinSize,
+  IsInt,
   Min,
   Max,
 } from "class-validator";
 import { Type, Transform } from "class-transformer";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 
-// Product Types and Enums (mirror from product module)
-export enum ProductType {
-  SIMPLE = "SIMPLE",
-  CONFIGURABLE = "CONFIGURABLE",
-  BUNDLE = "BUNDLE",
-  DIGITAL = "DIGITAL",
-  SERVICE = "SERVICE",
-}
+// ============================================================================
+// PRODUCT DTOs
+// ============================================================================
 
-export enum ProductStatus {
-  DRAFT = "DRAFT",
-  ACTIVE = "ACTIVE",
-  INACTIVE = "INACTIVE",
-  OUT_OF_STOCK = "OUT_OF_STOCK",
-  DISCONTINUED = "DISCONTINUED",
-}
-
-export enum ProductVisibility {
-  PUBLIC = "PUBLIC",
-  PRIVATE = "PRIVATE",
-  MEMBERS_ONLY = "MEMBERS_ONLY",
-  SPECIFIC_USERS = "SPECIFIC_USERS",
-}
-
-export enum InventoryPolicy {
-  DENY = "DENY",
-  CONTINUE = "CONTINUE",
-}
-
-// ===== CREATE PRODUCT DTO =====
 export class CreateProductDto {
   @ApiProperty({
-    description: "Product SKU (Stock Keeping Unit)",
-    example: "IPHONE15-128GB-RED",
+    description: "Product name",
+    example: "iPhone 14 Pro Max",
   })
   @IsString()
-  sku: string;
+  declare name: string;
 
-  @ApiProperty({ description: "Product name", example: "iPhone 15 128GB Red" })
-  @IsString()
-  name: string;
-
-  @ApiProperty({
-    description: "SEO-friendly URL slug",
-    example: "iphone-15-128gb-red",
+  @ApiPropertyOptional({
+    description: "Product description",
+    example: "Latest iPhone with A16 Bionic chip and ProRAW camera",
   })
-  @IsString()
-  slug: string;
-
-  @ApiPropertyOptional({ description: "Short description" })
-  @IsOptional()
-  @IsString()
-  shortDescription?: string;
-
-  @ApiPropertyOptional({ description: "Full product description" })
   @IsOptional()
   @IsString()
   description?: string;
 
-  @ApiPropertyOptional({ description: "Brand ID" })
+  @ApiProperty({
+    description: "Product price",
+    example: 1299.99,
+    minimum: 0,
+  })
+  @IsNumber()
+  @Type(() => Number)
+  @Min(0)
+  declare price: number;
+
+  @ApiPropertyOptional({
+    description: "Initial stock quantity",
+    example: 100,
+    minimum: 0,
+    default: 0,
+  })
   @IsOptional()
   @IsNumber()
+  @Type(() => Number)
+  @Min(0)
+  stockQuantity?: number = 0;
+
+  @ApiProperty({
+    description: "Product SKU (Stock Keeping Unit)",
+    example: "IPH14PM-256-BLK",
+  })
+  @IsString()
+  declare sku: string;
+
+  @ApiPropertyOptional({
+    description: "Brand ID",
+    example: 1,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
   brandId?: number;
 
-  @ApiProperty({ description: "Primary category ID" })
-  @IsNumber()
-  primaryCategoryId: number;
-
-  @ApiPropertyOptional({ description: "Product type", enum: ProductType })
-  @IsOptional()
-  @IsEnum(ProductType)
-  productType?: ProductType;
-
-  @ApiProperty({ description: "Base price", example: 25990000 })
-  @IsNumber()
-  @Min(0)
-  @Type(() => Number)
-  basePrice: number;
-
-  @ApiPropertyOptional({
-    description: "Compare price (original price)",
-    example: 28990000,
+  @ApiProperty({
+    description: "Category IDs",
+    example: [1, 2],
+    type: [Number],
   })
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  @Type(() => Number)
-  comparePrice?: number;
-
-  @ApiPropertyOptional({ description: "Cost price" })
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  @Type(() => Number)
-  costPrice?: number;
-
-  @ApiPropertyOptional({ description: "Track inventory", default: true })
-  @IsOptional()
-  @IsBoolean()
-  trackInventory?: boolean;
-
-  @ApiPropertyOptional({
-    description: "Inventory policy",
-    enum: InventoryPolicy,
-  })
-  @IsOptional()
-  @IsEnum(InventoryPolicy)
-  inventoryPolicy?: InventoryPolicy;
-
-  // Physical properties
-  @ApiPropertyOptional({ description: "Weight in kg" })
-  @IsOptional()
-  @IsNumber()
-  @Type(() => Number)
-  weight?: number;
-
-  @ApiPropertyOptional({ description: "Length in cm" })
-  @IsOptional()
-  @IsNumber()
-  @Type(() => Number)
-  length?: number;
-
-  @ApiPropertyOptional({ description: "Width in cm" })
-  @IsOptional()
-  @IsNumber()
-  @Type(() => Number)
-  width?: number;
-
-  @ApiPropertyOptional({ description: "Height in cm" })
-  @IsOptional()
-  @IsNumber()
-  @Type(() => Number)
-  height?: number;
-
-  // Status and visibility
-  @ApiPropertyOptional({ description: "Product status", enum: ProductStatus })
-  @IsOptional()
-  @IsEnum(ProductStatus)
-  status?: ProductStatus;
-
-  @ApiPropertyOptional({
-    description: "Product visibility",
-    enum: ProductVisibility,
-  })
-  @IsOptional()
-  @IsEnum(ProductVisibility)
-  visibility?: ProductVisibility;
-
-  // SEO fields
-  @ApiPropertyOptional({ description: "Meta title for SEO" })
-  @IsOptional()
-  @IsString()
-  metaTitle?: string;
-
-  @ApiPropertyOptional({ description: "Meta description for SEO" })
-  @IsOptional()
-  @IsString()
-  metaDescription?: string;
-
-  @ApiPropertyOptional({ description: "Meta keywords for SEO" })
-  @IsOptional()
-  @IsString()
-  metaKeywords?: string;
-
-  @ApiPropertyOptional({ description: "Featured image URL" })
-  @IsOptional()
-  @IsString()
-  featuredImageUrl?: string;
-
-  // Special flags
-  @ApiPropertyOptional({ description: "Is featured product", default: false })
-  @IsOptional()
-  @IsBoolean()
-  isFeatured?: boolean;
-
-  @ApiPropertyOptional({ description: "Is bestseller", default: false })
-  @IsOptional()
-  @IsBoolean()
-  isBestseller?: boolean;
-
-  @ApiPropertyOptional({ description: "Is new arrival", default: false })
-  @IsOptional()
-  @IsBoolean()
-  isNewArrival?: boolean;
-
-  @ApiPropertyOptional({ description: "Is on sale", default: false })
-  @IsOptional()
-  @IsBoolean()
-  isOnSale?: boolean;
-
-  // Date management
-  @ApiPropertyOptional({ description: "Available from date" })
-  @IsOptional()
-  @IsDateString()
-  availableFrom?: Date;
-
-  @ApiPropertyOptional({ description: "Available to date" })
-  @IsOptional()
-  @IsDateString()
-  availableTo?: Date;
-
-  // Shipping
-  @ApiPropertyOptional({ description: "Requires shipping", default: true })
-  @IsOptional()
-  @IsBoolean()
-  requiresShipping?: boolean;
-
-  @ApiPropertyOptional({ description: "Shipping class" })
-  @IsOptional()
-  @IsString()
-  shippingClass?: string;
-
-  @ApiPropertyOptional({ description: "Minimum order quantity", default: 1 })
-  @IsOptional()
-  @IsNumber()
-  @Min(1)
-  minOrderQuantity?: number;
-
-  @ApiPropertyOptional({ description: "Maximum order quantity" })
-  @IsOptional()
-  @IsNumber()
-  @Min(1)
-  maxOrderQuantity?: number;
-
-  @ApiPropertyOptional({ description: "Custom fields as JSON" })
-  @IsOptional()
-  customFields?: Record<string, any>;
-
-  @ApiPropertyOptional({ description: "Additional category IDs" })
-  @IsOptional()
   @IsArray()
-  @IsNumber({}, { each: true })
-  categoryIds?: number[];
+  @ArrayMinSize(1)
+  @IsInt({ each: true })
+  declare categoryIds: number[];
+
+  @ApiPropertyOptional({
+    description: "User ID (creator of the product)",
+    example: 1,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  userId?: number;
+
+  @ApiPropertyOptional({
+    description: "Product image URL",
+    example:
+      "https://images.unsplash.com/photo-1592750475338-74b7b21085ab?auto=format&fit=crop&q=80&w=600",
+  })
+  @IsOptional()
+  @IsString()
+  imageUrl?: string;
+
+  @ApiPropertyOptional({
+    description: "Product active status",
+    example: true,
+    default: true,
+  })
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean = true;
+
+  // Social engagement metrics
+  @ApiPropertyOptional({
+    description: "Number of likes",
+    example: 45,
+    minimum: 0,
+    default: 0,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  @Min(0)
+  likesCount?: number = 0;
+
+  @ApiPropertyOptional({
+    description: "Number of comments",
+    example: 12,
+    minimum: 0,
+    default: 0,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  @Min(0)
+  commentsCount?: number = 0;
+
+  @ApiPropertyOptional({
+    description: "Number of shares",
+    example: 8,
+    minimum: 0,
+    default: 0,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  @Min(0)
+  sharesCount?: number = 0;
+
+  @ApiPropertyOptional({
+    description: "Number of views",
+    example: 850,
+    minimum: 0,
+    default: 0,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  @Min(0)
+  viewCount?: number = 0;
+
+  // Product status for timeline/feed
+  @ApiPropertyOptional({
+    description: "Whether product is featured",
+    example: true,
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  isFeatured?: boolean = false;
+
+  @ApiPropertyOptional({
+    description: "Whether product is trending",
+    example: true,
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  isTrending?: boolean = false;
+
+  // Product condition and seller info
+  @ApiPropertyOptional({
+    description: "Product condition",
+    example: "new",
+    enum: ["new", "used", "refurbished"],
+    default: "new",
+  })
+  @IsOptional()
+  @IsString()
+  condition?: string = "new";
+
+  @ApiPropertyOptional({
+    description: "Seller notes about the product",
+    example:
+      "Sản phẩm chính hãng Apple, bảo hành 12 tháng tại các trung tâm bảo hành Apple Việt Nam.",
+  })
+  @IsOptional()
+  @IsString()
+  sellerNotes?: string;
+
+  // Rating system
+  @ApiPropertyOptional({
+    description: "Average rating (0.0 to 5.0)",
+    example: 4.8,
+    minimum: 0,
+    maximum: 5,
+    default: 0,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  @Min(0)
+  @Max(5)
+  rating?: number = 0;
+
+  @ApiPropertyOptional({
+    description: "Number of ratings received",
+    example: 89,
+    minimum: 0,
+    default: 0,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  @Min(0)
+  ratingCount?: number = 0;
 }
 
-// ===== UPDATE PRODUCT DTO =====
 export class UpdateProductDto {
-  @ApiProperty({ description: "Product ID" })
-  @IsNumber()
-  id: number;
-
-  @ApiPropertyOptional({ description: "Product SKU" })
-  @IsOptional()
-  @IsString()
-  sku?: string;
-
-  @ApiPropertyOptional({ description: "Product name" })
+  @ApiPropertyOptional({
+    description: "Product name",
+    example: "iPhone 14 Pro Max",
+  })
   @IsOptional()
   @IsString()
   name?: string;
 
-  @ApiPropertyOptional({ description: "SEO slug" })
-  @IsOptional()
-  @IsString()
-  slug?: string;
-
-  @ApiPropertyOptional({ description: "Short description" })
-  @IsOptional()
-  @IsString()
-  shortDescription?: string;
-
-  @ApiPropertyOptional({ description: "Full description" })
+  @ApiPropertyOptional({
+    description: "Product description",
+    example: "Latest iPhone with A16 Bionic chip and ProRAW camera",
+  })
   @IsOptional()
   @IsString()
   description?: string;
 
-  @ApiPropertyOptional({ description: "Brand ID" })
-  @IsOptional()
-  @IsNumber()
-  brandId?: number;
-
-  @ApiPropertyOptional({ description: "Primary category ID" })
-  @IsOptional()
-  @IsNumber()
-  primaryCategoryId?: number;
-
-  @ApiPropertyOptional({ description: "Base price" })
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  @Type(() => Number)
-  basePrice?: number;
-
-  @ApiPropertyOptional({ description: "Compare price" })
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  @Type(() => Number)
-  comparePrice?: number;
-
-  @ApiPropertyOptional({ description: "Product status", enum: ProductStatus })
-  @IsOptional()
-  @IsEnum(ProductStatus)
-  status?: ProductStatus;
-
   @ApiPropertyOptional({
-    description: "Product visibility",
-    enum: ProductVisibility,
+    description: "Product price",
+    example: 1299.99,
+    minimum: 0,
   })
   @IsOptional()
-  @IsEnum(ProductVisibility)
-  visibility?: ProductVisibility;
+  @IsNumber()
+  @Type(() => Number)
+  @Min(0)
+  price?: number;
 
-  @ApiPropertyOptional({ description: "Featured image URL" })
+  @ApiPropertyOptional({
+    description: "Stock quantity",
+    example: 100,
+    minimum: 0,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  @Min(0)
+  stockQuantity?: number;
+
+  @ApiPropertyOptional({
+    description: "Product SKU (Stock Keeping Unit)",
+    example: "IPH14PM-256-BLK",
+  })
   @IsOptional()
   @IsString()
-  featuredImageUrl?: string;
+  sku?: string;
 
-  @ApiPropertyOptional({ description: "Is featured" })
+  @ApiPropertyOptional({
+    description: "Brand ID",
+    example: 1,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  brandId?: number;
+
+  @ApiPropertyOptional({
+    description: "Category IDs",
+    example: [1, 2],
+    type: [Number],
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsInt({ each: true })
+  categoryIds?: number[];
+
+  @ApiPropertyOptional({
+    description: "Product image URL",
+    example: "https://example.com/images/iphone14pro.jpg",
+  })
+  @IsOptional()
+  @IsString()
+  imageUrl?: string;
+
+  @ApiPropertyOptional({
+    description: "Product active status",
+    example: true,
+  })
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+
+  // Social engagement metrics
+  @ApiPropertyOptional({
+    description: "Number of likes",
+    example: 45,
+    minimum: 0,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  @Min(0)
+  likesCount?: number;
+
+  @ApiPropertyOptional({
+    description: "Number of comments",
+    example: 12,
+    minimum: 0,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  @Min(0)
+  commentsCount?: number;
+
+  @ApiPropertyOptional({
+    description: "Number of shares",
+    example: 8,
+    minimum: 0,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  @Min(0)
+  sharesCount?: number;
+
+  @ApiPropertyOptional({
+    description: "Number of views",
+    example: 850,
+    minimum: 0,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  @Min(0)
+  viewCount?: number;
+
+  // Product status for timeline/feed
+  @ApiPropertyOptional({
+    description: "Whether product is featured",
+    example: true,
+  })
   @IsOptional()
   @IsBoolean()
   isFeatured?: boolean;
 
-  @ApiPropertyOptional({ description: "Custom fields" })
+  @ApiPropertyOptional({
+    description: "Whether product is trending",
+    example: true,
+  })
   @IsOptional()
-  customFields?: Record<string, any>;
-}
+  @IsBoolean()
+  isTrending?: boolean;
 
-// ===== GET PRODUCTS QUERY DTO =====
-export class GetProductsQueryDto {
-  @ApiPropertyOptional({ description: "Page number", default: 1, minimum: 1 })
+  // Product condition and seller info
+  @ApiPropertyOptional({
+    description: "Product condition",
+    example: "new",
+    enum: ["new", "used", "refurbished"],
+  })
+  @IsOptional()
+  @IsString()
+  condition?: string;
+
+  @ApiPropertyOptional({
+    description: "Seller notes about the product",
+    example: "Sản phẩm chính hãng Apple, bảo hành 12 tháng.",
+  })
+  @IsOptional()
+  @IsString()
+  sellerNotes?: string;
+
+  // Rating system
+  @ApiPropertyOptional({
+    description: "Average rating (0.0 to 5.0)",
+    example: 4.8,
+    minimum: 0,
+    maximum: 5,
+  })
   @IsOptional()
   @IsNumber()
-  @Min(1)
+  @Type(() => Number)
+  @Min(0)
+  @Max(5)
+  rating?: number;
+
+  @ApiPropertyOptional({
+    description: "Number of ratings received",
+    example: 89,
+    minimum: 0,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  @Min(0)
+  ratingCount?: number;
+}
+
+export class GetProductsQueryDto {
+  @ApiPropertyOptional({
+    description: "Page number for pagination",
+    example: 1,
+    default: 1,
+  })
+  @IsOptional()
+  @IsNumber()
   @Type(() => Number)
   page?: number = 1;
 
   @ApiPropertyOptional({
-    description: "Items per page",
+    description: "Number of items per page",
+    example: 10,
     default: 10,
-    minimum: 1,
-    maximum: 100,
   })
   @IsOptional()
   @IsNumber()
-  @Min(1)
-  @Max(100)
   @Type(() => Number)
   limit?: number = 10;
 
-  @ApiPropertyOptional({ description: "Search query (name, description, SKU)" })
+  @ApiPropertyOptional({
+    description: "Search keyword",
+    example: "iPhone",
+  })
   @IsOptional()
   @IsString()
   search?: string;
 
-  @ApiPropertyOptional({ description: "Filter by category ID" })
+  @ApiPropertyOptional({
+    description: "Filter by category ID",
+    example: 1,
+  })
   @IsOptional()
   @IsNumber()
   @Type(() => Number)
   categoryId?: number;
 
-  @ApiPropertyOptional({ description: "Filter by brand ID" })
+  @ApiPropertyOptional({
+    description: "Filter by brand ID",
+    example: 1,
+  })
   @IsOptional()
   @IsNumber()
   @Type(() => Number)
   brandId?: number;
 
-  @ApiPropertyOptional({ description: "Filter by status", enum: ProductStatus })
-  @IsOptional()
-  @IsEnum(ProductStatus)
-  status?: ProductStatus;
-
   @ApiPropertyOptional({
-    description: "Filter by product type",
-    enum: ProductType,
+    description: "Minimum price filter",
+    example: 100,
   })
-  @IsOptional()
-  @IsEnum(ProductType)
-  productType?: ProductType;
-
-  @ApiPropertyOptional({
-    description: "Filter by visibility",
-    enum: ProductVisibility,
-  })
-  @IsOptional()
-  @IsEnum(ProductVisibility)
-  visibility?: ProductVisibility;
-
-  @ApiPropertyOptional({ description: "Filter featured products" })
-  @IsOptional()
-  @IsBoolean()
-  @Transform(({ value }) => value === "true" || value === true)
-  isFeatured?: boolean;
-
-  @ApiPropertyOptional({ description: "Filter bestsellers" })
-  @IsOptional()
-  @IsBoolean()
-  @Transform(({ value }) => value === "true" || value === true)
-  isBestseller?: boolean;
-
-  @ApiPropertyOptional({ description: "Filter new arrivals" })
-  @IsOptional()
-  @IsBoolean()
-  @Transform(({ value }) => value === "true" || value === true)
-  isNewArrival?: boolean;
-
-  @ApiPropertyOptional({ description: "Filter products on sale" })
-  @IsOptional()
-  @IsBoolean()
-  @Transform(({ value }) => value === "true" || value === true)
-  isOnSale?: boolean;
-
-  @ApiPropertyOptional({ description: "Minimum price" })
   @IsOptional()
   @IsNumber()
-  @Min(0)
   @Type(() => Number)
   minPrice?: number;
 
-  @ApiPropertyOptional({ description: "Maximum price" })
+  @ApiPropertyOptional({
+    description: "Maximum price filter",
+    example: 2000,
+  })
   @IsOptional()
   @IsNumber()
-  @Min(0)
   @Type(() => Number)
   maxPrice?: number;
 
-  @ApiPropertyOptional({ description: "Sort by field", default: "createdAt" })
+  @ApiPropertyOptional({
+    description: "Filter by active status",
+    example: true,
+  })
+  @IsOptional()
+  @Transform(({ value }) => value === "true")
+  @IsBoolean()
+  isActive?: boolean;
+
+  @ApiPropertyOptional({
+    description: "Sort by field",
+    example: "createdAt",
+    default: "createdAt",
+  })
   @IsOptional()
   @IsString()
   sortBy?: string = "createdAt";
 
   @ApiPropertyOptional({
     description: "Sort order",
+    example: "DESC",
     enum: ["ASC", "DESC"],
     default: "DESC",
   })
   @IsOptional()
   @IsString()
   sortOrder?: "ASC" | "DESC" = "DESC";
+
+  // Social features filters
+  @ApiPropertyOptional({
+    description: "Filter by featured status",
+    example: true,
+  })
+  @IsOptional()
+  @Transform(({ value }) => value === "true")
+  @IsBoolean()
+  isFeatured?: boolean;
+
+  @ApiPropertyOptional({
+    description: "Filter by trending status",
+    example: true,
+  })
+  @IsOptional()
+  @Transform(({ value }) => value === "true")
+  @IsBoolean()
+  isTrending?: boolean;
+
+  @ApiPropertyOptional({
+    description: "Filter by product condition",
+    example: "new",
+    enum: ["new", "used", "refurbished"],
+  })
+  @IsOptional()
+  @IsString()
+  condition?: string;
+
+  @ApiPropertyOptional({
+    description: "Minimum rating filter",
+    example: 4.0,
+    minimum: 0,
+    maximum: 5,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  minRating?: number;
+
+  @ApiPropertyOptional({
+    description: "Maximum rating filter",
+    example: 5.0,
+    minimum: 0,
+    maximum: 5,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  maxRating?: number;
 }
 
-// ===== PRODUCT VARIANT DTOs =====
-export class CreateProductVariantDto {
-  @ApiProperty({ description: "Product ID" })
-  @IsNumber()
-  productId: number;
+// ============================================================================
+// BRAND DTOs
+// ============================================================================
 
+export class CreateBrandDto {
   @ApiProperty({
-    description: "Variant SKU",
-    example: "IPHONE15-128GB-RED-VARIANT",
+    description: "Brand name",
+    example: "Apple",
   })
   @IsString()
-  sku: string;
+  declare name: string;
 
-  @ApiPropertyOptional({ description: "Barcode" })
+  @ApiPropertyOptional({
+    description: "Brand description",
+    example: "Technology company known for innovative products",
+  })
   @IsOptional()
   @IsString()
-  barcode?: string;
+  description?: string;
 
   @ApiPropertyOptional({
-    description: "Variant price (overrides product price)",
+    description: "Brand active status",
+    example: true,
+    default: true,
   })
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  @Type(() => Number)
-  price?: number;
-
-  @ApiPropertyOptional({ description: "Variant compare price" })
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  @Type(() => Number)
-  comparePrice?: number;
-
-  @ApiPropertyOptional({
-    description: "Inventory quantity for this variant",
-    default: 0,
-  })
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  inventoryQuantity?: number = 0;
-
-  @ApiPropertyOptional({ description: "Variant image URL" })
-  @IsOptional()
-  @IsString()
-  featuredImageUrl?: string;
-
-  @ApiPropertyOptional({
-    description: "Variant attributes (color, size, etc.)",
-    example: { color: "Red", size: "128GB" },
-  })
-  @IsOptional()
-  variantAttributes?: Record<string, any>;
-
-  @ApiPropertyOptional({ description: "Is variant active", default: true })
   @IsOptional()
   @IsBoolean()
   isActive?: boolean = true;
 }
 
-export class UpdateProductVariantDto {
-  @ApiProperty({ description: "Variant ID" })
-  @IsNumber()
-  id: number;
+// ============================================================================
+// CATEGORY DTOs
+// ============================================================================
 
-  @ApiPropertyOptional({ description: "Variant SKU" })
+export class CreateCategoryDto {
+  @ApiProperty({
+    description: "Category name",
+    example: "Smartphones",
+  })
+  @IsString()
+  declare name: string;
+
+  @ApiPropertyOptional({
+    description: "Category description",
+    example: "Mobile devices and smartphones",
+  })
   @IsOptional()
   @IsString()
-  sku?: string;
+  description?: string;
 
-  @ApiPropertyOptional({ description: "Variant price" })
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  @Type(() => Number)
-  price?: number;
-
-  @ApiPropertyOptional({ description: "Inventory quantity" })
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  inventoryQuantity?: number;
-
-  @ApiPropertyOptional({ description: "Variant image URL" })
-  @IsOptional()
-  @IsString()
-  featuredImageUrl?: string;
-
-  @ApiPropertyOptional({ description: "Variant attributes" })
-  @IsOptional()
-  variantAttributes?: Record<string, any>;
-
-  @ApiPropertyOptional({ description: "Is variant active" })
+  @ApiPropertyOptional({
+    description: "Category active status",
+    example: true,
+    default: true,
+  })
   @IsOptional()
   @IsBoolean()
-  isActive?: boolean;
+  isActive?: boolean = true;
 }

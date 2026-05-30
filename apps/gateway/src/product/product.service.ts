@@ -12,7 +12,7 @@ import {
   GetProductsQueryDto,
   CreateBrandDto,
   CreateCategoryDto,
-} from "./dto/product-simple.dto";
+} from "./dto/product.dto";
 
 export interface ProductWithInventory {
   // Product fields
@@ -23,14 +23,13 @@ export interface ProductWithInventory {
   stockQuantity: number;
   sku: string;
   brandId?: number;
-  categoryId: number;
   userId?: number;
   imageUrl?: string;
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
   brand?: unknown;
-  category: unknown;
+  categories: unknown[];
 
   // User information
   user?: {

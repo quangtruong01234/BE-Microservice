@@ -9,6 +9,10 @@ import { RequestMethod, ValidationPipe } from "@nestjs/common";
 async function bootstrap() {
   dotenv.config({ path: "./local/nodeA/.env" });
   const app = await NestFactory.create(GatewayModule);
+  const expressApp = app
+    .getHttpAdapter()
+    .getInstance() as import("express").Application;
+  expressApp.set("trust proxy", 1);
   app.use(
     (cookieParser as unknown as () => import("express").RequestHandler)(),
   );
