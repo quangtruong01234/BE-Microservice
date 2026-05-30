@@ -1,8 +1,13 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { TypeOrmModule } from "@nestjs/typeorm";
+import { CachedModule } from "@app/cached";
 import { SocialController } from "./social.controller";
 import { SocialService } from "./social.service";
+import { Post } from "./entities/post.entity";
+import { PostLike } from "./entities/post-like.entity";
+import { Like } from "./entities/like.entity";
+import { Comment } from "./entities/comment.entity";
 
 @Module({
   imports: [
@@ -17,9 +22,11 @@ import { SocialService } from "./social.service";
       username: process.env.MYSQL_USER,
       password: process.env.MYSQL_PASSWORD,
       database: process.env.MYSQL_DATABASE,
-      entities: [],
+      entities: [Post, PostLike, Like, Comment],
       synchronize: false,
     }),
+    TypeOrmModule.forFeature([Post, PostLike, Comment]),
+    CachedModule,
   ],
   controllers: [SocialController],
   providers: [SocialService],

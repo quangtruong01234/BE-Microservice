@@ -1,7 +1,106 @@
-import { Controller } from "@nestjs/common";
+import { Controller, UseFilters } from "@nestjs/common";
+import { MessagePattern, Payload } from "@nestjs/microservices";
+import { HttpToRpcExceptionFilter } from "@app/common/filters/http-to-rpc-exception.filter";
 import { SocialService } from "./social.service";
+import { SOCIAL_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
+import { Post } from "./entities/post.entity";
+import { Comment } from "./entities/comment.entity";
 
+@UseFilters(new HttpToRpcExceptionFilter())
 @Controller()
 export class SocialController {
   constructor(private readonly socialService: SocialService) {}
+
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.CREATE_POST)
+  async createPost(
+    @Payload()
+    payload: {
+      userId: number;
+      content: string;
+      imageUrl?: string | null;
+    },
+  ): Promise<Post> {
+    return this.socialService.createPost(payload);
+  }
+
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.GET_POSTS)
+  async getPosts(
+    @Payload() payload: { page: number; limit: number },
+  ): Promise<unknown> {
+    return this.socialService.getPosts(payload);
+  }
+
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.GET_POSTS_BY_USER)
+  async getPostsByUser(
+    @Payload() payload: { userId: number; page: number; limit: number },
+  ): Promise<unknown> {
+    return this.socialService.getPostsByUser(payload);
+  }
+
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.GET_POST_BY_ID)
+  async getPostById(@Payload() postId: number): Promise<Post> {
+    return this.socialService.getPostById(postId);
+  }
+
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.DELETE_POST)
+  async deletePost(
+    @Payload() payload: { postId: number; userId: number },
+  ): Promise<{ success: boolean }> {
+    return this.socialService.deletePost(payload);
+  }
+
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.LIKE_POST)
+  async likePost(
+    @Payload() payload: { postId: number; userId: number },
+  ): Promise<{ liked: boolean; postId: number }> {
+    return this.socialService.likePost(payload);
+  }
+
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.UNLIKE_POST)
+  async unlikePost(
+    @Payload() payload: { postId: number; userId: number },
+  ): Promise<{ liked: boolean; postId: number }> {
+    return this.socialService.unlikePost(payload);
+  }
+
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.CREATE_COMMENT)
+  async createComment(
+    @Payload() payload: { postId: number; userId: number; content: string },
+  ): Promise<Comment> {
+    return this.socialService.createComment(payload);
+  }
+
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.GET_COMMENTS)
+  async getComments(
+    @Payload() payload: { postId: number; page: number; limit: number },
+  ): Promise<unknown> {
+    return this.socialService.getComments(payload);
+  }
+
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.DELETE_COMMENT)
+  async deleteComment(
+    @Payload() payload: { commentId: number; userId: number },
+  ): Promise<{ deleted: boolean }> {
+    return this.socialService.deleteComment(payload);
+  }
+
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.CREATE_REPLY)
+  async createReply(
+    @Payload()
+    payload: {
+      postId: number;
+      parentCommentId: number;
+      userId: number;
+      content: string;
+    },
+  ): Promise<Comment> {
+    return this.socialService.createReply(payload);
+  }
+
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.GET_REPLIES)
+  async getReplies(
+    @Payload() payload: { commentId: number; depth?: number },
+  ): Promise<Comment> {
+    return this.socialService.getReplies(payload);
+  }
 }
