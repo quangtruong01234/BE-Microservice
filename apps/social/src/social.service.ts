@@ -241,14 +241,26 @@ export class SocialService {
     postId: number;
     page: number;
     limit: number;
-  }): Promise<{ data: Comment[]; total: number; page: number; limit: number }> {
+  }): Promise<{
+    data: (Comment & { reply_count: number })[];
+    total: number;
+    page: number;
+    limit: number;
+  }> {
     const { postId, page, limit } = payload;
-    const [data, total] = await this.commentRepository.findAndCount({
+    const [comments, total] = await this.commentRepository.findAndCount({
       where: { post_id: postId, parent: IsNull() },
       order: { created_at: "ASC" },
       skip: (page - 1) * limit,
       take: limit,
     });
+    const replyCounts = await Promise.all(
+      comments.map((c) => this.treeRepo.countDescendants(c)),
+    );
+    const data = comments.map((c, i) => ({
+      ...c,
+      reply_count: replyCounts[i] ?? 0,
+    }));
     return { data, total, page, limit };
   }
 
