@@ -5,7 +5,7 @@ import {
   ConflictException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository, SelectQueryBuilder } from "typeorm";
+import { In, Repository, SelectQueryBuilder } from "typeorm";
 import { Product } from "./entity/product.entity";
 import { Brand } from "./entity/brand.entity";
 import { Category } from "./entity/category.entity";
@@ -49,7 +49,6 @@ export class ProductService {
 
   // Product methods
   async createProduct(createProductDto: CreateProductDto): Promise<Product> {
-    // Check if SKU already exists
     const existingProduct = await this.productRepository.findOne({
       where: { sku: createProductDto.sku },
     });
@@ -57,25 +56,24 @@ export class ProductService {
       throw new ConflictException("Product with this SKU already exists");
     }
 
-    // Verify category exists
-    const category = await this.categoryRepository.findOne({
-      where: { id: createProductDto.categoryId },
+    const { categoryIds, ...rest } = createProductDto;
+    const categories = await this.categoryRepository.findBy({
+      id: In(categoryIds),
     });
-    if (!category) {
-      throw new NotFoundException("Category not found");
+    if (categories.length !== categoryIds.length) {
+      throw new NotFoundException("One or more categories not found");
     }
 
-    // Verify brand exists (if provided)
-    if (createProductDto.brandId) {
+    if (rest.brandId) {
       const brand = await this.brandRepository.findOne({
-        where: { id: createProductDto.brandId },
+        where: { id: rest.brandId },
       });
       if (!brand) {
         throw new NotFoundException("Brand not found");
       }
     }
 
-    const product = this.productRepository.create(createProductDto);
+    const product = this.productRepository.create({ ...rest, categories });
     return this.productRepository.save(product);
   }
 
@@ -101,9 +99,8 @@ export class ProductService {
     const queryBuilder: SelectQueryBuilder<Product> = this.productRepository
       .createQueryBuilder("product")
       .leftJoinAndSelect("product.brand", "brand")
-      .leftJoinAndSelect("product.category", "category");
+      .leftJoinAndSelect("product.categories", "categories");
 
-    // Apply filters
     if (search) {
       queryBuilder.andWhere(
         "(product.name LIKE :search OR product.description LIKE :search OR product.sku LIKE :search)",
@@ -112,7 +109,7 @@ export class ProductService {
     }
 
     if (categoryId) {
-      queryBuilder.andWhere("product.categoryId = :categoryId", { categoryId });
+      queryBuilder.andWhere("categories.id = :categoryId", { categoryId });
     }
 
     if (brandId) {
@@ -131,7 +128,6 @@ export class ProductService {
       queryBuilder.andWhere("product.isActive = :isActive", { isActive });
     }
 
-    // Social features filters
     if (isFeatured !== undefined) {
       queryBuilder.andWhere("product.isFeatured = :isFeatured", { isFeatured });
     }
@@ -152,10 +148,8 @@ export class ProductService {
       queryBuilder.andWhere("product.rating <= :maxRating", { maxRating });
     }
 
-    // Apply sorting
     queryBuilder.orderBy(`product.${sortBy}`, sortOrder);
 
-    // Apply pagination
     const skip = (page - 1) * limit;
     queryBuilder.skip(skip).take(limit);
 
@@ -173,7 +167,7 @@ export class ProductService {
   async findProductById(id: number): Promise<Product> {
     const product = await this.productRepository.findOne({
       where: { id },
-      relations: ["brand", "category"],
+      relations: ["brand", "categories"],
     });
     if (!product) {
       throw new NotFoundException("Product not found");
@@ -184,7 +178,7 @@ export class ProductService {
   async findProductBySku(sku: string): Promise<Product> {
     const product = await this.productRepository.findOne({
       where: { sku },
-      relations: ["brand", "category"],
+      relations: ["brand", "categories"],
     });
     if (!product) {
       throw new NotFoundException("Product not found");
@@ -198,7 +192,6 @@ export class ProductService {
   ): Promise<Product> {
     const product = await this.findProductById(id);
 
-    // Check SKU uniqueness if it's being updated
     if (updateProductDto.sku && updateProductDto.sku !== product.sku) {
       const existingProduct = await this.productRepository.findOne({
         where: { sku: updateProductDto.sku },
@@ -208,17 +201,6 @@ export class ProductService {
       }
     }
 
-    // Verify category exists if it's being updated
-    if (updateProductDto.categoryId) {
-      const category = await this.categoryRepository.findOne({
-        where: { id: updateProductDto.categoryId },
-      });
-      if (!category) {
-        throw new NotFoundException("Category not found");
-      }
-    }
-
-    // Verify brand exists if it's being updated
     if (updateProductDto.brandId) {
       const brand = await this.brandRepository.findOne({
         where: { id: updateProductDto.brandId },
@@ -228,7 +210,19 @@ export class ProductService {
       }
     }
 
-    Object.assign(product, updateProductDto);
+    const { categoryIds, ...rest } = updateProductDto;
+    Object.assign(product, rest);
+
+    if (categoryIds) {
+      const categories = await this.categoryRepository.findBy({
+        id: In(categoryIds),
+      });
+      if (categories.length !== categoryIds.length) {
+        throw new NotFoundException("One or more categories not found");
+      }
+      product.categories = categories;
+    }
+
     return this.productRepository.save(product);
   }
 

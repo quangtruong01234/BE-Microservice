@@ -5,7 +5,9 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   ManyToOne,
+  ManyToMany,
   JoinColumn,
+  JoinTable,
 } from "typeorm";
 import { Brand } from "./brand.entity";
 import { Category } from "./category.entity";
@@ -32,9 +34,6 @@ export class Product {
 
   @Column({ type: "bigint", nullable: true, name: "brand_id" })
   brandId?: number;
-
-  @Column({ type: "bigint", name: "category_id" })
-  categoryId!: number;
 
   @Column({ type: "bigint", nullable: true, name: "user_id" })
   userId?: number;
@@ -102,7 +101,11 @@ export class Product {
   @JoinColumn({ name: "brand_id" })
   brand?: Brand;
 
-  @ManyToOne(() => Category, { nullable: false, onDelete: "RESTRICT" })
-  @JoinColumn({ name: "category_id" })
-  category!: Category;
+  @ManyToMany(() => Category, (category) => category.products, { eager: true })
+  @JoinTable({
+    name: "product_categories",
+    joinColumn: { name: "product_id" },
+    inverseJoinColumn: { name: "category_id" },
+  })
+  categories!: Category[];
 }

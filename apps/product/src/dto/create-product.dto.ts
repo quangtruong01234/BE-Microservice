@@ -6,6 +6,9 @@ import {
   Min,
   Max,
   IsIn,
+  IsArray,
+  ArrayMinSize,
+  IsInt,
 } from "class-validator";
 import { Type } from "class-transformer";
 
@@ -36,14 +39,15 @@ export class CreateProductDto {
   @Type(() => Number)
   brandId?: number;
 
-  @IsNumber()
-  @Type(() => Number)
-  categoryId: number;
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsInt({ each: true })
+  categoryIds: number[];
 
   @IsOptional()
   @IsNumber()
   @Type(() => Number)
-  userId?: number; // ID của người tạo sản phẩm
+  userId?: number;
 
   @IsOptional()
   @IsString()
