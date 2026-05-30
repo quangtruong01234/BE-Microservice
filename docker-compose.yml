@@ -1,38 +1,37 @@
 version: "3.8"
+
 services:
-  mysql_orders:
-    image: mysql:8.0
-    container_name: mysql_orders
-    restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: root1234
-      MYSQL_DATABASE: orders_db
-      MYSQL_USER: appuser
-      MYSQL_PASSWORD: apppass
+  # mysql:
+  #   image: mysql:latest
+  #   container_name: mysql
+  #   restart: always
+  #   environment:
+  #     MYSQL_ROOT_PASSWORD: 123123
+  #   ports:
+  #     - "3306:3306"
+  #   volumes:
+  #     - C:/Users/Quang Truong/Desktop/nginx-project/sql:/var/lib/mysql
+
+  redis:
+    image: redis:7
+    container_name: redis
+    restart: always
     ports:
-      - "3306:3306"
+      - "6379:6379"
     volumes:
-      - ./local/docker-init/mysql:/docker-entrypoint-initdb.d:ro
+      - C:/redis-data:/data
+    command: redis-server --appendonly yes
 
-  postgres_inventory:
-    image: postgres:15
-    container_name: postgres_inventory
-    restart: unless-stopped
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: rabbitmq
+    restart: always
     environment:
-      POSTGRES_PASSWORD: root1234
-      POSTGRES_DB: inventory_db
-      POSTGRES_USER: root
+      RABBITMQ_DEFAULT_USER: user_vh
+      RABBITMQ_DEFAULT_PASS: root1234
+      RABBITMQ_DEFAULT_VHOST: rabbit-trybuy
     ports:
-      - "5432:5432"
+      - "5672:5672" # app connect
+      - "15672:15672" # UI
     volumes:
-      - ./local/docker-init/postgres:/docker-entrypoint-initdb.d:ro
-
-  adminer:
-    image: adminer
-    restart: unless-stopped
-    ports:
-      - "8080:8080"
-
-networks:
-  default:
-    name: ecommerce_net
+      - C:/rabbitmq-data:/var/lib/rabbitmq
