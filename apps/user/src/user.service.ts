@@ -2,6 +2,7 @@ import {
   Injectable,
   InternalServerErrorException,
   Logger,
+  NotFoundException,
   UnauthorizedException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
@@ -10,6 +11,7 @@ import { Role, RoleName, RoleStatus } from "./entity/role.entity";
 import { In, Repository } from "typeorm";
 import { RegisterUserDto } from "./dto/register-user.dto";
 import { LoginUserDto } from "./dto/login-user.dto";
+import { UpdateUserDto } from "./dto/update-user.dto";
 import * as bcrypt from "bcryptjs";
 
 @Injectable()
@@ -90,6 +92,38 @@ export class UserService {
       isActive: true,
     };
     return this.userRepository.find({ where: { id: In(userIds) }, select });
+  }
+
+  async getMe(userId: number): Promise<User> {
+    this.logger.log(`getMe called with userId: ${userId}`);
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        name: true,
+        avatar: true,
+        isActive: true,
+        createdAt: true,
+      },
+    });
+    if (!user) {
+      throw new NotFoundException("User not found");
+    }
+    return user;
+  }
+
+  async updateUser(userId: number, dto: UpdateUserDto): Promise<User> {
+    this.logger.log(`updateUser called with userId: ${userId}`);
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException("User not found");
+    }
+    Object.assign(user, dto);
+    const saved = await this.userRepository.save(user);
+    delete (saved as Partial<User>).password;
+    return saved;
   }
 
   getServiceInfo(): string {

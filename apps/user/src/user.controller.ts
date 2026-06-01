@@ -3,6 +3,7 @@ import { UserService } from "./user.service";
 import { MessagePattern, Payload } from "@nestjs/microservices";
 import { RegisterUserDto } from "./dto/register-user.dto";
 import { LoginUserDto } from "./dto/login-user.dto";
+import { UpdateUserDto } from "./dto/update-user.dto";
 import { USER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 
 @Controller()
@@ -38,5 +39,15 @@ export class UserController {
     this.logger.log(`[USER-TCP] Login user`);
     this.logger.log(`[USER-TCP] Payload received:`, payload);
     return await this.userService.login(payload);
+  }
+
+  @MessagePattern({ cmd: USER_MESSAGE_PATTERN.GET_ME })
+  async getMe(@Payload() data: { userId: number }) {
+    return this.userService.getMe(data.userId);
+  }
+
+  @MessagePattern({ cmd: USER_MESSAGE_PATTERN.UPDATE_USER })
+  async updateUser(@Payload() data: { userId: number; dto: UpdateUserDto }) {
+    return this.userService.updateUser(data.userId, data.dto);
   }
 }
