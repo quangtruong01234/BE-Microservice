@@ -4,7 +4,6 @@
 
 - **MySQL 8** (:3306) -> orders, user, product
 - **PostgreSQL** (:5432) -> inventory, payments, rewards
-- **Adminer** (:8080) -> DB admin UI
 
 Start: `docker-compose up -d`  
 Manual migrations: `api/database/*.sql`

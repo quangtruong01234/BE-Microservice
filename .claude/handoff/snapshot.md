@@ -3,7 +3,7 @@
 TryBuy — NestJS monorepo, 7 microservices + 4 shared libs.
 Transport: TCP (sync) + RabbitMQ FANOUT (async).
 DB: MySQL 8 (orders/user/product) + PostgreSQL (inventory/payments/rewards). Cache: Redis.
-Node A: gateway:3000, orders:3001, user:3003, product:3006, social:3008, notification:3009
+Node A: gateway:3000, orders:3001, user:3003, product:3006, social:3008, notification:3009, chat:3012(TCP)/3011(WS)
 Node B: inventory:3002, payments:3005, rewards:3004
 Base URL: http://localhost:3000 | Swagger: /doc
 
@@ -43,7 +43,7 @@ Base URL: http://localhost:3000 | Swagger: /doc
 - Payment option selection: payment_methods table in payments PostgreSQL (id, key VARCHAR unique, name, description, is_active BOOLEAN default true); seeded zalopay/vnpay/cod rows via Node pg script; TCP GET_PAYMENT_OPTIONS handler in payments service; GET /api/payment/options (@Public()) returns active rows from DB via TCP; verified response correct
 - Social service scaffolded: apps/social/, port 3008, Node A, MySQL TypeORM, TCP, SOCIAL_SERVICE client trong gateway
 - Notification service fully implemented: entity (notifications table, 7 columns, MySQL), RabbitMQ consumers (payment_completed + order_canceled → save notification cho buyer), REST GET /api/notifications (paginated, JwtAuthGuard), PATCH /api/notifications/:id/read; end-to-end verified — event → DB → REST → mark-as-read all pass
-- Admin orders endpoint: GET /api/order/admin/orders?page=1&limit=20 — parallel fetch orders + buyer info (batch TCP to user service), @CheckPermission('order','read:any') guard, 200/403 verified; note: role relation leak trong buyer object (tech debt)
+- Admin orders endpoint: GET /api/order/admin/orders?page=1&limit=20 — parallel fetch orders + buyer info (batch TCP to user service), @CheckPermission('order','read:any') guard, 200/403 verified
 - Social Post CRUD Phase 1: SOCIAL_MESSAGE_PATTERN added (4 patterns); social.service.ts (createPost/getPosts/getPostById/deletePost), social.controller.ts (@MessagePattern + @UseFilters(HttpToRpcExceptionFilter)), social.module.ts (TypeOrmModule.forFeature([Post])); gateway social/ module (SocialGatewayService + SocialController: POST/GET/GET:id/DELETE /api/social/posts); SocialGatewayModule imported into gateway.module.ts
 - Social Like/Unlike: likePost/unlikePost + Redis caching (INCR/DECR like_count, SET/DEL liked flag); response trả likeCount mới nhất; getPosts + getPostsByUser đều kèm likeCount (cache-aside)
 - Social Comment: createComment/getComments/deleteComment (top-level only, parent IS NULL)
@@ -52,6 +52,16 @@ Base URL: http://localhost:3000 | Swagger: /doc
 - Production hardening: trust proxy via getHttpAdapter().getInstance() trong gateway main.ts; CORS đã dùng env var (no change); PM2 ecosystem.config.js cho nodeA + nodeB; nginx/trybuy.conf với Let's Encrypt + WebSocket headers
 - WebSocket WS-1: NotificationWsGateway added to notification service — @WebSocketGateway(3010), JWT auth on handleConnection, client.join(`user:${userId}`), sendToUser() helper; JwtModule.registerAsync added to NotificationModule; port 3010 binds automatically on app start
 - WebSocket WS-2: NotificationService injects NotificationWsGateway; saveNotification() calls wsGateway.sendToUser(userId, saved) fire-and-forget after DB save — ack/nack logic unchanged
+- WebSocket WS-3: nginx location /socket.io/ → port 3010 added to trybuy.conf + trybuy-local.conf
+- WebSocket WS-4: COMMENT_CREATED_EVENT + REPLY_CREATED_EVENT — social service emits fanout via SOCIAL_EXCHANGE; notification service consumes NOTIFICATION_SOCIAL_SERVICE queue → saveNotification() + wsGateway.sendToUser() fire-and-forget; self-comment/reply skipped
+- Cloudinary signed upload: POST /api/upload/signature (gateway, JwtAuthGuard, SHA-1 Node crypto); product + social post entity extended (image_urls JSON, video_url varchar); old image_url column dropped from both tables; migration SQL applied; dev test tool at scripts/test-cloudinary.html
+- Queue loop fix: no-op @EventPattern(PAYMENT_COMPLETED_EVENT) added to rewards + payments controllers — stale events acked and discarded on next deploy
+- @UseFilters(HttpToRpcExceptionFilter) applied to payments, inventory, rewards, product controllers — 4xx now propagate correctly through gateway
+- Inventory service: findOne/findByProductId/findBySku now throw NotFoundException instead of returning null; findByProductIdOrNull added for internal callers (checkStock/reserve/release/consume)
+- Real-time Chat: apps/chat/ service extracted (port TCP:3012, WS:3011/chat); CHAT_MESSAGE_PATTERN + CHAT_SERVICE constants; ChatGatewayModule wired in gateway; nginx /chat/ → 3011; 5-day message cleanup cron; JWT claim fix (userId not sub); Reply support verified: parentMessageId saved + broadcast correctly (13/13 E2E pass); Test artifacts: scripts/test-chat-ws.mjs, scripts/test-chat-reply.mjs
+- PaymentMethod enum consolidated: moved to libs/common/src/constants/payment-method.enum.ts, exported via @app/common; removed duplicate declarations from apps/orders/src/entity/order.entity.ts + apps/gateway/src/order/dto/create-order.dto.ts; orders.controller + orders.service updated to import from @app/common
+- GET /api/user/me + PATCH /api/user/:id: fully implemented + 6/6 E2E pass; JWT claim fix: JwtAuthGuard maps payload to req.user.id (not req.user.userId) — bug caused getMe to return wrong user when userId was undefined
+- PaginatedResponse<T>: shared type in @app/common, PaginatedResponse.of() factory; all paginated methods use standard shape: { data, total, page, limit, totalPages, hasNext }
 
 ## Active Tasks
 
@@ -59,7 +69,7 @@ Base URL: http://localhost:3000 | Swagger: /doc
 
 ## Known Issues
 
-- PAYMENTS_SERVICE + REWARDS_SERVICE queues: old payment_completed events bị nack+requeue loop — cần purge queue hoặc investigate rewards handler
+- BuyerInfo interface in gateway order.service declares 4 fields (id/username/email/name) but user service returns 6 (+ avatar/isActive) — minor type mismatch, no runtime impact; fix when touching that area
 
 ## Key Conventions
 
@@ -75,15 +85,22 @@ Base URL: http://localhost:3000 | Swagger: /doc
 - GHN shipping_address format (pipe-delimited): "name|phone|address|ward|district|province"
 - GHN env vars in local/nodeA/.env: GHN_API_URL=https://dev-online-gateway.ghn.vn/shiip/public-api, GHN_API_TOKEN, GHN_SHOP_ID=200481
 - GHN failure is non-fatal: order persists with ghn_order_code=null, retry manually
-- PaymentMethod enum re-declared locally in gateway DTO (tech debt — sync with orders entity later)
+- PaymentMethod enum lives in @app/common (libs/common/src/constants/payment-method.enum.ts) — import from there, never re-declare locally
+- HTTP controllers: req.user.id (not req.user.userId) — JwtAuthGuard maps JWT payload.userId → req.user.id
+- WS gateways: payload.userId (reading JWT claims directly on handshake, not via req.user)
+- PaginatedResponse: always use PaginatedResponse.of(data, total, page, limit) from @app/common — never build pagination object manually
 - payments service: guard clause (payment_method === 'cod') skips COD orders before any DB/logging work
 - payment_methods table: active methods controlled by is_active column in DB — PAYMENT_GATEWAY env no longer drives the options endpoint
-- Tech debt: payments/inventory/rewards/product controllers chưa có @UseFilters(HttpToRpcExceptionFilter) — apply khi gặp 502 bug tương tự
 - Deploy checklist: `pm2 start ecosystem.config.js --env production` → `pm2 save && pm2 startup`; thay yourdomain.com trong nginx/trybuy.conf trước khi deploy
 - WebSocket port: notification service binds Socket.io on port 3010 (separate from TCP)
 - WS auth: JWT passed via handshake.auth.token or handshake.query.token
 - WS rooms: each user joins room `user:{userId}` on connect
 - WS emit is fire-and-forget — never await, never throw on offline user
+- Cloudinary: client uploads directly to Cloudinary; server chỉ cấp signature qua POST /api/upload/signature
+- CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET trong local/nodeA/.env
+- Cloudinary folders: trybuy/products/, trybuy/posts/
+- SOCIAL_EXCHANGE: "social.fanout" trong libs/common/src/constants/exchange.ts
+- Dev test tool: scripts/test-cloudinary.html (login + upload + verify flow, no FE needed)
 
 ## Backlog (priority order)
 
@@ -95,21 +112,15 @@ Base URL: http://localhost:3000 | Swagger: /doc
 - [x] Social Like/Unlike Phase 2 — PostLike entity, likePost/unlikePost TCP handlers, POST/DELETE /api/social/posts/:id/like; ER_DUP_ENTRY → ConflictException
 - [x] Social Comment CRUD Phase 3 — Comment entity (comments table already in migration SQL); createComment/getComments/deleteComment TCP handlers; POST/GET /api/social/posts/:id/comments + DELETE /api/social/comments/:id; SocialCommentController added to gateway; SOCIAL_MESSAGE_PATTERN extended with CREATE_COMMENT/GET_COMMENTS/DELETE_COMMENT
 - [x] Social feed Phase 2 — Like ✓, Comment ✓, Reply tree ✓ | Chat defer WebSocket
-- [ ] reply_count trên getComments response
+- [x] Real-time Chat — 1-1 chat, reply, 5-day retention, WS broadcast — fully verified
+- [x] reply_count trên getComments response
 - [x] WebSocket WS-1 — NotificationWsGateway setup (port 3010, JWT, rooms)
 - [x] WebSocket WS-2 — in-process emit after saveNotification()
-- [ ] WebSocket WS-3 — nginx location /socket.io → port 3010
-- [ ] WebSocket WS-4 — wire comment/reply events → notification + WS push
-- [ ] Wire notification cho comment/reply events
+- [x] WebSocket WS-3 — nginx location /socket.io → port 3010
+- [x] WebSocket WS-4 — wire comment/reply events → notification + WS push
+- [x] Wire notification cho comment/reply events — COMMENT_CREATED_EVENT + REPLY_CREATED_EVENT; social emits to social.fanout exchange; notification consumes NOTIFICATION_SOCIAL_SERVICE queue; saveNotification + wsGateway.sendToUser; self-comment/reply skipped
 - [x] Nginx config — nginx/trybuy.conf + nginx/trybuy-local.conf,
-  Let's Encrypt setup, WebSocket headers, routing verified E2E:
-  /api/* → port 3000 ✓, /zalopay/callback → port 3007 ✓,
-  trust proxy + CORS env var + PM2 ecosystem.config.js included
-- [ ] Cloudinary signed upload — image/video for product + social post (extensible for comment/chat)
-  - Approach: client uploads directly to Cloudinary (zero server bandwidth)
-  - Server: POST /api/upload/signature (gateway, JwtAuthGuard) → returns signed params
-  - Env vars: CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET
-  - Product: add imageUrl[] field to CreateProductDto + entity (nullable)
-  - Social post: add imageUrl[] + videoUrl field to CreatePostDto + entity (nullable)
-  - Cloudinary folder convention: trybuy/products/, trybuy/posts/
-  - Future: same /api/upload/signature endpoint reusable for comment + chat (change folder param)
+      Let's Encrypt setup, WebSocket headers, routing verified E2E:
+      /api/\* → port 3000 ✓, /zalopay/callback → port 3007 ✓,
+      trust proxy + CORS env var + PM2 ecosystem.config.js included
+- [x] Cloudinary signed upload — POST /api/upload/signature implemented; product + social post entities extended; migration applied; test tool at scripts/test-cloudinary.html

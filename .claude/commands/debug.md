@@ -159,7 +159,7 @@ Then check:
 - Entity column names vs actual table columns — snake_case mismatch?
 - Has migration SQL in `api/database/*.sql` been applied to the DB?
 - DB routing: Orders/Products → MySQL. Inventory → PostgreSQL. Never cross-inject modules.
-- TypeORM sync issue? Compare entity field `name:` value with actual column name in Adminer (`http://localhost:8080`)
+- TypeORM sync issue? Compare entity field `name:` value with actual column name in DB (psql / mysql CLI)
 
 ---
 

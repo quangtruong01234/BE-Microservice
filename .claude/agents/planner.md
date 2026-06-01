@@ -47,7 +47,7 @@ Read the following files to ensure the plan does not create duplicates:
 | Target DB | MySQL / PostgreSQL |
 | Depends on | — |
 | Risk | low / medium / high |
-| Verify | Confirm column exists in Adminer `http://localhost:8080` |
+| Verify | Confirm column exists in DB (psql / mysql CLI) |
 
 ---
 

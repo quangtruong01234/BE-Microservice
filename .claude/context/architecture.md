@@ -63,5 +63,5 @@ npm run start:nodeB      # inventory + payments + rewards
 npm run dev              # http://localhost:5173
 
 # Infrastructure
-docker-compose up -d     # MySQL :3306, PostgreSQL :5432, Adminer :8080
+docker-compose up -d     # MySQL :3306, PostgreSQL :5432
 ```

@@ -140,10 +140,17 @@ export class UpdateProductDto extends PartialType(CreateProductDto) {}
 
 ## Backend: Response Shape
 
-Paginated list:
+Paginated list — dùng `PaginatedResponse.of()` từ `@app/common`. Không dùng key `items` — chuẩn là `data`. Không tự tính `totalPages` — dùng factory.
 
 ```typescript
-{ items: T[], total: number, page: number, limit: number }
+// Shape
+{ data: T[], total: number, page: number, limit: number, totalPages: number, hasNext: boolean }
+// totalPages = Math.ceil(total / limit) || 1
+// hasNext    = page < totalPages
+
+// Usage trong service
+import { PaginatedResponse } from '@app/common';
+return PaginatedResponse.of(data, total, page, limit);
 ```
 
 Error (from `HttpExceptionFilter`):
