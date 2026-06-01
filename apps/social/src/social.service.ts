@@ -1,23 +1,21 @@
 import {
   ConflictException,
   ForbiddenException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
 } from "@nestjs/common";
 import { InjectDataSource, InjectRepository } from "@nestjs/typeorm";
 import { DataSource, IsNull, QueryFailedError, Repository } from "typeorm";
+import { Channel } from "amqplib";
 import { CachedService } from "@app/cached";
+import { PaginatedResponse } from "@app/common";
+import { EXCHANGE } from "@app/common/constants/exchange";
+import { EVENT } from "@app/common/constants/event";
 import { Post } from "./entities/post.entity";
 import { PostLike } from "./entities/post-like.entity";
 import { Comment } from "./entities/comment.entity";
-
-interface PaginatedPosts {
-  data: (Post & { likeCount: number })[];
-  total: number;
-  page: number;
-  limit: number;
-}
 
 @Injectable()
 export class SocialService {
@@ -33,6 +31,8 @@ export class SocialService {
     @InjectDataSource()
     private readonly dataSource: DataSource,
     private readonly cachedService: CachedService,
+    @Inject(EXCHANGE.RMQ_PUBLISHER_CHANNEL)
+    private readonly fanoutChannel: Channel,
   ) {}
 
   private get treeRepo() {
@@ -42,12 +42,14 @@ export class SocialService {
   async createPost(payload: {
     userId: number;
     content: string;
-    imageUrl?: string | null;
+    imageUrls?: string[] | null;
+    videoUrl?: string | null;
   }): Promise<Post> {
     const post = this.postRepository.create({
       user_id: payload.userId,
       content: payload.content,
-      image_url: payload.imageUrl ?? null,
+      image_urls: payload.imageUrls ?? null,
+      video_url: payload.videoUrl ?? null,
     });
     return this.postRepository.save(post);
   }
@@ -55,7 +57,7 @@ export class SocialService {
   async getPosts(payload: {
     page: number;
     limit: number;
-  }): Promise<PaginatedPosts> {
+  }): Promise<PaginatedResponse<Post & { likeCount: number }>> {
     const { page, limit } = payload;
     const [posts, total] = await this.postRepository.findAndCount({
       order: { created_at: "DESC" },
@@ -78,19 +80,19 @@ export class SocialService {
         return count;
       }),
     );
-    return {
-      data: posts.map((post, i) => ({ ...post, likeCount: counts[i] ?? 0 })),
+    return PaginatedResponse.of(
+      posts.map((post, i) => ({ ...post, likeCount: counts[i] ?? 0 })),
       total,
       page,
       limit,
-    };
+    );
   }
 
   async getPostsByUser(payload: {
     userId: number;
     page: number;
     limit: number;
-  }): Promise<PaginatedPosts> {
+  }): Promise<PaginatedResponse<Post & { likeCount: number }>> {
     const { userId, page, limit } = payload;
     const [posts, total] = await this.postRepository.findAndCount({
       where: { user_id: userId },
@@ -114,12 +116,12 @@ export class SocialService {
         return count;
       }),
     );
-    return {
-      data: posts.map((post, i) => ({ ...post, likeCount: counts[i] ?? 0 })),
+    return PaginatedResponse.of(
+      posts.map((post, i) => ({ ...post, likeCount: counts[i] ?? 0 })),
       total,
       page,
       limit,
-    };
+    );
   }
 
   async getPostById(postId: number): Promise<Post & { likeCount: number }> {
@@ -234,19 +236,33 @@ export class SocialService {
       user_id: payload.userId,
       content: payload.content,
     });
-    return this.commentRepository.save(comment);
+    const saved = await this.commentRepository.save(comment);
+    if (payload.userId !== post.user_id) {
+      this.fanoutChannel.publish(
+        EXCHANGE.SOCIAL_EXCHANGE,
+        EVENT.COMMENT_CREATED_EVENT,
+        Buffer.from(
+          JSON.stringify({
+            data: {
+              postId: payload.postId,
+              postOwnerId: post.user_id,
+              commenterId: payload.userId,
+              commentId: saved.id,
+              preview: payload.content.slice(0, 20),
+            },
+            pattern: EVENT.COMMENT_CREATED_EVENT,
+          }),
+        ),
+      );
+    }
+    return saved;
   }
 
   async getComments(payload: {
     postId: number;
     page: number;
     limit: number;
-  }): Promise<{
-    data: (Comment & { reply_count: number })[];
-    total: number;
-    page: number;
-    limit: number;
-  }> {
+  }): Promise<PaginatedResponse<Comment & { reply_count: number }>> {
     const { postId, page, limit } = payload;
     const [comments, total] = await this.commentRepository.findAndCount({
       where: { post_id: postId, parent: IsNull() },
@@ -261,7 +277,7 @@ export class SocialService {
       ...c,
       reply_count: replyCounts[i] ?? 0,
     }));
-    return { data, total, page, limit };
+    return PaginatedResponse.of(data, total, page, limit);
   }
 
   async deleteComment(payload: {
@@ -295,7 +311,7 @@ export class SocialService {
         `Comment ${payload.parentCommentId} not found`,
       );
     }
-    return this.treeRepo.save(
+    const saved = await this.treeRepo.save(
       this.commentRepository.create({
         post_id: payload.postId,
         user_id: payload.userId,
@@ -303,6 +319,25 @@ export class SocialService {
         parent: parentComment,
       }),
     );
+    if (payload.userId !== parentComment.user_id) {
+      this.fanoutChannel.publish(
+        EXCHANGE.SOCIAL_EXCHANGE,
+        EVENT.REPLY_CREATED_EVENT,
+        Buffer.from(
+          JSON.stringify({
+            data: {
+              parentCommentId: payload.parentCommentId,
+              commentOwnerId: parentComment.user_id,
+              replierId: payload.userId,
+              replyId: saved.id,
+              preview: payload.content.slice(0, 20),
+            },
+            pattern: EVENT.REPLY_CREATED_EVENT,
+          }),
+        ),
+      );
+    }
+    return saved;
   }
 
   async getReplies(payload: {

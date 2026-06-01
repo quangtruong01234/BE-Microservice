@@ -17,8 +17,11 @@ export class Post {
   @Column({ type: "text", nullable: false })
   content!: string;
 
-  @Column({ type: "varchar", length: 500, nullable: true })
-  image_url!: string | null;
+  @Column({ type: "json", nullable: true, default: null })
+  image_urls!: string[] | null;
+
+  @Column({ type: "varchar", length: 500, nullable: true, default: null })
+  video_url!: string | null;
 
   @CreateDateColumn({ type: "timestamp" })
   created_at!: Date;

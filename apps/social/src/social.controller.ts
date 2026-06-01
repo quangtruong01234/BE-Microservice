@@ -17,7 +17,8 @@ export class SocialController {
     payload: {
       userId: number;
       content: string;
-      imageUrl?: string | null;
+      imageUrls?: string[] | null;
+      videoUrl?: string | null;
     },
   ): Promise<Post> {
     return this.socialService.createPost(payload);

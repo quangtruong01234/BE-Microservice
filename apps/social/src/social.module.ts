@@ -1,7 +1,9 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { TypeOrmModule } from "@nestjs/typeorm";
+import { ScheduleModule } from "@nestjs/schedule";
 import { CachedModule } from "@app/cached";
+import { RmqModule } from "@app/common";
 import { SocialController } from "./social.controller";
 import { SocialService } from "./social.service";
 import { Post } from "./entities/post.entity";
@@ -26,7 +28,10 @@ import { Comment } from "./entities/comment.entity";
       synchronize: false,
     }),
     TypeOrmModule.forFeature([Post, PostLike, Comment]),
+    ScheduleModule.forRoot(),
     CachedModule,
+    RmqModule,
+    RmqModule.registerDirectPublisher(),
   ],
   controllers: [SocialController],
   providers: [SocialService],
