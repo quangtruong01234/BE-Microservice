@@ -4,6 +4,8 @@ export const USER_MESSAGE_PATTERN = {
   GET_USERS_BY_IDS: "get_users_by_ids",
   REGISTER_USER: "register_user",
   LOGIN_USER: "login_user",
+  GET_ME: "user.get_me",
+  UPDATE_USER: "user.update",
 };
 
 export const PRODUCT_MESSAGE_PATTERN = {
@@ -60,4 +62,11 @@ export const SOCIAL_MESSAGE_PATTERN = {
   DELETE_COMMENT: "social_delete_comment",
   CREATE_REPLY: "social_create_reply",
   GET_REPLIES: "social_get_replies",
+};
+
+export const CHAT_MESSAGE_PATTERN = {
+  CHAT_CREATE_OR_GET_CONVERSATION: "chat.create_or_get_conversation",
+  CHAT_GET_CONVERSATIONS: "chat.get_conversations",
+  CHAT_GET_MESSAGES: "chat.get_messages",
+  CHAT_SEND_MESSAGE: "chat.send_message",
 };

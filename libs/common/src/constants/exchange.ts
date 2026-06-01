@@ -4,5 +4,6 @@ export const EXCHANGE = {
   ORDERS_EXCHANGE: "order.fanout",
   PAYMENTS_EXCHANGE: "payment.fanout",
   INVENTORY_EXCHANGE: "inventory.fanout",
+  SOCIAL_EXCHANGE: "social.fanout",
   RMQ_PUBLISHER_CHANNEL: "RMQ_PUBLISHER_CHANNEL",
 };
