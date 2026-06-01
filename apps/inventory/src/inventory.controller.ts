@@ -1,4 +1,9 @@
-import { Controller, Logger, NotFoundException } from "@nestjs/common";
+import {
+  Controller,
+  Logger,
+  NotFoundException,
+  UseFilters,
+} from "@nestjs/common";
 import {
   Ctx,
   EventPattern,
@@ -12,8 +17,9 @@ import {
   UpdateInventoryDto,
 } from "./inventory.service";
 import { EVENT } from "@app/common/constants/event";
-import { RmqService } from "@app/common";
+import { HttpToRpcExceptionFilter, RmqService } from "@app/common";
 
+@UseFilters(HttpToRpcExceptionFilter)
 @Controller("inventory")
 export class InventoryController {
   private readonly logger = new Logger(InventoryController.name);

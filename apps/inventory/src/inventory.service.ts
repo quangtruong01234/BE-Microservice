@@ -105,22 +105,41 @@ export class InventoryService {
     });
   }
 
-  async findOne(id: number): Promise<Inventory | null> {
-    return await this.inventoryRepository.findOne({
+  async findOne(id: number): Promise<Inventory> {
+    const result = await this.inventoryRepository.findOne({
       where: { id, isActive: true },
     });
+    if (!result)
+      throw new NotFoundException(`Inventory with id ${id} not found`);
+    return result;
   }
 
-  async findByProductId(productId: number): Promise<Inventory | null> {
-    return await this.inventoryRepository.findOne({
+  async findByProductId(productId: number): Promise<Inventory> {
+    const result = await this.inventoryRepository.findOne({
+      where: { productId, isActive: true },
+    });
+    if (!result)
+      throw new NotFoundException(
+        `Inventory for product ${productId} not found`,
+      );
+    return result;
+  }
+
+  private async findByProductIdOrNull(
+    productId: number,
+  ): Promise<Inventory | null> {
+    return this.inventoryRepository.findOne({
       where: { productId, isActive: true },
     });
   }
 
-  async findBySku(sku: string): Promise<Inventory | null> {
-    return await this.inventoryRepository.findOne({
+  async findBySku(sku: string): Promise<Inventory> {
+    const result = await this.inventoryRepository.findOne({
       where: { sku, isActive: true },
     });
+    if (!result)
+      throw new NotFoundException(`Inventory with sku ${sku} not found`);
+    return result;
   }
 
   async update(id: number, data: UpdateInventoryDto): Promise<Inventory> {
@@ -159,7 +178,7 @@ export class InventoryService {
     productId: number,
     quantity: number,
   ): Promise<StockCheckResult> {
-    const inventory = await this.findByProductId(productId);
+    const inventory = await this.findByProductIdOrNull(productId);
 
     if (!inventory) {
       return {
@@ -197,7 +216,7 @@ export class InventoryService {
       return false;
     }
 
-    const updated = await this.findByProductId(productId);
+    const updated = await this.findByProductIdOrNull(productId);
     if (updated) {
       this.emitStockChanged(productId, updated.availableStock);
     }
@@ -205,7 +224,7 @@ export class InventoryService {
   }
 
   async releaseStock(productId: number, quantity: number): Promise<boolean> {
-    const inventory = await this.findByProductId(productId);
+    const inventory = await this.findByProductIdOrNull(productId);
 
     if (!inventory || inventory.reservedStock < quantity) {
       return false;
@@ -225,7 +244,7 @@ export class InventoryService {
     productId: number,
     quantity: number,
   ): Promise<boolean> {
-    const inventory = await this.findByProductId(productId);
+    const inventory = await this.findByProductIdOrNull(productId);
 
     if (!inventory || inventory.reservedStock < quantity) {
       return false;
