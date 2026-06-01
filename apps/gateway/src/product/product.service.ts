@@ -24,7 +24,6 @@ export interface ProductWithInventory {
   sku: string;
   brandId?: number;
   userId?: number;
-  imageUrl?: string;
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;

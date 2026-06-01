@@ -11,12 +11,7 @@ import {
   ValidateNested,
 } from "class-validator";
 import { Type } from "class-transformer";
-
-export enum PaymentMethod {
-  ZALOPAY = "zalopay",
-  VNPAY = "vnpay",
-  COD = "cod",
-}
+import { PaymentMethod } from "@app/common";
 
 export class OrderItemDto {
   @ApiProperty({ description: "Product ID", example: 1 })

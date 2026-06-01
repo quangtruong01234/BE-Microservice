@@ -15,7 +15,8 @@ export class SocialGatewayService {
   async createPost(
     userId: number,
     content: string,
-    imageUrl?: string,
+    imageUrls?: string[],
+    videoUrl?: string,
   ): Promise<unknown> {
     try {
       return await firstValueFrom(
@@ -23,7 +24,8 @@ export class SocialGatewayService {
           .send(SOCIAL_MESSAGE_PATTERN.CREATE_POST, {
             userId,
             content,
-            imageUrl: imageUrl ?? null,
+            imageUrls: imageUrls ?? null,
+            videoUrl: videoUrl ?? null,
           })
           .pipe(timeout(10000)) as Observable<unknown>,
       );

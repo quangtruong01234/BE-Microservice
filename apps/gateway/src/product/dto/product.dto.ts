@@ -90,15 +90,6 @@ export class CreateProductDto {
   userId?: number;
 
   @ApiPropertyOptional({
-    description: "Product image URL",
-    example:
-      "https://images.unsplash.com/photo-1592750475338-74b7b21085ab?auto=format&fit=crop&q=80&w=600",
-  })
-  @IsOptional()
-  @IsString()
-  imageUrl?: string;
-
-  @ApiPropertyOptional({
     description: "Product active status",
     example: true,
     default: true,
@@ -289,14 +280,6 @@ export class UpdateProductDto {
   @ArrayMinSize(1)
   @IsInt({ each: true })
   categoryIds?: number[];
-
-  @ApiPropertyOptional({
-    description: "Product image URL",
-    example: "https://example.com/images/iphone14pro.jpg",
-  })
-  @IsOptional()
-  @IsString()
-  imageUrl?: string;
 
   @ApiPropertyOptional({
     description: "Product active status",

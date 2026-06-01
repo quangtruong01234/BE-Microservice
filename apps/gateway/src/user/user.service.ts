@@ -1,6 +1,10 @@
-import { Injectable, Inject, Logger } from "@nestjs/common";
+import { ForbiddenException, Injectable, Inject, Logger } from "@nestjs/common";
 import { ClientProxy } from "@nestjs/microservices";
-import { RegisterUserDto, LoginUserDto } from "./dto/user.dto";
+import {
+  RegisterUserDto,
+  LoginUserDto,
+  UpdateUserGatewayDto,
+} from "./dto/user.dto";
 import { firstValueFrom, timeout, catchError } from "rxjs";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { USER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
@@ -125,6 +129,54 @@ export class UserService {
       MicroserviceErrorHandler.handleError(
         error,
         "get all users",
+        "User Service",
+      );
+    }
+  }
+
+  async getMe(userId: number): Promise<unknown> {
+    try {
+      return (await firstValueFrom(
+        this.userClient
+          .send({ cmd: USER_MESSAGE_PATTERN.GET_ME }, { userId })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      )) as unknown;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(error, "get me", "User Service");
+    }
+  }
+
+  async updateUser(
+    requesterId: number,
+    targetId: number,
+    dto: UpdateUserGatewayDto,
+  ): Promise<unknown> {
+    if (requesterId !== targetId) {
+      throw new ForbiddenException("Cannot update another user");
+    }
+    try {
+      return (await firstValueFrom(
+        this.userClient
+          .send(
+            { cmd: USER_MESSAGE_PATTERN.UPDATE_USER },
+            { userId: targetId, dto },
+          )
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      )) as unknown;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        `update user ${targetId}`,
         "User Service",
       );
     }

@@ -41,7 +41,12 @@ export class SocialController {
     @Body() body: CreatePostDto,
   ): Promise<unknown> {
     const userId = req.user?.id ?? 0;
-    return this.socialService.createPost(userId, body.content, body.imageUrl);
+    return this.socialService.createPost(
+      userId,
+      body.content,
+      body.imageUrls,
+      body.videoUrl,
+    );
   }
 
   @Get()

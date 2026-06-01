@@ -25,7 +25,7 @@ async function bootstrap() {
   app.useGlobalFilters(new HttpExceptionFilter());
   app.useGlobalInterceptors(new ResponseInterceptor());
   app.enableCors({
-    origin: process.env.FRONTEND_URL || "http://localhost:5173",
+    origin: (process.env.FRONTEND_URL || "http://localhost:5173").split(","),
     credentials: true,
   });
   app.setGlobalPrefix("api", {

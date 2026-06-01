@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
+  IsArray,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -12,10 +13,16 @@ export class CreatePostDto {
   @IsNotEmpty()
   @IsString()
   @MaxLength(5000)
-  content!: string;
+  declare content: string;
 
-  @ApiPropertyOptional({ description: "Optional image URL" })
+  @ApiPropertyOptional({ description: "Optional image URLs", type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsUrl({}, { each: true })
+  imageUrls?: string[];
+
+  @ApiPropertyOptional({ description: "Optional video URL" })
   @IsOptional()
   @IsUrl()
-  imageUrl?: string;
+  videoUrl?: string;
 }
