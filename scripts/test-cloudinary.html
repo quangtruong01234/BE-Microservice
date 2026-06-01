@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TryBuy — Cloudinary Upload Tester</title>
+<style>
+:root {
+  --bg: #0d1117; --sur: #161b22; --sur2: #21262d;
+  --bd: #30363d; --tx: #e6edf3; --muted: #8b949e;
+  --blue: #58a6ff; --green: #3fb950; --red: #f85149; --amber: #d29922;
+  --r: 8px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--tx); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; min-height: 100vh; padding: 24px; }
+.hdr { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; }
+.hdr h1 { font-size: 17px; font-weight: 600; }
+.pill { font-size: 11px; padding: 2px 8px; background: var(--sur2); border: 1px solid var(--bd); border-radius: 20px; color: var(--muted); }
+.grid { display: grid; grid-template-columns: 350px 1fr; gap: 14px; max-width: 1080px; }
+.card { background: var(--sur); border: 1px solid var(--bd); border-radius: var(--r); padding: 18px; margin-bottom: 14px; }
+.ct { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin-bottom: 13px; }
+lbl, label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+input[type=text], input[type=email], input[type=password], input[type=url] {
+  width: 100%; background: var(--bg); border: 1px solid var(--bd); border-radius: 6px;
+  padding: 7px 10px; color: var(--tx); font-size: 13px; margin-bottom: 11px; outline: none;
+}
+input:focus { border-color: var(--blue); }
+.btn { background: var(--blue); color: #fff; border: none; border-radius: 6px; padding: 8px 14px; font-size: 13px; font-weight: 500; cursor: pointer; width: 100%; transition: opacity .15s; }
+.btn:hover { opacity: .85; } .btn:disabled { opacity: .35; cursor: not-allowed; }
+.btn-g { background: var(--sur2); border: 1px solid var(--bd); color: var(--tx); }
+.sta { display: flex; align-items: center; gap: 7px; font-size: 12px; padding: 6px 9px; border-radius: 6px; margin-top: 7px; }
+.sta.ok  { background: rgba(63,185,80,.1);  color: var(--green); }
+.sta.err { background: rgba(248,81,73,.1);  color: var(--red);   }
+.sta.inf { background: rgba(88,166,255,.1); color: var(--blue);  }
+.dz { border: 2px dashed var(--bd); border-radius: var(--r); padding: 26px; text-align: center; cursor: pointer; transition: all .2s; margin-bottom: 13px; }
+.dz:hover, .dz.over { border-color: var(--blue); background: rgba(88,166,255,.04); }
+.dz.got { border-color: var(--green); background: rgba(63,185,80,.04); }
+.dz-ic { font-size: 26px; margin-bottom: 5px; }
+.dz-sub { font-size: 11px; color: var(--muted); margin-top: 3px; }
+#prev { width: 100%; max-height: 150px; object-fit: contain; border-radius: 6px; margin-top: 9px; border: 1px solid var(--bd); display: none; }
+.rg { display: flex; gap: 9px; margin-bottom: 13px; }
+.ro { flex: 1; border: 1px solid var(--bd); border-radius: 6px; padding: 9px 10px; cursor: pointer; display: flex; align-items: center; gap: 7px; font-size: 12px; transition: all .15s; }
+.ro.sel { border-color: var(--blue); background: rgba(88,166,255,.08); color: var(--blue); }
+.ro input { display: none; }
+.log { background: var(--bg); border: 1px solid var(--bd); border-radius: var(--r); padding: 13px; font-family: 'SF Mono','Fira Code',monospace; font-size: 12px; min-height: 400px; max-height: 540px; overflow-y: auto; }
+.lr { display: flex; gap: 8px; padding: 4px 0; border-bottom: 1px solid rgba(48,54,61,.4); align-items: flex-start; }
+.lr:last-child { border-bottom: none; }
+.li { flex-shrink: 0; width: 17px; text-align: center; }
+.lt { color: var(--muted); flex-shrink: 0; font-size: 11px; padding-top: 1px; }
+.lm { flex: 1; word-break: break-all; line-height: 1.5; }
+.lm.ok   { color: var(--green); } .lm.err  { color: var(--red);   }
+.lm.warn { color: var(--amber); } .lm.inf  { color: var(--blue);  }
+.lm.dim  { color: var(--muted); }
+.spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--bd); border-top-color: var(--blue); border-radius: 50%; animation: sp .6s linear infinite; }
+@keyframes sp { to { transform: rotate(360deg); } }
+.div { height: 1px; background: var(--bd); margin: 13px 0; }
+.rurl { background: var(--bg); border: 1px solid var(--bd); border-radius: 6px; padding: 8px 11px; font-family: monospace; font-size: 11px; word-break: break-all; color: var(--blue); margin-top: 6px; cursor: pointer; }
+.rurl:hover { border-color: var(--blue); }
+.rbox { font-family: monospace; font-size: 11px; padding: 8px; background: var(--bg); border: 1px solid var(--bd); border-radius: 6px; word-break: break-all; }
+.tok { font-family: monospace; font-size: 10px; color: var(--muted); word-break: break-all; margin-top: 4px; padding: 5px 7px; background: var(--bg); border-radius: 4px; border: 1px solid var(--bd); }
+#res { display: none; margin-top: 13px; }
+#rimg { max-width: 100%; max-height: 160px; border-radius: 6px; border: 1px solid var(--bd); object-fit: contain; margin-top: 9px; display: none; }
+</style>
+</head>
+<body>
+
+<div class="hdr">
+  <span>🧪</span>
+  <h1>TryBuy — Cloudinary Upload Tester</h1>
+  <span class="pill">Dev Tool · No FE Required</span>
+</div>
+
+<div class="grid">
+  <div>
+
+    <div class="card">
+      <div class="ct">⚙️ Config</div>
+      <label>Base URL</label>
+      <input type="url" id="base" value="http://localhost:3000">
+      <label>Login path</label>
+      <input type="text" id="loginPath" value="/api/user/login">
+    </div>
+
+    <div class="card">
+      <div class="ct">🔐 Login</div>
+      <label>Username</label>
+      <input type="text" id="email" placeholder="your_username">
+      <label>Password</label>
+      <input type="password" id="pw" placeholder="••••••••">
+      <button class="btn btn-g" onclick="doLogin()">Login</button>
+      <div id="ls"></div>
+    </div>
+
+    <div class="card">
+      <div class="ct">📤 Upload Test</div>
+      <div class="dz" id="dz" onclick="document.getElementById('fi').click()">
+        <div class="dz-ic">📁</div>
+        <div id="dzl">Drag &amp; drop hoặc click để chọn ảnh</div>
+        <div class="dz-sub">JPG · PNG · GIF · WEBP</div>
+      </div>
+      <input type="file" id="fi" accept="image/*" style="display:none" onchange="onFile(this)">
+      <img id="prev">
+      <label style="margin-bottom:8px">Resource target</label>
+      <div class="rg">
+        <label class="ro sel" id="op-product" onclick="setF('trybuy/products','product')">
+          <input type="radio" name="folder" checked> 📦 Product
+        </label>
+        <label class="ro" id="op-post" onclick="setF('trybuy/posts','post')">
+          <input type="radio" name="folder"> 📝 Post
+        </label>
+      </div>
+      <button class="btn" id="runBtn" onclick="run()" disabled>▶ Run Upload Test</button>
+    </div>
+
+  </div>
+  <div>
+    <div class="card" style="margin-bottom:0">
+      <div class="ct">📋 Test Log</div>
+      <div class="log" id="log">
+        <div class="lr"><span class="li">💡</span><span class="lm dim">Sẵn sàng. Login và chọn file để bắt đầu.</span></div>
+      </div>
+      <div id="res">
+        <div class="div"></div>
+        <div class="ct">✅ Kết quả</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:3px">Cloudinary URL (click để copy)</div>
+        <div class="rurl" id="ru" onclick="cp(this)"></div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px">Click để copy</div>
+        <div style="font-size:12px;color:var(--muted);margin:9px 0 3px">Record đã tạo</div>
+        <div class="rbox" id="rr"></div>
+        <img id="rimg">
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let LOGGED_IN = false, selFile = null, selF = 'trybuy/products', selT = 'product';
+
+const B = () => document.getElementById('base').value.replace(/\/$/, '');
+const ts = () => new Date().toLocaleTimeString('vi', { hour12: false });
+
+function addLog(ic, msg, cls = '') {
+  const p = document.getElementById('log');
+  const r = document.createElement('div'); r.className = 'lr';
+  r.innerHTML = `<span class="li">${ic}</span><span class="lt">${ts()}</span><span class="lm ${cls}">${msg}</span>`;
+  p.appendChild(r); p.scrollTop = p.scrollHeight;
+}
+
+function spinLog(id, msg) {
+  const p = document.getElementById('log');
+  const r = document.createElement('div'); r.id = id; r.className = 'lr';
+  r.innerHTML = `<span class="li"><span class="spin"></span></span><span class="lt">${ts()}</span><span class="lm">${msg}</span>`;
+  p.appendChild(r); p.scrollTop = p.scrollHeight;
+}
+
+function resLog(id, ic, msg, cls) {
+  const r = document.getElementById(id); if (!r) return;
+  r.querySelector('.li').innerHTML = ic;
+  const m = r.querySelector('.lm'); m.textContent = msg; m.className = `lm ${cls}`;
+}
+
+async function api(url, opts = {}) {
+  const res = await fetch(url, opts);
+  const ct = res.headers.get('content-type') || '';
+  const d = ct.includes('json') ? await res.json() : await res.text();
+  if (!res.ok) { const e = new Error(typeof d === 'object' ? (d.message || JSON.stringify(d)) : d); throw e; }
+  return d;
+}
+
+async function doLogin() {
+  const email = document.getElementById('email').value.trim();
+  const pass = document.getElementById('pw').value;
+  const el = document.getElementById('ls');
+  if (!email || !pass) { el.innerHTML = '<div class="sta err">⚠️ Nhập email và password</div>'; return; }
+  el.innerHTML = '<div class="sta inf">⏳ Đang login...</div>';
+  try {
+    const loginPath = document.getElementById('loginPath').value || '/api/user/login';
+    const d = await api(`${B()}${loginPath}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ username: email, password: pass }),
+    });
+    LOGGED_IN = true;
+    const label = d.data?.username || d.data?.email || d.username || d.email || 'user';
+    el.innerHTML = `<div class="sta ok">✅ Login thành công — ${label}</div>`;
+    chk();
+  } catch (e) { el.innerHTML = `<div class="sta err">❌ ${e.message}</div>`; }
+}
+
+function onFile(input) {
+  if (!input.files?.[0]) return;
+  selFile = input.files[0];
+  document.getElementById('dzl').textContent = `✓ ${selFile.name} (${(selFile.size/1024).toFixed(1)} KB)`;
+  document.getElementById('dz').classList.add('got');
+  const p = document.getElementById('prev'); p.src = URL.createObjectURL(selFile); p.style.display = 'block';
+  chk();
+}
+
+const dz = document.getElementById('dz');
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('over'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('over'));
+dz.addEventListener('drop', e => {
+  e.preventDefault(); dz.classList.remove('over');
+  const f = e.dataTransfer.files[0];
+  if (f?.type.startsWith('image/')) {
+    const dt = new DataTransfer(); dt.items.add(f);
+    const fi = document.getElementById('fi'); fi.files = dt.files; onFile(fi);
+  }
+});
+
+function setF(folder, type) {
+  selF = folder; selT = type;
+  document.querySelectorAll('.ro').forEach(el => el.classList.remove('sel'));
+  document.getElementById(`op-${type}`).classList.add('sel');
+}
+
+function chk() { document.getElementById('runBtn').disabled = !(LOGGED_IN && selFile); }
+
+async function run() {
+  if (!LOGGED_IN || !selFile) return;
+  document.getElementById('log').innerHTML = '';
+  document.getElementById('res').style.display = 'none';
+  document.getElementById('runBtn').disabled = true;
+
+  addLog('🚀', `Bắt đầu test — folder: ${selF}`, 'inf');
+  addLog('📄', `File: ${selFile.name} · ${(selFile.size/1024).toFixed(1)} KB`, 'dim');
+
+  try {
+    spinLog('s1', `GET /api/upload/signature?folder=${selF}`);
+    const sigRes = await api(`${B()}/api/upload/signature?folder=${selF}`, {
+      method: 'POST', credentials: 'include',
+    });
+    const sig = sigRes.data ?? sigRes;
+    resLog('s1', '✅', `Signature OK — cloud: ${sig.cloud_name} · api_key: ${sig.api_key}`, 'ok');
+
+    spinLog('s2', 'Upload file → api.cloudinary.com ...');
+    const fd = new FormData();
+    fd.append('file', selFile);
+    fd.append('signature', String(sig.signature));
+    fd.append('timestamp', String(sig.timestamp));
+    fd.append('api_key', String(sig.api_key));
+    fd.append('folder', String(sig.folder));
+    const cr = await fetch(`https://api.cloudinary.com/v1_1/${sig.cloud_name}/image/upload`, { method: 'POST', body: fd });
+    const cd = await cr.json();
+    if (!cr.ok) throw new Error(`Cloudinary: ${cd?.error?.message ?? cr.status}`);
+    const url = cd.secure_url;
+    resLog('s2', '✅', `Upload OK — ${cd.width}×${cd.height}px · ${cd.format} · ${(cd.bytes/1024).toFixed(1)} KB`, 'ok');
+    addLog('🔗', url, 'inf');
+
+    let saved;
+    if (selT === 'product') {
+      spinLog('s3', 'POST /api/products (với imageUrls)...');
+      const savedRes = await api(`${B()}/api/products`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ name: `[Test] Cloudinary ${Date.now()}`, price: 10000, sku: `test-${Date.now()}`, categoryIds: [1], imageUrls: [url] }),
+      });
+      saved = savedRes.data ?? savedRes;
+      resLog('s3', '✅', `Product created — id: ${saved.id}`, 'ok');
+      spinLog('s4', `GET /api/products/${saved.id} → verify imageUrls...`);
+      const fRes = await api(`${B()}/api/products/${saved.id}`, { credentials: 'include' });
+      const f = fRes.data ?? fRes;
+      const ok = Array.isArray(f.imageUrls) && f.imageUrls.includes(url);
+      resLog('s4', ok ? '✅' : '⚠️', ok ? 'imageUrls confirmed in DB ✓' : 'imageUrls NULL — kiểm tra product.service.ts', ok ? 'ok' : 'warn');
+      showRes(url, `product #${saved.id}`, f);
+    } else {
+      spinLog('s3', 'POST /api/social/posts (với imageUrls)...');
+      const savedRes = await api(`${B()}/api/social/posts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ content: `[Test Cloudinary] ${new Date().toISOString()}`, imageUrls: [url], videoUrl: null }),
+      });
+      saved = savedRes.data ?? savedRes;
+      resLog('s3', '✅', `Post created — id: ${saved.id}`, 'ok');
+      spinLog('s4', `GET /api/social/posts/${saved.id} → verify imageUrls...`);
+      const fRes = await api(`${B()}/api/social/posts/${saved.id}`, { credentials: 'include' });
+      const f = fRes.data ?? fRes;
+      const ok = Array.isArray(f.imageUrls) && f.imageUrls.includes(url);
+      resLog('s4', ok ? '✅' : '⚠️', ok ? 'imageUrls confirmed in DB ✓' : 'imageUrls NULL — kiểm tra social.service.ts', ok ? 'ok' : 'warn');
+      showRes(url, `post #${saved.id}`, f);
+    }
+
+    addLog('🏁', 'All steps passed!', 'ok');
+  } catch (e) {
+    addLog('❌', e.message, 'err');
+    if (/fetch|CORS|Failed to fetch/i.test(e.message)) {
+      addLog('💡', 'CORS issue? Serve file: npx serve . rồi mở http://localhost:5000/test-cloudinary.html', 'warn');
+    }
+  } finally {
+    document.getElementById('runBtn').disabled = false;
+  }
+}
+
+function showRes(url, label, rec) {
+  document.getElementById('res').style.display = 'block';
+  document.getElementById('ru').textContent = url;
+  document.getElementById('rr').textContent =
+    `${label}\nimageUrls: ${JSON.stringify(rec.imageUrls)}\nvideoUrl: ${rec.videoUrl ?? null}`;
+  const img = document.getElementById('rimg'); img.src = url; img.style.display = 'block';
+}
+
+function cp(el) {
+  navigator.clipboard.writeText(el.textContent).then(() => {
+    const t = el.textContent; el.textContent = '✓ Copied!';
+    setTimeout(() => el.textContent = t, 1500);
+  });
+}
+</script>
+</body>
+</html>

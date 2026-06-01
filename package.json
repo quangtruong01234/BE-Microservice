@@ -28,7 +28,8 @@
     "start:product": "nest start product --watch",
     "start:social": "nest start social --watch",
     "start:notification": "nest start notification --watch",
-    "start:nodeA": "concurrently -n GATEWAY,ORDERS,USER,PRODUCT,SOCIAL,NOTIF -c blue,green,pink,yellow,cyan,magenta \"npm run start:gateway\" \"npm run start:orders\" \"npm run start:user\" \"npm run start:product\" \"npm run start:social\" \"npm run start:notification\"",
+    "start:chat": "nest start chat --watch",
+    "start:nodeA": "concurrently -n GATEWAY,ORDERS,USER,PRODUCT,SOCIAL,NOTIF,CHAT -c blue,green,pink,yellow,cyan,magenta,white \"npm run start:gateway\" \"npm run start:orders\" \"npm run start:user\" \"npm run start:product\" \"npm run start:social\" \"npm run start:notification\" \"npm run start:chat\"",
     "start:nodeB": "concurrently -n INVENTORY,PAYMENTS,REWARDS -c yellow,magenta,cyan \"npm run start:inventory\" \"npm run start:payments\" \"npm run start:rewards\""
   },
   "dependencies": {
@@ -40,6 +41,7 @@
     "@nestjs/microservices": "^11.1.7",
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/platform-socket.io": "^11.1.24",
+    "@nestjs/schedule": "^6.1.3",
     "@nestjs/swagger": "^11.2.3",
     "@nestjs/typeorm": "^11.0.0",
     "@nestjs/websockets": "^11.1.24",
@@ -88,6 +90,7 @@
     "globals": "^15.14.0",
     "jest": "^29.7.0",
     "prettier": "^3.4.2",
+    "socket.io-client": "^4.8.3",
     "source-map-support": "^0.5.21",
     "supertest": "^7.0.0",
     "ts-jest": "^29.2.5",
