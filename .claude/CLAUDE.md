@@ -44,6 +44,7 @@ Load on demand — read with the Read tool when the task touches the relevant ar
 | `context/typescript-rules.md` | tsc / type error / any / return type / eslint |
 | `context/git-workflow.md` | commit |
 | `context/research.md` | pre-implementation spanning > 1 service |
+| `context/performance.md` | query / list / pagination / index / cache / N+1 / slow path |
 | `backend.md` | NestJS / TCP / RabbitMQ / @MessagePattern / @EventPattern detail |
 
 Do NOT use `@` for the on-demand group above — load them explicitly with the Read tool.
@@ -60,6 +61,7 @@ Match keywords in the prompt → read the corresponding file with the Read tool.
 | tsc, type error, any, return type, eslint | `context/typescript-rules.md` |
 | commit | `context/git-workflow.md` |
 | TCP, RabbitMQ, message pattern, event, @MessagePattern, @EventPattern | `backend.md` |
+| performance, slow, N+1, index, cache, pagination, query | `context/performance.md` |
 
 - No keyword match → use only the 3 always-loaded files; do not load extras.
 - Multiple keywords match → load all matching files.
@@ -132,6 +134,7 @@ When debugging, run `/debug` — full protocol in `commands/debug.md`.
 - `/feature` (`commands/feature.md`): Implement a new feature end-to-end.
 - `/review` (`commands/review.md`): Review code against project standards.
 - `/debug` (`commands/debug.md`): Diagnose a failing feature.
+- `/perf-audit` (`commands/perf-audit.md`): Audit endpoints for performance issues; report fixes + side effects (read-only, does not implement).
 
 ## Agent Skills
 
