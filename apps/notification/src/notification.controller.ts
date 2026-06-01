@@ -116,6 +116,72 @@ export class NotificationController {
     }
   }
 
+  @EventPattern(EVENT.COMMENT_CREATED_EVENT)
+  async handleCommentCreated(
+    @Payload()
+    data: {
+      postId: number;
+      postOwnerId: number;
+      commenterId: number;
+      commentId: number;
+      preview: string;
+    },
+    @Ctx() context: RmqContext,
+  ): Promise<void> {
+    const { postOwnerId, commentId } = data;
+    this.logger.log(
+      `[NOTIFICATION] comment_created received commentId=${commentId} owner=${postOwnerId}`,
+    );
+    try {
+      await this.notificationService.saveNotification(
+        postOwnerId,
+        "comment",
+        commentId,
+        "Someone commented on your post",
+      );
+      this.rmqService.ack(context);
+    } catch (err) {
+      this.logger.error(`[NOTIFICATION] handleCommentCreated failed: ${err}`);
+      const channel = context.getChannelRef() as {
+        nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
+      };
+      channel.nack(context.getMessage(), false, true); // requeue: DB error
+    }
+  }
+
+  @EventPattern(EVENT.REPLY_CREATED_EVENT)
+  async handleReplyCreated(
+    @Payload()
+    data: {
+      parentCommentId: number;
+      commentOwnerId: number;
+      replierId: number;
+      replyId: number;
+      preview: string;
+    },
+    @Ctx() context: RmqContext,
+  ): Promise<void> {
+    const { commentOwnerId, replyId } = data;
+    this.logger.log(
+      `[NOTIFICATION] reply_created received replyId=${replyId} owner=${commentOwnerId}`,
+    );
+    try {
+      await this.notificationService.saveNotification(
+        commentOwnerId,
+        "reply",
+        replyId,
+        "Someone replied to your comment",
+      );
+      this.rmqService.ack(context);
+    } catch (err) {
+      this.logger.error(`[NOTIFICATION] handleReplyCreated failed: ${err}`);
+      const channel = context.getChannelRef() as {
+        nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
+      };
+      channel.nack(context.getMessage(), false, true); // requeue: DB error
+    }
+  }
+
   @MessagePattern(NOTIFICATION_MESSAGE_PATTERN.GET_USER_NOTIFICATIONS)
   async getUserNotifications(
     @Payload()

@@ -20,10 +20,22 @@ export class NotificationWsGateway
 
   constructor(private readonly jwtService: JwtService) {}
 
+  private parseTokenFromCookie(
+    cookieHeader: string | undefined,
+  ): string | null {
+    if (!cookieHeader) return null;
+    const match = cookieHeader
+      .split(";")
+      .map((c) => c.trim())
+      .find((c) => c.startsWith("access_token="));
+    return match ? match.split("=")[1] : null;
+  }
+
   handleConnection(client: Socket): void {
     const token =
       (client.handshake.auth?.token as string | undefined) ??
-      (client.handshake.query?.token as string | undefined);
+      (client.handshake.query?.token as string | undefined) ??
+      this.parseTokenFromCookie(client.handshake.headers.cookie);
 
     if (!token) {
       client.disconnect();
@@ -31,8 +43,8 @@ export class NotificationWsGateway
     }
 
     try {
-      const payload = this.jwtService.verify<{ sub: number }>(token);
-      const userId = payload.sub;
+      const payload = this.jwtService.verify<{ userId: number }>(token);
+      const userId = payload.userId;
       void client.join(`user:${userId}`);
       this.logger.log(`[WS] Client connected userId=${userId} id=${client.id}`);
     } catch {

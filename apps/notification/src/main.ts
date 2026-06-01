@@ -37,9 +37,17 @@ async function bootstrap() {
     }),
   );
 
+  // RabbitMQ: consume social comment/reply events (fanout)
+  app.connectMicroservice(
+    rmqService.getOptionsTopic("NOTIFICATION_SOCIAL_SERVICE", false, {
+      name: EXCHANGE.SOCIAL_EXCHANGE,
+      type: "fanout",
+    }),
+  );
+
   await app.startAllMicroservices();
   console.log(
-    `Notification service running: TCP :${PORT_TCP.NOTIFICATION_TCP_PORT} + RMQ ${EXCHANGE.PAYMENTS_EXCHANGE} + ${EXCHANGE.ORDERS_EXCHANGE}`,
+    `Notification service running: TCP :${PORT_TCP.NOTIFICATION_TCP_PORT} + RMQ ${EXCHANGE.PAYMENTS_EXCHANGE} + ${EXCHANGE.ORDERS_EXCHANGE} + ${EXCHANGE.SOCIAL_EXCHANGE}`,
   );
 }
 void bootstrap();

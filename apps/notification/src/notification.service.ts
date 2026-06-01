@@ -1,4 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
+import { PaginatedResponse } from "@app/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Notification } from "./entities/notification.entity";
@@ -37,19 +38,14 @@ export class NotificationService {
     userId: number,
     page: number,
     limit: number,
-  ): Promise<{
-    data: Notification[];
-    total: number;
-    page: number;
-    limit: number;
-  }> {
+  ): Promise<PaginatedResponse<Notification>> {
     const [data, total] = await this.notificationRepository.findAndCount({
       where: { user_id: userId },
       order: { created_at: "DESC" },
       skip: (page - 1) * limit,
       take: limit,
     });
-    return { data, total, page, limit };
+    return PaginatedResponse.of(data, total, page, limit);
   }
 
   async markNotificationRead(
