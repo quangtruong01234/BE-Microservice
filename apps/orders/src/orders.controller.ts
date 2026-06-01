@@ -14,8 +14,11 @@ import {
 import { OrdersService } from "./orders.service";
 import { CMD } from "@app/common/constants/cmd";
 import { EVENT } from "@app/common/constants/event";
-import { PaymentMethod } from "./entity/order.entity";
-import { HttpToRpcExceptionFilter, RmqService } from "@app/common";
+import {
+  HttpToRpcExceptionFilter,
+  PaymentMethod,
+  RmqService,
+} from "@app/common";
 import { ORDER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 
 @UseFilters(new HttpToRpcExceptionFilter())

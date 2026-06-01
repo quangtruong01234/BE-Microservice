@@ -8,7 +8,8 @@ import {
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
-import { Order, OrderStatus, PaymentMethod } from "./entity/order.entity";
+import { Order, OrderStatus } from "./entity/order.entity";
+import { PaymentMethod, PaginatedResponse } from "@app/common";
 import { HttpService } from "@nestjs/axios";
 import { ClientProxy } from "@nestjs/microservices";
 import { catchError, firstValueFrom, throwError, timeout } from "rxjs";
@@ -139,7 +140,7 @@ export class OrdersService {
     userId: number,
     page: number = 1,
     limit: number = 10,
-  ): Promise<{ data: Order[]; total: number; page: number; limit: number }> {
+  ): Promise<PaginatedResponse<Order>> {
     const [data, total] = await this.orderRepository.findAndCount({
       where: { user_id: userId },
       relations: ["items"],
@@ -147,20 +148,20 @@ export class OrdersService {
       skip: (page - 1) * limit,
       take: limit,
     });
-    return { data, total, page, limit };
+    return PaginatedResponse.of(data, total, page, limit);
   }
 
   async getAllOrders(
     page: number = 1,
     limit: number = 10,
-  ): Promise<{ data: Order[]; total: number; page: number; limit: number }> {
+  ): Promise<PaginatedResponse<Order>> {
     const [data, total] = await this.orderRepository.findAndCount({
       relations: ["items"],
       order: { created_at: "DESC" },
       skip: (page - 1) * limit,
       take: limit,
     });
-    return { data, total, page, limit };
+    return PaginatedResponse.of(data, total, page, limit);
   }
 
   async getOrderById(orderId: number): Promise<Order | null> {

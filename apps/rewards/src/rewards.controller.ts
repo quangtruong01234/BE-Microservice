@@ -1,13 +1,18 @@
-import { Controller, Logger } from "@nestjs/common";
+import { Controller, Logger, UseFilters } from "@nestjs/common";
 import { Ctx, EventPattern, Payload, RmqContext } from "@nestjs/microservices";
 import { RewardsService } from "./rewards.service";
 import { EVENT } from "@app/common/constants/event";
+import { HttpToRpcExceptionFilter } from "@app/common";
 
+@UseFilters(HttpToRpcExceptionFilter)
 @Controller()
 export class RewardsController {
   private readonly logger = new Logger(RewardsController.name);
 
   constructor(private readonly rewardsService: RewardsService) {}
+
+  @EventPattern(EVENT.PAYMENT_COMPLETED_EVENT)
+  handlePaymentCompleted(): void {}
 
   @EventPattern(EVENT.ORDER_CREATED_EVENT)
   async handleOrderCreated(

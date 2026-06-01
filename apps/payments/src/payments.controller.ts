@@ -6,6 +6,7 @@ import {
   Post,
   Query,
   SetMetadata,
+  UseFilters,
 } from "@nestjs/common";
 import {
   Ctx,
@@ -20,9 +21,11 @@ import { EVENT } from "@app/common/constants/event";
 import { handleZaloPayCallback } from "./zalopay/zalopay.callback";
 import { handleVNPayCallback } from "./vnpay/vnpay.callback";
 import { PAYMENT_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
+import { HttpToRpcExceptionFilter } from "@app/common";
 
 const Public = () => SetMetadata("isPublic", true);
 
+@UseFilters(HttpToRpcExceptionFilter)
 @Controller()
 export class PaymentsController {
   private readonly logger = new Logger(PaymentsController.name);
@@ -31,6 +34,9 @@ export class PaymentsController {
     private readonly paymentsService: PaymentsService,
     private readonly vnpayStrategy: VNPayStrategy,
   ) {}
+
+  @EventPattern(EVENT.PAYMENT_COMPLETED_EVENT)
+  handlePaymentCompleted(): void {}
 
   @EventPattern(EVENT.ORDER_CREATED_EVENT)
   async handleOrderCreated(

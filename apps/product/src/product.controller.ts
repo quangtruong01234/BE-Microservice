@@ -1,4 +1,9 @@
-import { Controller, Logger, NotFoundException } from "@nestjs/common";
+import {
+  Controller,
+  Logger,
+  NotFoundException,
+  UseFilters,
+} from "@nestjs/common";
 import {
   Ctx,
   EventPattern,
@@ -7,7 +12,7 @@ import {
   RmqContext,
 } from "@nestjs/microservices";
 import { ProductService } from "./product.service";
-import { RmqService } from "@app/common";
+import { HttpToRpcExceptionFilter, RmqService } from "@app/common";
 import { EVENT } from "@app/common/constants/event";
 import { CreateProductDto } from "./dto/create-product.dto";
 import { UpdateProductDto } from "./dto/update-product.dto";
@@ -16,6 +21,7 @@ import { CreateCategoryDto } from "./dto/create-category.dto";
 import { GetProductsQueryDto } from "./dto/get-products-query.dto";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
 
+@UseFilters(HttpToRpcExceptionFilter)
 @Controller()
 export class ProductController {
   private readonly logger = new Logger(ProductController.name);

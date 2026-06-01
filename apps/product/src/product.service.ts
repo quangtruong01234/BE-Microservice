@@ -6,6 +6,7 @@ import {
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { In, Repository, SelectQueryBuilder } from "typeorm";
+import { PaginatedResponse } from "@app/common";
 import { Product } from "./entity/product.entity";
 import { Brand } from "./entity/brand.entity";
 import { Category } from "./entity/category.entity";
@@ -77,7 +78,9 @@ export class ProductService {
     return this.productRepository.save(product);
   }
 
-  async findAllProducts(query: GetProductsQueryDto) {
+  async findAllProducts(
+    query: GetProductsQueryDto,
+  ): Promise<PaginatedResponse<Product>> {
     const {
       page = 1,
       limit = 10,
@@ -153,15 +156,9 @@ export class ProductService {
     const skip = (page - 1) * limit;
     queryBuilder.skip(skip).take(limit);
 
-    const [items, total] = await queryBuilder.getManyAndCount();
+    const [data, total] = await queryBuilder.getManyAndCount();
 
-    return {
-      items,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
+    return PaginatedResponse.of(data, total, page, limit);
   }
 
   async findProductById(id: number): Promise<Product> {

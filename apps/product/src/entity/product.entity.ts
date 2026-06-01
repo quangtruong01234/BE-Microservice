@@ -38,8 +38,8 @@ export class Product {
   @Column({ type: "bigint", nullable: true, name: "user_id" })
   userId?: number;
 
-  @Column({ type: "varchar", length: 1000, nullable: true, name: "image_url" })
-  imageUrl?: string;
+  @Column({ type: "json", nullable: true, default: null, name: "image_urls" })
+  imageUrls!: string[] | null;
 
   @Column({ type: "boolean", default: true, name: "is_active" })
   isActive!: boolean;

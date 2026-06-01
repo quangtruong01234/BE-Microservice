@@ -7,6 +7,7 @@ import {
   OneToMany,
 } from "typeorm";
 import { OrderItem } from "./order_item.entity";
+import { PaymentMethod } from "@app/common";
 
 export enum OrderStatus {
   PENDING = "pending",
@@ -15,12 +16,6 @@ export enum OrderStatus {
   DELIVERING = "delivering",
   COMPLETED = "completed",
   CANCELED = "canceled",
-}
-
-export enum PaymentMethod {
-  ZALOPAY = "zalopay",
-  VNPAY = "vnpay",
-  COD = "cod",
 }
 
 @Entity("orders")

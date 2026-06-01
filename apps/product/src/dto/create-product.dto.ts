@@ -50,8 +50,9 @@ export class CreateProductDto {
   userId?: number;
 
   @IsOptional()
-  @IsString()
-  imageUrl?: string;
+  @IsArray()
+  @IsString({ each: true })
+  imageUrls?: string[];
 
   @IsOptional()
   @IsBoolean()
