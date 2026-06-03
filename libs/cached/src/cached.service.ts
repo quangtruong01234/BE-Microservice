@@ -109,4 +109,8 @@ export class CachedService {
   async zrem(key: string, ...members: string[]): Promise<number> {
     return await this.redis.zrem(key, ...members);
   }
+
+  async keys(pattern: string): Promise<string[]> {
+    return await this.redis.keys(pattern);
+  }
 }

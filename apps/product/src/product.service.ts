@@ -7,6 +7,7 @@ import {
 import { InjectRepository } from "@nestjs/typeorm";
 import { In, Repository, SelectQueryBuilder } from "typeorm";
 import { PaginatedResponse } from "@app/common";
+import { CachedService } from "@app/cached";
 import { Product } from "./entity/product.entity";
 import { Brand } from "./entity/brand.entity";
 import { Category } from "./entity/category.entity";
@@ -15,6 +16,8 @@ import { UpdateProductDto } from "./dto/update-product.dto";
 import { CreateBrandDto } from "./dto/create-brand.dto";
 import { CreateCategoryDto } from "./dto/create-category.dto";
 import { GetProductsQueryDto } from "./dto/get-products-query.dto";
+
+const SEARCH_CACHE_TTL = 5; // seconds
 
 @Injectable()
 export class ProductService {
@@ -27,7 +30,33 @@ export class ProductService {
     private readonly brandRepository: Repository<Brand>,
     @InjectRepository(Category)
     private readonly categoryRepository: Repository<Category>,
+    private readonly cachedService: CachedService,
   ) {}
+
+  private buildSearchCacheKey(query: GetProductsQueryDto): string {
+    const stable = JSON.stringify(
+      Object.fromEntries(
+        Object.entries(query)
+          .filter(([, v]) => v !== undefined)
+          .sort(([a], [b]) => a.localeCompare(b)),
+      ),
+    );
+    return `products:search:${stable}`;
+  }
+
+  private async invalidateSearchCache(): Promise<void> {
+    try {
+      const keys = await this.cachedService.keys("products:search:*");
+      if (keys.length > 0) {
+        await Promise.all(keys.map((k) => this.cachedService.del(k)));
+      }
+    } catch (err) {
+      this.logger.warn(
+        "Failed to invalidate product search cache",
+        String(err),
+      );
+    }
+  }
 
   async updateStockQuantity(
     productId: number,
@@ -75,12 +104,24 @@ export class ProductService {
     }
 
     const product = this.productRepository.create({ ...rest, categories });
-    return this.productRepository.save(product);
+    const saved = await this.productRepository.save(product);
+    await this.invalidateSearchCache();
+    return saved;
   }
 
   async findAllProducts(
     query: GetProductsQueryDto,
   ): Promise<PaginatedResponse<Product>> {
+    const cacheKey = this.buildSearchCacheKey(query);
+    try {
+      const cached = await this.cachedService.get(cacheKey);
+      if (cached) {
+        return JSON.parse(cached) as PaginatedResponse<Product>;
+      }
+    } catch (err) {
+      this.logger.warn("Search cache read failed", String(err));
+    }
+
     const {
       page = 1,
       limit = 10,
@@ -158,7 +199,19 @@ export class ProductService {
 
     const [data, total] = await queryBuilder.getManyAndCount();
 
-    return PaginatedResponse.of(data, total, page, limit);
+    const result = PaginatedResponse.of(data, total, page, limit);
+
+    try {
+      await this.cachedService.set(
+        cacheKey,
+        JSON.stringify(result),
+        SEARCH_CACHE_TTL,
+      );
+    } catch (err) {
+      this.logger.warn("Search cache write failed", String(err));
+    }
+
+    return result;
   }
 
   async findProductById(id: number): Promise<Product> {
@@ -220,12 +273,16 @@ export class ProductService {
       product.categories = categories;
     }
 
-    return this.productRepository.save(product);
+    const updated = await this.productRepository.save(product);
+    await this.invalidateSearchCache();
+    return updated;
   }
 
-  async deleteProduct(id: number): Promise<void> {
+  async deleteProduct(id: number): Promise<{ success: boolean }> {
     const product = await this.findProductById(id);
     await this.productRepository.remove(product);
+    await this.invalidateSearchCache();
+    return { success: true };
   }
 
   async findProductsByCategory(categoryId: number, query: GetProductsQueryDto) {

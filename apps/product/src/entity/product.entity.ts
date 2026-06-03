@@ -8,6 +8,7 @@ import {
   ManyToMany,
   JoinColumn,
   JoinTable,
+  Index,
 } from "typeorm";
 import { Brand } from "./brand.entity";
 import { Category } from "./category.entity";
@@ -23,6 +24,7 @@ export class Product {
   @Column({ type: "text", nullable: true })
   description?: string;
 
+  @Index("idx_products_price")
   @Column({ type: "decimal", precision: 12, scale: 2, default: 0 })
   price!: number;
 
@@ -32,6 +34,7 @@ export class Product {
   @Column({ type: "varchar", length: 100, unique: true })
   sku!: string;
 
+  @Index("idx_products_brand_id")
   @Column({ type: "bigint", nullable: true, name: "brand_id" })
   brandId?: number;
 
@@ -41,6 +44,7 @@ export class Product {
   @Column({ type: "json", nullable: true, default: null, name: "image_urls" })
   imageUrls!: string[] | null;
 
+  @Index("idx_products_is_active")
   @Column({ type: "boolean", default: true, name: "is_active" })
   isActive!: boolean;
 
@@ -57,14 +61,16 @@ export class Product {
   @Column({ type: "int", default: () => "0", name: "view_count" })
   viewCount!: number;
 
-  // Product status for timeline/feed
+  @Index("idx_products_is_featured")
   @Column({ type: "boolean", default: () => "FALSE", name: "is_featured" })
   isFeatured!: boolean;
 
+  @Index("idx_products_is_trending")
   @Column({ type: "boolean", default: () => "FALSE", name: "is_trending" })
   isTrending!: boolean;
 
   // Product condition and seller info
+  @Index("idx_products_condition")
   @Column({
     type: "varchar",
     length: 50,
@@ -78,6 +84,7 @@ export class Product {
   sellerNotes?: string;
 
   // Rating system
+  @Index("idx_products_rating")
   @Column({
     type: "decimal",
     precision: 3,

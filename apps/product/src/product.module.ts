@@ -8,6 +8,7 @@ import { Brand } from "./entity/brand.entity";
 import { Category } from "./entity/category.entity";
 import { DatabaseModule } from "@app/database";
 import { RmqModule, RmqService } from "@app/common";
+import { CachedModule } from "@app/cached";
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { RmqModule, RmqService } from "@app/common";
     DatabaseModule,
     TypeOrmModule.forFeature([Product, Brand, Category]),
     RmqModule,
+    CachedModule,
   ],
   controllers: [ProductController],
   providers: [ProductService, RmqService],
