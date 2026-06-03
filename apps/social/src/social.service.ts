@@ -39,6 +39,26 @@ export class SocialService {
     return this.dataSource.getTreeRepository(Comment);
   }
 
+  private async resolveIsLiked(
+    postId: number,
+    viewerUserId: number | null | undefined,
+  ): Promise<boolean> {
+    if (!viewerUserId) return false;
+    const cached = await this.cachedService.get(
+      `post:liked:${postId}:${viewerUserId}`,
+    );
+    if (cached !== null) return cached === "1";
+    const exists = await this.postLikeRepository.findOne({
+      where: { post_id: postId, user_id: viewerUserId },
+    });
+    const isLiked = exists !== null;
+    await this.cachedService.set(
+      `post:liked:${postId}:${viewerUserId}`,
+      isLiked ? "1" : "0",
+    );
+    return isLiked;
+  }
+
   async createPost(payload: {
     userId: number;
     content: string;
@@ -57,31 +77,43 @@ export class SocialService {
   async getPosts(payload: {
     page: number;
     limit: number;
-  }): Promise<PaginatedResponse<Post & { likeCount: number }>> {
-    const { page, limit } = payload;
+    viewerUserId?: number | null;
+  }): Promise<
+    PaginatedResponse<Post & { likeCount: number; isLiked: boolean }>
+  > {
+    const { page, limit, viewerUserId } = payload;
     const [posts, total] = await this.postRepository.findAndCount({
       order: { created_at: "DESC" },
       skip: (page - 1) * limit,
       take: limit,
     });
-    const counts = await Promise.all(
-      posts.map(async (post) => {
-        const cached = await this.cachedService.get(
-          `post:like_count:${post.id}`,
-        );
-        if (cached !== null) return parseInt(cached, 10);
-        const count = await this.postLikeRepository.count({
-          where: { post_id: post.id },
-        });
-        await this.cachedService.set(
-          `post:like_count:${post.id}`,
-          count.toString(),
-        );
-        return count;
-      }),
-    );
+    const [counts, likedFlags] = await Promise.all([
+      Promise.all(
+        posts.map(async (post) => {
+          const cached = await this.cachedService.get(
+            `post:like_count:${post.id}`,
+          );
+          if (cached !== null) return parseInt(cached, 10);
+          const count = await this.postLikeRepository.count({
+            where: { post_id: post.id },
+          });
+          await this.cachedService.set(
+            `post:like_count:${post.id}`,
+            count.toString(),
+          );
+          return count;
+        }),
+      ),
+      Promise.all(
+        posts.map((post) => this.resolveIsLiked(post.id, viewerUserId)),
+      ),
+    ]);
     return PaginatedResponse.of(
-      posts.map((post, i) => ({ ...post, likeCount: counts[i] ?? 0 })),
+      posts.map((post, i) => ({
+        ...post,
+        likeCount: counts[i] ?? 0,
+        isLiked: likedFlags[i] ?? false,
+      })),
       total,
       page,
       limit,
@@ -92,39 +124,54 @@ export class SocialService {
     userId: number;
     page: number;
     limit: number;
-  }): Promise<PaginatedResponse<Post & { likeCount: number }>> {
-    const { userId, page, limit } = payload;
+    viewerUserId?: number | null;
+  }): Promise<
+    PaginatedResponse<Post & { likeCount: number; isLiked: boolean }>
+  > {
+    const { userId, page, limit, viewerUserId } = payload;
     const [posts, total] = await this.postRepository.findAndCount({
       where: { user_id: userId },
       order: { created_at: "DESC" },
       skip: (page - 1) * limit,
       take: limit,
     });
-    const counts = await Promise.all(
-      posts.map(async (post) => {
-        const cached = await this.cachedService.get(
-          `post:like_count:${post.id}`,
-        );
-        if (cached !== null) return parseInt(cached, 10);
-        const count = await this.postLikeRepository.count({
-          where: { post_id: post.id },
-        });
-        await this.cachedService.set(
-          `post:like_count:${post.id}`,
-          count.toString(),
-        );
-        return count;
-      }),
-    );
+    const [counts, likedFlags] = await Promise.all([
+      Promise.all(
+        posts.map(async (post) => {
+          const cached = await this.cachedService.get(
+            `post:like_count:${post.id}`,
+          );
+          if (cached !== null) return parseInt(cached, 10);
+          const count = await this.postLikeRepository.count({
+            where: { post_id: post.id },
+          });
+          await this.cachedService.set(
+            `post:like_count:${post.id}`,
+            count.toString(),
+          );
+          return count;
+        }),
+      ),
+      Promise.all(
+        posts.map((post) => this.resolveIsLiked(post.id, viewerUserId)),
+      ),
+    ]);
     return PaginatedResponse.of(
-      posts.map((post, i) => ({ ...post, likeCount: counts[i] ?? 0 })),
+      posts.map((post, i) => ({
+        ...post,
+        likeCount: counts[i] ?? 0,
+        isLiked: likedFlags[i] ?? false,
+      })),
       total,
       page,
       limit,
     );
   }
 
-  async getPostById(postId: number): Promise<Post & { likeCount: number }> {
+  async getPostById(
+    postId: number,
+    viewerUserId?: number | null,
+  ): Promise<Post & { likeCount: number; isLiked: boolean }> {
     const post = await this.postRepository.findOne({ where: { id: postId } });
     if (!post) {
       throw new NotFoundException(`Post ${postId} not found`);
@@ -140,25 +187,21 @@ export class SocialService {
     } else {
       likeCount = parseInt(cached, 10);
     }
-    return { ...post, likeCount };
+    const isLiked = await this.resolveIsLiked(postId, viewerUserId);
+    return { ...post, likeCount, isLiked };
   }
 
   async likePost(payload: {
     postId: number;
     userId: number;
   }): Promise<{ liked: boolean; postId: number; likeCount: number }> {
-    const post = await this.postRepository.findOne({
-      where: { id: payload.postId },
-    });
-    if (!post) {
-      throw new NotFoundException(`Post ${payload.postId} not found`);
-    }
     try {
-      const like = this.postLikeRepository.create({
-        post_id: payload.postId,
-        user_id: payload.userId,
-      });
-      await this.postLikeRepository.save(like);
+      await this.postLikeRepository.save(
+        this.postLikeRepository.create({
+          post_id: payload.postId,
+          user_id: payload.userId,
+        }),
+      );
     } catch (err) {
       if (
         err instanceof QueryFailedError &&
@@ -169,13 +212,13 @@ export class SocialService {
       }
       throw err;
     }
-    const newCount = await this.cachedService.incr(
-      `post:like_count:${payload.postId}`,
-    );
-    await this.cachedService.set(
-      `post:liked:${payload.postId}:${payload.userId}`,
-      "1",
-    );
+    const [newCount] = await Promise.all([
+      this.cachedService.incr(`post:like_count:${payload.postId}`),
+      this.cachedService.set(
+        `post:liked:${payload.postId}:${payload.userId}`,
+        "1",
+      ),
+    ]);
     return { liked: true, postId: payload.postId, likeCount: newCount };
   }
 
@@ -183,19 +226,17 @@ export class SocialService {
     postId: number;
     userId: number;
   }): Promise<{ liked: boolean; postId: number; likeCount: number }> {
-    const like = await this.postLikeRepository.findOne({
-      where: { post_id: payload.postId, user_id: payload.userId },
+    const result = await this.postLikeRepository.delete({
+      post_id: payload.postId,
+      user_id: payload.userId,
     });
-    if (!like) {
+    if (result.affected === 0) {
       throw new NotFoundException("Like not found");
     }
-    await this.postLikeRepository.remove(like);
-    const newCount = await this.cachedService.decr(
-      `post:like_count:${payload.postId}`,
-    );
-    await this.cachedService.del(
-      `post:liked:${payload.postId}:${payload.userId}`,
-    );
+    const [newCount] = await Promise.all([
+      this.cachedService.decr(`post:like_count:${payload.postId}`),
+      this.cachedService.del(`post:liked:${payload.postId}:${payload.userId}`),
+    ]);
     return {
       liked: false,
       postId: payload.postId,
