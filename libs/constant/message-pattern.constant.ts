@@ -62,6 +62,11 @@ export const SOCIAL_MESSAGE_PATTERN = {
   DELETE_COMMENT: "social_delete_comment",
   CREATE_REPLY: "social_create_reply",
   GET_REPLIES: "social_get_replies",
+  FOLLOW_USER: "social_follow_user",
+  UNFOLLOW_USER: "social_unfollow_user",
+  GET_FOLLOWERS: "social_get_followers",
+  GET_FOLLOWING: "social_get_following",
+  GET_FOLLOWING_FEED: "social_get_following_feed",
 };
 
 export const CHAT_MESSAGE_PATTERN = {
@@ -69,4 +74,5 @@ export const CHAT_MESSAGE_PATTERN = {
   CHAT_GET_CONVERSATIONS: "chat.get_conversations",
   CHAT_GET_MESSAGES: "chat.get_messages",
   CHAT_SEND_MESSAGE: "chat.send_message",
+  CHAT_CHECK_MEMBERSHIP: "chat.check_membership",
 };
