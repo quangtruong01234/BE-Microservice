@@ -281,9 +281,20 @@ export class ProductService {
   }
 
   async deleteProduct(id: number): Promise<unknown> {
-    return (await firstValueFrom(
-      this.productClient.send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_DELETE, id),
-    )) as unknown;
+    try {
+      return (await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_DELETE, id)
+          .pipe(timeout(10000)),
+        { defaultValue: { success: true } },
+      )) as unknown;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        `delete product ID: ${id}`,
+        "Product Service",
+      );
+    }
   }
 
   async getProductsByCategory(
