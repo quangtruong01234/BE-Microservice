@@ -46,8 +46,9 @@ async function bootstrap() {
   );
 
   await app.startAllMicroservices();
+  await app.listen(3010);
   console.log(
-    `Notification service running: TCP :${PORT_TCP.NOTIFICATION_TCP_PORT} + RMQ ${EXCHANGE.PAYMENTS_EXCHANGE} + ${EXCHANGE.ORDERS_EXCHANGE} + ${EXCHANGE.SOCIAL_EXCHANGE}`,
+    `Notification service running: TCP :${PORT_TCP.NOTIFICATION_TCP_PORT} + RMQ ${EXCHANGE.PAYMENTS_EXCHANGE} + ${EXCHANGE.ORDERS_EXCHANGE} + ${EXCHANGE.SOCIAL_EXCHANGE} + WS :3010`,
   );
 }
 void bootstrap();

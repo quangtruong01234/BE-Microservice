@@ -29,6 +29,7 @@ import { Notification } from "./entities/notification.entity";
       database: process.env.MYSQL_DATABASE,
       entities: [Notification],
       synchronize: false,
+      timezone: "Z",
     }),
     TypeOrmModule.forFeature([Notification]),
     ClientsModule.register([
