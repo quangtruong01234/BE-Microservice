@@ -41,7 +41,10 @@ export class CustomRateLimitGuard implements CanActivate {
 
       const request = context.switchToHttp().getRequest<RequestWithRateLimit>();
       const identifier = this.getIdentifier(request);
-      const key = `throttle:${identifier}`;
+      const routePath =
+        (request.route as { path?: string } | undefined)?.path ?? request.path;
+      const route = `${request.method}:${routePath}`;
+      const key = `throttle:${route}:${identifier}`;
 
       const current = await this.cachedService.incr(key);
 

@@ -21,6 +21,7 @@ import {
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { OptionalJwtAuthGuard } from "../common/guards/optional-jwt-auth.guard";
 import { Public } from "../common/decorators/public.decorator";
+import { RateLimit } from "../common/decorators/rate-limit.decorator";
 import { SocialGatewayService } from "./social.service";
 import { CreatePostDto } from "./dto/create-post.dto";
 import { CreateCommentDto } from "./dto/create-comment.dto";
@@ -146,6 +147,7 @@ export class SocialController {
 
   @Post(":id/comments")
   @UseGuards(JwtAuthGuard)
+  @RateLimit({ limit: 50 })
   @ApiBearerAuth("bearer")
   @ApiOperation({ summary: "Create a comment on a post" })
   @ApiResponse({ status: 201, description: "Comment created." })

@@ -23,6 +23,7 @@ import { IsInt, IsOptional, Max, Min } from "class-validator";
 import { Type } from "class-transformer";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { Public } from "../common/decorators/public.decorator";
+import { RateLimit } from "../common/decorators/rate-limit.decorator";
 import { SocialGatewayService } from "./social.service";
 import { CreateReplyDto } from "./dto/create-reply.dto";
 
@@ -57,6 +58,7 @@ export class SocialCommentController {
 
   @Post(":id/replies")
   @UseGuards(JwtAuthGuard)
+  @RateLimit({ limit: 50 })
   @ApiBearerAuth("bearer")
   @ApiOperation({ summary: "Reply to a comment" })
   @ApiResponse({ status: 201, description: "Reply created." })
