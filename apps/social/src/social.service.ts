@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Inject,
@@ -7,7 +8,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { InjectDataSource, InjectRepository } from "@nestjs/typeorm";
-import { DataSource, IsNull, QueryFailedError, Repository } from "typeorm";
+import { DataSource, In, IsNull, QueryFailedError, Repository } from "typeorm";
 import { Channel } from "amqplib";
 import { CachedService } from "@app/cached";
 import { PaginatedResponse } from "@app/common";
@@ -16,6 +17,7 @@ import { EVENT } from "@app/common/constants/event";
 import { Post } from "./entities/post.entity";
 import { PostLike } from "./entities/post-like.entity";
 import { Comment } from "./entities/comment.entity";
+import { Follow } from "./entities/follow.entity";
 
 @Injectable()
 export class SocialService {
@@ -28,6 +30,8 @@ export class SocialService {
     private readonly postLikeRepository: Repository<PostLike>,
     @InjectRepository(Comment)
     private readonly commentRepository: Repository<Comment>,
+    @InjectRepository(Follow)
+    private readonly followRepository: Repository<Follow>,
     @InjectDataSource()
     private readonly dataSource: DataSource,
     private readonly cachedService: CachedService,
@@ -49,7 +53,7 @@ export class SocialService {
     );
     if (cached !== null) return cached === "1";
     const exists = await this.postLikeRepository.findOne({
-      where: { post_id: postId, user_id: viewerUserId },
+      where: { postId, userId: viewerUserId },
     });
     const isLiked = exists !== null;
     await this.cachedService.set(
@@ -66,10 +70,10 @@ export class SocialService {
     videoUrl?: string | null;
   }): Promise<Post> {
     const post = this.postRepository.create({
-      user_id: payload.userId,
+      userId: payload.userId,
       content: payload.content,
-      image_urls: payload.imageUrls ?? null,
-      video_url: payload.videoUrl ?? null,
+      imageUrls: payload.imageUrls ?? null,
+      videoUrl: payload.videoUrl ?? null,
     });
     return this.postRepository.save(post);
   }
@@ -79,15 +83,17 @@ export class SocialService {
     limit: number;
     viewerUserId?: number | null;
   }): Promise<
-    PaginatedResponse<Post & { likeCount: number; isLiked: boolean }>
+    PaginatedResponse<
+      Post & { likeCount: number; isLiked: boolean; commentCount: number }
+    >
   > {
     const { page, limit, viewerUserId } = payload;
     const [posts, total] = await this.postRepository.findAndCount({
-      order: { created_at: "DESC" },
+      order: { createdAt: "DESC" },
       skip: (page - 1) * limit,
       take: limit,
     });
-    const [counts, likedFlags] = await Promise.all([
+    const [counts, likedFlags, commentCounts] = await Promise.all([
       Promise.all(
         posts.map(async (post) => {
           const cached = await this.cachedService.get(
@@ -95,7 +101,7 @@ export class SocialService {
           );
           if (cached !== null) return parseInt(cached, 10);
           const count = await this.postLikeRepository.count({
-            where: { post_id: post.id },
+            where: { postId: post.id },
           });
           await this.cachedService.set(
             `post:like_count:${post.id}`,
@@ -107,12 +113,18 @@ export class SocialService {
       Promise.all(
         posts.map((post) => this.resolveIsLiked(post.id, viewerUserId)),
       ),
+      Promise.all(
+        posts.map((post) =>
+          this.commentRepository.count({ where: { postId: post.id } }),
+        ),
+      ),
     ]);
     return PaginatedResponse.of(
       posts.map((post, i) => ({
         ...post,
         likeCount: counts[i] ?? 0,
         isLiked: likedFlags[i] ?? false,
+        commentCount: commentCounts[i] ?? 0,
       })),
       total,
       page,
@@ -126,16 +138,18 @@ export class SocialService {
     limit: number;
     viewerUserId?: number | null;
   }): Promise<
-    PaginatedResponse<Post & { likeCount: number; isLiked: boolean }>
+    PaginatedResponse<
+      Post & { likeCount: number; isLiked: boolean; commentCount: number }
+    >
   > {
     const { userId, page, limit, viewerUserId } = payload;
     const [posts, total] = await this.postRepository.findAndCount({
-      where: { user_id: userId },
-      order: { created_at: "DESC" },
+      where: { userId },
+      order: { createdAt: "DESC" },
       skip: (page - 1) * limit,
       take: limit,
     });
-    const [counts, likedFlags] = await Promise.all([
+    const [counts, likedFlags, commentCounts] = await Promise.all([
       Promise.all(
         posts.map(async (post) => {
           const cached = await this.cachedService.get(
@@ -143,7 +157,7 @@ export class SocialService {
           );
           if (cached !== null) return parseInt(cached, 10);
           const count = await this.postLikeRepository.count({
-            where: { post_id: post.id },
+            where: { postId: post.id },
           });
           await this.cachedService.set(
             `post:like_count:${post.id}`,
@@ -155,12 +169,18 @@ export class SocialService {
       Promise.all(
         posts.map((post) => this.resolveIsLiked(post.id, viewerUserId)),
       ),
+      Promise.all(
+        posts.map((post) =>
+          this.commentRepository.count({ where: { postId: post.id } }),
+        ),
+      ),
     ]);
     return PaginatedResponse.of(
       posts.map((post, i) => ({
         ...post,
         likeCount: counts[i] ?? 0,
         isLiked: likedFlags[i] ?? false,
+        commentCount: commentCounts[i] ?? 0,
       })),
       total,
       page,
@@ -171,7 +191,9 @@ export class SocialService {
   async getPostById(
     postId: number,
     viewerUserId?: number | null,
-  ): Promise<Post & { likeCount: number; isLiked: boolean }> {
+  ): Promise<
+    Post & { likeCount: number; isLiked: boolean; commentCount: number }
+  > {
     const post = await this.postRepository.findOne({ where: { id: postId } });
     if (!post) {
       throw new NotFoundException(`Post ${postId} not found`);
@@ -181,14 +203,17 @@ export class SocialService {
     let likeCount: number;
     if (cached === null) {
       likeCount = await this.postLikeRepository.count({
-        where: { post_id: postId },
+        where: { postId },
       });
       await this.cachedService.set(cacheKey, likeCount.toString());
     } else {
       likeCount = parseInt(cached, 10);
     }
-    const isLiked = await this.resolveIsLiked(postId, viewerUserId);
-    return { ...post, likeCount, isLiked };
+    const [isLiked, commentCount] = await Promise.all([
+      this.resolveIsLiked(postId, viewerUserId),
+      this.commentRepository.count({ where: { postId } }),
+    ]);
+    return { ...post, likeCount, isLiked, commentCount };
   }
 
   async likePost(payload: {
@@ -198,8 +223,8 @@ export class SocialService {
     try {
       await this.postLikeRepository.save(
         this.postLikeRepository.create({
-          post_id: payload.postId,
-          user_id: payload.userId,
+          postId: payload.postId,
+          userId: payload.userId,
         }),
       );
     } catch (err) {
@@ -227,8 +252,8 @@ export class SocialService {
     userId: number;
   }): Promise<{ liked: boolean; postId: number; likeCount: number }> {
     const result = await this.postLikeRepository.delete({
-      post_id: payload.postId,
-      user_id: payload.userId,
+      postId: payload.postId,
+      userId: payload.userId,
     });
     if (result.affected === 0) {
       throw new NotFoundException("Like not found");
@@ -254,7 +279,7 @@ export class SocialService {
     if (!post) {
       throw new NotFoundException(`Post ${payload.postId} not found`);
     }
-    if (post.user_id !== payload.userId) {
+    if (post.userId !== payload.userId) {
       throw new ForbiddenException("You can only delete your own posts");
     }
     await this.postRepository.remove(post);
@@ -273,12 +298,12 @@ export class SocialService {
       throw new NotFoundException(`Post ${payload.postId} not found`);
     }
     const comment = this.commentRepository.create({
-      post_id: payload.postId,
-      user_id: payload.userId,
+      postId: payload.postId,
+      userId: payload.userId,
       content: payload.content,
     });
     const saved = await this.commentRepository.save(comment);
-    if (payload.userId !== post.user_id) {
+    if (payload.userId !== post.userId) {
       this.fanoutChannel.publish(
         EXCHANGE.SOCIAL_EXCHANGE,
         EVENT.COMMENT_CREATED_EVENT,
@@ -286,7 +311,7 @@ export class SocialService {
           JSON.stringify({
             data: {
               postId: payload.postId,
-              postOwnerId: post.user_id,
+              postOwnerId: post.userId,
               commenterId: payload.userId,
               commentId: saved.id,
               preview: payload.content.slice(0, 20),
@@ -303,11 +328,11 @@ export class SocialService {
     postId: number;
     page: number;
     limit: number;
-  }): Promise<PaginatedResponse<Comment & { reply_count: number }>> {
+  }): Promise<PaginatedResponse<Comment & { replyCount: number }>> {
     const { postId, page, limit } = payload;
     const [comments, total] = await this.commentRepository.findAndCount({
-      where: { post_id: postId, parent: IsNull() },
-      order: { created_at: "ASC" },
+      where: { postId, parent: IsNull() },
+      order: { createdAt: "ASC" },
       skip: (page - 1) * limit,
       take: limit,
     });
@@ -316,7 +341,7 @@ export class SocialService {
     );
     const data = comments.map((c, i) => ({
       ...c,
-      reply_count: replyCounts[i] ?? 0,
+      replyCount: Math.max(0, (replyCounts[i] ?? 1) - 1),
     }));
     return PaginatedResponse.of(data, total, page, limit);
   }
@@ -331,7 +356,7 @@ export class SocialService {
     if (!comment) {
       throw new NotFoundException(`Comment ${payload.commentId} not found`);
     }
-    if (comment.user_id !== payload.userId) {
+    if (comment.userId !== payload.userId) {
       throw new ForbiddenException("You can only delete your own comments");
     }
     await this.commentRepository.remove(comment);
@@ -354,13 +379,13 @@ export class SocialService {
     }
     const saved = await this.treeRepo.save(
       this.commentRepository.create({
-        post_id: payload.postId,
-        user_id: payload.userId,
+        postId: payload.postId,
+        userId: payload.userId,
         content: payload.content,
         parent: parentComment,
       }),
     );
-    if (payload.userId !== parentComment.user_id) {
+    if (payload.userId !== parentComment.userId) {
       this.fanoutChannel.publish(
         EXCHANGE.SOCIAL_EXCHANGE,
         EVENT.REPLY_CREATED_EVENT,
@@ -368,7 +393,7 @@ export class SocialService {
           JSON.stringify({
             data: {
               parentCommentId: payload.parentCommentId,
-              commentOwnerId: parentComment.user_id,
+              commentOwnerId: parentComment.userId,
               replierId: payload.userId,
               replyId: saved.id,
               preview: payload.content.slice(0, 20),
@@ -394,5 +419,150 @@ export class SocialService {
     return this.treeRepo.findDescendantsTree(comment, {
       depth: payload.depth ?? 5,
     });
+  }
+
+  async followUser(payload: {
+    followerId: number;
+    followingId: number;
+  }): Promise<{ followed: boolean; followingId: number }> {
+    if (payload.followerId === payload.followingId) {
+      throw new BadRequestException("Cannot follow yourself");
+    }
+    try {
+      await this.followRepository.save(
+        this.followRepository.create({
+          followerId: payload.followerId,
+          followingId: payload.followingId,
+        }),
+      );
+    } catch (err) {
+      if (
+        err instanceof QueryFailedError &&
+        ((err.driverError as { code?: string })?.code === "ER_DUP_ENTRY" ||
+          (err.driverError as { code?: string })?.code === "23505")
+      ) {
+        throw new ConflictException("Already following");
+      }
+      throw err;
+    }
+    return { followed: true, followingId: payload.followingId };
+  }
+
+  async unfollowUser(payload: {
+    followerId: number;
+    followingId: number;
+  }): Promise<{ followed: boolean; followingId: number }> {
+    const result = await this.followRepository.delete({
+      followerId: payload.followerId,
+      followingId: payload.followingId,
+    });
+    if (result.affected === 0) {
+      throw new NotFoundException("Follow relationship not found");
+    }
+    return { followed: false, followingId: payload.followingId };
+  }
+
+  async getFollowers(payload: {
+    userId: number;
+    page: number;
+    limit: number;
+  }): Promise<PaginatedResponse<{ followerId: number; createdAt: Date }>> {
+    const { userId, page, limit } = payload;
+    const [rows, total] = await this.followRepository.findAndCount({
+      where: { followingId: userId },
+      order: { createdAt: "DESC" },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+    return PaginatedResponse.of(
+      rows.map((r) => ({ followerId: r.followerId, createdAt: r.createdAt })),
+      total,
+      page,
+      limit,
+    );
+  }
+
+  async getFollowing(payload: {
+    userId: number;
+    page: number;
+    limit: number;
+  }): Promise<PaginatedResponse<{ followingId: number; createdAt: Date }>> {
+    const { userId, page, limit } = payload;
+    const [rows, total] = await this.followRepository.findAndCount({
+      where: { followerId: userId },
+      order: { createdAt: "DESC" },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+    return PaginatedResponse.of(
+      rows.map((r) => ({ followingId: r.followingId, createdAt: r.createdAt })),
+      total,
+      page,
+      limit,
+    );
+  }
+
+  async getFollowingFeed(payload: {
+    userId: number;
+    page: number;
+    limit: number;
+    viewerUserId?: number | null;
+  }): Promise<
+    PaginatedResponse<
+      Post & { likeCount: number; isLiked: boolean; commentCount: number }
+    >
+  > {
+    const { userId, page, limit, viewerUserId } = payload;
+    const following = await this.followRepository.find({
+      where: { followerId: userId },
+      select: ["followingId"],
+    });
+    if (following.length === 0) {
+      return PaginatedResponse.of([], 0, page, limit);
+    }
+    const followingIds = following.map((f) => f.followingId);
+    const [posts, total] = await this.postRepository.findAndCount({
+      where: { userId: In(followingIds) },
+      order: { createdAt: "DESC" },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+    const [counts, likedFlags, commentCounts] = await Promise.all([
+      Promise.all(
+        posts.map(async (post) => {
+          const cached = await this.cachedService.get(
+            `post:like_count:${post.id}`,
+          );
+          if (cached !== null) return parseInt(cached, 10);
+          const count = await this.postLikeRepository.count({
+            where: { postId: post.id },
+          });
+          await this.cachedService.set(
+            `post:like_count:${post.id}`,
+            count.toString(),
+          );
+          return count;
+        }),
+      ),
+      Promise.all(
+        posts.map((post) => this.resolveIsLiked(post.id, viewerUserId)),
+      ),
+      Promise.all(
+        posts.map((post) =>
+          this.commentRepository.count({ where: { postId: post.id } }),
+        ),
+      ),
+    ]);
+    return PaginatedResponse.of(
+      posts.map((post, i) => ({
+        ...post,
+        likeCount: counts[i] ?? 0,
+        isLiked: likedFlags[i] ?? false,
+        commentCount: commentCounts[i] ?? 0,
+      })),
+      total,
+      page,
+      limit,
+    );
   }
 }

@@ -10,6 +10,7 @@ import { Post } from "./entities/post.entity";
 import { PostLike } from "./entities/post-like.entity";
 import { Like } from "./entities/like.entity";
 import { Comment } from "./entities/comment.entity";
+import { Follow } from "./entities/follow.entity";
 
 @Module({
   imports: [
@@ -24,10 +25,11 @@ import { Comment } from "./entities/comment.entity";
       username: process.env.MYSQL_USER,
       password: process.env.MYSQL_PASSWORD,
       database: process.env.MYSQL_DATABASE,
-      entities: [Post, PostLike, Like, Comment],
+      entities: [Post, PostLike, Like, Comment, Follow],
       synchronize: false,
+      timezone: "Z",
     }),
-    TypeOrmModule.forFeature([Post, PostLike, Comment]),
+    TypeOrmModule.forFeature([Post, PostLike, Comment, Follow]),
     ScheduleModule.forRoot(),
     CachedModule,
     RmqModule,

@@ -26,21 +26,34 @@ export class SocialController {
 
   @MessagePattern(SOCIAL_MESSAGE_PATTERN.GET_POSTS)
   async getPosts(
-    @Payload() payload: { page: number; limit: number },
+    @Payload()
+    payload: {
+      page: number;
+      limit: number;
+      viewerUserId?: number | null;
+    },
   ): Promise<unknown> {
     return this.socialService.getPosts(payload);
   }
 
   @MessagePattern(SOCIAL_MESSAGE_PATTERN.GET_POSTS_BY_USER)
   async getPostsByUser(
-    @Payload() payload: { userId: number; page: number; limit: number },
+    @Payload()
+    payload: {
+      userId: number;
+      page: number;
+      limit: number;
+      viewerUserId?: number | null;
+    },
   ): Promise<unknown> {
     return this.socialService.getPostsByUser(payload);
   }
 
   @MessagePattern(SOCIAL_MESSAGE_PATTERN.GET_POST_BY_ID)
-  async getPostById(@Payload() postId: number): Promise<Post> {
-    return this.socialService.getPostById(postId);
+  async getPostById(
+    @Payload() payload: { postId: number; viewerUserId?: number | null },
+  ): Promise<unknown> {
+    return this.socialService.getPostById(payload.postId, payload.viewerUserId);
   }
 
   @MessagePattern(SOCIAL_MESSAGE_PATTERN.DELETE_POST)
@@ -103,5 +116,46 @@ export class SocialController {
     @Payload() payload: { commentId: number; depth?: number },
   ): Promise<Comment> {
     return this.socialService.getReplies(payload);
+  }
+
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.FOLLOW_USER)
+  async followUser(
+    @Payload() payload: { followerId: number; followingId: number },
+  ): Promise<{ followed: boolean; followingId: number }> {
+    return this.socialService.followUser(payload);
+  }
+
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.UNFOLLOW_USER)
+  async unfollowUser(
+    @Payload() payload: { followerId: number; followingId: number },
+  ): Promise<{ followed: boolean; followingId: number }> {
+    return this.socialService.unfollowUser(payload);
+  }
+
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.GET_FOLLOWERS)
+  async getFollowers(
+    @Payload() payload: { userId: number; page: number; limit: number },
+  ): Promise<unknown> {
+    return this.socialService.getFollowers(payload);
+  }
+
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.GET_FOLLOWING)
+  async getFollowing(
+    @Payload() payload: { userId: number; page: number; limit: number },
+  ): Promise<unknown> {
+    return this.socialService.getFollowing(payload);
+  }
+
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.GET_FOLLOWING_FEED)
+  async getFollowingFeed(
+    @Payload()
+    payload: {
+      userId: number;
+      page: number;
+      limit: number;
+      viewerUserId?: number | null;
+    },
+  ): Promise<unknown> {
+    return this.socialService.getFollowingFeed(payload);
   }
 }
