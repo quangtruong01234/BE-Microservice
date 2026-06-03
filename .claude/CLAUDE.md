@@ -124,6 +124,7 @@ try {
 - **TypeORM entities**: Use `!` (definite assignment assertion) on all column-decorated properties, not non-null assertions.
 - **DB routing**: MySQL for Orders, Products, User. PostgreSQL for Inventory, Payments, Rewards. Never cross-inject.
 - **Error handling**: Use `MicroserviceErrorHandler` in all gateway services. Microservices throw NestJS built-in exceptions.
+- **camelCase responses**: All API response fields sent to the frontend must be camelCase. Entity properties that map to snake_case DB columns must use `@Column({ name: 'snake_case' })` with a camelCase property name — never expose snake_case keys in HTTP responses.
 
 ## Debug Protocol
 
