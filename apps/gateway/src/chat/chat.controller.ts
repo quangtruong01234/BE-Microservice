@@ -13,6 +13,7 @@ import {
 import { Request } from "express";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
+import { RateLimit } from "../common/decorators/rate-limit.decorator";
 import { ChatGatewayService } from "./chat.service";
 import { CreateConversationDto, GetMessagesQueryDto } from "./dto/chat.dto";
 
@@ -39,6 +40,7 @@ export class ChatController {
   }
 
   @Get("conversations/:id/messages")
+  @RateLimit({ limit: 50 })
   async getMessages(
     @Req() req: Request,
     @Param("id", ParseIntPipe) conversationId: number,

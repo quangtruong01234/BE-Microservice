@@ -7,6 +7,7 @@ import {
 } from "libs/constant/port-tcp.constant";
 import { ChatController } from "./chat.controller";
 import { ChatGatewayService } from "./chat.service";
+import { ChatWsGateway } from "./chat.ws-gateway";
 
 @Module({
   imports: [
@@ -22,6 +23,6 @@ import { ChatGatewayService } from "./chat.service";
     ]),
   ],
   controllers: [ChatController],
-  providers: [ChatGatewayService],
+  providers: [ChatGatewayService, ChatWsGateway],
 })
 export class ChatGatewayModule {}

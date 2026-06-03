@@ -60,4 +60,11 @@ export class ChatController {
   ): Promise<Message> {
     return this.chatService.sendMessage(data.userId, data.dto);
   }
+
+  @MessagePattern(CHAT_MESSAGE_PATTERN.CHAT_CHECK_MEMBERSHIP)
+  async checkMembership(
+    @Payload() data: { userId: number; conversationId: number },
+  ): Promise<boolean> {
+    return this.chatService.checkMembership(data.userId, data.conversationId);
+  }
 }
