@@ -22,9 +22,9 @@ export class NotificationService {
     message: string,
   ): Promise<void> {
     const notification = this.notificationRepository.create({
-      user_id: userId,
+      userId,
       type,
-      order_id: orderId,
+      orderId,
       message,
     });
     const saved = await this.notificationRepository.save(notification);
@@ -40,8 +40,8 @@ export class NotificationService {
     limit: number,
   ): Promise<PaginatedResponse<Notification>> {
     const [data, total] = await this.notificationRepository.findAndCount({
-      where: { user_id: userId },
-      order: { created_at: "DESC" },
+      where: { userId },
+      order: { createdAt: "DESC" },
       skip: (page - 1) * limit,
       take: limit,
     });
@@ -53,8 +53,8 @@ export class NotificationService {
     userId: number,
   ): Promise<{ success: boolean }> {
     await this.notificationRepository.update(
-      { id: notificationId, user_id: userId },
-      { is_read: true },
+      { id: notificationId, userId },
+      { isRead: true },
     );
     return { success: true };
   }

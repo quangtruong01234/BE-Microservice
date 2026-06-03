@@ -7,12 +7,12 @@ import { MicroserviceErrorHandler } from "../common/exception/microservice-error
 
 interface NotificationItem {
   id: number;
-  user_id: number;
+  userId: number;
   type: string;
-  order_id: number;
+  orderId: number;
   message: string;
-  is_read: boolean;
-  created_at: string;
+  isRead: boolean;
+  createdAt: string;
 }
 
 interface PaginatedNotifications {
