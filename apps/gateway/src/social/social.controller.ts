@@ -19,6 +19,7 @@ import {
   ApiTags,
 } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
+import { OptionalJwtAuthGuard } from "../common/guards/optional-jwt-auth.guard";
 import { Public } from "../common/decorators/public.decorator";
 import { SocialGatewayService } from "./social.service";
 import { CreatePostDto } from "./dto/create-post.dto";
@@ -51,36 +52,52 @@ export class SocialController {
 
   @Get()
   @Public()
+  @UseGuards(OptionalJwtAuthGuard)
   @ApiOperation({ summary: "Get paginated posts" })
   @ApiResponse({ status: 200, description: "Paginated post list." })
   async getPosts(
+    @Req() req: Request,
     @Query(ValidationPipe) query: GetPostsQueryDto,
   ): Promise<unknown> {
-    return this.socialService.getPosts(query.page ?? 1, query.limit ?? 20);
+    const viewerUserId = req.user?.id ?? null;
+    return this.socialService.getPosts(
+      query.page ?? 1,
+      query.limit ?? 20,
+      viewerUserId,
+    );
   }
 
   @Get("user/:userId")
   @Public()
+  @UseGuards(OptionalJwtAuthGuard)
   @ApiOperation({ summary: "Get paginated posts by user" })
   @ApiResponse({ status: 200, description: "Paginated post list for user." })
   async getPostsByUser(
+    @Req() req: Request,
     @Param("userId", ParseIntPipe) userId: number,
     @Query(ValidationPipe) query: GetPostsQueryDto,
   ): Promise<unknown> {
+    const viewerUserId = req.user?.id ?? null;
     return this.socialService.getPostsByUser(
       userId,
       query.page ?? 1,
       query.limit ?? 20,
+      viewerUserId,
     );
   }
 
   @Get(":id")
   @Public()
+  @UseGuards(OptionalJwtAuthGuard)
   @ApiOperation({ summary: "Get a post by ID" })
   @ApiResponse({ status: 200, description: "Post found." })
   @ApiResponse({ status: 404, description: "Post not found." })
-  async getPostById(@Param("id", ParseIntPipe) id: number): Promise<unknown> {
-    return this.socialService.getPostById(id);
+  async getPostById(
+    @Req() req: Request,
+    @Param("id", ParseIntPipe) id: number,
+  ): Promise<unknown> {
+    const viewerUserId = req.user?.id ?? null;
+    return this.socialService.getPostById(id, viewerUserId);
   }
 
   @Post(":id/like")

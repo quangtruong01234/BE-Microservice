@@ -8,6 +8,7 @@ import {
 import { SocialController } from "./social.controller";
 import { SocialCommentController } from "./social-comment.controller";
 import { SocialGatewayService } from "./social.service";
+import { OptionalJwtAuthGuard } from "../common/guards/optional-jwt-auth.guard";
 
 @Module({
   imports: [
@@ -23,6 +24,6 @@ import { SocialGatewayService } from "./social.service";
     ]),
   ],
   controllers: [SocialController, SocialCommentController],
-  providers: [SocialGatewayService],
+  providers: [SocialGatewayService, OptionalJwtAuthGuard],
 })
 export class SocialGatewayModule {}
