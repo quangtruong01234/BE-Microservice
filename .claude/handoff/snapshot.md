@@ -3,7 +3,7 @@
 TryBuy — NestJS monorepo, 7 microservices + 4 shared libs.
 Transport: TCP (sync) + RabbitMQ FANOUT (async).
 DB: MySQL 8 (orders/user/product) + PostgreSQL (inventory/payments/rewards). Cache: Redis.
-Node A: gateway:3000, orders:3001, user:3003, product:3006, social:3008, notification:3009, chat:3012(TCP)/3011(WS)
+Node A: gateway:3000, orders:3001, user:3003, product:3006, social:3008, notification:3009, chat:3012(TCP)/WS via gateway:3000
 Node B: inventory:3002, payments:3005, rewards:3004
 Base URL: http://localhost:3000 | Swagger: /doc
 
@@ -58,10 +58,14 @@ Base URL: http://localhost:3000 | Swagger: /doc
 - Queue loop fix: no-op @EventPattern(PAYMENT_COMPLETED_EVENT) added to rewards + payments controllers — stale events acked and discarded on next deploy
 - @UseFilters(HttpToRpcExceptionFilter) applied to payments, inventory, rewards, product controllers — 4xx now propagate correctly through gateway
 - Inventory service: findOne/findByProductId/findBySku now throw NotFoundException instead of returning null; findByProductIdOrNull added for internal callers (checkStock/reserve/release/consume)
-- Real-time Chat: apps/chat/ service extracted (port TCP:3012, WS:3011/chat); CHAT_MESSAGE_PATTERN + CHAT_SERVICE constants; ChatGatewayModule wired in gateway; nginx /chat/ → 3011; 5-day message cleanup cron; JWT claim fix (userId not sub); Reply support verified: parentMessageId saved + broadcast correctly (13/13 E2E pass); Test artifacts: scripts/test-chat-ws.mjs, scripts/test-chat-reply.mjs
+- Real-time Chat: apps/chat/ service extracted (port TCP:3012); WS moved to gateway:3000/chat (ChatWsGateway in apps/gateway/src/chat/); CHAT_MESSAGE_PATTERN + CHAT_SERVICE constants; ChatGatewayModule wired in gateway; nginx /chat/ → 3000 (gateway handles WS); 5-day message cleanup cron; JWT claim fix (userId not sub); Reply support verified: parentMessageId saved + broadcast correctly (13/13 E2E pass); Test artifacts: scripts/test-chat-ws.mjs, scripts/test-chat-reply.mjs
 - PaymentMethod enum consolidated: moved to libs/common/src/constants/payment-method.enum.ts, exported via @app/common; removed duplicate declarations from apps/orders/src/entity/order.entity.ts + apps/gateway/src/order/dto/create-order.dto.ts; orders.controller + orders.service updated to import from @app/common
 - GET /api/user/me + PATCH /api/user/:id: fully implemented + 6/6 E2E pass; JWT claim fix: JwtAuthGuard maps payload to req.user.id (not req.user.userId) — bug caused getMe to return wrong user when userId was undefined
 - PaginatedResponse<T>: shared type in @app/common, PaginatedResponse.of() factory; all paginated methods use standard shape: { data, total, page, limit, totalPages, hasNext }
+- isLiked bug fix: OptionalJwtAuthGuard added — public social GET routes (@Public()) now populate req.user when a valid token is present; viewerUserId correctly passed to resolveIsLiked(); verified E2E: no cookie → isLiked:false, with cookie (user who liked) → isLiked:true
+- Product search index + cache: 7 DB indexes added to products table (brand_id, is_active, is_featured, is_trending, condition, price, rating); CachedModule wired into ProductModule; findAllProducts cache-aside with 5s TTL (key: products:search:<stable-JSON>); invalidation on create/update/delete via keys("products:search:*") scan; keys() method added to CachedService; migration SQL needed for existing DB (see below)
+
+- User Follow: Follow entity (follows table, unique uq_follows_follower_following); followUser/unfollowUser/getFollowers/getFollowing/getFollowingFeed in social.service.ts; 5 new @MessagePattern handlers in social.controller.ts; SocialFollowController added to gateway (POST/DELETE /api/social/users/:id/follow, GET /api/social/users/:id/followers, GET /api/social/users/:id/following, GET /api/social/users/:id/feed); feed hydrates author info via fetchAuthorMap; **migration SQL required** (see Known Issues)
 
 ## Active Tasks
 
@@ -70,6 +74,7 @@ Base URL: http://localhost:3000 | Swagger: /doc
 ## Known Issues
 
 - BuyerInfo interface in gateway order.service declares 4 fields (id/username/email/name) but user service returns 6 (+ avatar/isActive) — minor type mismatch, no runtime impact; fix when touching that area
+- **follows table migration**: `synchronize: false` on social service — run this SQL on MySQL before starting social service: `CREATE TABLE IF NOT EXISTS follows (id INT AUTO_INCREMENT PRIMARY KEY, follower_id INT NOT NULL, following_id INT NOT NULL, created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), INDEX idx_follows_follower (follower_id), INDEX idx_follows_following (following_id), UNIQUE KEY uq_follows_follower_following (follower_id, following_id));`
 
 ## Key Conventions
 
