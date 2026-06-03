@@ -50,11 +50,11 @@ export class OrdersService {
 
   async placeOrder(
     userId: number,
-    payment_method: PaymentMethod,
-    shipping_address: string,
+    paymentMethod: PaymentMethod,
+    shippingAddress: string,
     items: Array<{
-      product_id: number;
-      product_name: string;
+      productId: number;
+      productName: string;
       quantity: number;
       price: number;
     }>,
@@ -67,7 +67,7 @@ export class OrdersService {
             available: boolean;
             availableStock: number;
           }>(INVENTORY_MESSAGE_PATTERNS.INVENTORY_CHECK_STOCK, {
-            productId: item.product_id,
+            productId: item.productId,
             quantity: item.quantity,
           })
           .pipe(
@@ -77,7 +77,7 @@ export class OrdersService {
       );
       if (!result.available) {
         throw new BadRequestException(
-          `Insufficient stock for product ${item.product_id}: requested ${item.quantity}, available ${result.availableStock}`,
+          `Insufficient stock for product ${item.productId}: requested ${item.quantity}, available ${result.availableStock}`,
         );
       }
     }
@@ -88,16 +88,16 @@ export class OrdersService {
     // Tạo order trước
     const order = await this.orderRepository.save(
       this.orderRepository.create({
-        user_id: userId,
+        userId,
         total,
-        payment_method,
-        shipping_address,
-        cod_amount: payment_method === PaymentMethod.COD ? total : null,
+        paymentMethod,
+        shippingAddress,
+        codAmount: paymentMethod === PaymentMethod.COD ? total : null,
       }),
     );
-    // Tạo order_items với order_id vừa tạo
+    // Tạo order_items với orderId vừa tạo
     const orderItems = items.map((item) =>
-      this.orderItemRepository.create({ ...item, order_id: order.id }),
+      this.orderItemRepository.create({ ...item, orderId: order.id }),
     );
     await this.orderItemRepository.save(orderItems);
     // Gán items vào order để trả về
@@ -108,7 +108,7 @@ export class OrdersService {
     const routingKey = EVENT.ORDER_CREATED_EVENT;
 
     const eventPayload = {
-      data: { ...order, payment_method: order.payment_method },
+      data: { ...order, paymentMethod: order.paymentMethod },
       pattern: routingKey,
     };
 
@@ -118,18 +118,18 @@ export class OrdersService {
       Buffer.from(JSON.stringify(eventPayload)),
     );
 
-    if (order.payment_method === PaymentMethod.COD) {
+    if (order.paymentMethod === PaymentMethod.COD) {
       try {
         const ghnCode = await this.ghnService.createShippingOrder(order);
         await this.orderRepository.update(order.id, {
-          ghn_order_code: ghnCode,
+          ghnOrderCode: ghnCode,
         });
-        order.ghn_order_code = ghnCode;
+        order.ghnOrderCode = ghnCode;
       } catch (err) {
         this.logger.error(
           `GHN createShippingOrder failed for order ${order.id}: ${err}`,
         );
-        // order already saved — return without ghn_order_code, retry later
+        // order already saved — return without ghnOrderCode, retry later
       }
     }
 
@@ -142,9 +142,9 @@ export class OrdersService {
     limit: number = 10,
   ): Promise<PaginatedResponse<Order>> {
     const [data, total] = await this.orderRepository.findAndCount({
-      where: { user_id: userId },
+      where: { userId },
       relations: ["items"],
-      order: { created_at: "DESC" },
+      order: { createdAt: "DESC" },
       skip: (page - 1) * limit,
       take: limit,
     });
@@ -157,7 +157,7 @@ export class OrdersService {
   ): Promise<PaginatedResponse<Order>> {
     const [data, total] = await this.orderRepository.findAndCount({
       relations: ["items"],
-      order: { created_at: "DESC" },
+      order: { createdAt: "DESC" },
       skip: (page - 1) * limit,
       take: limit,
     });
@@ -191,18 +191,18 @@ export class OrdersService {
 
     // COD orders: payment_completed is emitted by GHN webhook on delivery,
     // status is already COMPLETED at that point — nothing to do here
-    if (order.payment_method === PaymentMethod.COD) {
+    if (order.paymentMethod === PaymentMethod.COD) {
       this.logger.log(
         `[ORDERS] payment_completed: COD order ${orderId} already processed by GHN webhook`,
       );
       return;
     }
 
-    // ZaloPay/VNPay: create GHN shipping order (cod_amount = null → 0 in GHN payload)
+    // ZaloPay/VNPay: create GHN shipping order (codAmount = null → 0 in GHN payload)
     try {
       const ghnCode = await this.ghnService.createShippingOrder(order);
-      await this.orderRepository.update(order.id, { ghn_order_code: ghnCode });
-      order.ghn_order_code = ghnCode;
+      await this.orderRepository.update(order.id, { ghnOrderCode: ghnCode });
+      order.ghnOrderCode = ghnCode;
       this.logger.log(`[ORDERS] GHN order created for ${orderId}: ${ghnCode}`);
     } catch (err) {
       this.logger.error(
@@ -230,7 +230,7 @@ export class OrdersService {
       throw new BadRequestException("Order cannot be canceled");
     }
 
-    if (callerRole !== "admin" && Number(order.user_id) !== callerId) {
+    if (callerRole !== "admin" && Number(order.userId) !== callerId) {
       throw new ForbiddenException(
         "You do not have permission to cancel this order",
       );
@@ -259,7 +259,7 @@ export class OrdersService {
     ghnStatus: string,
   ): Promise<void> {
     const order = await this.orderRepository.findOne({
-      where: { ghn_order_code: ghnOrderCode },
+      where: { ghnOrderCode },
     });
 
     if (!order) {
@@ -289,7 +289,7 @@ export class OrdersService {
 
     if (
       newStatus === OrderStatus.COMPLETED &&
-      order.payment_method === PaymentMethod.COD
+      order.paymentMethod === PaymentMethod.COD
     ) {
       this.fanoutChannel.publish(
         EXCHANGE.PAYMENTS_EXCHANGE,
@@ -318,7 +318,7 @@ export class OrdersService {
     if (!order) {
       throw new NotFoundException(`Order ${orderId} not found`);
     }
-    if (Number(order.user_id) !== requestingUserId) {
+    if (Number(order.userId) !== requestingUserId) {
       throw new ForbiddenException("You do not have access to this order");
     }
     const user = await firstValueFrom(
@@ -328,7 +328,7 @@ export class OrdersService {
           username: string;
           email: string;
           name: string | null;
-        }>({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, order.user_id)
+        }>({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, order.userId)
         .pipe(
           timeout(10000),
           catchError((e: unknown) => throwError(() => e)),

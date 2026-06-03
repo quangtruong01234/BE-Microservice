@@ -5,10 +5,10 @@ export function generateInvoicePdf(
     id: number;
     status?: string;
     total: number;
-    created_at: Date;
+    createdAt: Date;
     items: Array<{
-      product_id: number;
-      product_name: string;
+      productId: number;
+      productName: string;
       quantity: number;
       price: number;
     }>;
@@ -23,7 +23,7 @@ export function generateInvoicePdf(
     doc.on("end", () => resolve(Buffer.concat(chunks)));
     doc.on("error", reject);
 
-    const invoiceDate = new Date(order.created_at).toLocaleDateString("en-US", {
+    const invoiceDate = new Date(order.createdAt).toLocaleDateString("en-US", {
       year: "numeric",
       month: "long",
       day: "numeric",
@@ -82,7 +82,7 @@ export function generateInvoicePdf(
       runningTotal += subtotal;
       const rowY = doc.y;
       doc.text(
-        item.product_name || `Product #${item.product_id}`,
+        item.productName || `Product #${item.productId}`,
         col.name,
         rowY,
         { width: 240 },

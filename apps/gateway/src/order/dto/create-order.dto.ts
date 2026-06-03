@@ -16,21 +16,21 @@ import { PaymentMethod } from "@app/common";
 export class OrderItemDto {
   @ApiProperty({ description: "Product ID", example: 1 })
   @IsInt()
-  product_id!: number;
+  declare productId: number;
 
   @ApiProperty({ description: "Product name", example: "iPhone 15 Pro" })
   @IsString()
-  product_name!: string;
+  declare productName: string;
 
   @ApiProperty({ description: "Quantity", example: 2 })
   @IsInt()
   @Min(1)
-  quantity!: number;
+  declare quantity: number;
 
   @ApiProperty({ description: "Unit price at time of order", example: 99000 })
   @IsNumber()
   @Min(0)
-  price!: number;
+  declare price: number;
 }
 
 export class CreateOrderDto {
@@ -41,7 +41,7 @@ export class CreateOrderDto {
   })
   @IsEnum(PaymentMethod)
   @IsNotEmpty()
-  payment_method!: PaymentMethod;
+  declare paymentMethod: PaymentMethod;
 
   @ApiProperty({
     description: "Full shipping address",
@@ -50,11 +50,11 @@ export class CreateOrderDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(500)
-  shipping_address!: string;
+  declare shippingAddress: string;
 
   @ApiProperty({ type: [OrderItemDto], description: "List of order items" })
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => OrderItemDto)
-  items!: OrderItemDto[];
+  declare items: OrderItemDto[];
 }

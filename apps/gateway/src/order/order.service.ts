@@ -19,12 +19,12 @@ import { CreateOrderDto } from "./dto/create-order.dto";
 
 interface OrderResponse {
   id: number;
-  user_id: number;
+  userId: number;
   status: string;
   total: number;
   items: unknown[];
-  created_at: string;
-  updated_at: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export abstract class BaseAggregatorService {
@@ -70,8 +70,8 @@ export class OrderService {
             { cmd: CMD.CREATE_ORDER },
             {
               userId,
-              payment_method: dto.payment_method,
-              shipping_address: dto.shipping_address,
+              paymentMethod: dto.paymentMethod,
+              shippingAddress: dto.shippingAddress,
               items: dto.items,
             },
           )
@@ -117,7 +117,7 @@ export class OrderService {
       throw new NotFoundException(`Order ${id} not found`);
     }
 
-    if (callerRole !== "admin" && Number(order.user_id) !== callerId) {
+    if (callerRole !== "admin" && Number(order.userId) !== callerId) {
       throw new ForbiddenException("You do not have access to this order");
     }
 
@@ -220,7 +220,7 @@ export class OrderService {
 
   async getPaymentUrl(
     orderId: number,
-  ): Promise<{ order_url: string | null; status: string | null }> {
+  ): Promise<{ orderUrl: string | null; status: string | null }> {
     try {
       return (await firstValueFrom(
         this.paymentsClient
@@ -231,7 +231,7 @@ export class OrderService {
               throw err;
             }),
           ),
-      )) as { order_url: string | null; status: string | null };
+      )) as { orderUrl: string | null; status: string | null };
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -261,7 +261,7 @@ export class OrderService {
         ),
     )) as { data: OrderResponse[]; total: number; page: number; limit: number };
 
-    const userIds = [...new Set(result.data.map((o) => Number(o.user_id)))];
+    const userIds = [...new Set(result.data.map((o) => Number(o.userId)))];
 
     let buyers: BuyerInfo[] = [];
     if (userIds.length > 0) {
@@ -289,7 +289,7 @@ export class OrderService {
 
     const data = result.data.map((order) => ({
       ...order,
-      buyer: buyerMap.get(Number(order.user_id)) ?? null,
+      buyer: buyerMap.get(Number(order.userId)) ?? null,
     }));
 
     return {

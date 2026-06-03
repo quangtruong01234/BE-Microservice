@@ -61,6 +61,7 @@ import { GhnModule } from "./ghn/ghn.module";
       database: process.env.MYSQL_DATABASE,
       entities: [Order, OrderItem],
       synchronize: true,
+      timezone: "Z",
     }),
     TypeOrmModule.forFeature([Order, OrderItem]),
   ],

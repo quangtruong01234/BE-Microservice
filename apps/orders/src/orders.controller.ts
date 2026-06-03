@@ -35,11 +35,11 @@ export class OrdersController {
     @Payload()
     payload: {
       userId: number;
-      payment_method: PaymentMethod;
-      shipping_address: string;
+      paymentMethod: PaymentMethod;
+      shippingAddress: string;
       items: {
-        product_id: number;
-        product_name: string;
+        productId: number;
+        productName: string;
         quantity: number;
         price: number;
       }[];
@@ -48,11 +48,11 @@ export class OrdersController {
     this.logger.log(
       `[ORDERS] Received create_order request with payload: ${JSON.stringify(payload)}`,
     );
-    const { userId, payment_method, shipping_address, items } = payload;
+    const { userId, paymentMethod, shippingAddress, items } = payload;
     return await this.ordersService.placeOrder(
       userId,
-      payment_method,
-      shipping_address,
+      paymentMethod,
+      shippingAddress,
       items,
     );
   }

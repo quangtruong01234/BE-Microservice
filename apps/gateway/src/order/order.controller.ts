@@ -145,7 +145,7 @@ export class OrderController {
   @ApiResponse({ status: 200, description: "Payment URL and status." })
   async getPaymentUrl(
     @Param("id") id: string,
-  ): Promise<{ order_url: string | null; status: string | null }> {
+  ): Promise<{ orderUrl: string | null; status: string | null }> {
     return await this.orderService.getPaymentUrl(+id);
   }
 }

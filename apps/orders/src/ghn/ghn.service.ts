@@ -40,7 +40,7 @@ export class GhnService {
       to_ward_name,
       to_district_name,
       to_province_name,
-    ] = order.shipping_address.split("|");
+    ] = order.shippingAddress.split("|");
 
     const body = {
       to_name,
@@ -49,13 +49,13 @@ export class GhnService {
       to_ward_name,
       to_district_name,
       to_province_name,
-      cod_amount: Math.round(Number(order.cod_amount ?? 0)),
+      cod_amount: Math.round(Number(order.codAmount ?? 0)),
       weight: 500,
       service_type_id: 2,
       payment_type_id: 2,
       required_note: "CHOXEMHANGKHONGTHU",
       items: order.items.map((i) => ({
-        name: i.product_name,
+        name: i.productName,
         quantity: i.quantity,
         price: Math.round(Number(i.price)),
       })),
