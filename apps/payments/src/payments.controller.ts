@@ -57,7 +57,7 @@ export class PaymentsController {
   @MessagePattern("get_payment_url")
   getPaymentUrl(
     @Payload() data: { orderId: number },
-  ): Promise<{ order_url: string | null; status: string | null }> {
+  ): Promise<{ orderUrl: string | null; status: string | null }> {
     return this.paymentsService.getPaymentUrl(data.orderId);
   }
 

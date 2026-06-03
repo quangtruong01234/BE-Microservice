@@ -42,21 +42,21 @@ export class PaymentsService {
 
     try {
       const existing = await this.paymentRepository.findOne({
-        where: { order_id: Number(orderId) },
+        where: { orderId: Number(orderId) },
       });
       if (existing) {
         this.logger.warn(
-          `[PAYMENTS] Duplicate order_id ${orderId} detected, skipping`,
+          `[PAYMENTS] Duplicate orderId ${orderId} detected, skipping`,
         );
         return {
-          paymentUrl: existing.order_url ?? "",
-          transactionId: existing.transaction_id ?? "",
+          paymentUrl: existing.orderUrl ?? "",
+          transactionId: existing.transactionId ?? "",
           appTransId: existing.appTransId ?? "",
         };
       }
 
       const payment = this.paymentRepository.create({
-        order_id: Number(orderId),
+        orderId: Number(orderId),
         amount,
         status: PaymentStatus.PENDING,
       });
@@ -71,13 +71,13 @@ export class PaymentsService {
       );
 
       const updateResult = await this.paymentRepository.update(
-        { order_id: Number(orderId) },
-        { order_url: paymentUrl, transaction_id: transactionId, appTransId },
+        { orderId: Number(orderId) },
+        { orderUrl: paymentUrl, transactionId, appTransId },
       );
       this.logger.log("[PAYMENTS] payment record updated with appTransId");
       if (updateResult.affected === 0) {
         throw new InternalServerErrorException(
-          "Failed to persist appTransId — payment row not found by order_id",
+          "Failed to persist appTransId — payment row not found by orderId",
         );
       }
 
@@ -103,7 +103,7 @@ export class PaymentsService {
 
     await this.paymentRepository.update(
       { appTransId },
-      { status: PaymentStatus.COMPLETED, transaction_id: zpTransId },
+      { status: PaymentStatus.COMPLETED, transactionId: zpTransId },
     );
 
     const updated = await this.paymentRepository.findOne({
@@ -114,7 +114,7 @@ export class PaymentsService {
     }
 
     const eventPayload = {
-      data: { orderId: updated.order_id, amount: updated.amount },
+      data: { orderId: updated.orderId, amount: updated.amount },
       pattern: EVENT.PAYMENT_COMPLETED_EVENT,
     };
     this.fanoutChannel.publish(
@@ -124,7 +124,7 @@ export class PaymentsService {
     );
 
     this.logger.log(
-      `[PAYMENTS] Payment completed orderId=${updated.order_id} appTransId=${appTransId}`,
+      `[PAYMENTS] Payment completed orderId=${updated.orderId} appTransId=${appTransId}`,
     );
     return updated;
   }
@@ -144,7 +144,7 @@ export class PaymentsService {
 
     const updateResult = await this.paymentRepository.update(
       { appTransId: vnpTxnRef },
-      { status: PaymentStatus.COMPLETED, transaction_id: vnpTransactionNo },
+      { status: PaymentStatus.COMPLETED, transactionId: vnpTransactionNo },
     );
     if (updateResult.affected === 0) {
       throw new NotFoundException(
@@ -160,7 +160,7 @@ export class PaymentsService {
     }
 
     const eventPayload = {
-      data: { orderId: updated.order_id, amount: updated.amount },
+      data: { orderId: updated.orderId, amount: updated.amount },
       pattern: EVENT.PAYMENT_COMPLETED_EVENT,
     };
     this.fanoutChannel.publish(
@@ -170,19 +170,19 @@ export class PaymentsService {
     );
 
     this.logger.log(
-      `[PAYMENTS] VNPay payment completed orderId=${updated.order_id} vnp_TxnRef=${vnpTxnRef}`,
+      `[PAYMENTS] VNPay payment completed orderId=${updated.orderId} vnp_TxnRef=${vnpTxnRef}`,
     );
     return updated;
   }
 
   async getPaymentUrl(
     orderId: number,
-  ): Promise<{ order_url: string | null; status: string | null }> {
+  ): Promise<{ orderUrl: string | null; status: string | null }> {
     const payment = await this.paymentRepository.findOne({
-      where: { order_id: orderId },
+      where: { orderId },
     });
     return {
-      order_url: payment?.order_url ?? null,
+      orderUrl: payment?.orderUrl ?? null,
       status: payment?.status ?? null,
     };
   }
@@ -191,7 +191,7 @@ export class PaymentsService {
     Array<{ id: string; name: string; description: string }>
   > {
     const methods = await this.paymentMethodRepository.find({
-      where: { is_active: true },
+      where: { isActive: true },
       order: { id: "ASC" },
     });
     return methods.map((m) => ({
