@@ -14,6 +14,11 @@ export class PaymentMethod {
   @Column({ type: "varchar", length: 255, nullable: false })
   description!: string;
 
-  @Column({ type: "boolean", default: true, nullable: false })
-  is_active!: boolean;
+  @Column({
+    name: "is_active",
+    type: "boolean",
+    default: true,
+    nullable: false,
+  })
+  isActive!: boolean;
 }

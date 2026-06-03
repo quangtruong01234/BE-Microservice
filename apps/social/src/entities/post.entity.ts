@@ -11,21 +11,27 @@ export class Post {
   @PrimaryGeneratedColumn("increment")
   id!: number;
 
-  @Column({ type: "int", nullable: false })
-  user_id!: number;
+  @Column({ name: "user_id", type: "int", nullable: false })
+  userId!: number;
 
   @Column({ type: "text", nullable: false })
   content!: string;
 
-  @Column({ type: "json", nullable: true, default: null })
-  image_urls!: string[] | null;
+  @Column({ name: "image_urls", type: "json", nullable: true, default: null })
+  imageUrls!: string[] | null;
 
-  @Column({ type: "varchar", length: 500, nullable: true, default: null })
-  video_url!: string | null;
+  @Column({
+    name: "video_url",
+    type: "varchar",
+    length: 500,
+    nullable: true,
+    default: null,
+  })
+  videoUrl!: string | null;
 
-  @CreateDateColumn({ type: "timestamp" })
-  created_at!: Date;
+  @CreateDateColumn({ name: "created_at", type: "timestamp" })
+  createdAt!: Date;
 
-  @UpdateDateColumn({ type: "timestamp" })
-  updated_at!: Date;
+  @UpdateDateColumn({ name: "updated_at", type: "timestamp" })
+  updatedAt!: Date;
 }

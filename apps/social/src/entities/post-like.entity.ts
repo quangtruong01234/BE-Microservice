@@ -6,18 +6,18 @@ import {
   Unique,
 } from "typeorm";
 
-@Unique(["post_id", "user_id"])
+@Unique(["postId", "userId"])
 @Entity("post_likes")
 export class PostLike {
   @PrimaryGeneratedColumn("increment")
   id!: number;
 
-  @Column({ type: "int", nullable: false })
-  post_id!: number;
+  @Column({ name: "post_id", type: "int", nullable: false })
+  postId!: number;
 
-  @Column({ type: "int", nullable: false })
-  user_id!: number;
+  @Column({ name: "user_id", type: "int", nullable: false })
+  userId!: number;
 
-  @CreateDateColumn({ type: "timestamp" })
-  created_at!: Date;
+  @CreateDateColumn({ name: "created_at", type: "timestamp" })
+  createdAt!: Date;
 }

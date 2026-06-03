@@ -16,8 +16,8 @@ export class Payment {
   @PrimaryGeneratedColumn("increment")
   id!: number;
 
-  @Column({ type: "bigint", unique: true })
-  order_id!: number;
+  @Column({ name: "order_id", type: "bigint", unique: true })
+  orderId!: number;
 
   @Column({ type: "decimal", precision: 12, scale: 2 })
   amount!: number;
@@ -29,8 +29,8 @@ export class Payment {
   })
   status!: PaymentStatus;
 
-  @Column({ type: "text", nullable: true })
-  order_url!: string | null;
+  @Column({ name: "order_url", type: "text", nullable: true })
+  orderUrl!: string | null;
 
   @Column({
     name: "transaction_id",
@@ -38,11 +38,11 @@ export class Payment {
     length: 255,
     nullable: true,
   })
-  transaction_id!: string | null;
+  transactionId!: string | null;
 
   @Column({ name: "app_trans_id", type: "varchar", length: 50, nullable: true })
   appTransId!: string | null;
 
-  @CreateDateColumn({ type: "timestamp" })
-  created_at!: Date;
+  @CreateDateColumn({ name: "created_at", type: "timestamp" })
+  createdAt!: Date;
 }

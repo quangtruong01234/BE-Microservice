@@ -12,14 +12,14 @@ export class OrderItem {
   @PrimaryGeneratedColumn("increment")
   id!: number;
 
-  @Column({ type: "bigint" })
-  order_id!: number;
+  @Column({ name: "order_id", type: "bigint" })
+  orderId!: number;
 
-  @Column({ type: "bigint" })
-  product_id!: number;
+  @Column({ name: "product_id", type: "bigint" })
+  productId!: number;
 
   @Column({ name: "product_name" })
-  product_name!: string;
+  productName!: string;
 
   @Column({ type: "int" })
   quantity!: number;

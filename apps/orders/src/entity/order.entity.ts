@@ -23,8 +23,8 @@ export class Order {
   @PrimaryGeneratedColumn("increment")
   id!: number;
 
-  @Column({ type: "bigint" })
-  user_id!: number;
+  @Column({ name: "user_id", type: "bigint" })
+  userId!: number;
 
   @Column({ type: "enum", enum: OrderStatus, default: OrderStatus.PENDING })
   status?: OrderStatus;
@@ -32,29 +32,46 @@ export class Order {
   @Column({ type: "decimal", precision: 12, scale: 2 })
   total!: number;
 
-  @Column({ type: "enum", enum: PaymentMethod, nullable: false })
-  payment_method!: PaymentMethod;
-
-  @Column({ type: "varchar", length: 500, nullable: false })
-  shipping_address!: string;
+  @Column({
+    name: "payment_method",
+    type: "enum",
+    enum: PaymentMethod,
+    nullable: false,
+  })
+  paymentMethod!: PaymentMethod;
 
   @Column({
+    name: "shipping_address",
+    type: "varchar",
+    length: 500,
+    nullable: false,
+  })
+  shippingAddress!: string;
+
+  @Column({
+    name: "cod_amount",
     type: "decimal",
     precision: 12,
     scale: 2,
     nullable: true,
     default: null,
   })
-  cod_amount!: number | null;
+  codAmount!: number | null;
 
-  @Column({ type: "varchar", length: 100, nullable: true, default: null })
-  ghn_order_code!: string | null;
+  @Column({
+    name: "ghn_order_code",
+    type: "varchar",
+    length: 100,
+    nullable: true,
+    default: null,
+  })
+  ghnOrderCode!: string | null;
 
-  @CreateDateColumn({ type: "datetime" })
-  created_at!: Date;
+  @CreateDateColumn({ name: "created_at", type: "datetime" })
+  createdAt!: Date;
 
-  @UpdateDateColumn({ type: "datetime" })
-  updated_at!: Date;
+  @UpdateDateColumn({ name: "updated_at", type: "datetime" })
+  updatedAt!: Date;
 
   @OneToMany(() => OrderItem, (item) => item.order, { cascade: true })
   items!: OrderItem[];
