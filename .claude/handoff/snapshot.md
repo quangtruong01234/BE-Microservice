@@ -65,7 +65,7 @@ Base URL: http://localhost:3000 | Swagger: /doc
 - isLiked bug fix: OptionalJwtAuthGuard added — public social GET routes (@Public()) now populate req.user when a valid token is present; viewerUserId correctly passed to resolveIsLiked(); verified E2E: no cookie → isLiked:false, with cookie (user who liked) → isLiked:true
 - Product search index + cache: 7 DB indexes added to products table (brand_id, is_active, is_featured, is_trending, condition, price, rating); CachedModule wired into ProductModule; findAllProducts cache-aside with 5s TTL (key: products:search:<stable-JSON>); invalidation on create/update/delete via keys("products:search:*") scan; keys() method added to CachedService; migration SQL needed for existing DB (see below)
 
-- User Follow: Follow entity (follows table, unique uq_follows_follower_following); followUser/unfollowUser/getFollowers/getFollowing/getFollowingFeed in social.service.ts; 5 new @MessagePattern handlers in social.controller.ts; SocialFollowController added to gateway (POST/DELETE /api/social/users/:id/follow, GET /api/social/users/:id/followers, GET /api/social/users/:id/following, GET /api/social/users/:id/feed); feed hydrates author info via fetchAuthorMap; **migration SQL required** (see Known Issues)
+- User Follow: Follow entity (follows table, unique uq_follows_follower_following); followUser/unfollowUser/getFollowers/getFollowing/getFollowingFeed in social.service.ts; 5 new @MessagePattern handlers in social.controller.ts; SocialFollowController added to gateway (POST/DELETE /api/social/users/:id/follow, GET /api/social/users/:id/followers, GET /api/social/users/:id/following, GET /api/social/users/:id/feed); feed hydrates author info via fetchAuthorMap; migration applied to Aiven MySQL (2026-06-04); 8/8 E2E pass
 
 ## Active Tasks
 
@@ -74,7 +74,6 @@ Base URL: http://localhost:3000 | Swagger: /doc
 ## Known Issues
 
 - BuyerInfo interface in gateway order.service declares 4 fields (id/username/email/name) but user service returns 6 (+ avatar/isActive) — minor type mismatch, no runtime impact; fix when touching that area
-- **follows table migration**: `synchronize: false` on social service — run this SQL on MySQL before starting social service: `CREATE TABLE IF NOT EXISTS follows (id INT AUTO_INCREMENT PRIMARY KEY, follower_id INT NOT NULL, following_id INT NOT NULL, created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), INDEX idx_follows_follower (follower_id), INDEX idx_follows_following (following_id), UNIQUE KEY uq_follows_follower_following (follower_id, following_id));`
 
 ## Key Conventions
 
