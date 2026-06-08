@@ -20,6 +20,10 @@ import { CreateBrandDto } from "./dto/create-brand.dto";
 import { CreateCategoryDto } from "./dto/create-category.dto";
 import { GetProductsQueryDto } from "./dto/get-products-query.dto";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
+import {
+  CreateProductSkuDto,
+  UpdateProductSkuDto,
+} from "./dto/create-product-sku.dto";
 
 @UseFilters(HttpToRpcExceptionFilter)
 @Controller()
@@ -125,6 +129,37 @@ export class ProductController {
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.CATEGORY_FIND_BY_ID)
   async findCategoryById(@Payload() id: number) {
     return this.productService.findCategoryById(id);
+  }
+
+  // ============================================================================
+  // SKU MESSAGE PATTERNS
+  // ============================================================================
+
+  @MessagePattern(PRODUCT_MESSAGE_PATTERNS.SKU_CREATE)
+  async upsertSkus(
+    @Payload() data: { productId: number; skuList: CreateProductSkuDto[] },
+  ) {
+    return this.productService.upsertSkus(data.productId, data.skuList);
+  }
+
+  @MessagePattern(PRODUCT_MESSAGE_PATTERNS.SKU_FIND_BY_PRODUCT)
+  async findSkusByProduct(@Payload() productId: number) {
+    return this.productService.findSkusByProduct(productId);
+  }
+
+  @MessagePattern(PRODUCT_MESSAGE_PATTERNS.SKU_FIND_BY_ID)
+  async findSkuById(@Payload() id: number) {
+    return this.productService.findSkuById(id);
+  }
+
+  @MessagePattern(PRODUCT_MESSAGE_PATTERNS.SKU_UPDATE)
+  async updateSku(@Payload() data: { id: number; dto: UpdateProductSkuDto }) {
+    return this.productService.updateSku(data.id, data.dto);
+  }
+
+  @MessagePattern(PRODUCT_MESSAGE_PATTERNS.SKU_DELETE)
+  async deleteSku(@Payload() id: number) {
+    return this.productService.deleteSku(id);
   }
 
   // ============================================================================

@@ -5,10 +5,11 @@ import {
   ConflictException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { In, Repository, SelectQueryBuilder } from "typeorm";
+import { DataSource, In, Repository, SelectQueryBuilder } from "typeorm";
 import { PaginatedResponse } from "@app/common";
 import { CachedService } from "@app/cached";
 import { Product } from "./entity/product.entity";
+import { ProductSku } from "./entity/product-sku.entity";
 import { Brand } from "./entity/brand.entity";
 import { Category } from "./entity/category.entity";
 import { CreateProductDto } from "./dto/create-product.dto";
@@ -16,6 +17,10 @@ import { UpdateProductDto } from "./dto/update-product.dto";
 import { CreateBrandDto } from "./dto/create-brand.dto";
 import { CreateCategoryDto } from "./dto/create-category.dto";
 import { GetProductsQueryDto } from "./dto/get-products-query.dto";
+import {
+  CreateProductSkuDto,
+  UpdateProductSkuDto,
+} from "./dto/create-product-sku.dto";
 
 const SEARCH_CACHE_TTL = 5; // seconds
 
@@ -30,6 +35,9 @@ export class ProductService {
     private readonly brandRepository: Repository<Brand>,
     @InjectRepository(Category)
     private readonly categoryRepository: Repository<Category>,
+    @InjectRepository(ProductSku)
+    private readonly skuRepository: Repository<ProductSku>,
+    private readonly dataSource: DataSource,
     private readonly cachedService: CachedService,
   ) {}
 
@@ -77,16 +85,74 @@ export class ProductService {
     );
   }
 
+  // SKU methods
+  async upsertSkus(
+    productId: number,
+    skuList: CreateProductSkuDto[],
+  ): Promise<ProductSku[]> {
+    return this.dataSource.transaction(async (manager) => {
+      await manager.delete(ProductSku, { productId });
+      const entities = skuList.map((dto) =>
+        manager.create(ProductSku, {
+          productId,
+          tierIdx: dto.tierIdx,
+          price: dto.price,
+          stockQuantity: dto.stockQuantity ?? 0,
+          sku: dto.sku ?? null,
+          isActive: dto.isActive ?? true,
+        }),
+      );
+      const saved = await manager.save(ProductSku, entities);
+      for (const sku of saved) {
+        if (typeof sku.tierIdx === 'string') {
+          sku.tierIdx = JSON.parse(sku.tierIdx) as number[];
+        }
+      }
+      return saved;
+    });
+  }
+
+  async findSkusByProduct(productId: number): Promise<ProductSku[]> {
+    return this.skuRepository.find({
+      where: { productId },
+      order: { tierIdx: "ASC" },
+    });
+  }
+
+  async findSkuById(id: number): Promise<ProductSku> {
+    const sku = await this.skuRepository.findOne({ where: { id } });
+    if (!sku) {
+      throw new NotFoundException(`SKU ${id} not found`);
+    }
+    return sku;
+  }
+
+  async updateSku(id: number, dto: UpdateProductSkuDto): Promise<ProductSku> {
+    const sku = await this.findSkuById(id);
+    Object.assign(sku, dto);
+    return this.skuRepository.save(sku);
+  }
+
+  async deleteSku(id: number): Promise<{ success: boolean }> {
+    await this.findSkuById(id);
+    await this.skuRepository.delete(id);
+    return { success: true };
+  }
+
   // Product methods
   async createProduct(createProductDto: CreateProductDto): Promise<Product> {
-    const existingProduct = await this.productRepository.findOne({
-      where: { sku: createProductDto.sku },
-    });
-    if (existingProduct) {
-      throw new ConflictException("Product with this SKU already exists");
+    const { skuList, categoryIds, ...rest } = createProductDto;
+
+    // Only check SKU uniqueness for simple (non-variation) products
+    if (rest.sku) {
+      const existingProduct = await this.productRepository.findOne({
+        where: { sku: rest.sku },
+      });
+      if (existingProduct) {
+        throw new ConflictException("Product with this SKU already exists");
+      }
     }
 
-    const { categoryIds, ...rest } = createProductDto;
     const categories = await this.categoryRepository.findBy({
       id: In(categoryIds),
     });
@@ -104,7 +170,22 @@ export class ProductService {
     }
 
     const product = this.productRepository.create({ ...rest, categories });
+    product.likesCount = 0;
+    product.commentsCount = 0;
+    product.sharesCount = 0;
+    product.viewCount = 0;
+    product.isFeatured = false;
+    product.isTrending = false;
+    product.rating = 0;
+    product.ratingCount = 0;
     const saved = await this.productRepository.save(product);
+
+    if (skuList && skuList.length > 0) {
+      saved.skus = await this.upsertSkus(saved.id, skuList);
+    } else {
+      saved.skus = [];
+    }
+
     await this.invalidateSearchCache();
     return saved;
   }
@@ -217,7 +298,7 @@ export class ProductService {
   async findProductById(id: number): Promise<Product> {
     const product = await this.productRepository.findOne({
       where: { id },
-      relations: ["brand", "categories"],
+      relations: ["brand", "categories", "skus"],
     });
     if (!product) {
       throw new NotFoundException("Product not found");
@@ -260,7 +341,7 @@ export class ProductService {
       }
     }
 
-    const { categoryIds, ...rest } = updateProductDto;
+    const { categoryIds, skuList, ...rest } = updateProductDto;
     Object.assign(product, rest);
 
     if (categoryIds) {
@@ -274,6 +355,11 @@ export class ProductService {
     }
 
     const updated = await this.productRepository.save(product);
+
+    if (skuList !== undefined) {
+      updated.skus = await this.upsertSkus(updated.id, skuList);
+    }
+
     await this.invalidateSearchCache();
     return updated;
   }

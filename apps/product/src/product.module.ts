@@ -4,6 +4,7 @@ import { TypeOrmModule } from "@nestjs/typeorm";
 import { ProductService } from "./product.service";
 import { ProductController } from "./product.controller";
 import { Product } from "./entity/product.entity";
+import { ProductSku } from "./entity/product-sku.entity";
 import { Brand } from "./entity/brand.entity";
 import { Category } from "./entity/category.entity";
 import { DatabaseModule } from "@app/database";
@@ -17,7 +18,7 @@ import { CachedModule } from "@app/cached";
       envFilePath: "./local/nodeA/.env",
     }),
     DatabaseModule,
-    TypeOrmModule.forFeature([Product, Brand, Category]),
+    TypeOrmModule.forFeature([Product, ProductSku, Brand, Category]),
     RmqModule,
     CachedModule,
   ],

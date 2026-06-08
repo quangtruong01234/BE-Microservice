@@ -4,35 +4,49 @@ import {
   IsOptional,
   IsBoolean,
   Min,
-  Max,
   IsIn,
   IsArray,
   ArrayMinSize,
   IsInt,
+  ValidateNested,
 } from "class-validator";
 import { Type } from "class-transformer";
+import { CreateProductSkuDto } from "./create-product-sku.dto";
+
+class VariationItemDto {
+  @IsString()
+  declare name: string;
+
+  @IsArray()
+  @IsString({ each: true })
+  declare options: string[];
+}
 
 export class CreateProductDto {
   @IsString()
-  name: string;
+  declare name: string;
 
   @IsOptional()
   @IsString()
   description?: string;
 
+  // Optional for SKU products (price lives on individual SKUs)
+  @IsOptional()
   @IsNumber()
   @Type(() => Number)
   @Min(0)
-  price: number;
+  price?: number;
 
   @IsOptional()
   @IsNumber()
   @Type(() => Number)
   @Min(0)
-  stockQuantity?: number = 0;
+  stockQuantity?: number;
 
+  // Optional for SKU products (sku is on each ProductSku row)
+  @IsOptional()
   @IsString()
-  sku: string;
+  sku?: string;
 
   @IsOptional()
   @IsNumber()
@@ -42,12 +56,10 @@ export class CreateProductDto {
   @IsArray()
   @ArrayMinSize(1)
   @IsInt({ each: true })
-  categoryIds: number[];
+  declare categoryIds: number[];
 
-  @IsOptional()
   @IsNumber()
-  @Type(() => Number)
-  userId?: number;
+  declare userId: number;
 
   @IsOptional()
   @IsArray()
@@ -56,63 +68,34 @@ export class CreateProductDto {
 
   @IsOptional()
   @IsBoolean()
-  isActive?: boolean = true;
+  isActive?: boolean;
 
-  // Social engagement metrics
-  @IsOptional()
-  @IsNumber()
-  @Type(() => Number)
-  @Min(0)
-  likesCount?: number = 0;
-
-  @IsOptional()
-  @IsNumber()
-  @Type(() => Number)
-  @Min(0)
-  commentsCount?: number = 0;
-
-  @IsOptional()
-  @IsNumber()
-  @Type(() => Number)
-  @Min(0)
-  sharesCount?: number = 0;
-
-  @IsOptional()
-  @IsNumber()
-  @Type(() => Number)
-  @Min(0)
-  viewCount?: number = 0;
-
-  // Product status for timeline/feed
-  @IsOptional()
-  @IsBoolean()
-  isFeatured?: boolean = false;
-
-  @IsOptional()
-  @IsBoolean()
-  isTrending?: boolean = false;
-
-  // Product condition and seller info
   @IsOptional()
   @IsString()
   @IsIn(["new", "used", "refurbished"])
-  condition?: string = "new";
+  condition?: string;
 
   @IsOptional()
   @IsString()
   sellerNotes?: string;
 
-  // Rating system
   @IsOptional()
   @IsNumber()
   @Type(() => Number)
   @Min(0)
-  @Max(5)
-  rating?: number = 0;
+  weight?: number;
 
+  // Variation axes — required when skuList is provided
   @IsOptional()
-  @IsNumber()
-  @Type(() => Number)
-  @Min(0)
-  ratingCount?: number = 0;
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => VariationItemDto)
+  variations?: VariationItemDto[];
+
+  // SKU combinations — required when variations is provided
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateProductSkuDto)
+  skuList?: CreateProductSkuDto[];
 }

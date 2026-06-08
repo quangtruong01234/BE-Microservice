@@ -6,12 +6,14 @@ import {
   UpdateDateColumn,
   ManyToOne,
   ManyToMany,
+  OneToMany,
   JoinColumn,
   JoinTable,
   Index,
 } from "typeorm";
 import { Brand } from "./brand.entity";
 import { Category } from "./category.entity";
+import { ProductSku } from "./product-sku.entity";
 
 @Entity("products")
 export class Product {
@@ -25,14 +27,14 @@ export class Product {
   description?: string;
 
   @Index("idx_products_price")
-  @Column({ type: "decimal", precision: 12, scale: 2, default: 0 })
-  price!: number;
+  @Column({ type: "decimal", precision: 12, scale: 2, nullable: true, default: null })
+  price!: number | null;
 
-  @Column({ type: "int", default: 0, name: "stock_quantity" })
-  stockQuantity!: number;
+  @Column({ type: "int", nullable: true, default: null, name: "stock_quantity" })
+  stockQuantity!: number | null;
 
-  @Column({ type: "varchar", length: 100, unique: true })
-  sku!: string;
+  @Column({ type: "varchar", length: 100, unique: true, nullable: true, default: null })
+  sku!: string | null;
 
   @Index("idx_products_brand_id")
   @Column({ type: "bigint", nullable: true, name: "brand_id" })
@@ -97,6 +99,12 @@ export class Product {
   @Column({ type: "int", default: () => "0", name: "rating_count" })
   ratingCount!: number;
 
+  @Column({ type: "int", nullable: true, default: null, name: "weight" })
+  weight!: number | null;
+
+  @Column({ type: "json", nullable: true, default: null, name: "variations" })
+  variations!: { name: string; options: string[] }[] | null;
+
   @CreateDateColumn({ type: "timestamp", name: "created_at" })
   createdAt!: Date;
 
@@ -115,4 +123,7 @@ export class Product {
     inverseJoinColumn: { name: "category_id" },
   })
   categories!: Category[];
+
+  @OneToMany(() => ProductSku, (sku) => sku.product)
+  skus!: ProductSku[];
 }
