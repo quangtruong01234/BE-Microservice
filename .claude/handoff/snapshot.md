@@ -66,6 +66,18 @@ Base URL: http://localhost:3000 | Swagger: /doc
 - Product search index + cache: 7 DB indexes added to products table (brand_id, is_active, is_featured, is_trending, condition, price, rating); CachedModule wired into ProductModule; findAllProducts cache-aside with 5s TTL (key: products:search:<stable-JSON>); invalidation on create/update/delete via keys("products:search:*") scan; keys() method added to CachedService; migration SQL needed for existing DB (see below)
 
 - User Follow: Follow entity (follows table, unique uq_follows_follower_following); followUser/unfollowUser/getFollowers/getFollowing/getFollowingFeed in social.service.ts; 5 new @MessagePattern handlers in social.controller.ts; SocialFollowController added to gateway (POST/DELETE /api/social/users/:id/follow, GET /api/social/users/:id/followers, GET /api/social/users/:id/following, GET /api/social/users/:id/feed); feed hydrates author info via fetchAuthorMap; migration applied to Aiven MySQL (2026-06-04); 8/8 E2E pass
+- Product Variations + SKU Matrix Phase 0+1: 4 DB migrations applied (price/sku/stockQuantity nullable on products, product_skus table, sku_id/sku_tier_idx on order_items, product_sku_id partial indexes on inventory_v2); ProductSku entity + CreateProductSkuDto/UpdateProductSkuDto; product.service.ts upsertSkus (transactional), findSkusByProduct, findSkuById, updateSku, deleteSku; createProduct() conditional skuList upsert; findProductById() includes "skus" relation; 5 SKU @MessagePattern handlers on product.controller; product.module.ts registers ProductSku; gateway create-product.dto.ts makes price/sku optional, adds variations/skuList fields; gateway product.service.ts skips auto-inventory creation when skuList provided; tsc: 0 errors; E2E: backward-compat 201+skus:[]+price non-null ✓, variation product 201+4 skus+price:null ✓
+
+- Cart feature: Cart + CartItem entities in orders service (MySQL); CartService + CartController TCP (5 patterns: cart.addItem/get/updateItem/removeItem/clear); gateway CartGatewayService fetches price from product service (SKU or base price) before forwarding to orders; CartController HTTP (POST/GET/PATCH/DELETE /api/cart, /api/cart/items/:id); CartModule with forwardRef(GatewayModule); CART_MESSAGE_PATTERN added to libs/constant; 2 SQL migrations applied (carts + cart_items); tsc: 0 errors, eslint: 0 errors
+- Cart snapshot columns removed: price/product_name/image_url dropped from cart_items (DB + entity + service + gateway); migration SQL at database/remove_snapshots_from_cart_items.sql; gateway cart.service.ts no longer transmits snapshot data to orders TCP
+- createOrder() security fix: price removed from gateway OrderItemDto (client can no longer inject price); gateway createOrder() fetches authoritative price via TCP before forwarding to orders — skuId → SKU_FIND_BY_ID, no skuId → PRODUCT_FIND_BY_ID; validates isActive + productId ownership; Number() cast handles DECIMAL-as-string from TypeORM; verified: POST /api/order with price:1 → order.total=299 (DB price used)
+- SKU stock check (interim fix): gateway createOrder() validates sku.stockQuantity before forwarding to orders — throws 400 "Insufficient stock for SKU X" when stockQuantity < requested; orders.service skips inventory TCP call for items with skuId (inventory has no record for variant products); base-price products unchanged; verified: SKU id=5 stock=10 → 201 ✓, SKU id=8 stock=0 → 400 ✓, base-price product 23 → 201 ✓
+- Product Variations + SKU Matrix: product_skus table, variations JSON column, tier_idx pattern, CartDrawer/ProductDetail/CreateProductModal UI hoàn chỉnh
+- Cart server-side: carts + cart_items tables (orders service), 5 CRUD endpoints, localStorage cart đã xóa, CheckoutPage migrate sang server cart
+- Security: userId từ JWT, price fetch server-side tại gateway, client không thể fake price
+- Bugfixes: TCP { cmd } wrapper → plain string, DECIMAL transformer, tierIdx stringify qua TCP, SKU stock check tại gateway, inventory skip cho variant items
+- Phase 2 SKU gateway endpoints: CreateSkuGatewayDto + UpdateSkuGatewayDto added to gateway/product/dto/product.dto.ts; 4 service methods (getSkusByProduct/addSku/updateSku/deleteSku) added to gateway product.service.ts; 4 routes wired in gateway product.controller.ts (GET/POST /api/products/:id/skus, PATCH/DELETE /api/products/:id/skus/:skuId); GET is @Public(), others require JwtAuthGuard; tsc: 0 errors, eslint: 0 errors
+- Self-test protocol established: Claude runs all API tests autonomously — login, curl, assert, report; never hands test commands to user; test-accounts.md moved to .claude/test-accounts.md
 
 ## Active Tasks
 
@@ -74,6 +86,11 @@ Base URL: http://localhost:3000 | Swagger: /doc
 ## Known Issues
 
 - BuyerInfo interface in gateway order.service declares 4 fields (id/username/email/name) but user service returns 6 (+ avatar/isActive) — minor type mismatch, no runtime impact; fix when touching that area
+- Product SKU matrix Phase 3-4 not yet done: Phase 3 = order_items sku_id wired into inventory reservation, Phase 4 = inventory per-SKU tracking
+- CheckoutPage: item.productName và item.imageUrl null (snapshot đã xóa) — cần fetch productMap như CartDrawer
+- Phase 4 inventory per-SKU reservation chưa implement (interim: gateway validates sku.stockQuantity, orders service skip inventory cho SKU items)
+- ProductDetail: nút "Thêm vào giỏ" chưa disable trước khi chọn đủ variant
+- ShopPage: chưa có Edit/Delete product action
 
 ## Key Conventions
 
@@ -128,3 +145,7 @@ Base URL: http://localhost:3000 | Swagger: /doc
       /api/\* → port 3000 ✓, /zalopay/callback → port 3007 ✓,
       trust proxy + CORS env var + PM2 ecosystem.config.js included
 - [x] Cloudinary signed upload — POST /api/upload/signature implemented; product + social post entities extended; migration applied; test tool at scripts/test-cloudinary.html
+- [x] Phase 2: Gateway SKU CRUD endpoints — GET/POST /api/products/:id/skus + PATCH/DELETE /api/products/:id/skus/:skuId; CreateSkuGatewayDto + UpdateSkuGatewayDto; tsc + eslint clean
+- [ ] Phase 4: Inventory per-SKU — product_sku_id column + partial unique indexes
+- [ ] CheckoutPage: fetch productMap cho name/image display
+- [ ] Phase 3 orders: full skuId integration với inventory reservation

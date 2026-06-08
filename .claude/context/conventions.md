@@ -228,3 +228,54 @@ Khi truyền sang external API expecting number: `Math.round(Number(value ?? 0))
 NestJS strips packet envelope trước khi deliver.
 ❌ Sai: `data.data.orderId`
 ✅ Đúng: `data.orderId`
+
+### 5. @MessagePattern handlers — luôn return giá trị, không bao giờ return void
+NestJS TCP transport không gửi response khi handler trả về `void`/`undefined`.
+Gateway dùng `firstValueFrom()` → throws "no elements in sequence" → HTTP 502.
+❌ Sai: handler không có return statement (void)
+✅ Đúng: return kiểu dữ liệu thật, hoặc `return null` cho side-effect-only handlers
+
+```typescript
+// ✅ Correct
+async updateItem(@Payload() payload: { cartItemId: number; quantity: number }): Promise<null> {
+  await this.cartService.updateItem(payload.cartItemId, payload.quantity);
+  return null;
+}
+```
+
+## TypeORM Entity Gotchas
+
+### 6. JSON stored as VARCHAR → use @AfterLoad() to auto-parse
+TypeORM does not automatically parse JSON strings into objects/arrays when loading from a `varchar` column. Use `@AfterLoad()` to parse on hydration:
+
+```typescript
+@AfterLoad()
+parseTierIdx(): void {
+  if (typeof this.tierIdx === 'string') {
+    this.tierIdx = JSON.parse(this.tierIdx) as number[];
+  }
+}
+```
+
+**Caveat**: `@AfterLoad()` does NOT trigger after `manager.save()` inside a transaction. If you need the parsed value immediately after saving, parse manually:
+
+```typescript
+const saved = await manager.save(ProductSku, sku);
+if (typeof saved.tierIdx === 'string') {
+  saved.tierIdx = JSON.parse(saved.tierIdx) as number[];
+}
+```
+
+Apply this pattern to any JSON/array data stored in a `varchar` column.
+
+### 7. @AfterLoad() result travels over TCP as parsed type — re-stringify before VARCHAR save
+`@AfterLoad()` runs on the **sending** service before the TCP response is serialized. The caller receives the already-parsed value (e.g. `number[]`), not the raw string. If that value is then saved to a `VARCHAR` column or forwarded in another TCP payload, the `mysql2` driver will misinterpret a JS array as an IN-clause parameter list → SQL error → 502.
+
+Always guard with:
+```typescript
+skuTierIdx = Array.isArray(sku.tierIdx)
+  ? JSON.stringify(sku.tierIdx)
+  : sku.tierIdx;
+```
+
+Applies to any entity field that uses `@AfterLoad()` to parse JSON from a `varchar` column (e.g. `ProductSku.tierIdx`).

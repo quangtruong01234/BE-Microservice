@@ -125,6 +125,7 @@ try {
 - **DB routing**: MySQL for Orders, Products, User. PostgreSQL for Inventory, Payments, Rewards. Never cross-inject.
 - **Error handling**: Use `MicroserviceErrorHandler` in all gateway services. Microservices throw NestJS built-in exceptions.
 - **camelCase responses**: All API response fields sent to the frontend must be camelCase. Entity properties that map to snake_case DB columns must use `@Column({ name: 'snake_case' })` with a camelCase property name — never expose snake_case keys in HTTP responses.
+- **Lodash-first**: Prefer lodash (`_`) for data manipulation (groupBy, keyBy, pick, omit, chunk, uniq, merge, etc.) over hand-rolled loops, unless the operation is trivially a one-liner or lodash would introduce measurable overhead (e.g., inside a hot RabbitMQ consumer processing thousands of events per second). Import per-method to keep bundle size minimal: `import groupBy from 'lodash/groupBy'`.
 
 ## Debug Protocol
 
@@ -181,15 +182,17 @@ A task is complete only when ALL of these pass:
 - `tsc --noEmit`: zero errors
 - `eslint`: zero errors
 - Runtime: endpoint responds as expected
-- If task adds/modifies an endpoint: suggest manual test command or Postman request to verify
+- If task adds/modifies an endpoint: run the test yourself per Self-Test Protocol — do not hand curl commands to the user
 - If task fixes a bug: verify the original symptom no longer occurs before marking done
 - After each task: update `.claude/handoff/snapshot.md` — move completed item out of Remaining Tasks, add any new Known Issues discovered.
 
 ## Test Accounts
 
-Stored in: `api/test-accounts.md`
+Stored in: `.claude/test-accounts.md`
 
-When creating a new test account during any task (register, seed, or manual creation), always append it to `api/test-accounts.md` immediately using this format:
+**When running any API test (curl, Postman, manual verification): always read `.claude/test-accounts.md` first and use an existing account. Never hardcode credentials inline or invent test users.**
+
+When creating a new test account during any task (register, seed, or manual creation), always append it to `.claude/test-accounts.md` immediately using this format:
 
 ## <username>
 - Password: <password>
@@ -198,3 +201,22 @@ When creating a new test account during any task (register, seed, or manual crea
 - Created: <date or task context>
 
 Do not push test-accounts.md to git. Verify .gitignore includes it.
+
+## Self-Test Protocol
+
+**Claude runs all API tests autonomously — never ask the user to run curl commands.**
+
+When a task adds or modifies an endpoint, after tsc + eslint pass:
+1. Read `.claude/test-accounts.md` — pick an account with the required role (user / admin / shop)
+2. Login via `POST /api/auth/login` with `-c tmpcookies_test.txt` to capture the cookie
+3. Run each test curl with `-b tmpcookies_test.txt`
+4. Assert the response: check HTTP status code and key fields in the JSON body
+5. Report results inline — pass/fail per test case, with actual response snippets
+
+**Role selection guide:**
+- Public endpoint (`@Public()`) → no login needed
+- JwtAuthGuard only → any `user` role account
+- `@CheckPermission('X', 'create:own')` → `shop` role account
+- `@CheckPermission('X', 'read:any')` → `admin` role account
+
+**Never** present curl commands for the user to run. Run them yourself and report results.
