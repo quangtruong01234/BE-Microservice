@@ -1,10 +1,11 @@
-import { ApiProperty } from "@nestjs/swagger";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
   IsArray,
   IsEnum,
   IsInt,
   IsNotEmpty,
   IsNumber,
+  IsOptional,
   IsString,
   MaxLength,
   Min,
@@ -18,6 +19,15 @@ export class OrderItemDto {
   @IsInt()
   declare productId: number;
 
+  @ApiPropertyOptional({
+    description: "SKU ID for variation products — omit for base-price products",
+    example: 5,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  skuId?: number;
+
   @ApiProperty({ description: "Product name", example: "iPhone 15 Pro" })
   @IsString()
   declare productName: string;
@@ -27,10 +37,13 @@ export class OrderItemDto {
   @Min(1)
   declare quantity: number;
 
-  @ApiProperty({ description: "Unit price at time of order", example: 99000 })
+  // price intentionally omitted — server fetches authoritative price from product service
+
+  @ApiPropertyOptional({ description: "Khối lượng item (gram)", example: 300 })
+  @IsOptional()
   @IsNumber()
   @Min(0)
-  declare price: number;
+  weight?: number;
 }
 
 export class CreateOrderDto {

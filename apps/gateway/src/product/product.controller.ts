@@ -7,11 +7,13 @@ import {
   Body,
   Param,
   Query,
+  Req,
   ParseIntPipe,
   HttpCode,
   HttpStatus,
   ValidationPipe,
 } from "@nestjs/common";
+import { Request } from "express";
 import { ProductService } from "./product.service";
 import {
   CreateProductDto,
@@ -19,7 +21,8 @@ import {
   GetProductsQueryDto,
   CreateBrandDto,
   CreateCategoryDto,
-} from "./dto/product.dto";
+} from "./dto";
+import { CreateSkuGatewayDto, UpdateSkuGatewayDto } from "./dto/product.dto";
 import {
   ApiTags,
   ApiOperation,
@@ -50,8 +53,9 @@ export class ProductController {
     description: "Bad Request - Invalid input data.",
   })
   @ApiResponse({ status: 409, description: "Conflict - SKU already exists." })
-  async createProduct(@Body() dto: CreateProductDto) {
-    return await this.productService.createProduct(dto);
+  async createProduct(@Body() dto: CreateProductDto, @Req() req: Request) {
+    const userId = (req.user as { id: number }).id;
+    return await this.productService.createProduct(dto, userId);
   }
 
   @Get()
@@ -183,6 +187,70 @@ export class ProductController {
   @ApiResponse({ status: 404, description: "Category not found." })
   async getCategoryById(@Param("id", ParseIntPipe) id: number) {
     return await this.productService.getCategoryById(id);
+  }
+
+  // ============================================================================
+  // SKU ENDPOINTS
+  // ============================================================================
+
+  @Get(":id/skus")
+  @Public()
+  @ApiOperation({ summary: "Get SKUs for a product" })
+  @ApiParam({ name: "id", description: "Product ID", type: Number })
+  @ApiResponse({ status: 200, description: "SKUs retrieved successfully." })
+  @ApiResponse({ status: 404, description: "Product not found." })
+  async getSkusByProduct(@Param("id", ParseIntPipe) id: number) {
+    return await this.productService.getSkusByProduct(id);
+  }
+
+  @Post(":id/skus")
+  @ApiOperation({ summary: "Add a SKU to a product" })
+  @ApiParam({ name: "id", description: "Product ID", type: Number })
+  @ApiBody({ type: CreateSkuGatewayDto })
+  @ApiResponse({ status: 201, description: "SKU added successfully." })
+  @ApiResponse({
+    status: 400,
+    description: "Bad Request - Invalid input data.",
+  })
+  @ApiResponse({ status: 404, description: "Product not found." })
+  async addSku(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: CreateSkuGatewayDto,
+  ) {
+    return await this.productService.addSku(id, dto);
+  }
+
+  @Patch(":id/skus/:skuId")
+  @ApiOperation({ summary: "Update a SKU" })
+  @ApiParam({ name: "id", description: "Product ID", type: Number })
+  @ApiParam({ name: "skuId", description: "SKU ID", type: Number })
+  @ApiBody({ type: UpdateSkuGatewayDto })
+  @ApiResponse({ status: 200, description: "SKU updated successfully." })
+  @ApiResponse({
+    status: 400,
+    description: "Bad Request - Invalid input data.",
+  })
+  @ApiResponse({ status: 404, description: "SKU not found." })
+  async updateSku(
+    @Param("id", ParseIntPipe) _id: number,
+    @Param("skuId", ParseIntPipe) skuId: number,
+    @Body() dto: UpdateSkuGatewayDto,
+  ) {
+    return await this.productService.updateSku(skuId, dto);
+  }
+
+  @Delete(":id/skus/:skuId")
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: "Delete a SKU" })
+  @ApiParam({ name: "id", description: "Product ID", type: Number })
+  @ApiParam({ name: "skuId", description: "SKU ID", type: Number })
+  @ApiResponse({ status: 204, description: "SKU deleted successfully." })
+  @ApiResponse({ status: 404, description: "SKU not found." })
+  async deleteSku(
+    @Param("id", ParseIntPipe) _id: number,
+    @Param("skuId", ParseIntPipe) skuId: number,
+  ) {
+    return await this.productService.deleteSku(skuId);
   }
 
   @Get(":id")

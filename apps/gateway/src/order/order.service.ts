@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Inject,
   Injectable,
@@ -12,8 +13,8 @@ import {
   PAYMENT_MESSAGE_PATTERN,
   USER_MESSAGE_PATTERN,
 } from "libs/constant/message-pattern.constant";
+import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
-import { CMD } from "@app/common/constants/cmd";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
 import { CreateOrderDto } from "./dto/create-order.dto";
 
@@ -25,6 +26,20 @@ interface OrderResponse {
   items: unknown[];
   createdAt: string;
   updatedAt: string;
+}
+
+interface ProductPriceResponse {
+  id: number;
+  price: number | null;
+  isActive: boolean;
+}
+
+interface SkuPriceResponse {
+  id: number;
+  productId: number;
+  price: number;
+  stockQuantity: number;
+  isActive: boolean;
 }
 
 export abstract class BaseAggregatorService {
@@ -60,21 +75,84 @@ export class OrderService {
     private readonly paymentsClient: ClientProxy,
     @Inject(NAME_SERVICE_TCP.USER_SERVICE)
     private readonly userClient: ClientProxy,
+    @Inject(NAME_SERVICE_TCP.PRODUCT_SERVICE)
+    private readonly productClient: ClientProxy,
   ) {}
 
   async createOrder(userId: number, dto: CreateOrderDto): Promise<unknown> {
+    // Fetch authoritative prices from product service — prevents client price injection
+    const enrichedItems = await Promise.all(
+      dto.items.map(async (item) => {
+        let price: number;
+        if (item.skuId) {
+          const sku = await firstValueFrom(
+            this.productClient
+              .send<SkuPriceResponse>(
+                PRODUCT_MESSAGE_PATTERNS.SKU_FIND_BY_ID,
+                item.skuId,
+              )
+              .pipe(timeout(10000)),
+          ).catch((err: unknown) =>
+            MicroserviceErrorHandler.handleError(
+              err,
+              `fetch SKU ${item.skuId}`,
+              "Product Service",
+            ),
+          );
+          if (!sku.isActive) {
+            throw new BadRequestException(`SKU ${item.skuId} is not available`);
+          }
+          if (Number(sku.productId) !== item.productId) {
+            throw new BadRequestException(
+              `SKU ${item.skuId} does not belong to product ${item.productId}`,
+            );
+          }
+          if (sku.stockQuantity < item.quantity) {
+            throw new BadRequestException(
+              `Insufficient stock for SKU ${item.skuId}: requested ${item.quantity}, available ${sku.stockQuantity}`,
+            );
+          }
+          price = Number(sku.price);
+        } else {
+          const product = await firstValueFrom(
+            this.productClient
+              .send<ProductPriceResponse>(
+                PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_ID,
+                item.productId,
+              )
+              .pipe(timeout(10000)),
+          ).catch((err: unknown) =>
+            MicroserviceErrorHandler.handleError(
+              err,
+              `fetch product ${item.productId}`,
+              "Product Service",
+            ),
+          );
+          if (!product.isActive) {
+            throw new BadRequestException(
+              `Product ${item.productId} is not available`,
+            );
+          }
+          if (product.price === null) {
+            throw new BadRequestException(
+              `Product ${item.productId} requires a skuId — it has no base price`,
+            );
+          }
+          price = Number(product.price);
+        }
+        return { ...item, price, skuId: item.skuId ?? null };
+      }),
+    );
+
     try {
       return (await firstValueFrom(
         this.ordersClient
-          .send(
-            { cmd: CMD.CREATE_ORDER },
-            {
-              userId,
-              paymentMethod: dto.paymentMethod,
-              shippingAddress: dto.shippingAddress,
-              items: dto.items,
-            },
-          )
+          .send(ORDER_MESSAGE_PATTERN.CREATE_ORDER, {
+            userId,
+            paymentMethod: dto.paymentMethod,
+            shippingAddress: dto.shippingAddress,
+            items: enrichedItems,
+          })
           .pipe(
             timeout(10000),
             catchError((err: unknown) => {

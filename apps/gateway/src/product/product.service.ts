@@ -12,7 +12,8 @@ import {
   GetProductsQueryDto,
   CreateBrandDto,
   CreateCategoryDto,
-} from "./dto/product.dto";
+} from "./dto";
+import { CreateSkuGatewayDto, UpdateSkuGatewayDto } from "./dto/product.dto";
 
 export interface ProductWithInventory {
   // Product fields
@@ -95,12 +96,12 @@ export class ProductService {
   // PRODUCT OPERATIONS
   // ============================================================================
 
-  async createProduct(dto: CreateProductDto): Promise<unknown> {
+  async createProduct(dto: CreateProductDto, userId: number): Promise<unknown> {
     try {
       this.logger.log(`Creating product with SKU: ${dto.sku}`);
       const response = (await firstValueFrom(
         this.productClient
-          .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_CREATE, dto)
+          .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_CREATE, { ...dto, userId })
           .pipe(
             timeout(10000),
             catchError((err: unknown) => {
@@ -118,7 +119,8 @@ export class ProductService {
         `Product created successfully with ID: ${String(result?.id ?? "")}`,
       );
 
-      if (result?.id) {
+      // Skip auto-inventory for SKU-matrix products — inventory will be managed per-SKU
+      if (result?.id && !dto.skuList?.length) {
         try {
           await firstValueFrom(
             this.inventoryClient
@@ -292,6 +294,93 @@ export class ProductService {
       MicroserviceErrorHandler.handleError(
         error,
         `delete product ID: ${id}`,
+        "Product Service",
+      );
+    }
+  }
+
+  // ============================================================================
+  // SKU OPERATIONS
+  // ============================================================================
+
+  async getSkusByProduct(productId: number): Promise<unknown> {
+    try {
+      return (await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.SKU_FIND_BY_PRODUCT, productId)
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      )) as unknown;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        `fetch SKUs for product ID: ${productId}`,
+        "Product Service",
+      );
+    }
+  }
+
+  async addSku(productId: number, dto: CreateSkuGatewayDto): Promise<unknown> {
+    try {
+      return (await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.SKU_CREATE, {
+            productId,
+            skuList: [dto],
+          })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      )) as unknown;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        `add SKU to product ID: ${productId}`,
+        "Product Service",
+      );
+    }
+  }
+
+  async updateSku(skuId: number, dto: UpdateSkuGatewayDto): Promise<unknown> {
+    try {
+      return (await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.SKU_UPDATE, { id: skuId, dto })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      )) as unknown;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        `update SKU ID: ${skuId}`,
+        "Product Service",
+      );
+    }
+  }
+
+  async deleteSku(skuId: number): Promise<unknown> {
+    try {
+      return (await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.SKU_DELETE, skuId)
+          .pipe(timeout(10000)),
+        { defaultValue: { success: true } },
+      )) as unknown;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        `delete SKU ID: ${skuId}`,
         "Product Service",
       );
     }

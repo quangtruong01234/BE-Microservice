@@ -12,6 +12,7 @@ import { NotificationGatewayModule } from "./notification/notification.module";
 import { SocialGatewayModule } from "./social/social.module";
 import { ChatGatewayModule } from "./chat/chat.module";
 import { UploadModule } from "./upload/upload.module";
+import { CartModule } from "./cart/cart.module";
 import { CachedModule } from "@app/cached";
 import {
   NAME_SERVICE_TCP,
@@ -104,6 +105,7 @@ import { RoleAuthGuard } from "./common/guards/role-auth.guard";
     SocialGatewayModule,
     ChatGatewayModule,
     UploadModule,
+    CartModule,
   ],
   controllers: [GatewayController],
   providers: [
