@@ -31,6 +31,7 @@ export const PRODUCT_MESSAGE_PATTERN = {
 };
 
 export const ORDER_MESSAGE_PATTERN = {
+  CREATE_ORDER: "create_order",
   GET_ORDERS_BY_USER: "get_orders_by_user",
   GET_ORDER_BY_ID: "get_order_by_id",
   GET_ALL_ORDERS: "get_all_orders",
@@ -75,4 +76,12 @@ export const CHAT_MESSAGE_PATTERN = {
   CHAT_GET_MESSAGES: "chat.get_messages",
   CHAT_SEND_MESSAGE: "chat.send_message",
   CHAT_CHECK_MEMBERSHIP: "chat.check_membership",
+};
+
+export const CART_MESSAGE_PATTERN = {
+  CART_ADD_ITEM: "cart.addItem",
+  CART_GET: "cart.get",
+  CART_UPDATE_ITEM: "cart.updateItem",
+  CART_REMOVE_ITEM: "cart.removeItem",
+  CART_CLEAR: "cart.clear",
 };

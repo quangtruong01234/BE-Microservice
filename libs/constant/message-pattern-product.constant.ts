@@ -23,6 +23,13 @@ export const PRODUCT_MESSAGE_PATTERNS = {
   CATEGORY_CREATE: "category.create",
   CATEGORY_FIND_ALL: "category.findAll",
   CATEGORY_FIND_BY_ID: "category.findById",
+
+  // SKU patterns
+  SKU_CREATE: "sku.create",
+  SKU_FIND_BY_PRODUCT: "sku.findByProduct",
+  SKU_FIND_BY_ID: "sku.findById",
+  SKU_UPDATE: "sku.update",
+  SKU_DELETE: "sku.delete",
 } as const;
 
 export type ProductMessagePattern =

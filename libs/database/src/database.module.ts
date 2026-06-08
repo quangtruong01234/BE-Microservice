@@ -25,6 +25,13 @@ import { DatabaseHealthService } from "./database-health.service";
         ssl: config.get<string>("MYSQL_HOST")?.includes("aivencloud.com")
           ? { rejectUnauthorized: false }
           : false,
+        extra: {
+          connectionLimit: 10,
+          connectTimeout: 10000,
+          // keep connections alive to prevent ECONNRESET on Aiven
+          enableKeepAlive: true,
+          keepAliveInitialDelay: 10000,
+        },
       }),
     }),
   ],
