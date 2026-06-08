@@ -50,7 +50,9 @@ export class GhnService {
       to_district_name,
       to_province_name,
       cod_amount: Math.round(Number(order.codAmount ?? 0)),
-      weight: 500,
+      weight: Math.round(
+        order.items.reduce((sum, i) => sum + (i.weight ?? 500) * i.quantity, 0),
+      ),
       service_type_id: 2,
       payment_type_id: 2,
       required_note: "CHOXEMHANGKHONGTHU",

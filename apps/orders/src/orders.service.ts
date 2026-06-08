@@ -57,10 +57,13 @@ export class OrdersService {
       productName: string;
       quantity: number;
       price: number;
+      skuId?: number | null;
+      weight?: number;
     }>,
   ): Promise<Order> {
-    //1. check stock in inventory
+    //1. check stock in inventory (skip for SKU items — gateway validates stockQuantity directly)
     for (const item of items) {
+      if (item.skuId) continue;
       const result = await firstValueFrom(
         this.inventoryClient
           .send<{

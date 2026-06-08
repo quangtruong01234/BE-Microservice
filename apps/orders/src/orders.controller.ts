@@ -12,7 +12,6 @@ import {
   RmqContext,
 } from "@nestjs/microservices";
 import { OrdersService } from "./orders.service";
-import { CMD } from "@app/common/constants/cmd";
 import { EVENT } from "@app/common/constants/event";
 import {
   HttpToRpcExceptionFilter,
@@ -30,7 +29,7 @@ export class OrdersController {
     private readonly rmqService: RmqService,
   ) {}
 
-  @MessagePattern({ cmd: CMD.CREATE_ORDER })
+  @MessagePattern(ORDER_MESSAGE_PATTERN.CREATE_ORDER)
   async createOrder(
     @Payload()
     payload: {
@@ -42,6 +41,8 @@ export class OrdersController {
         productName: string;
         quantity: number;
         price: number;
+        skuId?: number | null;
+        weight?: number;
       }[];
     },
   ) {

@@ -2,6 +2,10 @@ import { Module } from "@nestjs/common";
 import { APP_FILTER } from "@nestjs/core";
 import { OrdersController } from "./orders.controller";
 import { OrdersService } from "./orders.service";
+import { CartController } from "./cart.controller";
+import { CartService } from "./cart.service";
+import { Cart } from "./entity/cart.entity";
+import { CartItem } from "./entity/cart-item.entity";
 import { AllRpcExceptionFilter } from "./filters/rpc-exception.filter";
 import { ConfigModule } from "@nestjs/config";
 import { RmqModule } from "@app/common";
@@ -59,15 +63,16 @@ import { GhnModule } from "./ghn/ghn.module";
       username: process.env.MYSQL_USER,
       password: process.env.MYSQL_PASSWORD,
       database: process.env.MYSQL_DATABASE,
-      entities: [Order, OrderItem],
+      entities: [Order, OrderItem, Cart, CartItem],
       synchronize: true,
       timezone: "Z",
     }),
-    TypeOrmModule.forFeature([Order, OrderItem]),
+    TypeOrmModule.forFeature([Order, OrderItem, Cart, CartItem]),
   ],
-  controllers: [OrdersController],
+  controllers: [OrdersController, CartController],
   providers: [
     OrdersService,
+    CartService,
     { provide: APP_FILTER, useClass: AllRpcExceptionFilter },
   ],
 })

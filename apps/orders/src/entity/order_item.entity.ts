@@ -27,6 +27,9 @@ export class OrderItem {
   @Column({ type: "decimal", precision: 12, scale: 2 })
   price!: number;
 
+  @Column({ type: "int", nullable: true, default: null, name: "weight" })
+  weight!: number | null;
+
   @ManyToOne(() => Order, (order) => order.items)
   @JoinColumn({ name: "order_id" })
   order!: Order;
