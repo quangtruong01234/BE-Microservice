@@ -20,7 +20,9 @@ import {
   UpdateProductDto,
   GetProductsQueryDto,
   CreateBrandDto,
+  ReviewBrandDto,
   CreateCategoryDto,
+  ReviewCategoryDto,
 } from "./dto";
 import { CreateSkuGatewayDto, UpdateSkuGatewayDto } from "./dto/product.dto";
 import {
@@ -128,24 +130,55 @@ export class ProductController {
   // ============================================================================
 
   @Get("brands")
-  @ApiOperation({ summary: "Get all brands" })
+  @Public()
+  @ApiOperation({ summary: "Get all active brands" })
   @ApiResponse({ status: 200, description: "Brands retrieved successfully." })
   async getAllBrands() {
     return await this.productService.getAllBrands();
   }
 
+  @Get("brands/pending")
+  @CheckPermission("brand", "read:any")
+  @ApiOperation({ summary: "Get all pending brands (admin only)" })
+  @ApiResponse({
+    status: 200,
+    description: "Pending brands retrieved successfully.",
+  })
+  @ApiResponse({ status: 403, description: "Forbidden." })
+  async getPendingBrands() {
+    return await this.productService.getPendingBrands();
+  }
+
   @Post("brands")
-  @ApiOperation({ summary: "Create new brand" })
-  @ApiResponse({ status: 201, description: "Brand created successfully." })
+  @ApiOperation({ summary: "Create new brand (submitted for review)" })
+  @ApiBody({ type: CreateBrandDto })
+  @ApiResponse({ status: 201, description: "Brand submitted for review." })
   @ApiResponse({
     status: 400,
     description: "Bad Request - Invalid input data.",
   })
-  async createBrand(@Body() dto: CreateBrandDto) {
-    return await this.productService.createBrand(dto);
+  async createBrand(@Body() dto: CreateBrandDto, @Req() req: Request) {
+    const userId = (req.user as { id: number }).id;
+    return await this.productService.createBrand(dto, userId);
+  }
+
+  @Patch("brands/:id/review")
+  @CheckPermission("brand", "update:any")
+  @ApiOperation({ summary: "Approve or reject a brand (admin only)" })
+  @ApiParam({ name: "id", description: "Brand ID", type: Number })
+  @ApiBody({ type: ReviewBrandDto })
+  @ApiResponse({ status: 200, description: "Brand reviewed successfully." })
+  @ApiResponse({ status: 403, description: "Forbidden." })
+  @ApiResponse({ status: 404, description: "Brand not found." })
+  async reviewBrand(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: ReviewBrandDto,
+  ) {
+    return await this.productService.reviewBrand(id, dto);
   }
 
   @Get("brands/:id")
+  @Public()
   @ApiOperation({ summary: "Get brand by ID" })
   @ApiParam({ name: "id", description: "Brand ID", type: Number })
   @ApiResponse({ status: 200, description: "Brand retrieved successfully." })
@@ -159,28 +192,58 @@ export class ProductController {
   // ============================================================================
 
   @Get("categories")
-  @ApiOperation({ summary: "Get all categories" })
+  @Public()
+  @ApiOperation({ summary: "Get all active categories" })
   @ApiResponse({
     status: 200,
     description: "Categories retrieved successfully.",
   })
   async getAllCategories() {
-    console.log("Fetching all categories");
     return await this.productService.getAllCategories();
   }
 
+  @Get("categories/pending")
+  @CheckPermission("category", "read:any")
+  @ApiOperation({ summary: "Get all pending categories (admin only)" })
+  @ApiResponse({
+    status: 200,
+    description: "Pending categories retrieved successfully.",
+  })
+  @ApiResponse({ status: 403, description: "Forbidden." })
+  async getPendingCategories() {
+    return await this.productService.getPendingCategories();
+  }
+
   @Post("categories")
-  @ApiOperation({ summary: "Create new category" })
-  @ApiResponse({ status: 201, description: "Category created successfully." })
+  @ApiOperation({ summary: "Create new category (submitted for review)" })
+  @ApiBody({ type: CreateCategoryDto })
+  @ApiResponse({ status: 201, description: "Category submitted for review." })
   @ApiResponse({
     status: 400,
     description: "Bad Request - Invalid input data.",
   })
-  async createCategory(@Body() dto: CreateCategoryDto) {
-    return await this.productService.createCategory(dto);
+  async createCategory(@Body() dto: CreateCategoryDto, @Req() req: Request) {
+    const userId = (req.user as { id: number }).id;
+    return await this.productService.createCategory(dto, userId);
+  }
+
+  @Patch("categories/:id/review")
+  @CheckPermission("category", "update:any")
+  @ApiOperation({ summary: "Approve or reject a category (admin only)" })
+  @ApiParam({ name: "id", description: "Category ID", type: Number })
+  @ApiBody({ type: ReviewCategoryDto })
+  @ApiResponse({ status: 200, description: "Category reviewed successfully." })
+  @ApiResponse({ status: 403, description: "Forbidden." })
+  @ApiResponse({ status: 404, description: "Category not found." })
+  async reviewCategory(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: ReviewCategoryDto,
+  ) {
+    return await this.productService.reviewCategory(id, dto);
   }
 
   @Get("categories/:id")
+  @Public()
   @ApiOperation({ summary: "Get category by ID" })
   @ApiParam({ name: "id", description: "Category ID", type: Number })
   @ApiResponse({ status: 200, description: "Category retrieved successfully." })

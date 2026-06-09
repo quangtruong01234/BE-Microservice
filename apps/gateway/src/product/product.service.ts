@@ -11,7 +11,9 @@ import {
   UpdateProductDto,
   GetProductsQueryDto,
   CreateBrandDto,
+  ReviewBrandDto,
   CreateCategoryDto,
+  ReviewCategoryDto,
 } from "./dto";
 import { CreateSkuGatewayDto, UpdateSkuGatewayDto } from "./dto/product.dto";
 
@@ -429,21 +431,58 @@ export class ProductService {
   // BRAND OPERATIONS
   // ============================================================================
 
-  async createBrand(dto: CreateBrandDto): Promise<unknown> {
+  async createBrand(dto: CreateBrandDto, userId: number): Promise<unknown> {
     return (await firstValueFrom(
-      this.productClient.send(PRODUCT_MESSAGE_PATTERNS.BRAND_CREATE, dto),
+      this.productClient
+        .send(PRODUCT_MESSAGE_PATTERNS.BRAND_CREATE, {
+          ...dto,
+          submittedBy: userId,
+        })
+        .pipe(timeout(10000)),
     )) as unknown;
   }
 
   async getAllBrands(): Promise<unknown> {
     return (await firstValueFrom(
-      this.productClient.send(PRODUCT_MESSAGE_PATTERNS.BRAND_FIND_ALL, {}),
+      this.productClient
+        .send(PRODUCT_MESSAGE_PATTERNS.BRAND_FIND_ALL, {})
+        .pipe(timeout(10000)),
     )) as unknown;
+  }
+
+  async getPendingBrands(): Promise<unknown> {
+    return (await firstValueFrom(
+      this.productClient
+        .send(PRODUCT_MESSAGE_PATTERNS.BRAND_FIND_ALL, { status: "pending" })
+        .pipe(timeout(10000)),
+    )) as unknown;
+  }
+
+  async reviewBrand(id: number, dto: ReviewBrandDto): Promise<unknown> {
+    try {
+      return (await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.BRAND_REVIEW, {
+            id,
+            action: dto.action,
+            note: dto.note,
+          })
+          .pipe(timeout(10000)),
+      )) as unknown;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        `review brand ID: ${id}`,
+        "Product Service",
+      );
+    }
   }
 
   async getBrandById(id: number): Promise<unknown> {
     return (await firstValueFrom(
-      this.productClient.send(PRODUCT_MESSAGE_PATTERNS.BRAND_FIND_BY_ID, id),
+      this.productClient
+        .send(PRODUCT_MESSAGE_PATTERNS.BRAND_FIND_BY_ID, id)
+        .pipe(timeout(10000)),
     )) as unknown;
   }
 
@@ -451,9 +490,17 @@ export class ProductService {
   // CATEGORY OPERATIONS
   // ============================================================================
 
-  async createCategory(dto: CreateCategoryDto): Promise<unknown> {
+  async createCategory(
+    dto: CreateCategoryDto,
+    userId: number,
+  ): Promise<unknown> {
     return (await firstValueFrom(
-      this.productClient.send(PRODUCT_MESSAGE_PATTERNS.CATEGORY_CREATE, dto),
+      this.productClient
+        .send(PRODUCT_MESSAGE_PATTERNS.CATEGORY_CREATE, {
+          ...dto,
+          submittedBy: userId,
+        })
+        .pipe(timeout(10000)),
     )) as unknown;
   }
 
@@ -461,7 +508,9 @@ export class ProductService {
     try {
       this.logger.log("Fetching all categories");
       const result = (await firstValueFrom(
-        this.productClient.send(PRODUCT_MESSAGE_PATTERNS.CATEGORY_FIND_ALL, {}),
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.CATEGORY_FIND_ALL, {})
+          .pipe(timeout(10000)),
       )) as unknown as unknown[];
       this.logger.log(`Found ${result?.length ?? 0} categories`);
       return result;
@@ -471,9 +520,39 @@ export class ProductService {
     }
   }
 
+  async getPendingCategories(): Promise<unknown> {
+    return (await firstValueFrom(
+      this.productClient
+        .send(PRODUCT_MESSAGE_PATTERNS.CATEGORY_FIND_ALL, { status: "pending" })
+        .pipe(timeout(10000)),
+    )) as unknown;
+  }
+
+  async reviewCategory(id: number, dto: ReviewCategoryDto): Promise<unknown> {
+    try {
+      return (await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.CATEGORY_REVIEW, {
+            id,
+            action: dto.action,
+            note: dto.note,
+          })
+          .pipe(timeout(10000)),
+      )) as unknown;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        `review category ID: ${id}`,
+        "Product Service",
+      );
+    }
+  }
+
   async getCategoryById(id: number): Promise<unknown> {
     return (await firstValueFrom(
-      this.productClient.send(PRODUCT_MESSAGE_PATTERNS.CATEGORY_FIND_BY_ID, id),
+      this.productClient
+        .send(PRODUCT_MESSAGE_PATTERNS.CATEGORY_FIND_BY_ID, id)
+        .pipe(timeout(10000)),
     )) as unknown;
   }
 
