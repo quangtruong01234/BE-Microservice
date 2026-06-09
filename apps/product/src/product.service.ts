@@ -1,12 +1,16 @@
 import {
   Injectable,
+  Inject,
   Logger,
   NotFoundException,
   ConflictException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { DataSource, In, Repository, SelectQueryBuilder } from "typeorm";
+import { Channel } from "amqplib";
 import { PaginatedResponse } from "@app/common";
+import { EXCHANGE } from "@app/common/constants/exchange";
+import { EVENT } from "@app/common/constants/event";
 import { CachedService } from "@app/cached";
 import { Product } from "./entity/product.entity";
 import { ProductSku } from "./entity/product-sku.entity";
@@ -39,6 +43,8 @@ export class ProductService {
     private readonly skuRepository: Repository<ProductSku>,
     private readonly dataSource: DataSource,
     private readonly cachedService: CachedService,
+    @Inject(EXCHANGE.RMQ_PUBLISHER_CHANNEL)
+    private readonly fanoutChannel: Channel | null,
   ) {}
 
   private buildSearchCacheKey(query: GetProductsQueryDto): string {
@@ -426,7 +432,38 @@ export class ProductService {
     if (note !== undefined) {
       brand.reviewNote = note;
     }
-    return this.brandRepository.save(brand);
+    const saved = await this.brandRepository.save(brand);
+    if (saved.submittedBy != null) {
+      if (!this.fanoutChannel) {
+        this.logger.warn(
+          "[PRODUCT] fanoutChannel unavailable — brand_reviewed notification skipped",
+        );
+      } else {
+        try {
+          this.fanoutChannel.publish(
+            EXCHANGE.PRODUCT_EXCHANGE,
+            EVENT.BRAND_REVIEWED_EVENT,
+            Buffer.from(
+              JSON.stringify({
+                pattern: EVENT.BRAND_REVIEWED_EVENT,
+                data: {
+                  submittedBy: saved.submittedBy,
+                  brandId: saved.id,
+                  brandName: saved.name,
+                  action,
+                  note: note ?? null,
+                },
+              }),
+            ),
+          );
+        } catch (err) {
+          this.logger.warn(
+            `[PRODUCT] Failed to emit brand_reviewed event: ${String(err)}`,
+          );
+        }
+      }
+    }
+    return saved;
   }
 
   // Category methods
@@ -476,6 +513,37 @@ export class ProductService {
     if (note !== undefined) {
       category.reviewNote = note;
     }
-    return this.categoryRepository.save(category);
+    const saved = await this.categoryRepository.save(category);
+    if (saved.submittedBy != null) {
+      if (!this.fanoutChannel) {
+        this.logger.warn(
+          "[PRODUCT] fanoutChannel unavailable — category_reviewed notification skipped",
+        );
+      } else {
+        try {
+          this.fanoutChannel.publish(
+            EXCHANGE.PRODUCT_EXCHANGE,
+            EVENT.CATEGORY_REVIEWED_EVENT,
+            Buffer.from(
+              JSON.stringify({
+                pattern: EVENT.CATEGORY_REVIEWED_EVENT,
+                data: {
+                  submittedBy: saved.submittedBy,
+                  categoryId: saved.id,
+                  categoryName: saved.name,
+                  action,
+                  note: note ?? null,
+                },
+              }),
+            ),
+          );
+        } catch (err) {
+          this.logger.warn(
+            `[PRODUCT] Failed to emit category_reviewed event: ${String(err)}`,
+          );
+        }
+      }
+    }
+    return saved;
   }
 }
