@@ -9,75 +9,26 @@ Base URL: http://localhost:3000 | Swagger: /doc
 
 ## Completed Milestones
 
-- RBAC: accesscontrol library, Role/Resource entity, RoleAuthGuard, @CheckPermission decorator
-- Auth: JWT_SECRET 64-byte, JWT_EXPIRES_IN, removed hardcoded fallback
-- Payments: ZaloPay sandbox integrated (createOrder + callback + order_url polling)
-- VNPay: strategy pattern added, selected via PAYMENT_GATEWAY env
-- DB: app_trans_id column saved to payments table
-- Task 7: ZaloPay callback fixed — payment status updated, payment_completed emitted
-- Task 8: VNPay callback fully verified via ngrok — payment status updated to completed
-- Task 9: ZaloPay config — hardcoded fallbacks removed, requireEnv() used
-- Task 8 follow-up: orders handlePaymentCompleted — fixed data.data.orderId → data.orderId (NestJS strips envelope before @Payload delivery)
-- Task 12: Renamed zp_trans_token → transaction_id in payments table (entity + service + migration SQL created)
-- Task 10: Idempotency — UNIQUE constraint on order_id (uq_payments_order_id index), pre-insert check added to processPayment(); 9 duplicate rows cleaned from Aiven DB
-- Task 11: payment-result endpoint fixed for ZaloPay + VNPay — verified via sandbox — ZaloPay uses status/amount, VNPay uses vnp_ResponseCode/vnp_Amount
-- Task 13: GET /api/order/:id — gateway controller + service enforce owner-or-admin check (ForbiddenException) and 404 when order not found; JwtAuthGuard applied explicitly
-- Task 14: Pagination for GET /api/order/user/:id — orders service uses findAndCount with skip/take, returns { data, total, page, limit }; gateway passes { userId, page, limit } via TCP; GetOrdersByUserQueryDto added; stale fixed-key Redis cache removed
-- Task #4 (sync): Inventory → Product stock sync via RabbitMQ FANOUT — INVENTORY_STOCK_CHANGED_EVENT + INVENTORY_EVENTS queue + INVENTORY_EXCHANGE constants added; inventory emits after reserve/release/consume; product switched to hybrid mode (TCP + RabbitMQ consumer) with ack/nack logic (NotFoundException → no-requeue, DB error → requeue); fixed @Payload() handler to use data directly (not data.data) — verified reserve/release both sync stockQuantity correctly
-- Task #3 (race condition fix): reserveStock() atomic via single UPDATE WHERE available_stock >= qty — PostgreSQL row lock prevents oversell
-- Task #4 verified: reserve triggers stockQuantity 4→3, release triggers 3→4 confirmed live
-- Cancel order: PATCH /api/order/:id/cancel — status transition PENDING/PROCESSING → CANCELED, ownership check, RabbitMQ emit ORDER_CANCELED_EVENT → inventory releases stock
-- Inventory RabbitMQ fanout fix: main.ts switched to getOptionsTopic() with ORDERS_EXCHANGE binding; inventory.controller.ts removed spurious data.data unwrap in handleOrderCreated and handleOrderCanceled — order_created and order_canceled events now consumed correctly; verified reserve/release stock end-to-end
-- PDF Invoice: product_name added to order_items; pdfkit installed; invoice generator + TCP handler + GET /api/order/:id/invoice implemented; TCP pattern mismatch fixed (controller had { cmd: ... } wrapper, gateway sends string) — verified HTTP 200, Content-Type: application/pdf, 1874 bytes, 1-page PDF for order 62
-- GHN + COD schema: 4 new columns on orders table (payment_method ENUM zalopay|vnpay|cod, shipping_address VARCHAR 500, cod_amount DECIMAL nullable, ghn_order_code VARCHAR nullable); OrderStatus extended with SHIPPED + DELIVERING; PaymentMethod enum added; migration applied to Aiven DB (55 existing rows backfilled with DEFAULT then dropped)
-- GHN + COD implementation: GhnService + GhnModule created (apps/orders/src/ghn/); orders.service.ts calls GHN immediately for COD orders — GHN failure is non-fatal (try/catch, order saved with ghn_order_code=null); payment_method added explicitly to order_created event payload; payments service skips COD orders via guard clause (payment_method === 'cod') before any DB/logging work
-- Admin orders endpoint: GET /api/order/admin/orders — @CheckPermission('order','read:any'), TCP to orders (GET_ALL_ORDERS), batch TCP to user (GET_USERS_BY_IDS), merges buyer:{name,email} into each order
-- GHN URL fix: GHN_API_URL corrected to https://dev-online-gateway.ghn.vn/shiip/public-api in local/nodeA/.env
-- GHN COD E2E verified: order 61 ghn_order_code="LXD9YM" non-null in DB
-- GHN cod_amount cast fix: Math.round(Number(order.cod_amount ?? 0)) in ghn.service.ts — TypeORM returns DECIMAL as string, GHN expects int
-- GHN webhook handler (Task B): POST /ghn/webhook (gateway, @Public(), excluded from /api prefix); TCP handler GHN_WEBHOOK in orders maps picking/picked→SHIPPED, delivering→DELIVERING, delivered→COMPLETED; emits payment_completed for COD delivered orders; 8 files changed; verified 3 status transitions live
-- ZaloPay/VNPay → GHN post-payment (Task C): handlePaymentCompleted() calls GHN (cod_amount=0, non-fatal) and sets status=PROCESSING instead of COMPLETED; COD orders short-circuit (already COMPLETED via GHN webhook → no-op); verified order 62 ghn_order_code="LXD6U9" non-null, status=processing
-- GHN + COD shipping flow fully complete end-to-end
-- PDF invoice verified: TCP pattern fix (removed { cmd: } wrapper from @MessagePattern in orders controller); GET /api/order/:id/invoice → 200, Content-Type: application/pdf, 1874 bytes, 1-page PDF for order 62
-- MicroserviceErrorHandler fixed (2-layer): HttpToRpcExceptionFilter in libs/common catches HttpException → re-throws as RpcException({ statusCode, message }); gateway MicroserviceErrorHandler adds err?.error unwrap; @UseFilters(HttpToRpcExceptionFilter) on OrdersController; verified 403/404/200 correct for invoice endpoint
-- Payment option selection: payment_methods table in payments PostgreSQL (id, key VARCHAR unique, name, description, is_active BOOLEAN default true); seeded zalopay/vnpay/cod rows via Node pg script; TCP GET_PAYMENT_OPTIONS handler in payments service; GET /api/payment/options (@Public()) returns active rows from DB via TCP; verified response correct
-- Social service scaffolded: apps/social/, port 3008, Node A, MySQL TypeORM, TCP, SOCIAL_SERVICE client trong gateway
-- Notification service fully implemented: entity (notifications table, 7 columns, MySQL), RabbitMQ consumers (payment_completed + order_canceled → save notification cho buyer), REST GET /api/notifications (paginated, JwtAuthGuard), PATCH /api/notifications/:id/read; end-to-end verified — event → DB → REST → mark-as-read all pass
-- Admin orders endpoint: GET /api/order/admin/orders?page=1&limit=20 — parallel fetch orders + buyer info (batch TCP to user service), @CheckPermission('order','read:any') guard, 200/403 verified
-- Social Post CRUD Phase 1: SOCIAL_MESSAGE_PATTERN added (4 patterns); social.service.ts (createPost/getPosts/getPostById/deletePost), social.controller.ts (@MessagePattern + @UseFilters(HttpToRpcExceptionFilter)), social.module.ts (TypeOrmModule.forFeature([Post])); gateway social/ module (SocialGatewayService + SocialController: POST/GET/GET:id/DELETE /api/social/posts); SocialGatewayModule imported into gateway.module.ts
-- Social Like/Unlike: likePost/unlikePost + Redis caching (INCR/DECR like_count, SET/DEL liked flag); response trả likeCount mới nhất; getPosts + getPostsByUser đều kèm likeCount (cache-aside)
-- Social Comment: createComment/getComments/deleteComment (top-level only, parent IS NULL)
-- Social Reply tree: TypeORM materialized-path, createReply/getReplies (findDescendantsTree depth 5), infinite nesting verified
-- Product multi-category: refactored ManyToOne → ManyToMany, junction table product_categories, categoryIds[] in DTO; createProduct/updateProduct/findAll/findById all use relations: ['categories']; E2E verified (5 steps pass)
-- Production hardening: trust proxy via getHttpAdapter().getInstance() trong gateway main.ts; CORS đã dùng env var (no change); PM2 ecosystem.config.js cho nodeA + nodeB; nginx/trybuy.conf với Let's Encrypt + WebSocket headers
-- WebSocket WS-1: NotificationWsGateway added to notification service — @WebSocketGateway(3010), JWT auth on handleConnection, client.join(`user:${userId}`), sendToUser() helper; JwtModule.registerAsync added to NotificationModule; port 3010 binds automatically on app start
-- WebSocket WS-2: NotificationService injects NotificationWsGateway; saveNotification() calls wsGateway.sendToUser(userId, saved) fire-and-forget after DB save — ack/nack logic unchanged
-- WebSocket WS-3: nginx location /socket.io/ → port 3010 added to trybuy.conf + trybuy-local.conf
-- WebSocket WS-4: COMMENT_CREATED_EVENT + REPLY_CREATED_EVENT — social service emits fanout via SOCIAL_EXCHANGE; notification service consumes NOTIFICATION_SOCIAL_SERVICE queue → saveNotification() + wsGateway.sendToUser() fire-and-forget; self-comment/reply skipped
-- Cloudinary signed upload: POST /api/upload/signature (gateway, JwtAuthGuard, SHA-1 Node crypto); product + social post entity extended (image_urls JSON, video_url varchar); old image_url column dropped from both tables; migration SQL applied; dev test tool at scripts/test-cloudinary.html
-- Queue loop fix: no-op @EventPattern(PAYMENT_COMPLETED_EVENT) added to rewards + payments controllers — stale events acked and discarded on next deploy
-- @UseFilters(HttpToRpcExceptionFilter) applied to payments, inventory, rewards, product controllers — 4xx now propagate correctly through gateway
-- Inventory service: findOne/findByProductId/findBySku now throw NotFoundException instead of returning null; findByProductIdOrNull added for internal callers (checkStock/reserve/release/consume)
-- Real-time Chat: apps/chat/ service extracted (port TCP:3012); WS moved to gateway:3000/chat (ChatWsGateway in apps/gateway/src/chat/); CHAT_MESSAGE_PATTERN + CHAT_SERVICE constants; ChatGatewayModule wired in gateway; nginx /chat/ → 3000 (gateway handles WS); 5-day message cleanup cron; JWT claim fix (userId not sub); Reply support verified: parentMessageId saved + broadcast correctly (13/13 E2E pass); Test artifacts: scripts/test-chat-ws.mjs, scripts/test-chat-reply.mjs
-- PaymentMethod enum consolidated: moved to libs/common/src/constants/payment-method.enum.ts, exported via @app/common; removed duplicate declarations from apps/orders/src/entity/order.entity.ts + apps/gateway/src/order/dto/create-order.dto.ts; orders.controller + orders.service updated to import from @app/common
-- GET /api/user/me + PATCH /api/user/:id: fully implemented + 6/6 E2E pass; JWT claim fix: JwtAuthGuard maps payload to req.user.id (not req.user.userId) — bug caused getMe to return wrong user when userId was undefined
-- PaginatedResponse<T>: shared type in @app/common, PaginatedResponse.of() factory; all paginated methods use standard shape: { data, total, page, limit, totalPages, hasNext }
-- isLiked bug fix: OptionalJwtAuthGuard added — public social GET routes (@Public()) now populate req.user when a valid token is present; viewerUserId correctly passed to resolveIsLiked(); verified E2E: no cookie → isLiked:false, with cookie (user who liked) → isLiked:true
-- Product search index + cache: 7 DB indexes added to products table (brand_id, is_active, is_featured, is_trending, condition, price, rating); CachedModule wired into ProductModule; findAllProducts cache-aside with 5s TTL (key: products:search:<stable-JSON>); invalidation on create/update/delete via keys("products:search:*") scan; keys() method added to CachedService; migration SQL needed for existing DB (see below)
-
-- User Follow: Follow entity (follows table, unique uq_follows_follower_following); followUser/unfollowUser/getFollowers/getFollowing/getFollowingFeed in social.service.ts; 5 new @MessagePattern handlers in social.controller.ts; SocialFollowController added to gateway (POST/DELETE /api/social/users/:id/follow, GET /api/social/users/:id/followers, GET /api/social/users/:id/following, GET /api/social/users/:id/feed); feed hydrates author info via fetchAuthorMap; migration applied to Aiven MySQL (2026-06-04); 8/8 E2E pass
-- Product Variations + SKU Matrix Phase 0+1: 4 DB migrations applied (price/sku/stockQuantity nullable on products, product_skus table, sku_id/sku_tier_idx on order_items, product_sku_id partial indexes on inventory_v2); ProductSku entity + CreateProductSkuDto/UpdateProductSkuDto; product.service.ts upsertSkus (transactional), findSkusByProduct, findSkuById, updateSku, deleteSku; createProduct() conditional skuList upsert; findProductById() includes "skus" relation; 5 SKU @MessagePattern handlers on product.controller; product.module.ts registers ProductSku; gateway create-product.dto.ts makes price/sku optional, adds variations/skuList fields; gateway product.service.ts skips auto-inventory creation when skuList provided; tsc: 0 errors; E2E: backward-compat 201+skus:[]+price non-null ✓, variation product 201+4 skus+price:null ✓
-
-- Cart feature: Cart + CartItem entities in orders service (MySQL); CartService + CartController TCP (5 patterns: cart.addItem/get/updateItem/removeItem/clear); gateway CartGatewayService fetches price from product service (SKU or base price) before forwarding to orders; CartController HTTP (POST/GET/PATCH/DELETE /api/cart, /api/cart/items/:id); CartModule with forwardRef(GatewayModule); CART_MESSAGE_PATTERN added to libs/constant; 2 SQL migrations applied (carts + cart_items); tsc: 0 errors, eslint: 0 errors
-- Cart snapshot columns removed: price/product_name/image_url dropped from cart_items (DB + entity + service + gateway); migration SQL at database/remove_snapshots_from_cart_items.sql; gateway cart.service.ts no longer transmits snapshot data to orders TCP
-- createOrder() security fix: price removed from gateway OrderItemDto (client can no longer inject price); gateway createOrder() fetches authoritative price via TCP before forwarding to orders — skuId → SKU_FIND_BY_ID, no skuId → PRODUCT_FIND_BY_ID; validates isActive + productId ownership; Number() cast handles DECIMAL-as-string from TypeORM; verified: POST /api/order with price:1 → order.total=299 (DB price used)
-- SKU stock check (interim fix): gateway createOrder() validates sku.stockQuantity before forwarding to orders — throws 400 "Insufficient stock for SKU X" when stockQuantity < requested; orders.service skips inventory TCP call for items with skuId (inventory has no record for variant products); base-price products unchanged; verified: SKU id=5 stock=10 → 201 ✓, SKU id=8 stock=0 → 400 ✓, base-price product 23 → 201 ✓
-- Product Variations + SKU Matrix: product_skus table, variations JSON column, tier_idx pattern, CartDrawer/ProductDetail/CreateProductModal UI hoàn chỉnh
-- Cart server-side: carts + cart_items tables (orders service), 5 CRUD endpoints, localStorage cart đã xóa, CheckoutPage migrate sang server cart
-- Security: userId từ JWT, price fetch server-side tại gateway, client không thể fake price
-- Bugfixes: TCP { cmd } wrapper → plain string, DECIMAL transformer, tierIdx stringify qua TCP, SKU stock check tại gateway, inventory skip cho variant items
-- Phase 2 SKU gateway endpoints: CreateSkuGatewayDto + UpdateSkuGatewayDto added to gateway/product/dto/product.dto.ts; 4 service methods (getSkusByProduct/addSku/updateSku/deleteSku) added to gateway product.service.ts; 4 routes wired in gateway product.controller.ts (GET/POST /api/products/:id/skus, PATCH/DELETE /api/products/:id/skus/:skuId); GET is @Public(), others require JwtAuthGuard; tsc: 0 errors, eslint: 0 errors
-- Self-test protocol established: Claude runs all API tests autonomously — login, curl, assert, report; never hands test commands to user; test-accounts.md moved to .claude/test-accounts.md
+- Auth + RBAC: JWT cookie, 64-byte secret, accesscontrol library, RoleAuthGuard, @CheckPermission decorator
+- Payments: ZaloPay + VNPay strategy pattern; callback verified; idempotency (UNIQUE order_id); payment-result endpoint; payment_methods table; GET /api/payment/options
+- Orders: create/cancel/paginate/admin-list; owner-or-admin guard; PDF invoice; PaginatedResponse
+- GHN + COD: full shipping flow — COD order → GHN push → webhook status transitions → payment_completed emit; ZaloPay/VNPay post-payment → GHN; non-fatal failure
+- Inventory: atomic reserveStock (UPDATE WHERE); stock sync via RabbitMQ FANOUT (INVENTORY_STOCK_CHANGED_EVENT); findByProductIdOrNull for internal callers
+- Product: multi-category ManyToMany; search indexes (7); cache-aside 5s TTL + invalidation; imageUrls JSON column
+- Product SKU matrix: product_skus table, variations JSON, upsertSkus transactional; gateway SKU CRUD (GET/POST/PATCH/DELETE /api/products/:id/skus); price/sku nullable on products
+- Cart: Cart + CartItem entities (orders service); 5 TCP patterns; gateway fetches authoritative price before forwarding; snapshot columns removed; createOrder() price-injection fix
+- User: GET /api/user/me + PATCH /api/user/:id; JWT claim fix (req.user.id); GET_ME + UPDATE_USER patterns
+- Social: Post CRUD, Like/Unlike (Redis cache), Comment + Reply tree (materialized-path depth 5), Follow/Feed, isLiked (OptionalJwtAuthGuard)
+- Notification: RabbitMQ consumers (payment_completed + order_canceled + comment/reply events) → DB → REST (paginated) + WS push
+- Real-time Chat: TCP service (port 3012), WS via gateway:3000/chat, 1-1 + reply, 5-day cleanup cron
+- WebSocket: NotificationWsGateway port 3010, JWT auth, rooms user:{userId}, fire-and-forget emit
+- Cloudinary: signed upload/delete signature endpoint; image_urls JSON on products + posts; old image_url dropped
+- Infrastructure: nginx (Let's Encrypt, WS headers, /zalopay+/vnpay → 3007, /socket.io → 3010), PM2 ecosystem.config.js, trust proxy
+- MicroserviceErrorHandler 2-layer: HttpToRpcExceptionFilter on all microservice controllers; @UseFilters applied to payments/inventory/rewards/product
+- PaginatedResponse.of() factory in @app/common; PaymentMethod enum in @app/common
+- api.md fully updated: 14 controllers, all TCP patterns, RabbitMQ events table
+- Product imageUrls fix: gateway CreateProductDto + UpdateProductDto added imageUrls; FE useProductForm + types/index.ts changed image_urls → imageUrls (camelCase)
+- RewardPoint entity camelCase: user_id/order_id/created_at → userId/orderId/createdAt with @Column({ name }) aliases; service + controller updated
 
 ## Active Tasks
 
@@ -85,67 +36,39 @@ Base URL: http://localhost:3000 | Swagger: /doc
 
 ## Known Issues
 
-- BuyerInfo interface in gateway order.service declares 4 fields (id/username/email/name) but user service returns 6 (+ avatar/isActive) — minor type mismatch, no runtime impact; fix when touching that area
-- Product SKU matrix Phase 3-4 not yet done: Phase 3 = order_items sku_id wired into inventory reservation, Phase 4 = inventory per-SKU tracking
-- CheckoutPage: item.productName và item.imageUrl null (snapshot đã xóa) — cần fetch productMap như CartDrawer
-- Phase 4 inventory per-SKU reservation chưa implement (interim: gateway validates sku.stockQuantity, orders service skip inventory cho SKU items)
+- BuyerInfo interface in gateway order.service declares 4 fields (id/username/email/name) but user service returns 6 (+ avatar/isActive) — minor type mismatch, no runtime impact
+- CheckoutPage: item.productName và item.imageUrl null — cần fetch productMap như CartDrawer
+- Phase 3 orders: skuId chưa wired vào inventory reservation (interim: gateway validates sku.stockQuantity, orders service skip inventory cho SKU items)
+- Phase 4 inventory per-SKU: product_sku_id column + partial unique indexes chưa implement
 - ProductDetail: nút "Thêm vào giỏ" chưa disable trước khi chọn đủ variant
 - ShopPage: chưa có Edit/Delete product action
 
 ## Key Conventions
 
-- Payment gateway: always use official npm package, never implement HMAC manually
-- PAYMENT_GATEWAY env: zalopay | vnpay
-- Constants: message patterns + queue names always in @app/constant, never hardcode
+- Constants: message patterns + queue names always in @app/constant or @app/common/constants — never hardcode
 - RabbitMQ consumer: ack on success, nack+requeue on DB error, nack+no-requeue if order not found
-- Each prompt: 1 task only, report files changed
-- Archive reference: .claude/handoff/archive/2026-05-rbac-payment.md
-- @Payload() in NestJS RabbitMQ @EventPattern handlers = packet.data already unwrapped — access data.productId directly, never data.data.productId
-- COD payment handled via GHN cod_amount — not a separate payment service
-- Nginx config routes /zalopay/callback + /vnpay/callback → port 3007, all else → port 3000
-- GHN shipping_address format (pipe-delimited): "name|phone|address|ward|district|province"
-- GHN env vars in local/nodeA/.env: GHN_API_URL=https://dev-online-gateway.ghn.vn/shiip/public-api, GHN_API_TOKEN, GHN_SHOP_ID=200481
-- GHN failure is non-fatal: order persists with ghn_order_code=null, retry manually
-- PaymentMethod enum lives in @app/common (libs/common/src/constants/payment-method.enum.ts) — import from there, never re-declare locally
-- HTTP controllers: req.user.id (not req.user.userId) — JwtAuthGuard maps JWT payload.userId → req.user.id
-- WS gateways: payload.userId (reading JWT claims directly on handshake, not via req.user)
-- PaginatedResponse: always use PaginatedResponse.of(data, total, page, limit) from @app/common — never build pagination object manually
-- payments service: guard clause (payment_method === 'cod') skips COD orders before any DB/logging work
-- payment_methods table: active methods controlled by is_active column in DB — PAYMENT_GATEWAY env no longer drives the options endpoint
-- Deploy checklist: `pm2 start ecosystem.config.js --env production` → `pm2 save && pm2 startup`; thay yourdomain.com trong nginx/trybuy.conf trước khi deploy
-- WebSocket port: notification service binds Socket.io on port 3010 (separate from TCP)
-- WS auth: JWT passed via handshake.auth.token or handshake.query.token
-- WS rooms: each user joins room `user:{userId}` on connect
-- WS emit is fire-and-forget — never await, never throw on offline user
-- Cloudinary: client uploads directly to Cloudinary; server chỉ cấp signature qua POST /api/upload/signature
-- CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET trong local/nodeA/.env
-- Cloudinary folders: trybuy/products/, trybuy/posts/
-- SOCIAL_EXCHANGE: "social.fanout" trong libs/common/src/constants/exchange.ts
-- Dev test tool: scripts/test-cloudinary.html (login + upload + verify flow, no FE needed)
+- @Payload() in @EventPattern: packet.data already unwrapped — access data.orderId directly, never data.data.orderId
+- Gateway pattern: every TCP call needs timeout(10000) + MicroserviceErrorHandler; every DTO field needs @ApiProperty()
+- @MessagePattern handlers: always return a value — never void (causes TCP "no elements in sequence" → 502)
+- camelCase API contract: all HTTP response + request fields must be camelCase; entity properties use @Column({ name: 'snake_case' }) alias; snake_case only for DB column names, external API contracts (Cloudinary public_id, ZaloPay order_url), WS event name strings
+- TypeORM entity: use ! (definite assignment) on all @Column properties; use @Column({ name }) alias for snake_case DB columns
+- DECIMAL columns from TypeORM return string — always cast: Number(val ?? 0) or Math.round(Number(val ?? 0))
+- tierIdx (ProductSku): @AfterLoad() parses JSON string → number[]; must JSON.stringify before saving to VARCHAR or forwarding via TCP
+- HTTP controllers: req.user.id (JwtAuthGuard maps JWT payload.userId → req.user.id)
+- WS gateways: payload.userId (JWT claims read directly on handshake)
+- WS emit: fire-and-forget — never await, never throw on offline user
+- PaginatedResponse: always use PaginatedResponse.of(data, total, page, limit) from @app/common
+- PaymentMethod enum: import from @app/common — never re-declare locally
+- COD: handled via GHN cod_amount; payments service guard clause skips COD orders
+- GHN: shipping_address pipe-delimited "name|phone|addr|ward|district|province"; failure non-fatal (order saved with ghn_order_code=null)
+- GHN env: GHN_API_URL=https://dev-online-gateway.ghn.vn/shiip/public-api, GHN_API_TOKEN, GHN_SHOP_ID=200481 in local/nodeA/.env
+- Cloudinary: client uploads direct; server signs via POST /api/upload/signature; folders: trybuy/products/, trybuy/posts/
+- payment_methods table: is_active column controls active options — PAYMENT_GATEWAY env no longer drives options endpoint
+- Deploy: `pm2 start ecosystem.config.js --env production` → `pm2 save && pm2 startup`; update yourdomain.com in nginx/trybuy.conf
+- Archive: .claude/handoff/archive/2026-05-rbac-payment.md
 
 ## Backlog (priority order)
 
-- [x] PDF invoice — verified working: HTTP 200, application/pdf, 1-page PDF generated correctly
-- [x] Shipping GHN + COD — fully complete: COD flow, webhook handler, ZaloPay/VNPay→GHN post-payment
-- [x] Payment option selection — GET /api/payment/options returns active rows from payment_methods DB table
-- [x] Notification service — fully complete
-- [x] Social Post CRUD Phase 1 — POST/GET/GET:id/DELETE /api/social/posts fully wired
-- [x] Social Like/Unlike Phase 2 — PostLike entity, likePost/unlikePost TCP handlers, POST/DELETE /api/social/posts/:id/like; ER_DUP_ENTRY → ConflictException
-- [x] Social Comment CRUD Phase 3 — Comment entity (comments table already in migration SQL); createComment/getComments/deleteComment TCP handlers; POST/GET /api/social/posts/:id/comments + DELETE /api/social/comments/:id; SocialCommentController added to gateway; SOCIAL_MESSAGE_PATTERN extended with CREATE_COMMENT/GET_COMMENTS/DELETE_COMMENT
-- [x] Social feed Phase 2 — Like ✓, Comment ✓, Reply tree ✓ | Chat defer WebSocket
-- [x] Real-time Chat — 1-1 chat, reply, 5-day retention, WS broadcast — fully verified
-- [x] reply_count trên getComments response
-- [x] WebSocket WS-1 — NotificationWsGateway setup (port 3010, JWT, rooms)
-- [x] WebSocket WS-2 — in-process emit after saveNotification()
-- [x] WebSocket WS-3 — nginx location /socket.io → port 3010
-- [x] WebSocket WS-4 — wire comment/reply events → notification + WS push
-- [x] Wire notification cho comment/reply events — COMMENT_CREATED_EVENT + REPLY_CREATED_EVENT; social emits to social.fanout exchange; notification consumes NOTIFICATION_SOCIAL_SERVICE queue; saveNotification + wsGateway.sendToUser; self-comment/reply skipped
-- [x] Nginx config — nginx/trybuy.conf + nginx/trybuy-local.conf,
-      Let's Encrypt setup, WebSocket headers, routing verified E2E:
-      /api/\* → port 3000 ✓, /zalopay/callback → port 3007 ✓,
-      trust proxy + CORS env var + PM2 ecosystem.config.js included
-- [x] Cloudinary signed upload — POST /api/upload/signature implemented; product + social post entities extended; migration applied; test tool at scripts/test-cloudinary.html
-- [x] Phase 2: Gateway SKU CRUD endpoints — GET/POST /api/products/:id/skus + PATCH/DELETE /api/products/:id/skus/:skuId; CreateSkuGatewayDto + UpdateSkuGatewayDto; tsc + eslint clean
+- [ ] Phase 3 orders: full skuId integration với inventory reservation
 - [ ] Phase 4: Inventory per-SKU — product_sku_id column + partial unique indexes
 - [ ] CheckoutPage: fetch productMap cho name/image display
-- [ ] Phase 3 orders: full skuId integration với inventory reservation

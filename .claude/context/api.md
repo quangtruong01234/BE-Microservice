@@ -11,24 +11,39 @@ Auth: HttpOnly cookie set on login. Protected routes require the cookie (sent au
 ## Auth Zones
 
 **Public (no auth):**
-- POST /api/user/register
-- POST /api/user/login
-- GET /api/products/ and all GET product endpoints without a Cookie tag
+- POST /api/user/register, POST /api/user/login, POST /api/user/logout
+- GET /api/products/ and all GET product endpoints
+- GET /api/products/:id/skus
 - GET /api/inventory/ (read-only)
 - GET /api/gateway/health
+- GET /api/gateway/payment-result
+- GET /api/payment/options
+- GET /api/social/posts, GET /api/social/posts/:id, GET /api/social/posts/user/:userId
+- GET /api/social/posts/:id/comments, GET /api/social/comments/:id/replies
+- GET /api/social/users/:id/followers, GET /api/social/users/:id/following, GET /api/social/users/:id/feed
+- POST /api/ghn/webhook (GHN delivery callback, no /api prefix in gateway)
 
 **Cookie required (authenticated user):**
-- POST /api/products/
-- PATCH /api/products/:id
-- DELETE /api/products/:id
-- POST /api/order/
-- GET /api/order/user/:id
-- PATCH /api/order/:id/cancel
-- POST /api/inventory/reserve-stock
-- POST /api/inventory/release-stock
+- POST /api/products/, PATCH /api/products/:id, DELETE /api/products/:id
+- POST /api/products/:id/skus, PATCH /api/products/:id/skus/:skuId, DELETE /api/products/:id/skus/:skuId
+- POST /api/order/, GET /api/order/:id, GET /api/order/user/:id, PATCH /api/order/:id/cancel, GET /api/order/:id/invoice
+- GET /api/order/:id/payment-url
+- POST /api/inventory/reserve-stock, POST /api/inventory/release-stock
+- POST /api/inventory/, PUT /api/inventory/:id, DELETE /api/inventory/:id
+- GET /api/notifications, PATCH /api/notifications/:id/read
+- POST /api/cart, GET /api/cart, PATCH /api/cart/items/:id, DELETE /api/cart/items/:id, DELETE /api/cart
+- POST /api/social/posts, DELETE /api/social/posts/:id
+- POST /api/social/posts/:id/like, DELETE /api/social/posts/:id/like
+- POST /api/social/posts/:id/comments, DELETE /api/social/comments/:id
+- POST /api/social/comments/:id/replies
+- POST /api/social/users/:id/follow, DELETE /api/social/users/:id/follow
+- POST /api/chat/conversations, GET /api/chat/conversations, GET /api/chat/conversations/:id/messages
+- POST /api/upload/signature, DELETE /api/upload/media
+- GET /api/user/me, PATCH /api/user/:id
 
 **Role: admin only:**
 - GET /api/user/all
+- GET /api/order/admin/orders
 
 > When adding a new endpoint: declare it in the correct zone here before implementing the guard.
 
@@ -42,11 +57,9 @@ Auth: HttpOnly cookie set on login. Protected routes require the cookie (sent au
 | POST | `/api/user/login` | Public | Login — sets HttpOnly JWT cookie |
 | POST | `/api/user/logout` | Public | Clears auth cookie |
 | GET | `/api/user/all` | Role: admin | Get all users |
+| GET | `/api/user/me` | Cookie | Get current authenticated user |
 | GET | `/api/user/:id` | Cookie | Get user by ID |
-
-> ⚠️ **NOT IMPLEMENTED**: `GET /api/user/me` does not exist yet.
-> `useAuth` hook currently uses localStorage as a temporary store for display info (username, name) — JWT token is NOT stored here, only non-sensitive display data.
-> When implementing: add `GET /user/me` to user service + gateway (no `@Public()` needed, uses cookie), then update `useAuth` to query this endpoint instead of reading from localStorage.
+| PATCH | `/api/user/:id` | Cookie | Update user profile (own account only) |
 
 ### Register DTO
 ```typescript
@@ -83,10 +96,25 @@ Auth: HttpOnly cookie set on login. Protected routes require the cookie (sent au
 | DELETE | `/api/products/:id` | Cookie | Delete product |
 | GET | `/api/products/:id/with-inventory` | — | Product + stock data |
 | GET | `/api/products/:id/stock-check` | — | Stock availability check |
+| GET | `/api/products/:id/skus` | — | Get SKUs for a product |
+| POST | `/api/products/:id/skus` | Cookie | Add a SKU to a product |
+| PATCH | `/api/products/:id/skus/:skuId` | Cookie | Update a SKU |
+| DELETE | `/api/products/:id/skus/:skuId` | Cookie | Delete a SKU (204) |
 
 ### Query Params for GET `/api/products/`
 ```
 page, limit, categoryId, brandId, minPrice, maxPrice, search
+```
+
+### Create/Update SKU DTO (`CreateSkuGatewayDto`)
+```typescript
+{
+  tierIdx: string;       // JSON array string e.g. "[0,1]"
+  price: number;         // >= 0
+  stockQuantity?: number;
+  sku?: string;
+  isActive?: boolean;
+}
 ```
 
 ---
@@ -95,15 +123,27 @@ page, limit, categoryId, brandId, minPrice, maxPrice, search
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/api/order/` | Cookie | Create order (triggers `order_created` event) |
-| GET | `/api/order/user/:id` | Cookie | Get orders by user ID |
+| POST | `/api/order/` | Cookie | Create order — triggers `order_created` event |
+| GET | `/api/order/admin/orders` | Role: admin | All orders with buyer info (paginated) |
+| GET | `/api/order/user/:id` | Cookie | Get paginated orders by user ID |
+| GET | `/api/order/:id` | Cookie | Get single order (owner or admin only) |
+| PATCH | `/api/order/:id/cancel` | Cookie | Cancel order (owner or admin, PENDING/PROCESSING → CANCELED) |
+| GET | `/api/order/:id/invoice` | Cookie | Download PDF invoice |
+| GET | `/api/order/:id/payment-url` | Cookie | Get ZaloPay payment URL |
 
 ### Create Order DTO
 ```typescript
 {
-  userId: number;
-  items: Array<{ productId: number; quantity: number; price: number }>;
-  total: number;
+  paymentMethod: 'zalopay' | 'vnpay' | 'cod';
+  shippingAddress: string;   // max 500 chars, pipe-delimited for GHN: "name|phone|addr|ward|district|province"
+  items: Array<{
+    productId: number;
+    skuId?: number;          // omit for base-price products
+    productName: string;
+    quantity: number;        // >= 1
+    weight?: number;         // grams
+    // price is NOT sent — server fetches authoritative price
+  }>;
 }
 ```
 
@@ -127,12 +167,111 @@ page, limit, categoryId, brandId, minPrice, maxPrice, search
 
 ---
 
-## Gateway Endpoints (`/api/gateway/`)
+## Cart Endpoints (`/api/cart/`)
+
+All cart endpoints require a valid JWT cookie.
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/api/gateway/` | Cookie | Generic order creation |
-| GET | `/api/gateway/health` | — | Health check — returns status of all services |
+| POST | `/api/cart` | Cookie | Add item to cart |
+| GET | `/api/cart` | Cookie | Get current user's cart |
+| PATCH | `/api/cart/items/:id` | Cookie | Update cart item quantity (0 = remove) |
+| DELETE | `/api/cart/items/:id` | Cookie | Remove item from cart |
+| DELETE | `/api/cart` | Cookie | Clear entire cart |
+
+### Add to Cart DTO
+```typescript
+{ productId: number; skuId?: number; quantity: number /* >= 1 */ }
+```
+
+### Update Cart Item DTO
+```typescript
+{ quantity: number /* >= 0; 0 removes the item */ }
+```
+
+---
+
+## Payment Endpoints (`/api/payment/`)
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/api/payment/options` | — | Active payment methods from DB |
+
+---
+
+## Notification Endpoints (`/api/notifications/`)
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/api/notifications` | Cookie | Paginated notifications for current user |
+| PATCH | `/api/notifications/:id/read` | Cookie | Mark notification as read |
+
+---
+
+## Social Endpoints (`/api/social/`)
+
+### Posts
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | `/api/social/posts` | Cookie | Create a post |
+| GET | `/api/social/posts` | — | Paginated posts (isLiked populated if cookie present) |
+| GET | `/api/social/posts/user/:userId` | — | Paginated posts by user |
+| GET | `/api/social/posts/:id` | — | Get post by ID |
+| DELETE | `/api/social/posts/:id` | Cookie | Delete a post |
+| POST | `/api/social/posts/:id/like` | Cookie | Like a post |
+| DELETE | `/api/social/posts/:id/like` | Cookie | Unlike a post |
+
+### Comments
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | `/api/social/posts/:id/comments` | Cookie | Create top-level comment (rate limited) |
+| GET | `/api/social/posts/:id/comments` | — | Paginated comments for a post |
+| DELETE | `/api/social/comments/:id` | Cookie | Delete a comment |
+| POST | `/api/social/comments/:id/replies` | Cookie | Reply to a comment (rate limited) |
+| GET | `/api/social/comments/:id/replies` | — | Reply tree (depth 5) |
+
+### Follow / Feed
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | `/api/social/users/:id/follow` | Cookie | Follow a user |
+| DELETE | `/api/social/users/:id/follow` | Cookie | Unfollow a user |
+| GET | `/api/social/users/:id/followers` | — | Get followers of a user |
+| GET | `/api/social/users/:id/following` | — | Get users a user follows |
+| GET | `/api/social/users/:id/feed` | — | Posts from users the user follows |
+
+---
+
+## Chat Endpoints (`/api/chat/`)
+
+All chat endpoints require a valid JWT cookie. WebSocket on `gateway:3000/chat` namespace.
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | `/api/chat/conversations` | Cookie | Create or get 1-1 conversation |
+| GET | `/api/chat/conversations` | Cookie | List conversations for current user |
+| GET | `/api/chat/conversations/:id/messages` | Cookie | Paginated messages (rate limited) |
+
+---
+
+## Upload Endpoints (`/api/upload/`)
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | `/api/upload/signature` | Cookie | Get Cloudinary signed upload params |
+| DELETE | `/api/upload/media` | Cookie | Delete media from Cloudinary |
+
+Cloudinary folders: `trybuy/products/`, `trybuy/posts/`
+
+---
+
+## Gateway / Webhook Endpoints
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/api/gateway/health` | — | Health check — status of all services |
+| GET | `/api/gateway/payment-result` | — | Payment result redirect (ZaloPay/VNPay) |
+| POST | `/api/gateway/` | Cookie | Generic order creation (legacy) |
+| POST | `/ghn/webhook` | — | GHN delivery status callback (no /api prefix) |
 
 ---
 
@@ -142,21 +281,55 @@ All patterns defined in `api/libs/constant/`.
 
 ### User Patterns (`USER_MESSAGE_PATTERN`)
 ```
-GET_USER_INFO, GET_ALL_USERS, REGISTER_USER, LOGIN_USER
+GET_USER_INFO, GET_ALL_USERS, GET_USERS_BY_IDS, REGISTER_USER, LOGIN_USER,
+GET_ME (user.get_me), UPDATE_USER (user.update)
 ```
 
-### Product Patterns (`PRODUCT_MESSAGE_PATTERN` / `PRODUCT_MESSAGE_PATTERNS`)
+### Product Patterns (`PRODUCT_MESSAGE_PATTERNS`)
 ```
 product.create, product.findAll, product.findById, product.findBySku,
 product.update, product.delete, product.findByCategory, product.findByBrand,
 product.search,
 brand.create, brand.findAll, brand.findById,
-category.create, category.findAll, category.findById
+category.create, category.findAll, category.findById,
+sku.create, sku.findByProduct, sku.findById, sku.update, sku.delete
 ```
 
 ### Order Patterns (`ORDER_MESSAGE_PATTERN`)
 ```
-CMD.CREATE_ORDER, GET_ORDERS_BY_USER
+create_order, get_orders_by_user, get_order_by_id, get_all_orders,
+cancel_order, get_order_invoice, handle_ghn_webhook
+```
+
+### Payment Patterns (`PAYMENT_MESSAGE_PATTERN`)
+```
+get_payment_url, get_payment_options
+```
+
+### Notification Patterns (`NOTIFICATION_MESSAGE_PATTERN`)
+```
+get_user_notifications, mark_notification_read
+```
+
+### Social Patterns (`SOCIAL_MESSAGE_PATTERN`)
+```
+social_create_post, social_get_posts, social_get_posts_by_user, social_get_post_by_id,
+social_delete_post, social_like_post, social_unlike_post,
+social_create_comment, social_get_comments, social_delete_comment,
+social_create_reply, social_get_replies,
+social_follow_user, social_unfollow_user, social_get_followers,
+social_get_following, social_get_following_feed
+```
+
+### Chat Patterns (`CHAT_MESSAGE_PATTERN`)
+```
+chat.create_or_get_conversation, chat.get_conversations, chat.get_messages,
+chat.send_message, chat.check_membership
+```
+
+### Cart Patterns (`CART_MESSAGE_PATTERN`)
+```
+cart.addItem, cart.get, cart.updateItem, cart.removeItem, cart.clear
 ```
 
 ### Inventory Patterns (`INVENTORY_MESSAGE_PATTERNS`)
@@ -173,19 +346,19 @@ inventory.update, inventory.remove
 
 ## RabbitMQ Events
 
-### `order_created`
-- **Emitted by**: Orders service after a successful order creation
-- **Constant**: `EVENT.ORDER_CREATED_EVENT` (`api/libs/common/src/constants/event.ts`)
-- **Listeners**:
-  - Inventory service — reserves stock for ordered items
-  - Payments service — initiates payment processing
-  - Rewards service — awards loyalty points to the user
+All event constants in `api/libs/common/src/constants/event.ts`.
+
+| Event | Constant | Emitted by | Listeners |
+|---|---|---|---|
+| `order_created` | `EVENT.ORDER_CREATED_EVENT` | Orders service | Inventory (reserve stock), Payments, Rewards |
+| `order_canceled` | `EVENT.ORDER_CANCELED_EVENT` | Orders service | Inventory (release stock) |
+| `payment_completed` | `EVENT.PAYMENT_COMPLETED_EVENT` | Payments service | Orders (set PROCESSING + trigger GHN) |
+| `inventory.stock_changed` | `EVENT.INVENTORY_STOCK_CHANGED_EVENT` | Inventory service | Product service (sync stockQuantity) |
+| `social.comment_created` | `EVENT.COMMENT_CREATED_EVENT` | Social service | Notification service |
+| `social.reply_created` | `EVENT.REPLY_CREATED_EVENT` | Social service | Notification service |
 
 ### Queue Names (`QUEUES` in `api/libs/common/src/constants/queues.ts`)
 ```
-order_events_queue_nest
-orders_rpc_queue
-inventory_rpc_queue
-payments_rpc_queue
-rewards_rpc_queue
+order_events_queue_nest, orders_rpc_queue, inventory_rpc_queue,
+inventory_events_queue, payments_rpc_queue, rewards_rpc_queue
 ```
