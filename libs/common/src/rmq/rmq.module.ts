@@ -1,4 +1,4 @@
-import { DynamicModule, Module } from "@nestjs/common";
+import { DynamicModule, Logger, Module } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { ClientsModule, Transport } from "@nestjs/microservices";
 import { RmqService } from "./rmq.service";
@@ -53,6 +53,7 @@ export class RmqModule {
 
   // For publisher with exchange
   static registerDirectPublisher(): DynamicModule {
+    const logger = new Logger("RmqModule");
     return {
       module: RmqModule,
       providers: [
@@ -60,7 +61,7 @@ export class RmqModule {
           provide: EXCHANGE.RMQ_PUBLISHER_CHANNEL,
           useFactory: async (
             configService: ConfigService,
-          ): Promise<amqp.Channel> => {
+          ): Promise<amqp.Channel | null> => {
             try {
               const user = configService.get<string>("RABBITMQ_USER");
               const pass = configService.get<string>("RABBITMQ_PASS");
@@ -69,7 +70,10 @@ export class RmqModule {
               const vhost = configService.get<string>("RABBITMQ_VHOST");
 
               if (!user || !pass || !host || !port || !vhost) {
-                throw new Error("Missing RabbitMQ configuration in .env file");
+                logger.warn(
+                  "Missing RabbitMQ configuration — direct publisher channel unavailable",
+                );
+                return null;
               }
 
               const encodedVhost = encodeURIComponent(vhost);
@@ -77,11 +81,13 @@ export class RmqModule {
 
               const connection = await amqp.connect(rabbitmqUri);
               const channel = await connection.createChannel();
-              console.log("Direct Publisher Channel created successfully.");
+              logger.log("Direct publisher channel created successfully.");
               return channel;
             } catch (err) {
-              console.error("Failed to create Direct Publisher Channel:", err);
-              throw err;
+              logger.warn(
+                `Failed to create direct publisher channel — fanout emits will be skipped: ${String(err)}`,
+              );
+              return null;
             }
           },
           inject: [ConfigService],
