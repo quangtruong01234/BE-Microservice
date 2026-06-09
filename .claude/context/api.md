@@ -44,6 +44,10 @@ Auth: HttpOnly cookie set on login. Protected routes require the cookie (sent au
 **Role: admin only:**
 - GET /api/user/all
 - GET /api/order/admin/orders
+- GET /api/products/brands/pending
+- PATCH /api/products/brands/:id/review
+- GET /api/products/categories/pending
+- PATCH /api/products/categories/:id/review
 
 > When adding a new endpoint: declare it in the correct zone here before implementing the guard.
 
@@ -80,11 +84,15 @@ Auth: HttpOnly cookie set on login. Protected routes require the cookie (sent au
 | GET | `/api/products/` | — | All products (filter/paginate) |
 | POST | `/api/products/` | Cookie | Create product |
 | GET | `/api/products/search` | — | Search by keyword |
-| GET | `/api/products/brands` | — | All brands |
-| POST | `/api/products/brands` | Cookie | Create brand |
+| GET | `/api/products/brands` | — | All active brands |
+| POST | `/api/products/brands` | Cookie | Submit brand for review (status=pending, isActive=false) |
+| GET | `/api/products/brands/pending` | Role: admin | Pending brands awaiting review |
+| PATCH | `/api/products/brands/:id/review` | Role: admin | Approve or reject a brand |
 | GET | `/api/products/brands/:id` | — | Brand by ID |
-| GET | `/api/products/categories` | — | All categories |
-| POST | `/api/products/categories` | Cookie | Create category |
+| GET | `/api/products/categories` | — | All active categories |
+| POST | `/api/products/categories` | Cookie | Submit category for review (status=pending, isActive=false) |
+| GET | `/api/products/categories/pending` | Role: admin | Pending categories awaiting review |
+| PATCH | `/api/products/categories/:id/review` | Role: admin | Approve or reject a category |
 | GET | `/api/products/categories/:id` | — | Category by ID |
 | GET | `/api/products/category/:categoryId` | — | Products by category |
 | GET | `/api/products/brand/:brandId` | — | Products by brand |
@@ -290,8 +298,8 @@ GET_ME (user.get_me), UPDATE_USER (user.update)
 product.create, product.findAll, product.findById, product.findBySku,
 product.update, product.delete, product.findByCategory, product.findByBrand,
 product.search,
-brand.create, brand.findAll, brand.findById,
-category.create, category.findAll, category.findById,
+brand.create, brand.findAll, brand.findById, brand.review,
+category.create, category.findAll, category.findById, category.review,
 sku.create, sku.findByProduct, sku.findById, sku.update, sku.delete
 ```
 

@@ -29,6 +29,7 @@ Base URL: http://localhost:3000 | Swagger: /doc
 - api.md fully updated: 14 controllers, all TCP patterns, RabbitMQ events table
 - Product imageUrls fix: gateway CreateProductDto + UpdateProductDto added imageUrls; FE useProductForm + types/index.ts changed image_urls → imageUrls (camelCase)
 - RewardPoint entity camelCase: user_id/order_id/created_at → userId/orderId/createdAt with @Column({ name }) aliases; service + controller updated
+- Brand/Category approval flow: status ENUM(pending/active/rejected) + submittedBy + reviewNote columns on both tables; POST /api/products/brands|categories now sets status=pending, isActive=false; GET /api/products/brands/pending|categories/pending (admin:read:any); PATCH /api/products/brands/:id/review|categories/:id/review (admin:update:any); brand and category resources added to RBAC grants
 
 ## Active Tasks
 
