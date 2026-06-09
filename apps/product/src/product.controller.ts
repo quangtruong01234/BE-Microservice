@@ -98,13 +98,18 @@ export class ProductController {
   // ============================================================================
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.BRAND_CREATE)
-  async createBrand(@Payload() createBrandDto: CreateBrandDto) {
-    return this.productService.createBrand(createBrandDto);
+  async createBrand(
+    @Payload() payload: CreateBrandDto & { submittedBy: number },
+  ) {
+    const { submittedBy, ...dto } = payload;
+    return this.productService.createBrand(dto, submittedBy);
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.BRAND_FIND_ALL)
-  async findAllBrands() {
-    return this.productService.findAllBrands();
+  async findAllBrands(
+    @Payload() payload: { status?: "pending" | "active" | "rejected" },
+  ) {
+    return this.productService.findAllBrands(payload?.status);
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.BRAND_FIND_BY_ID)
@@ -112,23 +117,60 @@ export class ProductController {
     return this.productService.findBrandById(id);
   }
 
+  @MessagePattern(PRODUCT_MESSAGE_PATTERNS.BRAND_REVIEW)
+  async reviewBrand(
+    @Payload()
+    payload: {
+      id: number;
+      action: "approve" | "reject";
+      note?: string;
+    },
+  ) {
+    return this.productService.reviewBrand(
+      payload.id,
+      payload.action,
+      payload.note,
+    );
+  }
+
   // ============================================================================
   // CATEGORY MESSAGE PATTERNS
   // ============================================================================
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.CATEGORY_CREATE)
-  async createCategory(@Payload() createCategoryDto: CreateCategoryDto) {
-    return this.productService.createCategory(createCategoryDto);
+  async createCategory(
+    @Payload() payload: CreateCategoryDto & { submittedBy: number },
+  ) {
+    const { submittedBy, ...dto } = payload;
+    return this.productService.createCategory(dto, submittedBy);
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.CATEGORY_FIND_ALL)
-  async findAllCategories() {
-    return this.productService.findAllCategories();
+  async findAllCategories(
+    @Payload() payload: { status?: "pending" | "active" | "rejected" },
+  ) {
+    return this.productService.findAllCategories(payload?.status);
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.CATEGORY_FIND_BY_ID)
   async findCategoryById(@Payload() id: number) {
     return this.productService.findCategoryById(id);
+  }
+
+  @MessagePattern(PRODUCT_MESSAGE_PATTERNS.CATEGORY_REVIEW)
+  async reviewCategory(
+    @Payload()
+    payload: {
+      id: number;
+      action: "approve" | "reject";
+      note?: string;
+    },
+  ) {
+    return this.productService.reviewCategory(
+      payload.id,
+      payload.action,
+      payload.note,
+    );
   }
 
   // ============================================================================

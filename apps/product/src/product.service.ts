@@ -104,7 +104,7 @@ export class ProductService {
       );
       const saved = await manager.save(ProductSku, entities);
       for (const sku of saved) {
-        if (typeof sku.tierIdx === 'string') {
+        if (typeof sku.tierIdx === "string") {
           sku.tierIdx = JSON.parse(sku.tierIdx) as number[];
         }
       }
@@ -380,14 +380,24 @@ export class ProductService {
   }
 
   // Brand methods
-  async createBrand(createBrandDto: CreateBrandDto): Promise<Brand> {
-    const brand = this.brandRepository.create(createBrandDto);
+  async createBrand(
+    createBrandDto: CreateBrandDto,
+    submittedBy: number,
+  ): Promise<Brand> {
+    const brand = this.brandRepository.create({
+      ...createBrandDto,
+      status: "pending",
+      isActive: false,
+      submittedBy,
+    });
     return this.brandRepository.save(brand);
   }
 
-  async findAllBrands(): Promise<Brand[]> {
+  async findAllBrands(
+    status?: "pending" | "active" | "rejected",
+  ): Promise<Brand[]> {
     return this.brandRepository.find({
-      relations: ["products"],
+      where: { status: status ?? "active" },
       order: { name: "ASC" },
     });
   }
@@ -395,7 +405,6 @@ export class ProductService {
   async findBrandById(id: number): Promise<Brand> {
     const brand = await this.brandRepository.findOne({
       where: { id },
-      relations: ["products"],
     });
     if (!brand) {
       throw new NotFoundException("Brand not found");
@@ -403,17 +412,42 @@ export class ProductService {
     return brand;
   }
 
+  async reviewBrand(
+    id: number,
+    action: "approve" | "reject",
+    note?: string,
+  ): Promise<Brand> {
+    const brand = await this.brandRepository.findOne({ where: { id } });
+    if (!brand) {
+      throw new NotFoundException("Brand not found");
+    }
+    brand.status = action === "approve" ? "active" : "rejected";
+    brand.isActive = action === "approve";
+    if (note !== undefined) {
+      brand.reviewNote = note;
+    }
+    return this.brandRepository.save(brand);
+  }
+
   // Category methods
   async createCategory(
     createCategoryDto: CreateCategoryDto,
+    submittedBy: number,
   ): Promise<Category> {
-    const category = this.categoryRepository.create(createCategoryDto);
+    const category = this.categoryRepository.create({
+      ...createCategoryDto,
+      status: "pending",
+      isActive: false,
+      submittedBy,
+    });
     return this.categoryRepository.save(category);
   }
 
-  async findAllCategories(): Promise<Category[]> {
+  async findAllCategories(
+    status?: "pending" | "active" | "rejected",
+  ): Promise<Category[]> {
     return this.categoryRepository.find({
-      relations: ["products"],
+      where: { status: status ?? "active" },
       order: { name: "ASC" },
     });
   }
@@ -421,11 +455,27 @@ export class ProductService {
   async findCategoryById(id: number): Promise<Category> {
     const category = await this.categoryRepository.findOne({
       where: { id },
-      relations: ["products"],
     });
     if (!category) {
       throw new NotFoundException("Category not found");
     }
     return category;
+  }
+
+  async reviewCategory(
+    id: number,
+    action: "approve" | "reject",
+    note?: string,
+  ): Promise<Category> {
+    const category = await this.categoryRepository.findOne({ where: { id } });
+    if (!category) {
+      throw new NotFoundException("Category not found");
+    }
+    category.status = action === "approve" ? "active" : "rejected";
+    category.isActive = action === "approve";
+    if (note !== undefined) {
+      category.reviewNote = note;
+    }
+    return this.categoryRepository.save(category);
   }
 }

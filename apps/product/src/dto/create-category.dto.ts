@@ -2,7 +2,7 @@ import { IsString, IsOptional, IsBoolean } from "class-validator";
 
 export class CreateCategoryDto {
   @IsString()
-  name: string;
+  declare name: string;
 
   @IsOptional()
   @IsString()
@@ -10,5 +10,5 @@ export class CreateCategoryDto {
 
   @IsOptional()
   @IsBoolean()
-  isActive?: boolean = true;
+  isActive?: boolean;
 }

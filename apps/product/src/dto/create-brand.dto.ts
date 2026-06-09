@@ -2,7 +2,7 @@ import { IsString, IsOptional, IsBoolean } from "class-validator";
 
 export class CreateBrandDto {
   @IsString()
-  name: string;
+  declare name: string;
 
   @IsOptional()
   @IsString()
@@ -10,5 +10,5 @@ export class CreateBrandDto {
 
   @IsOptional()
   @IsBoolean()
-  isActive?: boolean = true;
+  isActive?: boolean;
 }
