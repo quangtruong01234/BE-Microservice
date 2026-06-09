@@ -36,7 +36,7 @@ export class SocialService {
     private readonly dataSource: DataSource,
     private readonly cachedService: CachedService,
     @Inject(EXCHANGE.RMQ_PUBLISHER_CHANNEL)
-    private readonly fanoutChannel: Channel,
+    private readonly fanoutChannel: Channel | null,
   ) {}
 
   private get treeRepo() {
@@ -304,22 +304,28 @@ export class SocialService {
     });
     const saved = await this.commentRepository.save(comment);
     if (payload.userId !== post.userId) {
-      this.fanoutChannel.publish(
-        EXCHANGE.SOCIAL_EXCHANGE,
-        EVENT.COMMENT_CREATED_EVENT,
-        Buffer.from(
-          JSON.stringify({
-            data: {
-              postId: payload.postId,
-              postOwnerId: post.userId,
-              commenterId: payload.userId,
-              commentId: saved.id,
-              preview: payload.content.slice(0, 20),
-            },
-            pattern: EVENT.COMMENT_CREATED_EVENT,
-          }),
-        ),
-      );
+      if (this.fanoutChannel) {
+        this.fanoutChannel.publish(
+          EXCHANGE.SOCIAL_EXCHANGE,
+          EVENT.COMMENT_CREATED_EVENT,
+          Buffer.from(
+            JSON.stringify({
+              data: {
+                postId: payload.postId,
+                postOwnerId: post.userId,
+                commenterId: payload.userId,
+                commentId: saved.id,
+                preview: payload.content.slice(0, 20),
+              },
+              pattern: EVENT.COMMENT_CREATED_EVENT,
+            }),
+          ),
+        );
+      } else {
+        this.logger.warn(
+          "[SOCIAL] fanoutChannel unavailable — comment notification skipped",
+        );
+      }
     }
     return saved;
   }
@@ -386,22 +392,28 @@ export class SocialService {
       }),
     );
     if (payload.userId !== parentComment.userId) {
-      this.fanoutChannel.publish(
-        EXCHANGE.SOCIAL_EXCHANGE,
-        EVENT.REPLY_CREATED_EVENT,
-        Buffer.from(
-          JSON.stringify({
-            data: {
-              parentCommentId: payload.parentCommentId,
-              commentOwnerId: parentComment.userId,
-              replierId: payload.userId,
-              replyId: saved.id,
-              preview: payload.content.slice(0, 20),
-            },
-            pattern: EVENT.REPLY_CREATED_EVENT,
-          }),
-        ),
-      );
+      if (this.fanoutChannel) {
+        this.fanoutChannel.publish(
+          EXCHANGE.SOCIAL_EXCHANGE,
+          EVENT.REPLY_CREATED_EVENT,
+          Buffer.from(
+            JSON.stringify({
+              data: {
+                parentCommentId: payload.parentCommentId,
+                commentOwnerId: parentComment.userId,
+                replierId: payload.userId,
+                replyId: saved.id,
+                preview: payload.content.slice(0, 20),
+              },
+              pattern: EVENT.REPLY_CREATED_EVENT,
+            }),
+          ),
+        );
+      } else {
+        this.logger.warn(
+          "[SOCIAL] fanoutChannel unavailable — reply notification skipped",
+        );
+      }
     }
     return saved;
   }
