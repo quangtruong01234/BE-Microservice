@@ -22,6 +22,15 @@ const grantList = [
   },
   { role: "admin", resource: "payment", action: "read:any", attributes: "*" },
   { role: "admin", resource: "rewards", action: "read:any", attributes: "*" },
+  { role: "admin", resource: "brand", action: "read:any", attributes: "*" },
+  { role: "admin", resource: "brand", action: "update:any", attributes: "*" },
+  { role: "admin", resource: "category", action: "read:any", attributes: "*" },
+  {
+    role: "admin",
+    resource: "category",
+    action: "update:any",
+    attributes: "*",
+  },
 
   // shop — quản lý sản phẩm của mình, xem order
   { role: "shop", resource: "product", action: "create:own", attributes: "*" },
