@@ -18,11 +18,13 @@ export const PRODUCT_MESSAGE_PATTERNS = {
   BRAND_CREATE: "brand.create",
   BRAND_FIND_ALL: "brand.findAll",
   BRAND_FIND_BY_ID: "brand.findById",
+  BRAND_REVIEW: "brand.review",
 
   // Category patterns
   CATEGORY_CREATE: "category.create",
   CATEGORY_FIND_ALL: "category.findAll",
   CATEGORY_FIND_BY_ID: "category.findById",
+  CATEGORY_REVIEW: "category.review",
 
   // SKU patterns
   SKU_CREATE: "sku.create",
