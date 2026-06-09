@@ -243,6 +243,36 @@ async updateItem(@Payload() payload: { cartItemId: number; quantity: number }): 
 }
 ```
 
+### 6. registerDirectPublisher() — useFactory must not throw on RabbitMQ unavailable
+If amqplib connection fails at startup, useFactory must catch and return null
+instead of throwing. A thrown error crashes NestJS DI → TCP handlers never
+register → gateway EmptyError → 502.
+
+✅ Fix pattern:
+```typescript
+useFactory: async (): Promise<Channel | null> => {
+  try {
+    const conn = await amqp.connect(url);
+    return await conn.createChannel();
+  } catch (err) {
+    logger.warn('RabbitMQ channel unavailable at startup — fanout disabled');
+    return null;
+  }
+}
+```
+
+All callers that inject this channel must null-check before publish():
+```typescript
+if (!this.fanoutChannel) {
+  this.logger.warn('Fanout channel unavailable — skipping emit');
+  return;
+}
+this.fanoutChannel.publish(...);
+```
+
+Applies to any service using registerDirectPublisher():
+currently social service and product service.
+
 ## TypeORM Entity Gotchas
 
 ### 6. JSON stored as VARCHAR → use @AfterLoad() to auto-parse
@@ -279,3 +309,21 @@ skuTierIdx = Array.isArray(sku.tierIdx)
 ```
 
 Applies to any entity field that uses `@AfterLoad()` to parse JSON from a `varchar` column (e.g. `ProductSku.tierIdx`).
+
+### 8. fanoutChannel.publish() — NestJS requires pattern field in envelope
+When emitting RabbitMQ fanout events via a raw amqplib channel, the JSON payload must include a `pattern` field for `@EventPattern` routing to work.
+
+❌ Sai:
+```typescript
+fanoutChannel.publish(exchange, '', Buffer.from(JSON.stringify({ data: payload })));
+```
+
+✅ Đúng:
+```typescript
+fanoutChannel.publish(exchange, '', Buffer.from(JSON.stringify({
+  pattern: EVENT.BRAND_REVIEWED_EVENT,
+  data: payload,
+})));
+```
+
+Without `pattern`, the consumer receives the message but cannot match any `@EventPattern` handler and silently drops it — no error logged, no nack, no dead-letter. Applies to any service using direct `amqplib` `channel.publish()` instead of `ClientProxy.emit()`.
