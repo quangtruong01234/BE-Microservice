@@ -17,7 +17,7 @@ export class RewardsController {
   @EventPattern(EVENT.ORDER_CREATED_EVENT)
   async handleOrderCreated(
     @Payload()
-    order: { id: number; user_id: number; total: number },
+    order: { id: number; userId: number; total: number },
     @Ctx() context: RmqContext,
   ) {
     void context;

@@ -17,11 +17,11 @@ export class RewardsService {
 
   async addRewards(order: {
     id?: string | number;
-    user_id?: number;
+    userId?: number;
     total?: number;
   }): Promise<void> {
     const orderId = Number(order.id ?? 0);
-    const userId = Number(order.user_id ?? 0);
+    const userId = Number(order.userId ?? 0);
     const total = Number(order.total ?? 0);
     const points = Math.floor(total / POINTS_PER_VND);
 
@@ -33,8 +33,8 @@ export class RewardsService {
     }
 
     const record = this.rewardRepository.create({
-      user_id: userId,
-      order_id: orderId,
+      userId,
+      orderId,
       points,
     });
     await this.rewardRepository.save(record);
@@ -48,7 +48,7 @@ export class RewardsService {
     const result = await this.rewardRepository
       .createQueryBuilder("rp")
       .select("SUM(rp.points)", "total")
-      .where("rp.user_id = :userId", { userId })
+      .where("rp.userId = :userId", { userId })
       .getRawOne<{ total: string | null }>();
     return Number(result?.total ?? 0);
   }
