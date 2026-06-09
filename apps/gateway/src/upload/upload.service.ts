@@ -33,7 +33,7 @@ export class UploadService {
     const cloudName = requireEnv("CLOUDINARY_CLOUD_NAME");
 
     const timestamp = Math.floor(Date.now() / 1000);
-    const publicId = incomingPublicId ?? `${folder}/${userId}_${nanoid()}`;
+    const publicId = incomingPublicId ?? `${userId}_${nanoid()}`;
 
     // params must be sorted alphabetically for Cloudinary signature
     const paramsToSign = `folder=${folder}&public_id=${publicId}&timestamp=${timestamp}${apiSecret}`;
