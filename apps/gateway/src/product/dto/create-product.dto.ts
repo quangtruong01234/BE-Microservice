@@ -166,6 +166,18 @@ export class CreateProductDto {
   weight?: number;
 
   @ApiPropertyOptional({
+    description: "Product image URLs (upload via Cloudinary first)",
+    type: [String],
+    example: [
+      "https://res.cloudinary.com/example/image/upload/v1/trybuy/products/abc.jpg",
+    ],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  imageUrls?: string[];
+
+  @ApiPropertyOptional({
     description:
       "Variation axes — provide together with skuList for SKU matrix products",
     example: [

@@ -227,7 +227,16 @@ export class ProductService {
       );
 
       // Enrich with user information
-      return await this.enrichProductWithUserInfo(product);
+      const enriched = await this.enrichProductWithUserInfo(product);
+      const typedEnriched = enriched as {
+        categories?: { id: number }[];
+      } & ProductData;
+      return {
+        ...typedEnriched,
+        categoryIds: Array.isArray(typedEnriched.categories)
+          ? typedEnriched.categories.map((c) => c.id)
+          : [],
+      };
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,

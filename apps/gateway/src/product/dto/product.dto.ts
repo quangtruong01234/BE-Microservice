@@ -1,6 +1,7 @@
 import { PartialType } from "@nestjs/swagger";
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
+  IsArray,
   IsBoolean,
   IsNumber,
   IsOptional,
@@ -8,6 +9,16 @@ import {
   Matches,
   Min,
 } from "class-validator";
+
+export class ProductResponseDto {
+  @ApiProperty({
+    type: [Number],
+    description: "IDs of categories this product belongs to",
+  })
+  @IsArray()
+  @IsNumber({}, { each: true })
+  declare categoryIds: number[];
+}
 
 export class CreateSkuGatewayDto {
   @ApiProperty({

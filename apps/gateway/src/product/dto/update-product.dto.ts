@@ -97,6 +97,18 @@ export class UpdateProductDto {
   condition?: string;
 
   @ApiPropertyOptional({
+    description: "Product image URLs (upload via Cloudinary first)",
+    type: [String],
+    example: [
+      "https://res.cloudinary.com/example/image/upload/v1/trybuy/products/abc.jpg",
+    ],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  imageUrls?: string[];
+
+  @ApiPropertyOptional({
     description: "Seller notes about the product",
     example: "Sản phẩm chính hãng Apple, bảo hành 12 tháng.",
   })
