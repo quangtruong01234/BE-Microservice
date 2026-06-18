@@ -1,16 +1,21 @@
-# /perf-audit — Performance Audit Command
+---
+name: perf-audit
+description: Perform a read-only TryBuy backend performance audit with concrete findings, side effects, mitigations, and verification. Use for endpoint, service, query, cache, N+1, index, or latency audits.
+---
+
+# $perf-audit — Performance Audit Skill
 
 Use this command to scan the TryBuy backend for slow / wasteful API paths,
 propose fixes, and — for every fix — predict its side effects and give a
 mitigation. This command is **read-only**: it reports, it does NOT implement.
-Implement findings afterwards via `/feature`, `prompts/refactor.md`, or a direct edit.
+Implement findings afterwards via `$feature`, `$refactor`, or a direct edit.
 
 ## How to invoke
 
 ```
-/perf-audit                 # audit all HTTP endpoints in the gateway
-/perf-audit <path>          # audit a single endpoint / service / file
-/perf-audit order           # audit only the orders domain
+$perf-audit                 # audit all HTTP endpoints in the gateway
+$perf-audit <path>          # audit a single endpoint / service / file
+$perf-audit order           # audit only the orders domain
 ```
 
 ---
@@ -131,8 +136,8 @@ For **every** finding, output exactly this block — all six fields required:
 ```
 SUMMARY: <n critical / n important / n minor>
 TOP FIX: <the single highest-impact, lowest-risk change to do first>
-HANDOFF: implement via /feature or prompts/refactor.md — do NOT implement here.
-         If a fix needs migration + entity + service together → run planner agent first.
+HANDOFF: implement via $feature or $refactor — do NOT implement here.
+         If a fix needs migration + entity + service together → spawn the `planner` custom agent first.
 ```
 
 > A finding is only actionable when its Side-effect and Mitigation are filled in.

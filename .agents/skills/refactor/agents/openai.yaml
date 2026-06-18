@@ -1,0 +1,4 @@
+interface:
+  display_name: "Refactor TryBuy Code"
+  short_description: "Perform a constrained safe refactor"
+  default_prompt: "Use $refactor to perform this scoped TryBuy refactor."

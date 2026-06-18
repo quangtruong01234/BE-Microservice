@@ -1,3 +1,8 @@
+---
+name: commit
+description: Create scoped local Git commits for TryBuy. Use when the user asks to commit changes, organize commits, or prepare local commits without pushing.
+---
+
 # Commit Changes
 
 Read `ai-docs/agent-context/git-workflow.md` to understand the commit convention before committing.

@@ -1,0 +1,35 @@
+prefix_rule(
+    pattern = ["npm", ["install", "uninstall"]],
+    decision = "forbidden",
+    justification = "Dependency changes require explicit repository-owner action.",
+)
+
+prefix_rule(
+    pattern = [["yarn", "pnpm", "bun"]],
+    decision = "forbidden",
+    justification = "This repository uses npm and does not allow alternate package managers.",
+)
+
+prefix_rule(
+    pattern = ["git", "push"],
+    decision = "forbidden",
+    justification = "Create local commits only; the repository owner performs pushes.",
+)
+
+prefix_rule(
+    pattern = ["git", "reset", "--hard"],
+    decision = "forbidden",
+    justification = "Hard resets can destroy uncommitted work.",
+)
+
+prefix_rule(
+    pattern = ["docker-compose", ["up", "down"]],
+    decision = "forbidden",
+    justification = "Do not change the shared local stack lifecycle automatically.",
+)
+
+prefix_rule(
+    pattern = ["rm", "-rf"],
+    decision = "forbidden",
+    justification = "Recursive force deletion is not allowed.",
+)

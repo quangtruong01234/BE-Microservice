@@ -1,6 +1,6 @@
 # Performance — Always-On Rules
 
-These rules apply whenever code is **added or edited**, not only during `/perf-audit`.
+These rules apply whenever code is **added or edited**, not only during a dedicated performance audit.
 Goal: write performant code by default so an audit finds little to fix.
 A change that improves perf but silently alters behaviour is a bug — see "Regression discipline" below.
 
@@ -45,7 +45,7 @@ A change that improves perf but silently alters behaviour is a bug — see "Regr
   ```
 - Eager `relations` only when the response needs them. On paginated lists, prefer a **split query** for ManyToMany (`product_categories`) to avoid cartesian row duplication and N+1 hydration.
 - Select only the columns the response uses on hot/list paths — avoid loading full nested trees just to drop them.
-- **Index awareness**: any column used in `WHERE` / `ORDER BY` / `LIKE` on a hot path must be indexed. If it is not (check `context/database.md`), the change is incomplete — note that an index migration is needed. PostgreSQL: `CREATE INDEX CONCURRENTLY`. MySQL: `ALTER TABLE ... ALGORITHM=INPLACE, LOCK=NONE`.
+- **Index awareness**: any column used in `WHERE` / `ORDER BY` / `LIKE` on a hot path must be indexed. If it is not (check `ai-docs/agent-context/database.md`), the change is incomplete — note that an index migration is needed. PostgreSQL: `CREATE INDEX CONCURRENTLY`. MySQL: `ALTER TABLE ... ALGORITHM=INPLACE, LOCK=NONE`.
 - Recursive trees (`findDescendantsTree`, depth-limited) must never be called inside a list loop. Load tree only on a detail/expand request.
 
 ## Caching (`@app/cached` / Redis)
@@ -64,7 +64,7 @@ A change that improves perf but silently alters behaviour is a bug — see "Regr
 
 - Keep `@EventPattern` handlers lean — heavy synchronous work before `ack(context)` backs up the queue.
 - At-least-once delivery: handlers must be idempotent (re-processing the same event must not double-write). Only then is it safe to ack early.
-- Follow the requeue policy in `CLAUDE.md` (DB error → requeue; not-found / unprocessable → no-requeue).
+- Follow the requeue policy in the active agent entry point (`AGENTS.md` or `.claude/CLAUDE.md`): DB error → requeue; not-found / unprocessable → no-requeue.
 
 ## Regression discipline
 
@@ -80,11 +80,11 @@ No perf change merges without knowing what it could break.
 
 ## Definition of done (performance addendum)
 
-On top of the standard DoD in `CLAUDE.md`:
+On top of the standard DoD in the active agent entry point:
 
 - No new I/O call inside a loop introduced.
 - New list endpoint is paginated.
 - New filter/sort column on a hot path is indexed (or an index migration is flagged).
 - New cache entry has matching invalidation.
 
-> For a full sweep of existing endpoints, run `/perf-audit`. This file is for keeping new code clean as it is written.
+> For a full sweep of existing endpoints, invoke the performance-audit command or skill. This file is for keeping new code clean as it is written.

@@ -26,8 +26,9 @@ Auth: HttpOnly cookie set on login. Protected routes require the cookie (sent au
 **Cookie required (authenticated user):**
 - POST /api/products/, PATCH /api/products/:id, DELETE /api/products/:id
 - POST /api/products/:id/skus, PATCH /api/products/:id/skus/:skuId, DELETE /api/products/:id/skus/:skuId
-- POST /api/order/, GET /api/order/:id, GET /api/order/user/:id, PATCH /api/order/:id/cancel, GET /api/order/:id/invoice
+- POST /api/order/, POST /api/order/shipping-fee, GET /api/order/:id, GET /api/order/user/:id, PATCH /api/order/:id/cancel, GET /api/order/:id/invoice
 - GET /api/order/:id/payment-url
+- GET /api/order/seller, PATCH /api/order/:id/confirm, PATCH /api/order/:id/ready-to-ship
 - POST /api/inventory/reserve-stock, POST /api/inventory/release-stock
 - POST /api/inventory/, PUT /api/inventory/:id, DELETE /api/inventory/:id
 - GET /api/notifications, PATCH /api/notifications/:id/read
@@ -131,11 +132,15 @@ page, limit, categoryId, brandId, minPrice, maxPrice, search
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/api/order/` | Cookie | Create order — triggers `order_created` event |
+| POST | `/api/order/` | Cookie | Create order — triggers `order_created` event; `total = items + GHN shipping fee`, `shippingFee` persisted on order |
+| POST | `/api/order/shipping-fee` | Cookie | Preview GHN shipping fee for an address — returns `{ shippingFee, expectedDeliveryTime }` |
 | GET | `/api/order/admin/orders` | Role: admin | All orders with buyer info (paginated) |
+| GET | `/api/order/seller` | Cookie | Paginated orders containing the logged-in seller's products (`?page&limit&status`) |
 | GET | `/api/order/user/:id` | Cookie | Get paginated orders by user ID |
 | GET | `/api/order/:id` | Cookie | Get single order (owner or admin only) |
 | PATCH | `/api/order/:id/cancel` | Cookie | Cancel order (owner or admin, PENDING/PROCESSING → CANCELED) |
+| PATCH | `/api/order/:id/confirm` | Cookie | Confirm order — PENDING → CONFIRMED (seller only, ownership via order items) |
+| PATCH | `/api/order/:id/ready-to-ship` | Cookie | Mark ready-to-ship — CONFIRMED → PROCESSING, retries GHN if missing (seller only) |
 | GET | `/api/order/:id/invoice` | Cookie | Download PDF invoice |
 | GET | `/api/order/:id/payment-url` | Cookie | Get ZaloPay payment URL |
 
@@ -153,6 +158,21 @@ page, limit, categoryId, brandId, minPrice, maxPrice, search
     // price is NOT sent — server fetches authoritative price
   }>;
 }
+```
+
+### Shipping Fee DTO (`POST /api/order/shipping-fee`)
+```typescript
+{
+  shippingAddress: string;   // pipe-delimited "name|phone|addr|ward|district|province", max 500
+  items: Array<{
+    productName?: string;
+    quantity: number;        // >= 1
+    price?: number;          // >= 0
+    weight?: number;         // grams, default 500
+  }>;
+}
+// Response: { shippingFee: number; expectedDeliveryTime: string | null }
+// Backed by GHN /v2/shipping-order/preview; orders service defaults fee to 0 if GHN is down (non-fatal)
 ```
 
 ---
@@ -306,7 +326,9 @@ sku.create, sku.findByProduct, sku.findById, sku.update, sku.delete
 ### Order Patterns (`ORDER_MESSAGE_PATTERN`)
 ```
 create_order, get_orders_by_user, get_order_by_id, get_all_orders,
-cancel_order, get_order_invoice, handle_ghn_webhook
+cancel_order, get_order_invoice, handle_ghn_webhook,
+order.get_by_seller, order.confirm, order.ready_to_ship,
+order.calculate_shipping_fee
 ```
 
 ### Payment Patterns (`PAYMENT_MESSAGE_PATTERN`)

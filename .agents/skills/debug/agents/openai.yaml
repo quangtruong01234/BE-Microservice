@@ -1,0 +1,4 @@
+interface:
+  display_name: "Debug TryBuy"
+  short_description: "Diagnose TryBuy failures systematically"
+  default_prompt: "Use $debug to diagnose and verify this TryBuy failure."

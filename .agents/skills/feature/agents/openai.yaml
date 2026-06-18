@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build TryBuy Feature"
+  short_description: "Implement TryBuy features end to end"
+  default_prompt: "Use $feature to implement this TryBuy feature end to end."

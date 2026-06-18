@@ -1,0 +1,109 @@
+## System Overview
+
+TryBuy — NestJS monorepo, 7 microservices + 4 shared libs.
+Transport: TCP (sync) + RabbitMQ FANOUT (async).
+DB: MySQL 8 (orders/user/product) + PostgreSQL (inventory/payments/rewards). Cache: Redis.
+Node A: gateway:3000 (HTTP+WS /chat+/notifications), orders:3001, user:3003, product:3006, social:3008, notification:3009 (TCP+RMQ only, no HTTP), chat:3012(TCP)
+Node B: inventory:3002, payments:3005, rewards:3004
+Base URL: http://localhost:3000 | Swagger: /doc
+
+## Completed Milestones
+
+- Auth + RBAC: JWT cookie, 64-byte secret, accesscontrol library, RoleAuthGuard, @CheckPermission decorator
+- Payments: ZaloPay + VNPay strategy pattern; callback verified; idempotency (UNIQUE order_id); payment-result endpoint; payment_methods table; GET /api/payment/options
+- Orders: create/cancel/paginate/admin-list; owner-or-admin guard; PDF invoice; PaginatedResponse
+- GHN + COD: full shipping flow — COD order → GHN push → webhook status transitions → payment_completed emit; ZaloPay/VNPay post-payment → GHN; non-fatal failure
+- Inventory: atomic reserveStock (UPDATE WHERE); stock sync via RabbitMQ FANOUT (INVENTORY_STOCK_CHANGED_EVENT); findByProductIdOrNull for internal callers
+- Product: multi-category ManyToMany; search indexes (7); cache-aside 5s TTL + invalidation; imageUrls JSON column
+- Product SKU matrix: product_skus table, variations JSON, upsertSkus transactional; gateway SKU CRUD (GET/POST/PATCH/DELETE /api/products/:id/skus); price/sku nullable on products
+- Cart: Cart + CartItem entities (orders service); 5 TCP patterns; gateway fetches authoritative price before forwarding; snapshot columns removed; createOrder() price-injection fix
+- User: GET /api/user/me + PATCH /api/user/:id; JWT claim fix (req.user.id); GET_ME + UPDATE_USER patterns
+- Social: Post CRUD, Like/Unlike (Redis cache), Comment + Reply tree (materialized-path depth 5), Follow/Feed, isLiked (OptionalJwtAuthGuard)
+- Notification: RabbitMQ consumers (payment_completed + order_canceled + comment/reply events) → DB → REST (paginated) + WS push
+- Real-time Chat: TCP service (port 3012), WS via gateway:3000/chat, 1-1 + reply, 5-day cleanup cron
+- WebSocket: NotificationWsGateway port 3010, JWT auth, rooms user:{userId}, fire-and-forget emit
+- Cloudinary: signed upload/delete signature endpoint; image_urls JSON on products + posts; old image_url dropped
+- Infrastructure: nginx (Let's Encrypt, WS headers, /zalopay+/vnpay → 3007, /socket.io → 3010), PM2 ecosystem.config.js, trust proxy
+- MicroserviceErrorHandler 2-layer: HttpToRpcExceptionFilter on all microservice controllers; @UseFilters applied to payments/inventory/rewards/product
+- PaginatedResponse.of() factory in @app/common; PaymentMethod enum in @app/common
+- api.md fully updated: 14 controllers, all TCP patterns, RabbitMQ events table
+- Product imageUrls fix: gateway CreateProductDto + UpdateProductDto added imageUrls; FE useProductForm + types/index.ts changed image_urls → imageUrls (camelCase)
+- RewardPoint entity camelCase: user_id/order_id/created_at → userId/orderId/createdAt with @Column({ name }) aliases; service + controller updated
+- Brand/Category approval flow (Phase 1): status ENUM(pending/active/rejected) + submittedBy + reviewNote columns on both tables; POST /api/products/brands|categories now sets status=pending, isActive=false; GET /api/products/brands/pending|categories/pending (admin:read:any); PATCH /api/products/brands/:id/review|categories/:id/review (admin:update:any); brand and category resources added to RBAC grants
+- Brand/Category approval flow (Phase 2 — notifications): BRAND_REVIEWED_EVENT + CATEGORY_REVIEWED_EVENT added to EVENT constants; PRODUCT_EXCHANGE ("product.fanout") added to EXCHANGE constants; NOTIFICATION_PRODUCT_SERVICE queue added to QUEUES; ProductModule wired with RmqModule.registerDirectPublisher(); ProductService injects fanoutChannel, emits brand/category reviewed events after review save (fire-and-forget); notification.entity.ts orderId made nullable (number | null); NotificationService.saveNotification() accepts orderId: number | null; notification/main.ts connects to PRODUCT_EXCHANGE; NotificationController adds handleBrandReviewed + handleCategoryReviewed @EventPattern handlers; notification type values: brand_approved, brand_rejected, category_approved, category_rejected; bug fixed: publish payload was missing `pattern` field — NestJS @EventPattern requires `{ pattern, data }` envelope; notifications/order_id column migrated to INT NULL via ALTER TABLE; E2E verified: approve → brand_approved notification, reject-with-note → brand_rejected notification with reason in message
+- Brand/Category approval flow (Phase 2b — Admin UI): admin pending brands/categories pages; approve/reject with inline note; RBAC guarded (admin:update:any); nav links in LeftRail
+- Brand/Category approval flow (Phase 2c — Product form): brand search-select with Add-as-new inline; category add-new inline; (chờ duyệt) badge on pending items
+- CheckoutPage: productMap fetch for authoritative name/image display (api.products.getMultipleWithInventory)
+- ProductDetail: variant selection guard on add-to-cart button (disabled until all tiers selected)
+- ShopPage: Edit (navigate /sell/:id) and Delete product actions present on ProductRow
+- useAuth: migrated to GET /api/user/me via react-query; no localStorage reads for display data
+- tsc: zero errors, clean build across all services
+- Per-SKU inventory Phase 2+3 complete: orders.service.ts removes skip-logic, adds TCP INVENTORY_RESERVE_STOCK calls per item (SKU-scoped), persists skuId + skuTierIdx (JSON.stringify) on OrderItem; gateway order.service.ts captures tierIdx from SkuPriceResponse and forwards in enriched payload; inventory.controller.ts handleOrderCanceled fixed product_id→productId (camelCase bug); inventory CreateInventoryDto accepts optional productSkuId; orders service fanoutChannel null-guards all 3 publish calls; E2E verified: Test A (simple product order 201 + reservedStock+1 + release on cancel ✅), Test B (SKU order 201 + skuId/skuTierIdx in order_item + reservedStock+2 on correct SKU row ✅), Test C (cancel SKU order → availableStock restored + reservedStock decremented ✅)
+- Notification WS moved to gateway: NotificationWsGateway removed from notification service (port 3010 dropped); gateway adds namespace /notifications WS + RMQ consumer (NOTIFICATION_GATEWAY_PUSH_QUEUE bound to notification.push.fanout); notification service emits NOTIFY_USER_PUSH_EVENT via registerDirectPublisher() after saveNotification(); JwtAuthGuard bypasses non-HTTP contexts; tsc clean
+- Product search by creator + SKU: added `userId` (filter by creator) and `skuSearch` (LIKE match on product.sku + product_skus.sku via LEFT JOIN) to GetProductsQueryDto in both gateway and product service; `findAllProducts` queryBuilder updated; tsc clean; E2E verified ✅
+- Per-SKU inventory Phase 4 complete: SKU_UPSERTED_EVENT ("sku.upserted") added to EVENT constants; INVENTORY_PRODUCT_SERVICE queue added to QUEUES; inventory entity drops unique(product_id), adds @Unique(['productId','productSkuId']) composite constraint (TypeORM synchronize applied); upsertSkus() queries old SKU IDs before delete, emits SKU_UPSERTED_EVENT via PRODUCT_EXCHANGE after transaction commit with payload {productId, skus:[{skuId,sku,stockQuantity}], deletedSkuIds}; inventory/main.ts connects INVENTORY_PRODUCT_SERVICE queue to PRODUCT_EXCHANGE; InventoryService adds createForSku() (idempotent — skips if productId+productSkuId row exists; sku field auto-generated as product-{id}-sku-{skuId}) and softDeleteSkus() (sets isActive=false for given skuIds); InventoryController adds handleSkuUpserted @EventPattern handler; E2E verified: 2 SKUs upserted → 2 inventory rows created ✅, 1 SKU removed → removed SKU row soft-deleted ✅, createForSku skips on same skuId (at-least-once delivery idempotency)
+
+## Active Tasks
+
+(none)
+
+## Recently Completed
+
+- AI documentation directory renamed from `docs/` to `ai-docs/` so repository documentation is clearly distinguished from agent context; all Codex/Claude entry points, skills, permissions, and internal references now use the new path
+
+- Agent context consolidation: moved duplicated `.codex`/`.claude` context into `ai-docs/agent-context/`, moved the shared handoff to `ai-docs/agent-handoff/snapshot.md`, and unified local test accounts at `.agent-local/test-accounts.md`; `AGENTS.md` and `.claude/CLAUDE.md` remain tool-specific entry points and now reference the same source of truth
+
+- GHN webhook PascalCase fix + Postman collection: ghn-webhook.controller.ts now reads BOTH field shapes — PascalCase (OrderCode/Status, what real GHN sends) and snake_case (order_code/status, manual tests), PascalCase preferred; root cause: controller only read snake_case → real GHN callbacks parsed as undefined → "Order not found" log + 200, order status never advanced (silent fail, no GHN retry); guard added: missing both shapes → warn log + 200 no-op; postman/ghn-webhook.postman_collection.json created (7 requests: picking/picked/delivering/delivered lifecycle, unhandled status, nonexistent code, PascalCase shape; baseUrl + ghnOrderCode collection vars; built-in 200+success assertions) so user can self-test; tsc + eslint clean; E2E: COD order 95 (product 5, GHN code LXTCRP) → PascalCase "picking" → shipped ✅, snake_case "delivering" → delivering ✅, missing-fields body → 200 no-op ✅, PascalCase "delivered" → completed + reserved 1→0 consumed ✅
+
+- Payment gateway selected by user's paymentMethod (env decoupled): PaymentGatewayFactory.getStrategy(method: PaymentMethod) now takes the method as a parameter — PAYMENT_GATEWAY env no longer read anywhere (zalopay → ZaloPayService, vnpay → VNPayStrategy, else BadRequestException); processPayment + processMultiOrderPayment accept paymentMethod (enum aliased as PaymentMethodEnum in payments.service.ts to avoid collision with PaymentMethod entity); gateway order.service.ts forwards paymentMethod in INITIATE_MULTI_ORDER_PAYMENT payload; BUG FIXED: payments handleOrderCreated read order.payment_method (snake_case) but orders emits paymentMethod (camelCase) → guard always undefined, so COD orders also got payment rows via env strategy — now reads order.paymentMethod, skips COD, and warn-skips if field missing; tsc + eslint clean; E2E (env=vnpay throughout): single-seller zalopay order 90 → qcgateway.zalopay.vn URL ✅, single-seller vnpay order 91 → sandbox.vnpayment.vn URL ✅, multi-seller zalopay orders 92+93 → synchronous zalopay paymentUrl via TCP ✅, COD order 94 → payment-url {null,null} (no payment row) ✅; all test orders canceled, stock restored
+
+- GHN shipping fee + cancel integration: ORDER_MESSAGE_PATTERN.CALCULATE_SHIPPING_FEE added; GhnService refactored with buildHeaders/buildShippingOrderBody helpers + previewShippingFee() (POST /v2/shipping-order/preview → {shippingFee, expectedDeliveryTime}) + cancelShippingOrder() (POST /v2/switch-status/cancel); Order entity adds shipping_fee DECIMAL(12,2) NULL column (synchronize applied); placeOrder + placeMultiSellerOrder compute fee via getShippingFeeOrZero (non-fatal, defaults 0 on GHN failure; multi-seller computes per-seller fee BEFORE the transaction so HTTP never holds a DB lock) and persist shippingFee, total = itemsTotal + shippingFee, codAmount includes fee; cancelOrder pushes cancel to GHN when ghnOrderCode exists (non-fatal); gateway adds POST /api/order/shipping-fee (JWT, ShippingFeeDto) → TCP CALCULATE_SHIPPING_FEE; BUG FIXED during E2E: placeOrder never set sellerId → "Field 'seller_id' doesn't have a default value" on every single-seller order (pre-existing since seller_id column added) — now derives sellerId from gateway-enriched items[0].sellerId, throws 400 if missing; tsc + eslint clean; E2E: fee preview Hà Nội 46207đ / HCM intra-city 0đ ✅, single-seller COD order 87 total 245207 = 199000+46207, shippingFee persisted, GHN order LXTCRV created ✅, cancel → local canceled + GHN status "cancel" verified via detail API + reserved stock released ✅, multi-seller COD orders 88+89 each carry own 46207 fee + own GHN code ✅ (test orders canceled after)
+
+- Reserved-stock consume on delivery: orders.service.ts handleGhnWebhook now loads order items and, on first transition to COMPLETED (wasCompleted guard → duplicate "delivered" webhooks are no-ops), calls TCP INVENTORY_CONSUME_RESERVED_STOCK per item (SKU-scoped, non-fatal warn on failure) — full lifecycle is now reserve (TCP at creation) → release (ORDER_CANCELED consumer) XOR consume (GHN delivered → COMPLETED); chose webhook over PAYMENT_COMPLETED because non-COD orders at PROCESSING can still be canceled, while COMPLETED orders cannot → consume never races with release; tsc + eslint clean; E2E: reserve 1 unit of product 23 → webhook delivered for order 68 (real GHN code) → status completed + reserved 1→0 + available unchanged ✅, duplicate webhook → no change ✅, cancel completed order → 400 ✅
+
+- Stock double-decrement fix: inventory handleOrderCreated (ORDER_CREATED_EVENT consumer) no longer calls reserveStock + consumeReservedStock — stock is reserved exactly once via TCP INVENTORY_RESERVE_STOCK by the orders service at creation; consumer is now ack-only (kept so the event doesn't go unhandled on the inventory queue); tsc + eslint clean; E2E: stock 10, multi-seller order qty 5 → available 5 / reserved 5 (was 0/5 before fix), cancel both child orders → available 10 / reserved 0, no permanent loss ✅; follow-up gap recorded in Known Issues (reserved stock never consumed on completion)
+
+- Multi-seller stock pre-check: placeMultiSellerOrder (orders.service.ts) now runs the same INVENTORY_CHECK_STOCK loop as placeOrder before the order-creation transaction — SKU-aware ({productId, quantity, skuId}), throws BadRequestException on insufficient stock so no orders/payment are created; tsc + eslint clean; E2E: out-of-stock multi-seller COD order → 400 "Insufficient stock for product 10: requested 5, available 0", order count unchanged ✅; after stocking 10 units each → 201, 2 child orders (sellers 20+21), reservedStock +5 per product ✅; residual race between check and reserve still exists (reserve failure after commit only logs warning) — accepted for now
+
+- Multi-order payment-url lookup fix: payments.service.ts getPaymentUrl() now falls back to JSONB containment query (order_ids @> CAST(:ids AS jsonb), ordered by created_at DESC) when the single order_id lookup misses — covers multi-order payments where order_id is NULL and IDs live in order_ids; tsc + eslint clean; E2E: multi-seller VNPay order (2 sellers → orders 79+80 + 1 multi-order payment) → GET /order/:id/payment-url returned 200 with orderUrl+status for both child orders ✅; fallback SQL verified executable (nonexistent ID → 200 {null,null}, no 500) ✅; discovery: ORDER_CREATED_EVENT consumer in payments also creates an individual payment row per non-COD child order, so the primary lookup usually hits — the JSONB fallback covers the case where RMQ event processing was unavailable at order time
+
+- Multi-order payment gateway wiring: gateway order.service.ts — after CREATE_MULTI_SELLER_ORDER returns Order[], COD guard skips payment and returns { orders, paymentUrl: null }; non-COD collects orderIds + sums totalAmount, calls INITIATE_MULTI_ORDER_PAYMENT via TCP to payments service, returns { orders, paymentUrl }; PaymentMethod enum imported from @app/common for type-safe COD comparison; single-seller path unchanged; tsc + eslint clean
+
+- Multi-order payment support: INITIATE_MULTI_ORDER_PAYMENT TCP pattern added to libs/constant; payment.entity.ts — orderId made nullable, unique constraint removed, orderIds JSONB column added; payments.service.ts adds processMultiOrderPayment() (creates one record, sets orderIds, generates payment URL via existing strategy); callback handlers (ZaloPay + VNPay) refactored to emit PAYMENT_COMPLETED_EVENT once per order ID (reads orderIds if present, falls back to [orderId]); migration SQL: database/multi_order_payment_migration.sql (drops unique on order_id, makes nullable, adds order_ids JSONB); tsc clean, eslint clean
+
+- Product Review feature (Phases 0–4 complete): migration SQL (database/create_product_reviews_table.sql, no FK); constants VERIFY_PRODUCT_PURCHASED + REVIEW_CREATE/DELETE/FIND_BY_PRODUCT; orders service verifyUserPurchasedProduct (JOIN completed orders); product service ProductReview entity + createReview (ER_DUP_ENTRY → 409) + deleteReview + findReviewsByProduct + recalculateProductRating; gateway review.dto.ts + 3 endpoints (GET :id/reviews @Public, POST :id/reviews JWT, DELETE reviews/:reviewId JWT); bug fixed: REVIEW_DELETE handler returned void → 502, changed to return null; E2E 10/10 passed ✅
+
+## Known Issues
+
+- Orders that never reach GHN "delivered" webhook (e.g. ghn_order_code null because GHN creation failed) keep stock in reservedStock indefinitely — no expiry/sweeper for stale reservations
+- BuyerInfo interface in gateway order.service declares 4 fields (id/username/email/name) but user service returns 6 (+ avatar/isActive) — minor type mismatch, no runtime impact
+- Multi-seller non-COD checkout creates BOTH a multi-order payment row (via INITIATE_MULTI_ORDER_PAYMENT) AND one individual payment row per child order (via ORDER_CREATED_EVENT consumer) — getPaymentUrl prefers the individual row; paying the multi-order URL leaves individual rows pending (and vice versa); potential double-payment if user pays both URLs — needs a dedupe decision (e.g. skip individual payment creation when order came from multi-seller checkout)
+
+## Key Conventions
+
+- Constants: message patterns + queue names always in @app/constant or @app/common/constants — never hardcode
+- RabbitMQ consumer: ack on success, nack+requeue on DB error, nack+no-requeue if order not found
+- @Payload() in @EventPattern: packet.data already unwrapped — access data.orderId directly, never data.data.orderId
+- Gateway pattern: every TCP call needs timeout(10000) + MicroserviceErrorHandler; every DTO field needs @ApiProperty()
+- @MessagePattern handlers: always return a value — never void (causes TCP "no elements in sequence" → 502)
+- camelCase API contract: all HTTP response + request fields must be camelCase; entity properties use @Column({ name: 'snake_case' }) alias; snake_case only for DB column names, external API contracts (Cloudinary public_id, ZaloPay order_url), WS event name strings
+- TypeORM entity: use ! (definite assignment) on all @Column properties; use @Column({ name }) alias for snake_case DB columns
+- DECIMAL columns from TypeORM return string — always cast: Number(val ?? 0) or Math.round(Number(val ?? 0))
+- tierIdx (ProductSku): @AfterLoad() parses JSON string → number[]; must JSON.stringify before saving to VARCHAR or forwarding via TCP
+- HTTP controllers: req.user.id (JwtAuthGuard maps JWT payload.userId → req.user.id)
+- WS gateways: payload.userId (JWT claims read directly on handshake)
+- WS emit: fire-and-forget — never await, never throw on offline user
+- PaginatedResponse: always use PaginatedResponse.of(data, total, page, limit) from @app/common
+- PaymentMethod enum: import from @app/common — never re-declare locally
+- COD: handled via GHN cod_amount; payments service guard clause skips COD orders
+- GHN: shipping_address pipe-delimited "name|phone|addr|ward|district|province"; failure non-fatal (order saved with ghn_order_code=null)
+- GHN env: GHN_API_URL=https://dev-online-gateway.ghn.vn/shiip/public-api, GHN_API_TOKEN, GHN_SHOP_ID=200481 in local/nodeA/.env
+- Cloudinary: client uploads direct; server signs via POST /api/upload/signature; folders: trybuy/products/, trybuy/posts/
+- payment_methods table: is_active column controls active options — PAYMENT_GATEWAY env is fully unused now (options endpoint reads the table; gateway strategy selected per-request from paymentMethod)
+- registerDirectPublisher(): useFactory must return null (not throw) on RabbitMQ unavailable at startup — callers must null-check before publish(); orders service all 3 fanoutChannel.publish calls now null-guarded (ORDER_CREATED, ORDER_CANCELED, PAYMENT_COMPLETED)
+- Deploy: `pm2 start ecosystem.config.js --env production` → `pm2 save && pm2 startup`; update yourdomain.com in nginx/trybuy.conf
+- Archive: none currently
+
+## Backlog (priority order)
+
+(none)

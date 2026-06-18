@@ -13,7 +13,7 @@
 
 ## Service Map
 
-See CLAUDE.md Service Map & Scripts for service list and ports.
+See the active agent entry point (`AGENTS.md` or `.claude/CLAUDE.md`) for the service list and ports.
 
 ## Shared Libraries
 

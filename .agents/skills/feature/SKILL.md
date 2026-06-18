@@ -1,20 +1,25 @@
-# /feature — New Feature Command
+---
+name: feature
+description: Implement a TryBuy feature end-to-end across gateway, microservices, database, and frontend. Use when the user asks to add or build a feature.
+---
+
+# $feature — New Feature Skill
 
 Use this command to implement a new feature end-to-end in TryBuy.
 
 ## How to invoke
 
 ```
-/feature <short description>
+$feature <short description>
 ```
 
-Example: `/feature add product reviews`
+Example: `$feature add product reviews`
 
 ---
 
 ## What I will do before implementing
 
-1. Run `researcher` agent to locate existing patterns, entities, constants
+1. Spawn the `researcher` custom agent to locate existing patterns, entities, constants
 2. Identify affected microservices from the feature description
 3. Plan implementation checklist based on findings
 4. Implement without asking user for info that can be found in code
@@ -38,6 +43,6 @@ Example: `/feature add product reviews`
 ---
 
 ## After implementing
-- Run `code-reviewer` agent to verify against project conventions
+- Spawn the `code-reviewer` custom agent to verify against project conventions
 - Run `tsc --noEmit` — zero errors before done
 - Report: files changed, endpoints added, patterns registered

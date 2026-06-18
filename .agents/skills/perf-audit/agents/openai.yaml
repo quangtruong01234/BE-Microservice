@@ -1,0 +1,4 @@
+interface:
+  display_name: "Performance Audit"
+  short_description: "Audit backend performance without edits"
+  default_prompt: "Use $perf-audit to audit this TryBuy path for performance risks."

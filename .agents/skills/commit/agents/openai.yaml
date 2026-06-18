@@ -1,0 +1,4 @@
+interface:
+  display_name: "Commit Changes"
+  short_description: "Create scoped local commits safely"
+  default_prompt: "Use $commit to group current changes into scoped local commits."

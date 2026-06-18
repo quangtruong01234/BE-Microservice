@@ -1,0 +1,12 @@
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+web_search = "cached"
+personality = "pragmatic"
+
+[features]
+hooks = true
+multi_agent = true
+
+[agents]
+max_threads = 6
+max_depth = 1

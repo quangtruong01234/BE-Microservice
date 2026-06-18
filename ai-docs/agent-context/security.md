@@ -1,6 +1,6 @@
 # Security — Always-On Rules
 
-These rules apply at all times, not only during `/review`.
+These rules apply at all times, not only during a dedicated review command or skill.
 
 ## Payment Gateway Secrets
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review TryBuy Code"
+  short_description: "Review changes against TryBuy standards"
+  default_prompt: "Use $review to review the current changes against TryBuy standards."

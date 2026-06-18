@@ -1,6 +1,6 @@
-# CLAUDE.md — Backend (API)
+# AGENTS.md — Backend (API)
 
-Guidance for Claude Code inside `api/`.
+Guidance for Codex inside `api/`.
 
 ## Role
 
@@ -30,13 +30,13 @@ When in doubt:
 
 Shared context under `ai-docs/agent-context/` is the single source of truth for Codex and Claude Code. Do not recreate context files under `.codex/` or `.claude/`.
 
-Always loaded (auto-imported every session):
+At the start of each task, read these files before acting:
 
-@../ai-docs/agent-context/conventions.md
-@../ai-docs/agent-context/architecture.md
-@../ai-docs/agent-handoff/snapshot.md
+- `ai-docs/agent-context/conventions.md`
+- `ai-docs/agent-context/architecture.md`
+- `ai-docs/agent-handoff/snapshot.md`
 
-Load on demand — read with the Read tool when the task touches the relevant area:
+Load additional references only when the task touches the relevant area:
 
 | File | When to load |
 |---|---|
@@ -45,11 +45,9 @@ Load on demand — read with the Read tool when the task touches the relevant ar
 | `ai-docs/agent-context/security.md` | payment / zalopay / vnpay / JWT / auth / cookie / guard |
 | `ai-docs/agent-context/typescript-rules.md` | tsc / type error / any / return type / eslint |
 | `ai-docs/agent-context/git-workflow.md` | commit |
-| `ai-docs/agent-context/research.md` | pre-implementation spanning > 1 service |
+| `ai-docs/agent-context/research.md` | pre-implementation spanning more than one service |
 | `ai-docs/agent-context/performance.md` | query / list / pagination / index / cache / N+1 / slow path |
 | `ai-docs/agent-context/backend.md` | NestJS / TCP / RabbitMQ / @MessagePattern / @EventPattern detail |
-
-Do NOT use `@` for the on-demand group above — load them explicitly with the Read tool.
 
 ## Auto-context (when user does not tag a context file)
 
@@ -71,7 +69,7 @@ Match keywords in the prompt → read the corresponding file with the Read tool.
 
 ## Additional References
 
-- **[backend.md](../ai-docs/agent-context/backend.md)** — File naming, folder structure, TCP/RabbitMQ call patterns, gateway route checklist, entity int/bigint convention, API testing
+- **[backend.md](ai-docs/agent-context/backend.md)** — File naming, folder structure, TCP/RabbitMQ call patterns, gateway route checklist, entity int/bigint convention, API testing
 
 ## Before Creating New Files
 
@@ -131,32 +129,39 @@ try {
 
 ## Debug Protocol
 
-When debugging, run `/debug` — full protocol in `commands/debug.md`.
+When debugging, invoke `$debug`.
 
-## Slash Commands
+## Repo Skills
 
-- `/feature` (`commands/feature.md`): Implement a new feature end-to-end.
-- `/review` (`commands/review.md`): Review code against project standards.
-- `/debug` (`commands/debug.md`): Diagnose a failing feature.
-- `/perf-audit` (`commands/perf-audit.md`): Audit endpoints for performance issues; report fixes + side effects (read-only, does not implement).
+- `$feature`: implement a feature end-to-end.
+- `$review`: review code against project standards.
+- `$debug`: diagnose a failing feature.
+- `$perf-audit`: audit performance without editing.
+- `$commit`: create scoped local commits.
+- `$refactor`: perform a constrained refactor.
 
-## Agent Skills
+## Custom Agents
 
-- `researcher` (`agents/researcher.md`): Pre-implementation to locate endpoints, patterns, and entities.
-- `code-reviewer` (`agents/code-reviewer.md`): Post-implementation to check constraints and TS errors.
+Project agents are defined in `.codex/agents/`:
+
+- `researcher`: read-only codebase research.
+- `planner`: plans changes spanning services or migrations.
+- `code-reviewer`: read-only post-implementation review.
+
+Spawn them only when the user explicitly requests subagents or parallel agent work.
 
 ## Agent Orchestration
 
 - 1 service, clear scope → implement directly, no agent needed
 - > 1 file or involves TCP/RabbitMQ → researcher → implement
 - > 2 services or needs migration → researcher → planner → implement → code-reviewer
-- Bug/crash → `/debug` directly, do not go through researcher
+- Bug/crash → `$debug` directly, do not go through researcher
 
 **Rule**: paste researcher output into the next prompt. Do not let the next agent re-research the same information.
 
 ## Prompt Templates
 
-- Refactor (`prompts/refactor.md`): Scoped refactor request template.
+- Refactor (`$refactor`): Scoped refactor request template.
 
 ## Quick Validation
 
@@ -170,7 +175,7 @@ npm run build && npm run lint && npm run test
 
 ## Context Loading Strategy
 
-- Always loaded: `CLAUDE.md`, `conventions.md`, `architecture.md`
+- Always loaded: `AGENTS.md`, `conventions.md`, `architecture.md`
 - Load when touching payment code: `ai-docs/agent-context/security.md`
 - Load when adding a new feature: `ai-docs/agent-context/api.md`, `ai-docs/agent-context/research.md`
 - Load when committing: `ai-docs/agent-context/git-workflow.md`
@@ -206,7 +211,7 @@ Do not push test-accounts.md to git. Verify .gitignore includes it.
 
 ## Self-Test Protocol
 
-**Claude runs all API tests autonomously — never ask the user to run curl commands.**
+**Codex runs all API tests autonomously — never ask the user to run curl commands.**
 
 When a task adds or modifies an endpoint, after tsc + eslint pass:
 1. Read `.agent-local/test-accounts.md` — pick an account with the required role (user / admin / shop)
