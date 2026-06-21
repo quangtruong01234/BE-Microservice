@@ -18,6 +18,9 @@ export class OrderItem {
   @Column({ name: "product_id", type: "bigint" })
   productId!: number;
 
+  @Column({ name: "seller_id", type: "int" })
+  sellerId!: number;
+
   @Column({ name: "product_name" })
   productName!: string;
 
@@ -29,6 +32,17 @@ export class OrderItem {
 
   @Column({ type: "int", nullable: true, default: null, name: "weight" })
   weight!: number | null;
+
+  @Column({ type: "int", nullable: true, default: null, name: "sku_id" })
+  skuId!: number | null;
+
+  @Column({
+    type: "varchar",
+    nullable: true,
+    default: null,
+    name: "sku_tier_idx",
+  })
+  skuTierIdx!: string | null;
 
   @ManyToOne(() => Order, (order) => order.items)
   @JoinColumn({ name: "order_id" })

@@ -16,9 +16,11 @@ import { EVENT } from "@app/common/constants/event";
 import {
   HttpToRpcExceptionFilter,
   PaymentMethod,
+  PaginatedResponse,
   RmqService,
 } from "@app/common";
 import { ORDER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
+import { Order, OrderStatus } from "./entity/order.entity";
 
 @UseFilters(new HttpToRpcExceptionFilter())
 @Controller("orders")
@@ -41,7 +43,9 @@ export class OrdersController {
         productName: string;
         quantity: number;
         price: number;
+        sellerId?: number;
         skuId?: number | null;
+        tierIdx?: number[];
         weight?: number;
       }[];
     },
@@ -51,6 +55,34 @@ export class OrdersController {
     );
     const { userId, paymentMethod, shippingAddress, items } = payload;
     return await this.ordersService.placeOrder(
+      userId,
+      paymentMethod,
+      shippingAddress,
+      items,
+    );
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.CREATE_MULTI_SELLER_ORDER)
+  async createMultiSellerOrder(
+    @Payload()
+    payload: {
+      userId: number;
+      paymentMethod: PaymentMethod;
+      shippingAddress: string;
+      items: {
+        productId: number;
+        productName: string;
+        quantity: number;
+        price: number;
+        sellerId: number;
+        skuId?: number | null;
+        tierIdx?: number[];
+        weight?: number;
+      }[];
+    },
+  ): Promise<Order[]> {
+    const { userId, paymentMethod, shippingAddress, items } = payload;
+    return this.ordersService.placeMultiSellerOrder(
       userId,
       paymentMethod,
       shippingAddress,
@@ -110,11 +142,73 @@ export class OrdersController {
   @MessagePattern(ORDER_MESSAGE_PATTERN.GHN_WEBHOOK)
   async handleGhnWebhook(
     @Payload() payload: { ghnOrderCode: string; ghnStatus: string },
-  ): Promise<void> {
+  ): Promise<null> {
     await this.ordersService.handleGhnWebhook(
       payload.ghnOrderCode,
       payload.ghnStatus,
     );
+    return null;
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.CALCULATE_SHIPPING_FEE)
+  async calculateShippingFee(
+    @Payload()
+    payload: {
+      shippingAddress: string;
+      items: {
+        productName?: string;
+        quantity: number;
+        price?: number;
+        weight?: number;
+      }[];
+    },
+  ): Promise<{ shippingFee: number; expectedDeliveryTime: string | null }> {
+    return this.ordersService.calculateShippingFee(
+      payload.shippingAddress,
+      payload.items,
+    );
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.VERIFY_PRODUCT_PURCHASED)
+  async verifyProductPurchased(
+    @Payload() data: { userId: number; productId: number },
+  ): Promise<{ valid: boolean; orderId: number }> {
+    return this.ordersService.verifyUserPurchasedProduct(
+      data.userId,
+      data.productId,
+    );
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.GET_ORDERS_BY_SELLER)
+  async handleGetOrdersBySeller(
+    @Payload()
+    data: {
+      sellerId: number;
+      page: number;
+      limit: number;
+      status?: OrderStatus;
+    },
+  ): Promise<PaginatedResponse<Order>> {
+    return this.ordersService.getOrdersBySeller(
+      data.sellerId,
+      data.page,
+      data.limit,
+      data.status,
+    );
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.CONFIRM_ORDER)
+  async handleConfirmOrder(
+    @Payload() data: { orderId: number; sellerId: number },
+  ): Promise<Order> {
+    return this.ordersService.confirmOrder(data.orderId, data.sellerId);
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.READY_TO_SHIP)
+  async handleReadyToShip(
+    @Payload() data: { orderId: number; sellerId: number },
+  ): Promise<Order> {
+    return this.ordersService.readyToShip(data.orderId, data.sellerId);
   }
 
   @EventPattern(EVENT.PAYMENT_COMPLETED_EVENT)

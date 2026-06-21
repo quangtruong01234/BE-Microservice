@@ -11,6 +11,7 @@ import { PaymentMethod } from "@app/common";
 
 export enum OrderStatus {
   PENDING = "pending",
+  CONFIRMED = "confirmed",
   PROCESSING = "processing",
   SHIPPED = "shipped",
   DELIVERING = "delivering",
@@ -25,6 +26,9 @@ export class Order {
 
   @Column({ name: "user_id", type: "bigint" })
   userId!: number;
+
+  @Column({ name: "seller_id", type: "int" })
+  sellerId!: number;
 
   @Column({ type: "enum", enum: OrderStatus, default: OrderStatus.PENDING })
   status?: OrderStatus;
@@ -59,6 +63,16 @@ export class Order {
   codAmount!: number | null;
 
   @Column({
+    name: "shipping_fee",
+    type: "decimal",
+    precision: 12,
+    scale: 2,
+    nullable: true,
+    default: null,
+  })
+  shippingFee!: number | null;
+
+  @Column({
     name: "ghn_order_code",
     type: "varchar",
     length: 100,
@@ -66,6 +80,9 @@ export class Order {
     default: null,
   })
   ghnOrderCode!: string | null;
+
+  @Column({ name: "reservation_key", type: "varchar", length: 36 })
+  reservationKey!: string;
 
   @CreateDateColumn({ name: "created_at", type: "datetime" })
   createdAt!: Date;

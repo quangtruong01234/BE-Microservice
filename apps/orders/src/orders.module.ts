@@ -49,6 +49,14 @@ import { GhnModule } from "./ghn/ghn.module";
           port: PORT_TCP.USER_TCP_PORT,
         },
       },
+      {
+        name: NAME_SERVICE_TCP.PRODUCT_SERVICE,
+        transport: Transport.TCP,
+        options: {
+          host: TCP_HOST,
+          port: PORT_TCP.PRODUCT_TCP_PORT,
+        },
+      },
     ]),
     // RmqModule.register({ name: "INVENTORY_SERVICE" }),
     // RmqModule.register({ name: "PAYMENTS_SERVICE" }),
