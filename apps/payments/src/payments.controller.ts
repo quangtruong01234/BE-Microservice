@@ -21,7 +21,11 @@ import { EVENT } from "@app/common/constants/event";
 import { handleZaloPayCallback } from "./zalopay/zalopay.callback";
 import { handleVNPayCallback } from "./vnpay/vnpay.callback";
 import { PAYMENT_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
-import { HttpToRpcExceptionFilter } from "@app/common";
+import {
+  HttpToRpcExceptionFilter,
+  PaymentMethod,
+  RmqService,
+} from "@app/common";
 
 const Public = () => SetMetadata("isPublic", true);
 
@@ -33,6 +37,7 @@ export class PaymentsController {
   constructor(
     private readonly paymentsService: PaymentsService,
     private readonly vnpayStrategy: VNPayStrategy,
+    private readonly rmqService: RmqService,
   ) {}
 
   @EventPattern(EVENT.PAYMENT_COMPLETED_EVENT)
@@ -41,17 +46,53 @@ export class PaymentsController {
   @EventPattern(EVENT.ORDER_CREATED_EVENT)
   async handleOrderCreated(
     @Payload()
-    order: { id: number; total: number; payment_method?: string },
+    order: {
+      id: number;
+      total: number;
+      paymentMethod?: PaymentMethod;
+      isMultiSellerCheckout?: boolean;
+    },
     @Ctx() context: RmqContext,
-  ) {
-    void context;
-    if (order.payment_method === "cod") return;
-    this.logger.log(`[PAYMENTS] Received order_created for order: ${order.id}`);
-    await this.paymentsService.processPayment(
-      String(order.id),
-      order.total,
-      `Payment for order ${order.id}`,
-    );
+  ): Promise<void> {
+    try {
+      if (order.isMultiSellerCheckout) {
+        this.logger.log(
+          `[PAYMENTS] order_created for multi-seller child order ${order.id} — payment handled by multi-order flow`,
+        );
+        this.rmqService.ack(context);
+        return;
+      }
+      if (order.paymentMethod === PaymentMethod.COD) {
+        this.rmqService.ack(context);
+        return;
+      }
+      if (!order.paymentMethod) {
+        this.logger.warn(
+          `[PAYMENTS] order_created for order ${order.id} has no paymentMethod — skipping payment creation`,
+        );
+        this.rmqService.ack(context);
+        return;
+      }
+      this.logger.log(
+        `[PAYMENTS] Received order_created for order: ${order.id}`,
+      );
+      await this.paymentsService.processPayment(
+        String(order.id),
+        order.total,
+        `Payment for order ${order.id}`,
+        order.paymentMethod,
+      );
+      this.rmqService.ack(context);
+    } catch (error: unknown) {
+      this.logger.error(
+        `[PAYMENTS] Failed to process order_created for order ${order.id}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+      const channel = context.getChannelRef() as {
+        nack: (message: unknown, allUpTo: boolean, requeue: boolean) => void;
+      };
+      channel.nack(context.getMessage(), false, true);
+    }
   }
 
   @MessagePattern("get_payment_url")
@@ -66,6 +107,26 @@ export class PaymentsController {
     Array<{ id: string; name: string; description: string }>
   > {
     return this.paymentsService.getPaymentOptions();
+  }
+
+  @MessagePattern(PAYMENT_MESSAGE_PATTERN.INITIATE_MULTI_ORDER_PAYMENT)
+  initiateMultiOrderPayment(
+    @Payload()
+    data: {
+      orderIds: number[];
+      totalAmount: number;
+      paymentMethod: PaymentMethod;
+    },
+  ): Promise<{
+    paymentUrl: string;
+    transactionId: string;
+    appTransId: string;
+  }> {
+    return this.paymentsService.processMultiOrderPayment(
+      data.orderIds,
+      data.totalAmount,
+      data.paymentMethod,
+    );
   }
 
   @Post("zalopay/callback")

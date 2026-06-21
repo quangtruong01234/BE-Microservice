@@ -16,8 +16,11 @@ export class Payment {
   @PrimaryGeneratedColumn("increment")
   id!: number;
 
-  @Column({ name: "order_id", type: "bigint", unique: true })
-  orderId!: number;
+  @Column({ name: "order_id", type: "bigint", nullable: true })
+  orderId!: number | null;
+
+  @Column({ name: "order_ids", type: "jsonb", nullable: true })
+  orderIds!: number[] | null;
 
   @Column({ type: "decimal", precision: 12, scale: 2 })
   amount!: number;

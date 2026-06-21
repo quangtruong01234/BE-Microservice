@@ -10,6 +10,7 @@ import { Repository } from "typeorm";
 import { Channel } from "amqplib";
 import { Payment, PaymentStatus } from "./entity/payment.entity";
 import { PaymentMethod } from "./entity/payment-method.entity";
+import { PaymentMethod as PaymentMethodEnum } from "@app/common";
 import { PaymentGatewayFactory } from "./payment-gateway.factory";
 import { EXCHANGE } from "@app/common/constants/exchange";
 import { EVENT } from "@app/common/constants/event";
@@ -32,6 +33,7 @@ export class PaymentsService {
     orderId: string,
     amount: number,
     description: string,
+    paymentMethod: PaymentMethodEnum,
   ): Promise<{
     paymentUrl: string;
     transactionId: string;
@@ -64,7 +66,7 @@ export class PaymentsService {
       this.logger.log("[PAYMENTS] payment record saved");
 
       const { paymentUrl, transactionId, appTransId } = await this.factory
-        .getStrategy()
+        .getStrategy(paymentMethod)
         .createPayment({ id: orderId, total: amount });
       this.logger.log(
         "[PAYMENTS] createPayment done, appTransId=" + appTransId,
@@ -88,33 +90,58 @@ export class PaymentsService {
     }
   }
 
-  async completeZaloPayPayment(
-    appTransId: string,
-    zpTransId: string,
-  ): Promise<Payment> {
-    const payment = await this.paymentRepository.findOne({
-      where: { appTransId },
-    });
-    if (!payment) {
-      throw new NotFoundException(
-        `Payment with app_trans_id ${appTransId} not found`,
-      );
-    }
-
-    await this.paymentRepository.update(
-      { appTransId },
-      { status: PaymentStatus.COMPLETED, transactionId: zpTransId },
+  async processMultiOrderPayment(
+    orderIds: number[],
+    totalAmount: number,
+    paymentMethod: PaymentMethodEnum,
+  ): Promise<{
+    paymentUrl: string;
+    transactionId: string;
+    appTransId: string;
+  }> {
+    this.logger.log(
+      `[PAYMENTS] Processing multi-order payment for orders [${orderIds.join(",")}]`,
     );
 
-    const updated = await this.paymentRepository.findOne({
-      where: { appTransId },
-    });
-    if (!updated) {
-      throw new InternalServerErrorException("Payment update failed");
-    }
+    try {
+      const payment = this.paymentRepository.create({
+        orderId: null,
+        orderIds,
+        amount: totalAmount,
+        status: PaymentStatus.PENDING,
+      });
+      await this.paymentRepository.save(payment);
+      this.logger.log(
+        `[PAYMENTS] multi-order payment record saved id=${payment.id}`,
+      );
 
+      const { paymentUrl, transactionId, appTransId } = await this.factory
+        .getStrategy(paymentMethod)
+        .createPayment({ id: String(payment.id), total: totalAmount });
+      this.logger.log(
+        "[PAYMENTS] createPayment done, appTransId=" + appTransId,
+      );
+
+      const updateResult = await this.paymentRepository.update(
+        { id: payment.id },
+        { orderUrl: paymentUrl, transactionId, appTransId },
+      );
+      if (updateResult.affected === 0) {
+        throw new InternalServerErrorException(
+          "Failed to persist appTransId — multi-order payment row not found",
+        );
+      }
+
+      return { paymentUrl, transactionId, appTransId };
+    } catch (err: unknown) {
+      this.logger.error("[PAYMENTS] processMultiOrderPayment failed", err);
+      throw err;
+    }
+  }
+
+  private emitPaymentCompleted(orderId: number, amount: number): void {
     const eventPayload = {
-      data: { orderId: updated.orderId, amount: updated.amount },
+      data: { orderId, amount },
       pattern: EVENT.PAYMENT_COMPLETED_EVENT,
     };
     this.fanoutChannel.publish(
@@ -122,55 +149,72 @@ export class PaymentsService {
       EVENT.PAYMENT_COMPLETED_EVENT,
       Buffer.from(JSON.stringify(eventPayload)),
     );
+  }
 
-    this.logger.log(
-      `[PAYMENTS] Payment completed orderId=${updated.orderId} appTransId=${appTransId}`,
-    );
-    return updated;
+  async completeZaloPayPayment(
+    appTransId: string,
+    zpTransId: string,
+  ): Promise<Payment> {
+    return this.completePayment(appTransId, zpTransId, "ZaloPay");
   }
 
   async completeVNPayPayment(
     vnpTxnRef: string,
     vnpTransactionNo: string,
   ): Promise<Payment> {
+    return this.completePayment(vnpTxnRef, vnpTransactionNo, "VNPay");
+  }
+
+  private async completePayment(
+    appTransId: string,
+    transactionId: string,
+    gateway: "ZaloPay" | "VNPay",
+  ): Promise<Payment> {
     const payment = await this.paymentRepository.findOne({
-      where: { appTransId: vnpTxnRef },
+      where: { appTransId },
     });
     if (!payment) {
-      throw new NotFoundException(
-        `Payment with vnp_TxnRef ${vnpTxnRef} not found`,
+      throw new NotFoundException(`Payment ${appTransId} not found`);
+    }
+    if (payment.status === PaymentStatus.COMPLETED) {
+      this.logger.log(
+        `[PAYMENTS] Duplicate ${gateway} callback ignored appTransId=${appTransId}`,
       );
+      return payment;
     }
 
     const updateResult = await this.paymentRepository.update(
-      { appTransId: vnpTxnRef },
-      { status: PaymentStatus.COMPLETED, transactionId: vnpTransactionNo },
+      { id: payment.id, status: PaymentStatus.PENDING },
+      { status: PaymentStatus.COMPLETED, transactionId },
     );
-    if (updateResult.affected === 0) {
-      throw new NotFoundException(
-        `Payment update affected 0 rows for vnp_TxnRef ${vnpTxnRef}`,
-      );
+    if (updateResult.affected !== 1) {
+      const current = await this.paymentRepository.findOne({
+        where: { id: payment.id },
+      });
+      if (current?.status === PaymentStatus.COMPLETED) {
+        this.logger.log(
+          `[PAYMENTS] Concurrent ${gateway} callback ignored appTransId=${appTransId}`,
+        );
+        return current;
+      }
+      throw new InternalServerErrorException("Payment completion failed");
     }
 
     const updated = await this.paymentRepository.findOne({
-      where: { appTransId: vnpTxnRef },
+      where: { id: payment.id },
     });
     if (!updated) {
       throw new InternalServerErrorException("Payment update failed");
     }
 
-    const eventPayload = {
-      data: { orderId: updated.orderId, amount: updated.amount },
-      pattern: EVENT.PAYMENT_COMPLETED_EVENT,
-    };
-    this.fanoutChannel.publish(
-      EXCHANGE.PAYMENTS_EXCHANGE,
-      EVENT.PAYMENT_COMPLETED_EVENT,
-      Buffer.from(JSON.stringify(eventPayload)),
-    );
+    const orderIdList =
+      updated.orderIds ?? (updated.orderId !== null ? [updated.orderId] : []);
+    for (const orderId of orderIdList) {
+      this.emitPaymentCompleted(orderId, updated.amount);
+    }
 
     this.logger.log(
-      `[PAYMENTS] VNPay payment completed orderId=${updated.orderId} vnp_TxnRef=${vnpTxnRef}`,
+      `[PAYMENTS] ${gateway} payment completed appTransId=${appTransId} orderIds=[${orderIdList.join(",")}]`,
     );
     return updated;
   }
@@ -178,9 +222,19 @@ export class PaymentsService {
   async getPaymentUrl(
     orderId: number,
   ): Promise<{ orderUrl: string | null; status: string | null }> {
-    const payment = await this.paymentRepository.findOne({
+    let payment = await this.paymentRepository.findOne({
       where: { orderId },
     });
+    if (!payment) {
+      // Multi-order payments store order_id = NULL and the IDs in order_ids (JSONB)
+      payment = await this.paymentRepository
+        .createQueryBuilder("payment")
+        .where("payment.order_ids @> CAST(:ids AS jsonb)", {
+          ids: JSON.stringify([orderId]),
+        })
+        .orderBy("payment.created_at", "DESC")
+        .getOne();
+    }
     return {
       orderUrl: payment?.orderUrl ?? null,
       status: payment?.status ?? null,
