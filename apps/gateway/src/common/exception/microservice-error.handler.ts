@@ -17,6 +17,13 @@ export class MicroserviceErrorHandler {
     operation: string,
     serviceName: string = "Microservice",
   ): never {
+    if (error == null) {
+      this.logger.error(
+        `${serviceName} ${operation} failed: TCP call completed without emitting a value (undefined error)`,
+      );
+      throw new HttpException("Service unavailable", HttpStatus.BAD_GATEWAY);
+    }
+
     const errorSummary =
       error instanceof Error
         ? `${error.constructor.name}: ${error.message}`

@@ -1,10 +1,14 @@
-import { Injectable, Inject, Logger } from "@nestjs/common";
+import { ForbiddenException, Injectable, Inject, Logger } from "@nestjs/common";
 import { ClientProxy } from "@nestjs/microservices";
 import { firstValueFrom, timeout, catchError, of } from "rxjs";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
 import { INVENTORY_MESSAGE_PATTERNS } from "libs/constant/message-pattern-inventory.constant";
-import { USER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
+import {
+  ORDER_MESSAGE_PATTERN,
+  USER_MESSAGE_PATTERN,
+} from "libs/constant/message-pattern.constant";
+import { CreateReviewDto } from "./dto/review.dto";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
 import {
   CreateProductDto,
@@ -82,6 +86,11 @@ type UserData = {
   avatar?: string;
 };
 
+type SkuOwnershipData = {
+  id: number;
+  productId: number;
+};
+
 @Injectable()
 export class ProductService {
   private readonly logger = new Logger(ProductService.name);
@@ -92,6 +101,8 @@ export class ProductService {
     private readonly inventoryClient: ClientProxy,
     @Inject(NAME_SERVICE_TCP.USER_SERVICE)
     private readonly userClient: ClientProxy,
+    @Inject(NAME_SERVICE_TCP.ORDERS_SERVICE)
+    private readonly ordersClient: ClientProxy,
   ) {}
 
   // ============================================================================
@@ -269,7 +280,13 @@ export class ProductService {
     }
   }
 
-  async updateProduct(id: number, dto: UpdateProductDto): Promise<unknown> {
+  async updateProduct(
+    id: number,
+    dto: UpdateProductDto,
+    callerId: number,
+    callerRole: string,
+  ): Promise<unknown> {
+    await this.assertProductMutationAccess(id, callerId, callerRole);
     try {
       return (await firstValueFrom(
         this.productClient
@@ -293,7 +310,12 @@ export class ProductService {
     }
   }
 
-  async deleteProduct(id: number): Promise<unknown> {
+  async deleteProduct(
+    id: number,
+    callerId: number,
+    callerRole: string,
+  ): Promise<unknown> {
+    await this.assertProductMutationAccess(id, callerId, callerRole);
     try {
       return (await firstValueFrom(
         this.productClient
@@ -335,7 +357,13 @@ export class ProductService {
     }
   }
 
-  async addSku(productId: number, dto: CreateSkuGatewayDto): Promise<unknown> {
+  async addSku(
+    productId: number,
+    dto: CreateSkuGatewayDto,
+    callerId: number,
+    callerRole: string,
+  ): Promise<unknown> {
+    await this.assertProductMutationAccess(productId, callerId, callerRole);
     try {
       return (await firstValueFrom(
         this.productClient
@@ -359,7 +387,15 @@ export class ProductService {
     }
   }
 
-  async updateSku(skuId: number, dto: UpdateSkuGatewayDto): Promise<unknown> {
+  async updateSku(
+    productId: number,
+    skuId: number,
+    dto: UpdateSkuGatewayDto,
+    callerId: number,
+    callerRole: string,
+  ): Promise<unknown> {
+    await this.assertProductMutationAccess(productId, callerId, callerRole);
+    await this.assertSkuBelongsToProduct(skuId, productId);
     try {
       return (await firstValueFrom(
         this.productClient
@@ -380,7 +416,14 @@ export class ProductService {
     }
   }
 
-  async deleteSku(skuId: number): Promise<unknown> {
+  async deleteSku(
+    productId: number,
+    skuId: number,
+    callerId: number,
+    callerRole: string,
+  ): Promise<unknown> {
+    await this.assertProductMutationAccess(productId, callerId, callerRole);
+    await this.assertSkuBelongsToProduct(skuId, productId);
     try {
       return (await firstValueFrom(
         this.productClient
@@ -392,6 +435,62 @@ export class ProductService {
       MicroserviceErrorHandler.handleError(
         error,
         `delete SKU ID: ${skuId}`,
+        "Product Service",
+      );
+    }
+  }
+
+  private async assertProductMutationAccess(
+    productId: number,
+    callerId: number,
+    callerRole: string,
+  ): Promise<void> {
+    if (callerRole === "admin") {
+      return;
+    }
+
+    const product = await this.fetchProductForAccess(productId);
+    if (Number(product.userId) !== callerId) {
+      throw new ForbiddenException("You cannot modify another user's product");
+    }
+  }
+
+  private async assertSkuBelongsToProduct(
+    skuId: number,
+    productId: number,
+  ): Promise<void> {
+    try {
+      const sku = (await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.SKU_FIND_BY_ID, skuId)
+          .pipe(timeout(10000)),
+      )) as SkuOwnershipData;
+      if (Number(sku.productId) !== productId) {
+        throw new ForbiddenException("SKU does not belong to this product");
+      }
+    } catch (error) {
+      if (error instanceof ForbiddenException) {
+        throw error;
+      }
+      MicroserviceErrorHandler.handleError(
+        error,
+        `verify SKU ID: ${skuId}`,
+        "Product Service",
+      );
+    }
+  }
+
+  private async fetchProductForAccess(productId: number): Promise<ProductData> {
+    try {
+      return (await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_ID, productId)
+          .pipe(timeout(10000)),
+      )) as ProductData;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        `verify product ID: ${productId}`,
         "Product Service",
       );
     }
@@ -772,6 +871,83 @@ export class ProductService {
         error,
       );
       throw error;
+    }
+  }
+
+  // ============================================================================
+  // REVIEW OPERATIONS
+  // ============================================================================
+
+  async createProductReview(
+    productId: number,
+    userId: number,
+    dto: CreateReviewDto,
+  ): Promise<unknown> {
+    try {
+      await firstValueFrom(
+        this.ordersClient
+          .send(ORDER_MESSAGE_PATTERN.VERIFY_PRODUCT_PURCHASED, {
+            userId,
+            productId,
+          })
+          .pipe(timeout(10000)),
+      );
+      return (await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.REVIEW_CREATE, {
+            userId,
+            productId,
+            rating: dto.rating,
+            comment: dto.comment,
+          })
+          .pipe(timeout(10000)),
+      )) as unknown;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        `create review for product ID: ${productId}`,
+        "Product Service",
+      );
+    }
+  }
+
+  async deleteProductReview(reviewId: number, userId: number): Promise<void> {
+    try {
+      await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.REVIEW_DELETE, { reviewId, userId })
+          .pipe(timeout(10000)),
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        `delete review ID: ${reviewId}`,
+        "Product Service",
+      );
+    }
+  }
+
+  async getProductReviews(
+    productId: number,
+    page: number,
+    limit: number,
+  ): Promise<unknown> {
+    try {
+      return (await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.REVIEW_FIND_BY_PRODUCT, {
+            productId,
+            page,
+            limit,
+          })
+          .pipe(timeout(10000)),
+      )) as unknown;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        `get reviews for product ID: ${productId}`,
+        "Product Service",
+      );
     }
   }
 

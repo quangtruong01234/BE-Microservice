@@ -1,7 +1,6 @@
 import { Module } from "@nestjs/common";
 import { ClientsModule, Transport } from "@nestjs/microservices";
 import { GatewayController } from "./gateway.controller";
-import { GatewayService } from "./gateway.service";
 import { InventoryModule } from "./inventory/inventory.module";
 import { UserModule } from "./user/user.module";
 import { OrderModule } from "./order/order.module";
@@ -109,7 +108,6 @@ import { RoleAuthGuard } from "./common/guards/role-auth.guard";
   ],
   controllers: [GatewayController],
   providers: [
-    GatewayService,
     {
       provide: APP_GUARD,
       useClass: CustomRateLimitGuard,

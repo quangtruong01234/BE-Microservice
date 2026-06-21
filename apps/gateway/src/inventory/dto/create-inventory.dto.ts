@@ -1,4 +1,4 @@
-import { ApiProperty } from "@nestjs/swagger";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { IsInt, IsOptional, IsString, Min, IsNotEmpty } from "class-validator";
 
 export class CreateInventoryDto {
@@ -10,6 +10,17 @@ export class CreateInventoryDto {
   @IsInt()
   @IsNotEmpty()
   productId: number;
+
+  @ApiPropertyOptional({
+    description:
+      "Product SKU ID — set when this inventory row tracks a specific SKU variant",
+    example: 6,
+    type: "integer",
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  productSkuId?: number;
 
   @ApiProperty({
     description: "Product SKU",

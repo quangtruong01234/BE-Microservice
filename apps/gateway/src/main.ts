@@ -1,4 +1,5 @@
 import { NestFactory } from "@nestjs/core";
+import { MicroserviceOptions, Transport } from "@nestjs/microservices";
 import { GatewayModule } from "./gateway.module";
 import * as dotenv from "dotenv";
 import * as cookieParser from "cookie-parser";
@@ -6,6 +7,9 @@ import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import { HttpExceptionFilter } from "./common/filters/http-exception.filter";
 import { ResponseInterceptor } from "./common/interceptor/response.interceptor";
 import { RequestMethod, ValidationPipe } from "@nestjs/common";
+import { EXCHANGE } from "@app/common/constants/exchange";
+import { QUEUES } from "@app/common/constants/queues";
+
 async function bootstrap() {
   dotenv.config({ path: "./local/nodeA/.env" });
   const app = await NestFactory.create(GatewayModule);
@@ -43,6 +47,25 @@ async function bootstrap() {
     .build();
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup("doc", app, document);
+
+  // RabbitMQ consumer: receive notification push events from notification service
+  if (process.env.RABBITMQ_HOST) {
+    const vhost = encodeURIComponent(process.env.RABBITMQ_VHOST ?? "/");
+    const rmqUrl = `amqp://${process.env.RABBITMQ_USER}:${process.env.RABBITMQ_PASS}@${process.env.RABBITMQ_HOST}:${process.env.RABBITMQ_PORT}/${vhost}`;
+    app.connectMicroservice<MicroserviceOptions>({
+      transport: Transport.RMQ,
+      options: {
+        urls: [rmqUrl],
+        queue: QUEUES.NOTIFICATION_GATEWAY_PUSH_QUEUE,
+        noAck: true,
+        persistent: true,
+        queueOptions: { durable: true },
+        exchange: EXCHANGE.NOTIFICATION_PUSH_EXCHANGE,
+        exchangeType: "fanout",
+      },
+    });
+    await app.startAllMicroservices();
+  }
 
   const port = process.env.GATEWAY_PORT || 3000;
   await app.listen(port);

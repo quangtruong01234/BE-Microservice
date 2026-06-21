@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  ParseIntPipe,
   Patch,
   Post,
   Query,
@@ -21,7 +22,9 @@ import {
   ApiBearerAuth,
 } from "@nestjs/swagger";
 import { CreateOrderDto } from "./dto/create-order.dto";
+import { ShippingFeeDto } from "./dto/shipping-fee.dto";
 import { GetOrdersByUserQueryDto } from "./dto/get-orders-query.dto";
+import { SellerOrdersQueryDto } from "./dto/seller-orders-query.dto";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { CheckPermission } from "../common/decorators/check-permission.decorator";
 
@@ -63,6 +66,24 @@ export class OrderController {
     return await this.orderService.createOrder(userId, dto);
   }
 
+  @Post("shipping-fee")
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({
+    summary: "Calculate GHN shipping fee for an address (requires auth cookie)",
+  })
+  @ApiBody({ type: ShippingFeeDto })
+  @ApiResponse({
+    status: 201,
+    description: "Shipping fee and expected delivery time.",
+  })
+  @ApiResponse({ status: 400, description: "Invalid payload." })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  async calculateShippingFee(
+    @Body(ValidationPipe) dto: ShippingFeeDto,
+  ): Promise<unknown> {
+    return this.orderService.calculateShippingFee(dto);
+  }
+
   @Get(":id/invoice")
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: "Download PDF invoice for an order (owner only)" })
@@ -82,6 +103,22 @@ export class OrderController {
       `attachment; filename="invoice-${id}.pdf"`,
     );
     res.end(pdfBuffer);
+  }
+
+  @Get("seller")
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: "Get orders for the logged-in seller" })
+  @ApiResponse({
+    status: 200,
+    description: "Paginated orders containing seller products.",
+  })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  async getSellerOrders(
+    @Query(ValidationPipe) query: SellerOrdersQueryDto,
+    @Req() req: Request,
+  ): Promise<unknown> {
+    const sellerId = req.user?.id ?? 0;
+    return this.orderService.getSellerOrders(sellerId, query);
   }
 
   @Get(":id")
@@ -107,14 +144,20 @@ export class OrderController {
     description: "Paginated order list with total count.",
   })
   @ApiResponse({ status: 400, description: "Invalid query parameters." })
+  @ApiResponse({ status: 403, description: "Forbidden — not this user." })
   async getOrderByUser(
     @Param("id") id: string,
     @Query(ValidationPipe) query: GetOrdersByUserQueryDto,
+    @Req() req: Request,
   ): Promise<unknown> {
+    const callerId = req.user?.id ?? 0;
+    const callerRole = req.user?.role ?? "user";
     return await this.orderService.getOrderByUser(
       id,
       query.page ?? 1,
       query.limit ?? 10,
+      callerId,
+      callerRole,
     );
   }
 
@@ -143,9 +186,51 @@ export class OrderController {
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: "Get ZaloPay payment URL for an order" })
   @ApiResponse({ status: 200, description: "Payment URL and status." })
+  @ApiResponse({ status: 403, description: "Forbidden — not the order owner." })
   async getPaymentUrl(
     @Param("id") id: string,
+    @Req() req: Request,
   ): Promise<{ orderUrl: string | null; status: string | null }> {
-    return await this.orderService.getPaymentUrl(+id);
+    const callerId = req.user?.id ?? 0;
+    const callerRole = req.user?.role ?? "user";
+    return await this.orderService.getPaymentUrl(+id, callerId, callerRole);
+  }
+
+  @Patch(":id/confirm")
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: "Confirm an order (seller only)" })
+  @ApiResponse({ status: 200, description: "Order confirmed successfully." })
+  @ApiResponse({ status: 400, description: "Order is not in PENDING status." })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  @ApiResponse({ status: 403, description: "Forbidden — not the seller." })
+  @ApiResponse({ status: 404, description: "Order not found." })
+  async confirmOrder(
+    @Param("id", ParseIntPipe) id: number,
+    @Req() req: Request,
+  ): Promise<unknown> {
+    const sellerId = req.user?.id ?? 0;
+    return this.orderService.confirmOrder(id, sellerId);
+  }
+
+  @Patch(":id/ready-to-ship")
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: "Mark an order as ready-to-ship (seller only)" })
+  @ApiResponse({
+    status: 200,
+    description: "Order marked as processing/ready-to-ship.",
+  })
+  @ApiResponse({
+    status: 400,
+    description: "Order is not in CONFIRMED status.",
+  })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  @ApiResponse({ status: 403, description: "Forbidden — not the seller." })
+  @ApiResponse({ status: 404, description: "Order not found." })
+  async readyToShip(
+    @Param("id", ParseIntPipe) id: number,
+    @Req() req: Request,
+  ): Promise<unknown> {
+    const sellerId = req.user?.id ?? 0;
+    return this.orderService.readyToShip(id, sellerId);
   }
 }

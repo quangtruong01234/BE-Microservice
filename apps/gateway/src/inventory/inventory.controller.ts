@@ -7,8 +7,10 @@ import {
   Body,
   Param,
   ParseIntPipe,
+  Req,
   ValidationPipe,
 } from "@nestjs/common";
+import { Request } from "express";
 import { ApiTags, ApiOperation, ApiResponse, ApiParam } from "@nestjs/swagger";
 import { InventoryService } from "./inventory.service";
 import { CreateInventoryDto } from "./dto/create-inventory.dto";
@@ -18,6 +20,8 @@ import {
   ReserveStockDto,
   ReleaseStockDto,
 } from "./dto/stock-operations.dto";
+import { Roles } from "../common/decorators/roles.decorator";
+import { Public } from "../common/decorators/public.decorator";
 
 @ApiTags("Inventory")
 @Controller("inventory")
@@ -35,11 +39,23 @@ export class InventoryController {
     status: 409,
     description: "Conflict - Product already has inventory.",
   })
-  async create(@Body(ValidationPipe) body: CreateInventoryDto) {
-    return this.inventoryService.create(body);
+  @ApiResponse({
+    status: 403,
+    description: "Forbidden - not the product owner.",
+  })
+  async create(
+    @Body(ValidationPipe) body: CreateInventoryDto,
+    @Req() req: Request,
+  ) {
+    return this.inventoryService.create(
+      body,
+      req.user?.id ?? 0,
+      req.user?.role ?? "user",
+    );
   }
 
   @Get()
+  @Public()
   @ApiOperation({ summary: "Get all inventory items" })
   @ApiResponse({
     status: 200,
@@ -50,6 +66,7 @@ export class InventoryController {
   }
 
   @Get("low-stock")
+  @Public()
   @ApiOperation({ summary: "Get items with low stock" })
   @ApiResponse({
     status: 200,
@@ -60,6 +77,7 @@ export class InventoryController {
   }
 
   @Get("product/:productId")
+  @Public()
   @ApiOperation({ summary: "Get inventory by product ID" })
   @ApiParam({ name: "productId", description: "Product ID", type: Number })
   @ApiResponse({
@@ -75,6 +93,7 @@ export class InventoryController {
   }
 
   @Get("sku/:sku")
+  @Public()
   @ApiOperation({ summary: "Get inventory by SKU" })
   @ApiParam({ name: "sku", description: "Product SKU", type: String })
   @ApiResponse({
@@ -90,6 +109,7 @@ export class InventoryController {
   }
 
   @Get(":id")
+  @Public()
   @ApiOperation({ summary: "Get inventory item by ID" })
   @ApiParam({ name: "id", description: "Inventory ID", type: Number })
   @ApiResponse({
@@ -102,6 +122,7 @@ export class InventoryController {
   }
 
   @Post("check-stock")
+  @Public()
   @ApiOperation({ summary: "Check stock availability" })
   @ApiResponse({
     status: 200,
@@ -109,25 +130,41 @@ export class InventoryController {
   })
   @ApiResponse({ status: 404, description: "Product not found." })
   async checkStock(@Body(ValidationPipe) body: CheckStockDto) {
-    return this.inventoryService.checkStock(body.productId, body.quantity);
+    return this.inventoryService.checkStock(
+      body.productId,
+      body.quantity,
+      body.skuId,
+    );
   }
 
   @Post("reserve-stock")
+  @Roles("admin")
   @ApiOperation({ summary: "Reserve stock for an order" })
   @ApiResponse({ status: 200, description: "Stock reserved successfully." })
   @ApiResponse({ status: 400, description: "Insufficient stock." })
   @ApiResponse({ status: 404, description: "Product not found." })
+  @ApiResponse({ status: 403, description: "Forbidden - admin only." })
   async reserveStock(@Body(ValidationPipe) body: ReserveStockDto) {
-    return this.inventoryService.reserveStock(body.productId, body.quantity);
+    return this.inventoryService.reserveStock(
+      body.productId,
+      body.quantity,
+      body.skuId,
+    );
   }
 
   @Post("release-stock")
+  @Roles("admin")
   @ApiOperation({ summary: "Release reserved stock" })
   @ApiResponse({ status: 200, description: "Stock released successfully." })
   @ApiResponse({ status: 400, description: "Invalid release request." })
   @ApiResponse({ status: 404, description: "Product not found." })
+  @ApiResponse({ status: 403, description: "Forbidden - admin only." })
   async releaseStock(@Body(ValidationPipe) body: ReleaseStockDto) {
-    return this.inventoryService.releaseStock(body.productId, body.quantity);
+    return this.inventoryService.releaseStock(
+      body.productId,
+      body.quantity,
+      body.skuId,
+    );
   }
 
   @Put(":id")
@@ -139,11 +176,21 @@ export class InventoryController {
     description: "Bad Request - Invalid input data.",
   })
   @ApiResponse({ status: 404, description: "Inventory not found." })
+  @ApiResponse({
+    status: 403,
+    description: "Forbidden - not the product owner.",
+  })
   async update(
     @Param("id", ParseIntPipe) id: number,
     @Body(ValidationPipe) body: UpdateInventoryDto,
+    @Req() req: Request,
   ) {
-    return this.inventoryService.update(id, body);
+    return this.inventoryService.update(
+      id,
+      body,
+      req.user?.id ?? 0,
+      req.user?.role ?? "user",
+    );
   }
 
   @Delete(":id")
@@ -151,7 +198,15 @@ export class InventoryController {
   @ApiParam({ name: "id", description: "Inventory ID", type: Number })
   @ApiResponse({ status: 200, description: "Inventory deleted successfully." })
   @ApiResponse({ status: 404, description: "Inventory not found." })
-  async remove(@Param("id", ParseIntPipe) id: number) {
-    return this.inventoryService.remove(id);
+  @ApiResponse({
+    status: 403,
+    description: "Forbidden - not the product owner.",
+  })
+  async remove(@Param("id", ParseIntPipe) id: number, @Req() req: Request) {
+    return this.inventoryService.remove(
+      id,
+      req.user?.id ?? 0,
+      req.user?.role ?? "user",
+    );
   }
 }

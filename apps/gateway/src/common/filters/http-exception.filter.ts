@@ -21,13 +21,6 @@ export class HttpExceptionFilter implements ExceptionFilter {
     let message: string | string[] = "Internal server error";
     let error: string = "UnknownError";
 
-    // Log the raw exception for debugging
-    this.logger.error(
-      `Raw exception caught: ${JSON.stringify(exception)}`,
-      exception instanceof Error ? exception.stack : undefined,
-      `${request.method} ${request.url}`,
-    );
-
     if (exception instanceof HttpException) {
       // Handle NestJS HTTP exceptions
       status = exception.getStatus();
@@ -85,6 +78,15 @@ export class HttpExceptionFilter implements ExceptionFilter {
       status = HttpStatus.INTERNAL_SERVER_ERROR;
       message = "Internal server error";
       error = "UnknownError";
+    }
+
+    // Log raw exception — warn for 4xx (expected), error for 5xx (unexpected)
+    if (status >= 500) {
+      this.logger.error(
+        `Raw exception caught: ${JSON.stringify(exception)}`,
+        exception instanceof Error ? exception.stack : undefined,
+        `${request.method} ${request.url}`,
+      );
     }
 
     // Ensure status is a valid HTTP status code

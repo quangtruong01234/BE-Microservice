@@ -19,6 +19,14 @@ import {
           port: PORT_TCP.INVENTORY_TCP_PORT,
         },
       },
+      {
+        name: NAME_SERVICE_TCP.PRODUCT_SERVICE,
+        transport: Transport.TCP,
+        options: {
+          host: TCP_HOST,
+          port: PORT_TCP.PRODUCT_TCP_PORT,
+        },
+      },
     ]),
   ],
   controllers: [InventoryController],

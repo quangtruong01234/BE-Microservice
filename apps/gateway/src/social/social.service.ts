@@ -104,7 +104,7 @@ export class SocialGatewayService {
       };
     } catch (error) {
       MicroserviceErrorHandler.handleError(
-        error,
+        error ?? new Error("TCP call completed without emitting a value"),
         "get posts",
         "Social Service",
       );

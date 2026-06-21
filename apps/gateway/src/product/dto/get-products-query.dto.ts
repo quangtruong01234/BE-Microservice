@@ -3,6 +3,7 @@ import {
   IsNumber,
   IsOptional,
   IsBoolean,
+  IsArray,
   Min,
 } from "class-validator";
 import { Type, Transform } from "class-transformer";
@@ -38,22 +39,26 @@ export class GetProductsQueryDto {
   search?: string;
 
   @ApiPropertyOptional({
-    description: "Filter by category ID",
-    example: 1,
+    description: "Filter by category IDs (multi-select)",
+    example: [1, 2],
+    type: [Number],
   })
   @IsOptional()
-  @IsNumber()
+  @IsArray()
+  @IsNumber({}, { each: true })
   @Type(() => Number)
-  categoryId?: number;
+  categoryIds?: number[];
 
   @ApiPropertyOptional({
-    description: "Filter by brand ID",
-    example: 1,
+    description: "Filter by brand IDs (multi-select)",
+    example: [1, 2],
+    type: [Number],
   })
   @IsOptional()
-  @IsNumber()
+  @IsArray()
+  @IsNumber({}, { each: true })
   @Type(() => Number)
-  brandId?: number;
+  brandIds?: number[];
 
   @ApiPropertyOptional({
     description: "Minimum price filter",
@@ -151,4 +156,21 @@ export class GetProductsQueryDto {
   @Type(() => Number)
   @Min(0)
   maxRating?: number;
+
+  @ApiPropertyOptional({
+    description: "Filter by creator user ID",
+    example: 5,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  userId?: number;
+
+  @ApiPropertyOptional({
+    description: "Search by SKU value across product variants",
+    example: "SKU-001",
+  })
+  @IsOptional()
+  @IsString()
+  skuSearch?: string;
 }

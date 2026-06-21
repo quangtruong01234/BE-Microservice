@@ -18,7 +18,7 @@ import { UploadService } from "./upload.service";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 
 class GetSignatureQueryDto {
-  @ApiProperty({ example: "trybuy/posts" })
+  @ApiProperty({ example: "trybuy/products" })
   @IsString()
   @IsNotEmpty()
   declare folder: string;
@@ -46,11 +46,11 @@ export class UploadController {
   @ApiOperation({ summary: "Get Cloudinary signed upload params" })
   getSignature(
     @Query() query: GetSignatureQueryDto,
-    @Req() req: { user: { userId: number } },
+    @Req() req: { user: { id: number } },
   ): ReturnType<UploadService["generateSignature"]> {
     return this.uploadService.generateSignature(
       query.folder,
-      req.user.userId,
+      req.user.id,
       query.publicId,
     );
   }

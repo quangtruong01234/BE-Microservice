@@ -16,7 +16,10 @@ import {
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
+import { PaymentMethod } from "@app/common";
 import { CreateOrderDto } from "./dto/create-order.dto";
+import { SellerOrdersQueryDto } from "./dto/seller-orders-query.dto";
+import { ShippingFeeDto } from "./dto/shipping-fee.dto";
 
 interface OrderResponse {
   id: number;
@@ -30,6 +33,7 @@ interface OrderResponse {
 
 interface ProductPriceResponse {
   id: number;
+  userId: number;
   price: number | null;
   isActive: boolean;
 }
@@ -40,6 +44,7 @@ interface SkuPriceResponse {
   price: number;
   stockQuantity: number;
   isActive: boolean;
+  tierIdx?: number[];
 }
 
 export abstract class BaseAggregatorService {
@@ -80,10 +85,13 @@ export class OrderService {
   ) {}
 
   async createOrder(userId: number, dto: CreateOrderDto): Promise<unknown> {
-    // Fetch authoritative prices from product service — prevents client price injection
+    // Fetch authoritative prices and sellerId from product service
     const enrichedItems = await Promise.all(
       dto.items.map(async (item) => {
         let price: number;
+        let tierIdx: number[] | undefined;
+        let sellerId: number;
+
         if (item.skuId) {
           const sku = await firstValueFrom(
             this.productClient
@@ -113,6 +121,24 @@ export class OrderService {
             );
           }
           price = Number(sku.price);
+          tierIdx = Array.isArray(sku.tierIdx) ? sku.tierIdx : undefined;
+
+          // Fetch product to get sellerId (sku response has productId but not userId)
+          const product = await firstValueFrom(
+            this.productClient
+              .send<ProductPriceResponse>(
+                PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_ID,
+                item.productId,
+              )
+              .pipe(timeout(10000)),
+          ).catch((err: unknown) =>
+            MicroserviceErrorHandler.handleError(
+              err,
+              `fetch product ${item.productId}`,
+              "Product Service",
+            ),
+          );
+          sellerId = Number(product.userId);
         } else {
           const product = await firstValueFrom(
             this.productClient
@@ -139,12 +165,58 @@ export class OrderService {
             );
           }
           price = Number(product.price);
+          sellerId = Number(product.userId);
         }
-        return { ...item, price, skuId: item.skuId ?? null };
+
+        return { ...item, price, skuId: item.skuId ?? null, tierIdx, sellerId };
       }),
     );
 
+    const uniqueSellerIds = new Set(enrichedItems.map((i) => i.sellerId));
+    const isMultiSeller = uniqueSellerIds.size > 1;
+
     try {
+      if (isMultiSeller) {
+        const orders = (await firstValueFrom(
+          this.ordersClient
+            .send(ORDER_MESSAGE_PATTERN.CREATE_MULTI_SELLER_ORDER, {
+              userId,
+              paymentMethod: dto.paymentMethod,
+              shippingAddress: dto.shippingAddress,
+              items: enrichedItems,
+            })
+            .pipe(
+              timeout(10000),
+              catchError((err: unknown) => {
+                throw err;
+              }),
+            ),
+        )) as OrderResponse[];
+
+        if (dto.paymentMethod === PaymentMethod.COD) {
+          return { orders, paymentUrl: null };
+        }
+
+        const orderIds = orders.map((o) => o.id);
+        const totalAmount = orders.reduce((sum, o) => sum + Number(o.total), 0);
+        const { paymentUrl } = (await firstValueFrom(
+          this.paymentsClient
+            .send(PAYMENT_MESSAGE_PATTERN.INITIATE_MULTI_ORDER_PAYMENT, {
+              orderIds,
+              totalAmount,
+              paymentMethod: dto.paymentMethod,
+            })
+            .pipe(
+              timeout(10000),
+              catchError((err: unknown) => {
+                throw err;
+              }),
+            ),
+        )) as { paymentUrl: string; transactionId: string; appTransId: string };
+
+        return { orders, paymentUrl };
+      }
+
       return (await firstValueFrom(
         this.ordersClient
           .send(ORDER_MESSAGE_PATTERN.CREATE_ORDER, {
@@ -164,6 +236,33 @@ export class OrderService {
       MicroserviceErrorHandler.handleError(
         error,
         "create order",
+        "Orders Service",
+      );
+    }
+  }
+
+  async calculateShippingFee(dto: ShippingFeeDto): Promise<{
+    shippingFee: number;
+    expectedDeliveryTime: string | null;
+  }> {
+    try {
+      return (await firstValueFrom(
+        this.ordersClient
+          .send(ORDER_MESSAGE_PATTERN.CALCULATE_SHIPPING_FEE, {
+            shippingAddress: dto.shippingAddress,
+            items: dto.items,
+          })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      )) as { shippingFee: number; expectedDeliveryTime: string | null };
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "calculate shipping fee",
         "Orders Service",
       );
     }
@@ -206,6 +305,8 @@ export class OrderService {
     userId: string,
     page: number,
     limit: number,
+    callerId: number,
+    callerRole: string,
   ): Promise<{
     data: unknown[];
     total: number;
@@ -219,6 +320,9 @@ export class OrderService {
         "get orders by user",
         "Orders Service",
       );
+    }
+    if (callerRole !== "admin" && uid !== callerId) {
+      throw new ForbiddenException("You cannot access another user's orders");
     }
     return (await firstValueFrom(
       this.ordersClient
@@ -298,7 +402,10 @@ export class OrderService {
 
   async getPaymentUrl(
     orderId: number,
+    callerId: number,
+    callerRole: string,
   ): Promise<{ orderUrl: string | null; status: string | null }> {
+    await this.getOrderById(String(orderId), callerId, callerRole);
     try {
       return (await firstValueFrom(
         this.paymentsClient
@@ -376,5 +483,76 @@ export class OrderService {
       page: result.page,
       limit: result.limit,
     };
+  }
+
+  async getSellerOrders(
+    sellerId: number,
+    query: SellerOrdersQueryDto,
+  ): Promise<unknown> {
+    try {
+      return await firstValueFrom(
+        this.ordersClient
+          .send(ORDER_MESSAGE_PATTERN.GET_ORDERS_BY_SELLER, {
+            sellerId,
+            page: query.page ?? 1,
+            limit: query.limit ?? 20,
+            status: query.status,
+          })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "get seller orders",
+        "Orders Service",
+      );
+    }
+  }
+
+  async confirmOrder(orderId: number, sellerId: number): Promise<unknown> {
+    try {
+      return await firstValueFrom(
+        this.ordersClient
+          .send(ORDER_MESSAGE_PATTERN.CONFIRM_ORDER, { orderId, sellerId })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "confirm order",
+        "Orders Service",
+      );
+    }
+  }
+
+  async readyToShip(orderId: number, sellerId: number): Promise<unknown> {
+    try {
+      return await firstValueFrom(
+        this.ordersClient
+          .send(ORDER_MESSAGE_PATTERN.READY_TO_SHIP, { orderId, sellerId })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "ready to ship",
+        "Orders Service",
+      );
+    }
   }
 }

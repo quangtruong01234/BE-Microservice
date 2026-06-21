@@ -7,6 +7,8 @@ import {
 } from "libs/constant/port-tcp.constant";
 import { NotificationController } from "./notification.controller";
 import { NotificationGatewayService } from "./notification.service";
+import { NotificationWsGateway } from "./notification.ws-gateway";
+import { NotificationPushController } from "./notification.push.controller";
 
 @Module({
   imports: [
@@ -21,7 +23,7 @@ import { NotificationGatewayService } from "./notification.service";
       },
     ]),
   ],
-  controllers: [NotificationController],
-  providers: [NotificationGatewayService],
+  controllers: [NotificationController, NotificationPushController],
+  providers: [NotificationGatewayService, NotificationWsGateway],
 })
 export class NotificationGatewayModule {}

@@ -10,6 +10,7 @@ import {
   CHECK_PERMISSION_KEY,
   PermissionMeta,
 } from "../decorators/check-permission.decorator";
+import { ROLES_KEY } from "../decorators/roles.decorator";
 import { ac } from "../../../../user/src/rbac/grants";
 
 interface RequestUser {
@@ -38,6 +39,18 @@ export class RoleAuthGuard implements CanActivate {
       return true;
     }
 
+    const requiredRoles = this.reflector.getAllAndOverride<string[]>(
+      ROLES_KEY,
+      [context.getHandler(), context.getClass()],
+    );
+
+    const request = context.switchToHttp().getRequest<RequestWithUser>();
+    const user = request.user;
+
+    if (requiredRoles?.length && !requiredRoles.includes(user?.role ?? "")) {
+      throw new ForbiddenException("Insufficient role");
+    }
+
     const permission = this.reflector.getAllAndOverride<PermissionMeta>(
       CHECK_PERMISSION_KEY,
       [context.getHandler(), context.getClass()],
@@ -47,9 +60,6 @@ export class RoleAuthGuard implements CanActivate {
     if (!permission) {
       return true;
     }
-
-    const request = context.switchToHttp().getRequest<RequestWithUser>();
-    const user = request.user;
 
     if (!user) {
       throw new ForbiddenException("User not authenticated");

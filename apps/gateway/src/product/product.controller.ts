@@ -25,6 +25,7 @@ import {
   ReviewCategoryDto,
 } from "./dto";
 import { CreateSkuGatewayDto, UpdateSkuGatewayDto } from "./dto/product.dto";
+import { CreateReviewDto } from "./dto/review.dto";
 import {
   ApiTags,
   ApiOperation,
@@ -73,6 +74,7 @@ export class ProductController {
   }
 
   @Get("search")
+  @Public()
   @ApiOperation({ summary: "Search products by keyword" })
   @ApiResponse({
     status: 200,
@@ -87,6 +89,7 @@ export class ProductController {
   }
 
   @Get("category/:categoryId")
+  @Public()
   @ApiOperation({ summary: "Get products by category" })
   @ApiParam({ name: "categoryId", description: "Category ID", type: Number })
   @ApiResponse({
@@ -102,6 +105,7 @@ export class ProductController {
   }
 
   @Get("brand/:brandId")
+  @Public()
   @ApiOperation({ summary: "Get products by brand" })
   @ApiParam({ name: "brandId", description: "Brand ID", type: Number })
   @ApiResponse({
@@ -117,6 +121,7 @@ export class ProductController {
   }
 
   @Get("sku/:sku")
+  @Public()
   @ApiOperation({ summary: "Get product by SKU" })
   @ApiParam({ name: "sku", description: "Product SKU", type: String })
   @ApiResponse({ status: 200, description: "Product retrieved successfully." })
@@ -253,6 +258,58 @@ export class ProductController {
   }
 
   // ============================================================================
+  // REVIEW ENDPOINTS
+  // ============================================================================
+
+  @Get(":id/reviews")
+  @Public()
+  @ApiOperation({ summary: "Get reviews for a product (paginated)" })
+  @ApiParam({ name: "id", description: "Product ID", type: Number })
+  @ApiQuery({ name: "page", required: false, type: Number })
+  @ApiQuery({ name: "limit", required: false, type: Number })
+  async getProductReviews(
+    @Param("id", ParseIntPipe) id: number,
+    @Query("page") page = 1,
+    @Query("limit") limit = 10,
+  ) {
+    return this.productService.getProductReviews(id, +page, +limit);
+  }
+
+  @Post(":id/reviews")
+  @ApiOperation({ summary: "Create a review for a purchased product" })
+  @ApiParam({ name: "id", description: "Product ID", type: Number })
+  @ApiBody({ type: CreateReviewDto })
+  @ApiResponse({ status: 201, description: "Review created successfully." })
+  @ApiResponse({
+    status: 403,
+    description: "Forbidden - product not in any completed order.",
+  })
+  @ApiResponse({ status: 409, description: "Conflict - already reviewed." })
+  async createProductReview(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: CreateReviewDto,
+    @Req() req: Request,
+  ) {
+    const userId = (req as unknown as { user: { id: number } }).user.id;
+    return this.productService.createProductReview(id, userId, dto);
+  }
+
+  @Delete("reviews/:reviewId")
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: "Delete a review (owner only)" })
+  @ApiParam({ name: "reviewId", description: "Review ID", type: Number })
+  @ApiResponse({ status: 204, description: "Review deleted successfully." })
+  @ApiResponse({ status: 403, description: "Forbidden - not your review." })
+  @ApiResponse({ status: 404, description: "Review not found." })
+  async deleteProductReview(
+    @Param("reviewId", ParseIntPipe) reviewId: number,
+    @Req() req: Request,
+  ) {
+    const userId = (req as unknown as { user: { id: number } }).user.id;
+    await this.productService.deleteProductReview(reviewId, userId);
+  }
+
+  // ============================================================================
   // SKU ENDPOINTS
   // ============================================================================
 
@@ -276,11 +333,21 @@ export class ProductController {
     description: "Bad Request - Invalid input data.",
   })
   @ApiResponse({ status: 404, description: "Product not found." })
+  @ApiResponse({
+    status: 403,
+    description: "Forbidden - not the product owner.",
+  })
   async addSku(
     @Param("id", ParseIntPipe) id: number,
     @Body() dto: CreateSkuGatewayDto,
+    @Req() req: Request,
   ) {
-    return await this.productService.addSku(id, dto);
+    return await this.productService.addSku(
+      id,
+      dto,
+      req.user?.id ?? 0,
+      req.user?.role ?? "user",
+    );
   }
 
   @Patch(":id/skus/:skuId")
@@ -294,12 +361,23 @@ export class ProductController {
     description: "Bad Request - Invalid input data.",
   })
   @ApiResponse({ status: 404, description: "SKU not found." })
+  @ApiResponse({
+    status: 403,
+    description: "Forbidden - not the product owner.",
+  })
   async updateSku(
-    @Param("id", ParseIntPipe) _id: number,
+    @Param("id", ParseIntPipe) id: number,
     @Param("skuId", ParseIntPipe) skuId: number,
     @Body() dto: UpdateSkuGatewayDto,
+    @Req() req: Request,
   ) {
-    return await this.productService.updateSku(skuId, dto);
+    return await this.productService.updateSku(
+      id,
+      skuId,
+      dto,
+      req.user?.id ?? 0,
+      req.user?.role ?? "user",
+    );
   }
 
   @Delete(":id/skus/:skuId")
@@ -309,14 +387,25 @@ export class ProductController {
   @ApiParam({ name: "skuId", description: "SKU ID", type: Number })
   @ApiResponse({ status: 204, description: "SKU deleted successfully." })
   @ApiResponse({ status: 404, description: "SKU not found." })
+  @ApiResponse({
+    status: 403,
+    description: "Forbidden - not the product owner.",
+  })
   async deleteSku(
-    @Param("id", ParseIntPipe) _id: number,
+    @Param("id", ParseIntPipe) id: number,
     @Param("skuId", ParseIntPipe) skuId: number,
+    @Req() req: Request,
   ) {
-    return await this.productService.deleteSku(skuId);
+    return await this.productService.deleteSku(
+      id,
+      skuId,
+      req.user?.id ?? 0,
+      req.user?.role ?? "user",
+    );
   }
 
   @Get(":id")
+  @Public()
   @ApiOperation({ summary: "Get product by ID" })
   @ApiParam({ name: "id", description: "Product ID", type: Number })
   @ApiResponse({ status: 200, description: "Product retrieved successfully." })
@@ -336,11 +425,21 @@ export class ProductController {
   })
   @ApiResponse({ status: 404, description: "Product not found." })
   @ApiResponse({ status: 409, description: "Conflict - SKU already exists." })
+  @ApiResponse({
+    status: 403,
+    description: "Forbidden - not the product owner.",
+  })
   async updateProduct(
     @Param("id", ParseIntPipe) id: number,
     @Body() dto: UpdateProductDto,
+    @Req() req: Request,
   ) {
-    return await this.productService.updateProduct(id, dto);
+    return await this.productService.updateProduct(
+      id,
+      dto,
+      req.user?.id ?? 0,
+      req.user?.role ?? "user",
+    );
   }
 
   @Delete(":id")
@@ -349,8 +448,19 @@ export class ProductController {
   @ApiParam({ name: "id", description: "Product ID", type: Number })
   @ApiResponse({ status: 204, description: "Product deleted successfully." })
   @ApiResponse({ status: 404, description: "Product not found." })
-  async deleteProduct(@Param("id", ParseIntPipe) id: number) {
-    return await this.productService.deleteProduct(id);
+  @ApiResponse({
+    status: 403,
+    description: "Forbidden - not the product owner.",
+  })
+  async deleteProduct(
+    @Param("id", ParseIntPipe) id: number,
+    @Req() req: Request,
+  ) {
+    return await this.productService.deleteProduct(
+      id,
+      req.user?.id ?? 0,
+      req.user?.role ?? "user",
+    );
   }
 
   // ============================================================================
@@ -358,6 +468,7 @@ export class ProductController {
   // ============================================================================
 
   @Get("with-inventory/all")
+  @Public()
   @ApiOperation({ summary: "Get all products with inventory information" })
   @ApiResponse({
     status: 200,
@@ -370,6 +481,7 @@ export class ProductController {
   }
 
   @Get(":id/with-inventory")
+  @Public()
   @ApiOperation({ summary: "Get product with inventory by product ID" })
   @ApiParam({ name: "id", description: "Product ID", type: Number })
   @ApiResponse({
@@ -382,6 +494,7 @@ export class ProductController {
   }
 
   @Post("with-inventory/multiple")
+  @Public()
   @ApiOperation({
     summary: "Get multiple products with inventory by product IDs",
   })
@@ -411,6 +524,7 @@ export class ProductController {
   }
 
   @Get(":id/stock-check")
+  @Public()
   @ApiOperation({ summary: "Check stock availability for a product" })
   @ApiParam({ name: "id", description: "Product ID", type: Number })
   @ApiQuery({

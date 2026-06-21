@@ -1,5 +1,5 @@
-import { ApiProperty } from "@nestjs/swagger";
-import { IsInt, Min, IsNotEmpty } from "class-validator";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { IsInt, Min, IsNotEmpty, IsOptional } from "class-validator";
 
 export class CheckStockDto {
   @ApiProperty({
@@ -10,6 +10,16 @@ export class CheckStockDto {
   @IsInt()
   @IsNotEmpty()
   productId: number;
+
+  @ApiPropertyOptional({
+    description: "Product SKU ID when checking variant stock",
+    example: 6,
+    type: "integer",
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  skuId?: number;
 
   @ApiProperty({
     description: "Quantity to check availability",
@@ -32,6 +42,16 @@ export class ReserveStockDto {
   @IsNotEmpty()
   productId: number;
 
+  @ApiPropertyOptional({
+    description: "Product SKU ID when reserving variant stock",
+    example: 6,
+    type: "integer",
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  skuId?: number;
+
   @ApiProperty({
     description: "Quantity to reserve",
     example: 3,
@@ -52,6 +72,16 @@ export class ReleaseStockDto {
   @IsInt()
   @IsNotEmpty()
   productId: number;
+
+  @ApiPropertyOptional({
+    description: "Product SKU ID when releasing variant stock",
+    example: 6,
+    type: "integer",
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  skuId?: number;
 
   @ApiProperty({
     description: "Quantity to release",

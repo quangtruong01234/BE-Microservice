@@ -1,11 +1,40 @@
-import { forwardRef, Module } from "@nestjs/common";
+import { Module } from "@nestjs/common";
+import { ClientsModule, Transport } from "@nestjs/microservices";
 import { OrderService } from "./order.service";
 import { OrderController } from "./order.controller";
 import { CachedModule } from "@app/cached";
-import { GatewayModule } from "../gateway.module";
+import {
+  NAME_SERVICE_TCP,
+  PORT_TCP,
+  TCP_HOST,
+} from "libs/constant/port-tcp.constant";
 
 @Module({
-  imports: [forwardRef(() => GatewayModule), CachedModule],
+  imports: [
+    ClientsModule.register([
+      {
+        name: NAME_SERVICE_TCP.ORDERS_SERVICE,
+        transport: Transport.TCP,
+        options: { host: TCP_HOST, port: PORT_TCP.ORDERS_TCP_PORT },
+      },
+      {
+        name: NAME_SERVICE_TCP.PAYMENT_SERVICE,
+        transport: Transport.TCP,
+        options: { host: TCP_HOST, port: PORT_TCP.PAYMENT_TCP_PORT },
+      },
+      {
+        name: NAME_SERVICE_TCP.USER_SERVICE,
+        transport: Transport.TCP,
+        options: { host: TCP_HOST, port: PORT_TCP.USER_TCP_PORT },
+      },
+      {
+        name: NAME_SERVICE_TCP.PRODUCT_SERVICE,
+        transport: Transport.TCP,
+        options: { host: TCP_HOST, port: PORT_TCP.PRODUCT_TCP_PORT },
+      },
+    ]),
+    CachedModule,
+  ],
   controllers: [OrderController],
   providers: [OrderService],
 })
