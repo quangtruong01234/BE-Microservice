@@ -32,6 +32,14 @@ export const PRODUCT_MESSAGE_PATTERNS = {
   SKU_FIND_BY_ID: "sku.findById",
   SKU_UPDATE: "sku.update",
   SKU_DELETE: "sku.delete",
+
+  // Seller patterns
+  GET_PRODUCT_IDS_BY_SELLER: "product.get_ids_by_seller",
+
+  // Review patterns
+  REVIEW_CREATE: "product.review.create",
+  REVIEW_DELETE: "product.review.delete",
+  REVIEW_FIND_BY_PRODUCT: "product.review.findByProduct",
 } as const;
 
 export type ProductMessagePattern =

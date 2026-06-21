@@ -32,17 +32,24 @@ export const PRODUCT_MESSAGE_PATTERN = {
 
 export const ORDER_MESSAGE_PATTERN = {
   CREATE_ORDER: "create_order",
+  CREATE_MULTI_SELLER_ORDER: "order.create_multi_seller",
   GET_ORDERS_BY_USER: "get_orders_by_user",
   GET_ORDER_BY_ID: "get_order_by_id",
   GET_ALL_ORDERS: "get_all_orders",
   CANCEL_ORDER: "cancel_order",
   GET_ORDER_INVOICE: "get_order_invoice",
   GHN_WEBHOOK: "handle_ghn_webhook",
+  VERIFY_PRODUCT_PURCHASED: "order.verify_product_purchased",
+  GET_ORDERS_BY_SELLER: "order.get_by_seller",
+  CONFIRM_ORDER: "order.confirm",
+  READY_TO_SHIP: "order.ready_to_ship",
+  CALCULATE_SHIPPING_FEE: "order.calculate_shipping_fee",
 };
 
 export const PAYMENT_MESSAGE_PATTERN = {
   GET_PAYMENT_URL: "get_payment_url",
   GET_PAYMENT_OPTIONS: "get_payment_options",
+  INITIATE_MULTI_ORDER_PAYMENT: "payment.initiate_multi_order",
 };
 
 export const NOTIFICATION_MESSAGE_PATTERN = {
