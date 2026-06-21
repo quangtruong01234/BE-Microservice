@@ -88,48 +88,56 @@ export class SocialService {
     >
   > {
     const { page, limit, viewerUserId } = payload;
-    const [posts, total] = await this.postRepository.findAndCount({
-      order: { createdAt: "DESC" },
-      skip: (page - 1) * limit,
-      take: limit,
-    });
-    const [counts, likedFlags, commentCounts] = await Promise.all([
-      Promise.all(
-        posts.map(async (post) => {
-          const cached = await this.cachedService.get(
-            `post:like_count:${post.id}`,
-          );
-          if (cached !== null) return parseInt(cached, 10);
-          const count = await this.postLikeRepository.count({
-            where: { postId: post.id },
-          });
-          await this.cachedService.set(
-            `post:like_count:${post.id}`,
-            count.toString(),
-          );
-          return count;
-        }),
-      ),
-      Promise.all(
-        posts.map((post) => this.resolveIsLiked(post.id, viewerUserId)),
-      ),
-      Promise.all(
-        posts.map((post) =>
-          this.commentRepository.count({ where: { postId: post.id } }),
+    try {
+      const [posts, total] = await this.postRepository.findAndCount({
+        order: { createdAt: "DESC" },
+        skip: (page - 1) * limit,
+        take: limit,
+      });
+      const [counts, likedFlags, commentCounts] = await Promise.all([
+        Promise.all(
+          posts.map(async (post) => {
+            const cached = await this.cachedService.get(
+              `post:like_count:${post.id}`,
+            );
+            if (cached !== null) return parseInt(cached, 10);
+            const count = await this.postLikeRepository.count({
+              where: { postId: post.id },
+            });
+            await this.cachedService.set(
+              `post:like_count:${post.id}`,
+              count.toString(),
+            );
+            return count;
+          }),
         ),
-      ),
-    ]);
-    return PaginatedResponse.of(
-      posts.map((post, i) => ({
-        ...post,
-        likeCount: counts[i] ?? 0,
-        isLiked: likedFlags[i] ?? false,
-        commentCount: commentCounts[i] ?? 0,
-      })),
-      total,
-      page,
-      limit,
-    );
+        Promise.all(
+          posts.map((post) => this.resolveIsLiked(post.id, viewerUserId)),
+        ),
+        Promise.all(
+          posts.map((post) =>
+            this.commentRepository.count({ where: { postId: post.id } }),
+          ),
+        ),
+      ]);
+      return PaginatedResponse.of(
+        posts.map((post, i) => ({
+          ...post,
+          likeCount: counts[i] ?? 0,
+          isLiked: likedFlags[i] ?? false,
+          commentCount: commentCounts[i] ?? 0,
+        })),
+        total,
+        page,
+        limit,
+      );
+    } catch (err) {
+      this.logger.error(
+        `getPosts failed — page=${page} limit=${limit} viewerUserId=${viewerUserId ?? "null"}: ${(err as Error).message}`,
+        (err as Error).stack,
+      );
+      throw err;
+    }
   }
 
   async getPostsByUser(payload: {
