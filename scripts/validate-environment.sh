@@ -111,13 +111,6 @@ else
     echo -e "${YELLOW}⚠️  Low memory available: ${available_memory}MB${NC}"
 fi
 
-# Network checks (if we can detect we're on EC2)
-if command -v curl >/dev/null 2>&1; then
-    check_requirement 0 "curl is available for health checks"
-else
-    check_requirement 1 "curl not available (install with: sudo apt install curl)"
-fi
-
 echo ""
 echo "=================================="
 if [ $ERRORS -eq 0 ]; then
@@ -126,7 +119,7 @@ if [ $ERRORS -eq 0 ]; then
     echo "Next steps:"
     echo "1. Run build script: ./scripts/build-nodeA.sh (or build-nodeB.sh)"
     echo "2. Start services: ./scripts/start-nodeA-prod.sh (or start-nodeB-prod.sh)"
-    echo "3. Verify health: ./scripts/health-check-nodeA.sh (or health-check-nodeB.sh)"
+    echo "3. Verify processes: pm2 list"
     exit 0
 else
     echo -e "${RED}❌ $ERRORS issues found. Please fix before deployment.${NC}"

@@ -123,7 +123,8 @@
     "moduleNameMapper": {
       "^@app/cached(|/.*)$": "<rootDir>/libs/cached/src/$1",
       "^@app/common(|/.*)$": "<rootDir>/libs/common/src/$1",
-      "^@app/database(|/.*)$": "<rootDir>/libs/database/src/$1"
+      "^@app/database(|/.*)$": "<rootDir>/libs/database/src/$1",
+      "^libs/(.*)$": "<rootDir>/libs/$1"
     }
   }
 }
