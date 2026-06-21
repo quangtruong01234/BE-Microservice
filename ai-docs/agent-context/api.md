@@ -15,13 +15,12 @@ Auth: HttpOnly cookie set on login. Protected routes require the cookie (sent au
 - GET /api/products/ and all GET product endpoints
 - GET /api/products/:id/skus
 - GET /api/inventory/ (read-only)
-- GET /api/gateway/health
 - GET /api/gateway/payment-result
 - GET /api/payment/options
 - GET /api/social/posts, GET /api/social/posts/:id, GET /api/social/posts/user/:userId
 - GET /api/social/posts/:id/comments, GET /api/social/comments/:id/replies
 - GET /api/social/users/:id/followers, GET /api/social/users/:id/following, GET /api/social/users/:id/feed
-- POST /api/ghn/webhook (GHN delivery callback, no /api prefix in gateway)
+- POST /ghn/webhook (GHN delivery callback, no `/api` prefix; requires `x-ghn-webhook-token` or `?token=` matching `GHN_WEBHOOK_SECRET`)
 
 **Cookie required (authenticated user):**
 - POST /api/products/, PATCH /api/products/:id, DELETE /api/products/:id
@@ -29,8 +28,7 @@ Auth: HttpOnly cookie set on login. Protected routes require the cookie (sent au
 - POST /api/order/, POST /api/order/shipping-fee, GET /api/order/:id, GET /api/order/user/:id, PATCH /api/order/:id/cancel, GET /api/order/:id/invoice
 - GET /api/order/:id/payment-url
 - GET /api/order/seller, PATCH /api/order/:id/confirm, PATCH /api/order/:id/ready-to-ship
-- POST /api/inventory/reserve-stock, POST /api/inventory/release-stock
-- POST /api/inventory/, PUT /api/inventory/:id, DELETE /api/inventory/:id
+- POST /api/inventory/, PUT /api/inventory/:id, DELETE /api/inventory/:id (product owner/admin)
 - GET /api/notifications, PATCH /api/notifications/:id/read
 - POST /api/cart, GET /api/cart, PATCH /api/cart/items/:id, DELETE /api/cart/items/:id, DELETE /api/cart
 - POST /api/social/posts, DELETE /api/social/posts/:id
@@ -49,6 +47,7 @@ Auth: HttpOnly cookie set on login. Protected routes require the cookie (sent au
 - PATCH /api/products/brands/:id/review
 - GET /api/products/categories/pending
 - PATCH /api/products/categories/:id/review
+- POST /api/inventory/reserve-stock, POST /api/inventory/release-stock
 
 > When adding a new endpoint: declare it in the correct zone here before implementing the guard.
 
@@ -101,14 +100,14 @@ Auth: HttpOnly cookie set on login. Protected routes require the cookie (sent au
 | GET | `/api/products/with-inventory/all` | — | All products with stock |
 | POST | `/api/products/with-inventory/multiple` | — | Multiple products with stock |
 | GET | `/api/products/:id` | — | Product by ID |
-| PATCH | `/api/products/:id` | Cookie | Update product |
-| DELETE | `/api/products/:id` | Cookie | Delete product |
+| PATCH | `/api/products/:id` | Owner/admin | Update product |
+| DELETE | `/api/products/:id` | Owner/admin | Delete product |
 | GET | `/api/products/:id/with-inventory` | — | Product + stock data |
 | GET | `/api/products/:id/stock-check` | — | Stock availability check |
 | GET | `/api/products/:id/skus` | — | Get SKUs for a product |
-| POST | `/api/products/:id/skus` | Cookie | Add a SKU to a product |
-| PATCH | `/api/products/:id/skus/:skuId` | Cookie | Update a SKU |
-| DELETE | `/api/products/:id/skus/:skuId` | Cookie | Delete a SKU (204) |
+| POST | `/api/products/:id/skus` | Owner/admin | Add a SKU to a product |
+| PATCH | `/api/products/:id/skus/:skuId` | Owner/admin | Update a SKU |
+| DELETE | `/api/products/:id/skus/:skuId` | Owner/admin | Delete a SKU (204) |
 
 ### Query Params for GET `/api/products/`
 ```
@@ -136,13 +135,13 @@ page, limit, categoryId, brandId, minPrice, maxPrice, search
 | POST | `/api/order/shipping-fee` | Cookie | Preview GHN shipping fee for an address — returns `{ shippingFee, expectedDeliveryTime }` |
 | GET | `/api/order/admin/orders` | Role: admin | All orders with buyer info (paginated) |
 | GET | `/api/order/seller` | Cookie | Paginated orders containing the logged-in seller's products (`?page&limit&status`) |
-| GET | `/api/order/user/:id` | Cookie | Get paginated orders by user ID |
+| GET | `/api/order/user/:id` | Owner/admin | Get paginated orders by user ID |
 | GET | `/api/order/:id` | Cookie | Get single order (owner or admin only) |
 | PATCH | `/api/order/:id/cancel` | Cookie | Cancel order (owner or admin, PENDING/PROCESSING → CANCELED) |
 | PATCH | `/api/order/:id/confirm` | Cookie | Confirm order — PENDING → CONFIRMED (seller only, ownership via order items) |
 | PATCH | `/api/order/:id/ready-to-ship` | Cookie | Mark ready-to-ship — CONFIRMED → PROCESSING, retries GHN if missing (seller only) |
 | GET | `/api/order/:id/invoice` | Cookie | Download PDF invoice |
-| GET | `/api/order/:id/payment-url` | Cookie | Get ZaloPay payment URL |
+| GET | `/api/order/:id/payment-url` | Owner/admin | Get payment URL and status |
 
 ### Create Order DTO
 ```typescript
@@ -181,17 +180,19 @@ page, limit, categoryId, brandId, minPrice, maxPrice, search
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/api/inventory/` | Cookie | Create inventory record |
+| POST | `/api/inventory/` | Owner/admin | Create inventory record |
 | GET | `/api/inventory/` | — | All inventory items |
 | GET | `/api/inventory/low-stock` | — | Items below minimum stock |
 | GET | `/api/inventory/product/:productId` | — | Inventory by product ID |
 | GET | `/api/inventory/sku/:sku` | — | Inventory by SKU |
 | GET | `/api/inventory/:id` | — | Inventory by ID |
 | POST | `/api/inventory/check-stock` | — | Check if stock is sufficient |
-| POST | `/api/inventory/reserve-stock` | Cookie | Reserve stock for an order |
-| POST | `/api/inventory/release-stock` | Cookie | Release reserved stock |
-| PUT | `/api/inventory/:id` | Cookie | Update inventory |
-| DELETE | `/api/inventory/:id` | Cookie | Delete inventory record |
+| POST | `/api/inventory/reserve-stock` | Admin | Reserve stock manually |
+| POST | `/api/inventory/release-stock` | Admin | Release reserved stock manually |
+| PUT | `/api/inventory/:id` | Owner/admin | Update inventory |
+| DELETE | `/api/inventory/:id` | Owner/admin | Delete inventory record |
+
+Stock check/reserve/release payloads accept optional `skuId` for SKU-scoped inventory; omit it for base-product inventory.
 
 ---
 
@@ -290,16 +291,107 @@ All chat endpoints require a valid JWT cookie. WebSocket on `gateway:3000/chat` 
 
 Cloudinary folders: `trybuy/products/`, `trybuy/posts/`
 
+### Create product with uploaded images
+
+Product images use a signed direct-upload flow; the API server does not proxy
+the image bytes.
+
+1. Log in as a shop account so Postman keeps the `access_token` cookie.
+2. Request upload parameters:
+
+```http
+POST /api/upload/signature?folder=trybuy/products
+```
+
+```json
+{
+  "statusCode": 201,
+  "data": {
+    "signature": "...",
+    "timestamp": 1710000000,
+    "api_key": "...",
+    "cloud_name": "...",
+    "folder": "trybuy/products",
+    "public_id": "20_generated-id"
+  }
+}
+```
+
+3. Send the image and all returned parameters to Cloudinary:
+
+```http
+POST https://api.cloudinary.com/v1_1/{cloud_name}/image/upload
+Content-Type: application/x-www-form-urlencoded
+```
+
+Required fields: `file`, `api_key`, `timestamp`, `signature`, `folder`, and
+`public_id` from the response's `data` object. Keep Cloudinary's returned
+`secure_url`.
+
+4. Create the product with one or more uploaded URLs:
+
+```json
+{
+  "name": "Example product",
+  "price": 100000,
+  "stockQuantity": 1,
+  "sku": "EXAMPLE-001",
+  "categoryIds": [1],
+  "imageUrls": [
+    "https://res.cloudinary.com/example/image/upload/v1/trybuy/products/20_generated-id.png"
+  ]
+}
+```
+
+The Postman collection `TryBuy Product Image Upload Flow` automates this
+sequence and verifies that the Cloudinary URL is persisted unchanged.
+
+### Full e-commerce Postman flow
+
+The personal collection `TryBuy Full E-commerce E2E` runs the deterministic
+COD lifecycle without manual input when paired with the personal environment
+`TryBuy Local Full E2E`:
+
+1. Verify public payment options.
+2. Log in as the shop account.
+3. Select an active category, sign and upload a generated image, and create a
+   uniquely named product.
+4. Locate the product inventory; if product creation did not provision it,
+   create the missing row, then set deterministic test stock.
+5. Log in as the buyer, clear stale cart state, add the generated product, and
+   verify the cart.
+6. Preview GHN shipping, create a COD order, and verify stock reservation.
+7. Cancel the order and verify stock release.
+8. Clear the cart, then delete generated inventory, product, and Cloudinary
+   media as the shop account.
+
+The canceled order remains as the transaction audit record. ZaloPay and VNPay
+redirect/callback flows are intentionally separate because they require an
+external sandbox interaction.
+
+### Successful e-commerce Postman flow
+
+The personal collection `TryBuy Full E-commerce Success E2E` uses the same
+`TryBuy Local Full E2E` environment and runs the successful COD lifecycle:
+
+1. Create the product image, product, and deterministic inventory fixture.
+2. Add the product to the buyer cart and create a COD order.
+3. Log in as the shop, confirm the order, and mark it ready to ship.
+4. Send an authenticated GHN `delivered` webhook using the environment's
+   secret webhook token.
+5. Verify the order is `completed` and reserved stock was consumed.
+6. Log back in as the buyer, create and list a verified-purchase review.
+7. Delete the generated review, cart, inventory, product, and Cloudinary
+   media. The completed order remains as the transaction audit record.
+
 ---
 
 ## Gateway / Webhook Endpoints
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| GET | `/api/gateway/health` | — | Health check — status of all services |
 | GET | `/api/gateway/payment-result` | — | Payment result redirect (ZaloPay/VNPay) |
-| POST | `/api/gateway/` | Cookie | Generic order creation (legacy) |
-| POST | `/ghn/webhook` | — | GHN delivery status callback (no /api prefix) |
+| POST | `/ghn/webhook` | Shared secret | GHN delivery status callback (no `/api` prefix); token via `x-ghn-webhook-token` or `?token=` |
 
 ---
 

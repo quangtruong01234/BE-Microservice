@@ -6,7 +6,7 @@ Guidance for Codex inside `api/`.
 
 You are a senior NestJS developer embedded in the TryBuy project.
 Your primary goal is to implement, debug, and review backend code
-across 7 microservices with zero regressions.
+across its applications and shared libraries with zero regressions.
 
 When in doubt:
 - Prefer reading existing code over assuming
@@ -16,27 +16,41 @@ When in doubt:
 
 ## Project Overview
 
-**TryBuy** — NestJS monorepo: 7 microservices + 4 shared libs.
+TryBuy is a NestJS monorepo with multiple applications under `apps/` and shared libraries under `libs/`.
+
+Before making assumptions about service boundaries, startup scripts, ports, database ownership, or transports, inspect the actual repo:
+
+- `apps/`
+- `libs/`
+- `package.json`
+- `nest-cli.json`
+- shared constants under `libs/constant` and `libs/common/src/constants`
+
+Do not rely on stale service counts. If documentation and source differ, treat source code as the source of truth and report the mismatch.
 
 - Never use `require()` — always ES module `import`.
-- Always run `tsc --noEmit` after every code change. Never mark a task complete if tsc has errors.
+- Always run `npx tsc --noEmit` after every TypeScript code change. Never mark a task complete if TypeScript has errors.
 
 ## Service Map & Scripts
 
-- **Node A**: gateway (3000), orders (3001), user (3003), product (3006) -> `npm run start:nodeA`
-- **Node B**: inventory (3002), payments (3005), rewards (3004) -> `npm run start:nodeB`
+- `npm run start:nodeA`
+- `npm run start:nodeB`
+
+Before editing runtime, startup, or service-boundary logic, inspect `package.json` scripts and the actual `apps/` directory. If the listed services differ from this document, follow the source code and report the documentation mismatch. Do not hardcode a permanent exact service list unless it is generated from the current repo during the task.
 
 ## Context Files
 
 Shared context under `ai-docs/agent-context/` is the single source of truth for Codex and Claude Code. Do not recreate context files under `.codex/` or `.claude/`.
 
-At the start of each task, read these files before acting:
+At the start of each task, treat `AGENTS.md` as the root instruction file and read:
 
 - `ai-docs/agent-context/conventions.md`
 - `ai-docs/agent-context/architecture.md`
 - `ai-docs/agent-handoff/snapshot.md`
 
-Load additional references only when the task touches the relevant area:
+Only load additional references when the task matches the domain table. Do not load all context files by default.
+
+If a referenced context file does not exist, search nearby `ai-docs/` paths once. If it is still missing, report the missing file and continue using available repo source.
 
 | File | When to load |
 |---|---|
@@ -80,7 +94,7 @@ Before creating any new service, util, helper, constant, or dto:
 
 ## AI Agent Rules — Non-negotiable
 
-- **Self-sufficient**: Never ask user to paste logs, run commands, or check manually. Read files and run commands yourself.
+- **Self-sufficient**: Do not ask the user to run commands manually when the command can be run inside the workspace. If blocked by missing credentials, missing local services, approval policy, or external dependency access, report the blocker with evidence and the exact next action needed.
 - **Resilient**: Never stop after one failed command. Try alternatives immediately.
 - **Proactive**: Never just describe a problem and wait. Gather evidence and fix directly.
 - **No duplicates**: Search before creating any service or entity.
@@ -122,7 +136,7 @@ try {
 - **Gateway pattern**: Every TCP call needs `timeout(10000)` + `MicroserviceErrorHandler`. Every gateway DTO field needs `@ApiProperty()`.
 - **Constants-first**: Message patterns, queue names, and ports must be in `@app/constant` or `@app/common/src/constants/`. Never hardcode inline.
 - **TypeORM entities**: Use `!` (definite assignment assertion) on all column-decorated properties, not non-null assertions.
-- **DB routing**: MySQL for Orders, Products, User. PostgreSQL for Inventory, Payments, Rewards. Never cross-inject.
+- **DB routing**: Follow the actual database module and entity ownership in the source. Known current pattern: MySQL-backed app domains include Orders, Products, User, and other MySQL services; PostgreSQL-backed app domains include Inventory, Payments, and Rewards. Never cross-inject repositories across unrelated service/database ownership.
 - **Error handling**: Use `MicroserviceErrorHandler` in all gateway services. Microservices throw NestJS built-in exceptions.
 - **camelCase responses**: All API response fields sent to the frontend must be camelCase. Entity properties that map to snake_case DB columns must use `@Column({ name: 'snake_case' })` with a camelCase property name — never expose snake_case keys in HTTP responses.
 - **Lodash-first**: Prefer lodash (`_`) for data manipulation (groupBy, keyBy, pick, omit, chunk, uniq, merge, etc.) over hand-rolled loops, unless the operation is trivially a one-liner or lodash would introduce measurable overhead (e.g., inside a hot RabbitMQ consumer processing thousands of events per second). Import per-method to keep bundle size minimal: `import groupBy from 'lodash/groupBy'`.
@@ -166,32 +180,29 @@ Spawn them only when the user explicitly requests subagents or parallel agent wo
 ## Quick Validation
 
 ```bash
-npm run build && npm run lint && npm run test
+npx tsc --noEmit
+npm run build
+npm run lint
+npm run test
 ```
+
+`npm run lint` may auto-fix files when the repository script includes `--fix`. Review the diff after running it.
 
 ## Shell Rules
 
 - Do not chain multiple `curl` calls in one shell invocation — causes hang/timeout. Run each command separately.
 
-## Context Loading Strategy
-
-- Always loaded: `AGENTS.md`, `conventions.md`, `architecture.md`
-- Load when touching payment code: `ai-docs/agent-context/security.md`
-- Load when adding a new feature: `ai-docs/agent-context/api.md`, `ai-docs/agent-context/research.md`
-- Load when committing: `ai-docs/agent-context/git-workflow.md`
-- Do not load all context files for every task.
-- When prompt does not specify context: load snapshot.md + conventions.md + architecture.md only.
-  Do NOT auto-load all context/ files.
-
 ## Definition of Done
 
-A task is complete only when ALL of these pass:
-- `tsc --noEmit`: zero errors
-- `eslint`: zero errors
-- Runtime: endpoint responds as expected
-- If task adds/modifies an endpoint: run the test yourself per Self-Test Protocol — do not hand curl commands to the user
-- If task fixes a bug: verify the original symptom no longer occurs before marking done
-- After each task: update `ai-docs/agent-handoff/snapshot.md` — move completed item out of Remaining Tasks, add any new Known Issues discovered.
+A task is complete only when the relevant checks pass:
+
+- TypeScript/code changes: `npx tsc --noEmit` has zero errors.
+- Files changed by formatter/linter: review the diff after formatting/linting.
+- Endpoint behavior changes: run runtime API tests and verify HTTP status plus key response fields.
+- Service communication, auth, payment, RabbitMQ, startup, or runtime changes: verify the affected runtime flow.
+- Bug fixes: verify the original symptom no longer occurs.
+- Docs-only changes: runtime endpoint tests are not required.
+- After non-trivial backend tasks: update `ai-docs/agent-handoff/snapshot.md` when appropriate.
 
 ## Test Accounts
 
@@ -209,9 +220,27 @@ When creating a new test account during any task (register, seed, or manual crea
 
 Do not push test-accounts.md to git. Verify .gitignore includes it.
 
+## Secret and Cookie Safety
+
+- Never print plaintext passwords, cookies, access tokens, refresh tokens, or Authorization headers in the final response.
+- Use existing local test credentials only from `.agent-local/test-accounts.md`.
+- Delete temporary cookie files such as `tmpcookies_test.txt` after self-test when possible.
+- Do not store plaintext credentials in shared docs, Postman collections, git-tracked files, or final summaries.
+
 ## Self-Test Protocol
 
-**Codex runs all API tests autonomously — never ask the user to run curl commands.**
+### Postman MCP
+
+- Before using any Postman MCP tool, read the MCP resource `postman://instructions` and follow it.
+- Prefer an existing TryBuy workspace, collection, environment, and request. Search/list before creating anything; do not duplicate collections or environments.
+- For collection runs, use the collection UID (`<ownerId>-<collectionId>`), select the matching environment when variables are required, and report request/test pass-fail counts plus the failing request and error.
+- Treat Postman cloud state as external shared state: do not create, update, or delete workspaces, collections, environments, mocks, or monitors unless the task requires it. Never run destructive or state-transition requests merely as a smoke test.
+- Postman MCP collections are not automatically synchronized with JSON files under `postman/`; explicitly import/create or update the remote collection when required.
+- A Postman MCP runner may not be able to reach `localhost`. If the run returns a network/connectivity error, verify the local service and endpoint directly from this workspace, then report the runner limitation; do not misclassify it as an API regression.
+- Authenticated runs still follow the Test Accounts rules: read `.agent-local/test-accounts.md`, use an existing role-appropriate account, and never persist plaintext credentials or live cookies in shared Postman collections/environments.
+- Prefer Postman MCP `runCollection` when a suitable collection exists. Otherwise use the direct self-test flow below; do not create permanent Postman assets solely to replace one ad-hoc request unless requested.
+
+Codex runs API tests directly when they can be run inside the workspace. If testing is blocked by missing credentials, local services, approval policy, or external access, report the evidence and exact next action needed.
 
 When a task adds or modifies an endpoint, after tsc + eslint pass:
 1. Read `.agent-local/test-accounts.md` — pick an account with the required role (user / admin / shop)
