@@ -1,9 +1,11 @@
-import { Injectable, Logger } from "@nestjs/common";
-import { PaginatedResponse } from "@app/common";
+import { Inject, Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
+import { Channel } from "amqplib";
+import { PaginatedResponse } from "@app/common";
+import { EXCHANGE } from "@app/common/constants/exchange";
+import { EVENT } from "@app/common/constants/event";
 import { Notification } from "./entities/notification.entity";
-import { NotificationWsGateway } from "./notification.ws-gateway";
 
 @Injectable()
 export class NotificationService {
@@ -12,13 +14,14 @@ export class NotificationService {
   constructor(
     @InjectRepository(Notification)
     private readonly notificationRepository: Repository<Notification>,
-    private readonly wsGateway: NotificationWsGateway,
+    @Inject(EXCHANGE.RMQ_PUBLISHER_CHANNEL)
+    private readonly fanoutChannel: Channel | null,
   ) {}
 
   async saveNotification(
     userId: number,
     type: string,
-    orderId: number,
+    orderId: number | null,
     message: string,
   ): Promise<void> {
     const notification = this.notificationRepository.create({
@@ -28,7 +31,30 @@ export class NotificationService {
       message,
     });
     const saved = await this.notificationRepository.save(notification);
-    this.wsGateway.sendToUser(userId, saved);
+
+    if (!this.fanoutChannel) {
+      this.logger.warn(
+        "[NOTIFICATION] fanoutChannel unavailable — WS push skipped",
+      );
+    } else {
+      try {
+        this.fanoutChannel.publish(
+          EXCHANGE.NOTIFICATION_PUSH_EXCHANGE,
+          "",
+          Buffer.from(
+            JSON.stringify({
+              pattern: EVENT.NOTIFY_USER_PUSH_EVENT,
+              data: { userId, notification: saved },
+            }),
+          ),
+        );
+      } catch (err) {
+        this.logger.warn(
+          `[NOTIFICATION] Failed to emit push event: ${String(err)}`,
+        );
+      }
+    }
+
     this.logger.log(
       `[NOTIFICATION] Saved type=${type} orderId=${orderId} userId=${userId}`,
     );

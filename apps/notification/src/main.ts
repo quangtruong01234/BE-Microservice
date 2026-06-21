@@ -45,10 +45,18 @@ async function bootstrap() {
     }),
   );
 
+  // RabbitMQ: consume product brand/category review events (fanout)
+  app.connectMicroservice(
+    rmqService.getOptionsTopic("NOTIFICATION_PRODUCT_SERVICE", false, {
+      name: EXCHANGE.PRODUCT_EXCHANGE,
+      type: "fanout",
+    }),
+  );
+
   await app.startAllMicroservices();
-  await app.listen(3010);
+  await app.init();
   console.log(
-    `Notification service running: TCP :${PORT_TCP.NOTIFICATION_TCP_PORT} + RMQ ${EXCHANGE.PAYMENTS_EXCHANGE} + ${EXCHANGE.ORDERS_EXCHANGE} + ${EXCHANGE.SOCIAL_EXCHANGE} + WS :3010`,
+    `Notification service running: TCP :${PORT_TCP.NOTIFICATION_TCP_PORT} + RMQ ${EXCHANGE.PAYMENTS_EXCHANGE} + ${EXCHANGE.ORDERS_EXCHANGE} + ${EXCHANGE.SOCIAL_EXCHANGE} + ${EXCHANGE.PRODUCT_EXCHANGE}`,
   );
 }
 void bootstrap();

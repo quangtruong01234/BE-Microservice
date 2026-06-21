@@ -19,7 +19,7 @@ import {
 
 interface OrderInfo {
   id: number;
-  user_id: number;
+  userId: number;
   total: number;
 }
 
@@ -53,7 +53,7 @@ export class NotificationController {
         throw new NotFoundException(`Order ${orderId} not found`);
       }
       await this.notificationService.saveNotification(
-        order.user_id,
+        order.userId,
         "payment_completed",
         orderId,
         `Đơn hàng #${orderId} đã thanh toán thành công`,
@@ -94,7 +94,7 @@ export class NotificationController {
         throw new NotFoundException(`Order ${orderId} not found`);
       }
       await this.notificationService.saveNotification(
-        order.user_id,
+        order.userId,
         "order_canceled",
         orderId,
         `Đơn hàng #${orderId} đã bị hủy`,
@@ -179,6 +179,88 @@ export class NotificationController {
         nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
       };
       channel.nack(context.getMessage(), false, true); // requeue: DB error
+    }
+  }
+
+  @EventPattern(EVENT.BRAND_REVIEWED_EVENT)
+  async handleBrandReviewed(
+    @Payload()
+    data: {
+      submittedBy: number;
+      brandId: number;
+      brandName: string;
+      action: "approve" | "reject";
+      note: string | null;
+    },
+    @Ctx() context: RmqContext,
+  ): Promise<void> {
+    const { submittedBy, brandName, action, note } = data;
+    if (submittedBy == null) {
+      this.rmqService.ack(context);
+      return;
+    }
+    this.logger.log(
+      `[NOTIFICATION] brand_reviewed received brand="${brandName}" action=${action} user=${submittedBy}`,
+    );
+    const message =
+      action === "approve"
+        ? `Your brand '${brandName}' has been approved.`
+        : `Your brand '${brandName}' was rejected.${note ? ` Reason: ${note}` : ""}`;
+    try {
+      await this.notificationService.saveNotification(
+        submittedBy,
+        action === "approve" ? "brand_approved" : "brand_rejected",
+        null,
+        message,
+      );
+      this.rmqService.ack(context);
+    } catch (err) {
+      this.logger.error(`[NOTIFICATION] handleBrandReviewed failed: ${err}`);
+      const channel = context.getChannelRef() as {
+        nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
+      };
+      channel.nack(context.getMessage(), false, true);
+    }
+  }
+
+  @EventPattern(EVENT.CATEGORY_REVIEWED_EVENT)
+  async handleCategoryReviewed(
+    @Payload()
+    data: {
+      submittedBy: number;
+      categoryId: number;
+      categoryName: string;
+      action: "approve" | "reject";
+      note: string | null;
+    },
+    @Ctx() context: RmqContext,
+  ): Promise<void> {
+    const { submittedBy, categoryName, action, note } = data;
+    if (submittedBy == null) {
+      this.rmqService.ack(context);
+      return;
+    }
+    this.logger.log(
+      `[NOTIFICATION] category_reviewed received category="${categoryName}" action=${action} user=${submittedBy}`,
+    );
+    const message =
+      action === "approve"
+        ? `Your category '${categoryName}' has been approved.`
+        : `Your category '${categoryName}' was rejected.${note ? ` Reason: ${note}` : ""}`;
+    try {
+      await this.notificationService.saveNotification(
+        submittedBy,
+        action === "approve" ? "category_approved" : "category_rejected",
+        null,
+        message,
+      );
+      this.rmqService.ack(context);
+    } catch (err) {
+      this.logger.error(`[NOTIFICATION] handleCategoryReviewed failed: ${err}`);
+      const channel = context.getChannelRef() as {
+        nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
+      };
+      channel.nack(context.getMessage(), false, true);
     }
   }
 

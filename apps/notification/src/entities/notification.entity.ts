@@ -16,8 +16,8 @@ export class Notification {
   @Column({ type: "varchar", length: 50, nullable: false })
   type!: string;
 
-  @Column({ name: "order_id", type: "bigint", nullable: false })
-  orderId!: number;
+  @Column({ name: "order_id", type: "bigint", nullable: true })
+  orderId!: number | null;
 
   @Column({ type: "varchar", length: 255, nullable: false })
   message!: string;
