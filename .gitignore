@@ -62,4 +62,5 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
 # Local test data
 test-accounts.md
-
+.agent-local/
+*.txt

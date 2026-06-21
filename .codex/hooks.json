@@ -7,7 +7,7 @@
             "type": "command",
             "command": "npx tsc --noEmit",
             "commandWindows": "npx tsc --noEmit",
-            "timeout": 30,
+            "timeout": 120,
             "statusMessage": "Running TypeScript validation"
           }
         ]
