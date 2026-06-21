@@ -4,6 +4,8 @@ import {
   Logger,
   NotFoundException,
   ConflictException,
+  ForbiddenException,
+  BadRequestException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { DataSource, In, Repository, SelectQueryBuilder } from "typeorm";
@@ -13,6 +15,7 @@ import { EXCHANGE } from "@app/common/constants/exchange";
 import { EVENT } from "@app/common/constants/event";
 import { CachedService } from "@app/cached";
 import { Product } from "./entity/product.entity";
+import { ProductReview } from "./entity/product-review.entity";
 import { ProductSku } from "./entity/product-sku.entity";
 import { Brand } from "./entity/brand.entity";
 import { Category } from "./entity/category.entity";
@@ -39,6 +42,8 @@ export class ProductService {
     private readonly brandRepository: Repository<Brand>,
     @InjectRepository(Category)
     private readonly categoryRepository: Repository<Category>,
+    @InjectRepository(ProductReview)
+    private readonly reviewRepository: Repository<ProductReview>,
     @InjectRepository(ProductSku)
     private readonly skuRepository: Repository<ProductSku>,
     private readonly dataSource: DataSource,
@@ -96,7 +101,15 @@ export class ProductService {
     productId: number,
     skuList: CreateProductSkuDto[],
   ): Promise<ProductSku[]> {
-    return this.dataSource.transaction(async (manager) => {
+    let deletedSkuIds: number[] = [];
+
+    const saved = await this.dataSource.transaction(async (manager) => {
+      const existing = await manager.find(ProductSku, {
+        where: { productId },
+        select: ["id"],
+      });
+      deletedSkuIds = existing.map((s) => s.id);
+
       await manager.delete(ProductSku, { productId });
       const entities = skuList.map((dto) =>
         manager.create(ProductSku, {
@@ -108,14 +121,47 @@ export class ProductService {
           isActive: dto.isActive ?? true,
         }),
       );
-      const saved = await manager.save(ProductSku, entities);
-      for (const sku of saved) {
+      const result = await manager.save(ProductSku, entities);
+      for (const sku of result) {
         if (typeof sku.tierIdx === "string") {
           sku.tierIdx = JSON.parse(sku.tierIdx) as number[];
         }
       }
-      return saved;
+      return result;
     });
+
+    if (!this.fanoutChannel) {
+      this.logger.warn(
+        "[PRODUCT] fanoutChannel unavailable — sku_upserted event skipped",
+      );
+    } else {
+      try {
+        this.fanoutChannel.publish(
+          EXCHANGE.PRODUCT_EXCHANGE,
+          "",
+          Buffer.from(
+            JSON.stringify({
+              pattern: EVENT.SKU_UPSERTED_EVENT,
+              data: {
+                productId,
+                skus: saved.map((s) => ({
+                  skuId: s.id,
+                  sku: s.sku,
+                  stockQuantity: s.stockQuantity,
+                })),
+                deletedSkuIds,
+              },
+            }),
+          ),
+        );
+      } catch (err) {
+        this.logger.warn(
+          `[PRODUCT] Failed to emit sku_upserted event: ${String(err)}`,
+        );
+      }
+    }
+
+    return saved;
   }
 
   async findSkusByProduct(productId: number): Promise<ProductSku[]> {
@@ -165,6 +211,12 @@ export class ProductService {
     if (categories.length !== categoryIds.length) {
       throw new NotFoundException("One or more categories not found");
     }
+    const inactiveCategories = categories.filter((c) => c.status !== "active");
+    if (inactiveCategories.length > 0) {
+      throw new BadRequestException(
+        `Categories not approved: ${inactiveCategories.map((c) => c.id).join(", ")}`,
+      );
+    }
 
     if (rest.brandId) {
       const brand = await this.brandRepository.findOne({
@@ -172,6 +224,9 @@ export class ProductService {
       });
       if (!brand) {
         throw new NotFoundException("Brand not found");
+      }
+      if (brand.status !== "active") {
+        throw new BadRequestException("Brand has not been approved");
       }
     }
 
@@ -213,8 +268,8 @@ export class ProductService {
       page = 1,
       limit = 10,
       search,
-      categoryId,
-      brandId,
+      categoryIds,
+      brandIds,
       minPrice,
       maxPrice,
       isActive,
@@ -225,6 +280,8 @@ export class ProductService {
       maxRating,
       sortBy = "id",
       sortOrder = "ASC",
+      userId,
+      skuSearch,
     } = query;
 
     const queryBuilder: SelectQueryBuilder<Product> = this.productRepository
@@ -239,12 +296,26 @@ export class ProductService {
       );
     }
 
-    if (categoryId) {
-      queryBuilder.andWhere("categories.id = :categoryId", { categoryId });
+    if (userId !== undefined) {
+      queryBuilder.andWhere("product.userId = :userId", { userId });
     }
 
-    if (brandId) {
-      queryBuilder.andWhere("product.brandId = :brandId", { brandId });
+    if (skuSearch) {
+      queryBuilder
+        .leftJoin("product.skus", "sku")
+        .andWhere("(product.sku LIKE :skuSearch OR sku.sku LIKE :skuSearch)", {
+          skuSearch: `%${skuSearch}%`,
+        });
+    }
+
+    if (categoryIds && categoryIds.length > 0) {
+      queryBuilder.andWhere("categories.id IN (:...categoryIds)", {
+        categoryIds,
+      });
+    }
+
+    if (brandIds && brandIds.length > 0) {
+      queryBuilder.andWhere("product.brandId IN (:...brandIds)", { brandIds });
     }
 
     if (minPrice !== undefined) {
@@ -329,6 +400,12 @@ export class ProductService {
   ): Promise<Product> {
     const product = await this.findProductById(id);
 
+    if (updateProductDto.isActive === true && product.approvalBlocked) {
+      throw new BadRequestException(
+        "Product is blocked pending brand/category approval",
+      );
+    }
+
     if (updateProductDto.sku && updateProductDto.sku !== product.sku) {
       const existingProduct = await this.productRepository.findOne({
         where: { sku: updateProductDto.sku },
@@ -345,6 +422,9 @@ export class ProductService {
       if (!brand) {
         throw new NotFoundException("Brand not found");
       }
+      if (brand.status !== "active") {
+        throw new BadRequestException("Brand has not been approved");
+      }
     }
 
     const { categoryIds, skuList, ...rest } = updateProductDto;
@@ -356,6 +436,14 @@ export class ProductService {
       });
       if (categories.length !== categoryIds.length) {
         throw new NotFoundException("One or more categories not found");
+      }
+      const inactiveCategories = categories.filter(
+        (c) => c.status !== "active",
+      );
+      if (inactiveCategories.length > 0) {
+        throw new BadRequestException(
+          `Categories not approved: ${inactiveCategories.map((c) => c.id).join(", ")}`,
+        );
       }
       product.categories = categories;
     }
@@ -378,11 +466,84 @@ export class ProductService {
   }
 
   async findProductsByCategory(categoryId: number, query: GetProductsQueryDto) {
-    return this.findAllProducts({ ...query, categoryId });
+    return this.findAllProducts({ ...query, categoryIds: [categoryId] });
   }
 
   async findProductsByBrand(brandId: number, query: GetProductsQueryDto) {
-    return this.findAllProducts({ ...query, brandId });
+    return this.findAllProducts({ ...query, brandIds: [brandId] });
+  }
+
+  // Review methods
+  private async recalculateProductRating(productId: number): Promise<void> {
+    const result = await this.reviewRepository
+      .createQueryBuilder("review")
+      .select("AVG(review.rating)", "avg")
+      .addSelect("COUNT(review.id)", "count")
+      .where("review.productId = :productId", { productId })
+      .getRawOne<{ avg: string | null; count: string }>();
+
+    await this.productRepository.update(productId, {
+      rating: Number(result?.avg ?? 0),
+      ratingCount: Number(result?.count ?? 0),
+    });
+  }
+
+  async createReview(dto: {
+    userId: number;
+    productId: number;
+    rating: number;
+    comment?: string;
+  }): Promise<ProductReview> {
+    await this.findProductById(dto.productId);
+
+    let review: ProductReview;
+    try {
+      review = await this.reviewRepository.save(
+        this.reviewRepository.create({
+          productId: dto.productId,
+          userId: dto.userId,
+          rating: dto.rating,
+          comment: dto.comment ?? null,
+        }),
+      );
+    } catch (err: unknown) {
+      const dbErr = err as { code?: string };
+      if (dbErr.code === "ER_DUP_ENTRY") {
+        throw new ConflictException("Already reviewed this product");
+      }
+      throw err;
+    }
+
+    await this.recalculateProductRating(dto.productId);
+    return review;
+  }
+
+  async deleteReview(reviewId: number, userId: number): Promise<void> {
+    const review = await this.reviewRepository.findOne({
+      where: { id: reviewId },
+    });
+    if (!review) {
+      throw new NotFoundException("Review not found");
+    }
+    if (review.userId !== userId) {
+      throw new ForbiddenException("Not your review");
+    }
+    await this.reviewRepository.remove(review);
+    await this.recalculateProductRating(review.productId);
+  }
+
+  async findReviewsByProduct(
+    productId: number,
+    page: number,
+    limit: number,
+  ): Promise<PaginatedResponse<ProductReview>> {
+    const [data, total] = await this.reviewRepository.findAndCount({
+      where: { productId },
+      order: { createdAt: "DESC" },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+    return PaginatedResponse.of(data, total, page, limit);
   }
 
   // Brand methods
@@ -433,6 +594,24 @@ export class ProductService {
       brand.reviewNote = note;
     }
     const saved = await this.brandRepository.save(brand);
+    if (saved.status === "rejected") {
+      const result = await this.productRepository.update(
+        { brandId: saved.id },
+        { approvalBlocked: true, isActive: false },
+      );
+      this.logger.log(
+        `Brand ${saved.id} rejected: blocked ${result.affected ?? 0} products`,
+      );
+    }
+    if (saved.status === "active") {
+      const result = await this.productRepository.update(
+        { brandId: saved.id },
+        { approvalBlocked: false },
+      );
+      this.logger.log(
+        `Brand ${saved.id} approved: unblocked ${result.affected ?? 0} products`,
+      );
+    }
     if (saved.submittedBy != null) {
       if (!this.fanoutChannel) {
         this.logger.warn(
@@ -514,6 +693,42 @@ export class ProductService {
       category.reviewNote = note;
     }
     const saved = await this.categoryRepository.save(category);
+    if (saved.status === "rejected") {
+      const affected = await this.productRepository
+        .createQueryBuilder("product")
+        .innerJoin("product.categories", "cat", "cat.id = :catId", {
+          catId: saved.id,
+        })
+        .select("product.id")
+        .getMany();
+      if (affected.length > 0) {
+        await this.productRepository.update(
+          { id: In(affected.map((p) => p.id)) },
+          { approvalBlocked: true, isActive: false },
+        );
+      }
+      this.logger.log(
+        `Category ${saved.id} rejected: blocked ${affected.length} products`,
+      );
+    }
+    if (saved.status === "active") {
+      const affected = await this.productRepository
+        .createQueryBuilder("product")
+        .innerJoin("product.categories", "cat", "cat.id = :catId", {
+          catId: saved.id,
+        })
+        .select("product.id")
+        .getMany();
+      if (affected.length > 0) {
+        await this.productRepository.update(
+          { id: In(affected.map((p) => p.id)) },
+          { approvalBlocked: false },
+        );
+      }
+      this.logger.log(
+        `Category ${saved.id} approved: unblocked ${affected.length} products`,
+      );
+    }
     if (saved.submittedBy != null) {
       if (!this.fanoutChannel) {
         this.logger.warn(
@@ -545,5 +760,13 @@ export class ProductService {
       }
     }
     return saved;
+  }
+
+  async getProductIdsBySeller(sellerId: number): Promise<number[]> {
+    const products = await this.productRepository.find({
+      select: ["id"],
+      where: { userId: sellerId, isActive: true },
+    });
+    return products.map((p) => p.id);
   }
 }

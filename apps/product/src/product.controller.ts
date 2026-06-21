@@ -12,7 +12,12 @@ import {
   RmqContext,
 } from "@nestjs/microservices";
 import { ProductService } from "./product.service";
-import { HttpToRpcExceptionFilter, RmqService } from "@app/common";
+import {
+  HttpToRpcExceptionFilter,
+  PaginatedResponse,
+  RmqService,
+} from "@app/common";
+import { ProductReview } from "./entity/product-review.entity";
 import { EVENT } from "@app/common/constants/event";
 import { CreateProductDto } from "./dto/create-product.dto";
 import { UpdateProductDto } from "./dto/update-product.dto";
@@ -78,6 +83,13 @@ export class ProductController {
   ) {
     const { categoryId, query } = data;
     return this.productService.findProductsByCategory(categoryId, query);
+  }
+
+  @MessagePattern(PRODUCT_MESSAGE_PATTERNS.GET_PRODUCT_IDS_BY_SELLER)
+  async handleGetProductIdsBySeller(
+    @Payload() sellerId: number,
+  ): Promise<number[]> {
+    return this.productService.getProductIdsBySeller(sellerId);
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_BRAND)
@@ -202,6 +214,42 @@ export class ProductController {
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.SKU_DELETE)
   async deleteSku(@Payload() id: number) {
     return this.productService.deleteSku(id);
+  }
+
+  // ============================================================================
+  // REVIEW MESSAGE PATTERNS
+  // ============================================================================
+
+  @MessagePattern(PRODUCT_MESSAGE_PATTERNS.REVIEW_CREATE)
+  async createReview(
+    @Payload()
+    data: {
+      userId: number;
+      productId: number;
+      rating: number;
+      comment?: string;
+    },
+  ): Promise<ProductReview> {
+    return this.productService.createReview(data);
+  }
+
+  @MessagePattern(PRODUCT_MESSAGE_PATTERNS.REVIEW_DELETE)
+  async deleteReview(
+    @Payload() data: { reviewId: number; userId: number },
+  ): Promise<null> {
+    await this.productService.deleteReview(data.reviewId, data.userId);
+    return null;
+  }
+
+  @MessagePattern(PRODUCT_MESSAGE_PATTERNS.REVIEW_FIND_BY_PRODUCT)
+  async findReviewsByProduct(
+    @Payload() data: { productId: number; page: number; limit: number },
+  ): Promise<PaginatedResponse<ProductReview>> {
+    return this.productService.findReviewsByProduct(
+      data.productId,
+      data.page,
+      data.limit,
+    );
   }
 
   // ============================================================================

@@ -27,13 +27,30 @@ export class Product {
   description?: string;
 
   @Index("idx_products_price")
-  @Column({ type: "decimal", precision: 12, scale: 2, nullable: true, default: null })
+  @Column({
+    type: "decimal",
+    precision: 12,
+    scale: 2,
+    nullable: true,
+    default: null,
+  })
   price!: number | null;
 
-  @Column({ type: "int", nullable: true, default: null, name: "stock_quantity" })
+  @Column({
+    type: "int",
+    nullable: true,
+    default: null,
+    name: "stock_quantity",
+  })
   stockQuantity!: number | null;
 
-  @Column({ type: "varchar", length: 100, unique: true, nullable: true, default: null })
+  @Column({
+    type: "varchar",
+    length: 100,
+    unique: true,
+    nullable: true,
+    default: null,
+  })
   sku!: string | null;
 
   @Index("idx_products_brand_id")
@@ -49,6 +66,9 @@ export class Product {
   @Index("idx_products_is_active")
   @Column({ type: "boolean", default: true, name: "is_active" })
   isActive!: boolean;
+
+  @Column({ name: "approval_blocked", default: false })
+  approvalBlocked!: boolean;
 
   // Social engagement metrics
   @Column({ type: "int", default: () => "0", name: "likes_count" })

@@ -1,4 +1,10 @@
-import { IsOptional, IsString, IsNumber, IsBoolean } from "class-validator";
+import {
+  IsOptional,
+  IsString,
+  IsNumber,
+  IsBoolean,
+  IsArray,
+} from "class-validator";
 import { Transform, Type } from "class-transformer";
 
 export class GetProductsQueryDto {
@@ -17,14 +23,16 @@ export class GetProductsQueryDto {
   search?: string;
 
   @IsOptional()
-  @IsNumber()
+  @IsArray()
+  @IsNumber({}, { each: true })
   @Type(() => Number)
-  categoryId?: number;
+  categoryIds?: number[];
 
   @IsOptional()
-  @IsNumber()
+  @IsArray()
+  @IsNumber({}, { each: true })
   @Type(() => Number)
-  brandId?: number;
+  brandIds?: number[];
 
   @IsOptional()
   @IsNumber()
@@ -73,4 +81,13 @@ export class GetProductsQueryDto {
   @IsNumber()
   @Type(() => Number)
   maxRating?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  userId?: number;
+
+  @IsOptional()
+  @IsString()
+  skuSearch?: string;
 }

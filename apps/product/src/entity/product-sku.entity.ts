@@ -23,7 +23,7 @@ export class ProductSku {
 
   @AfterLoad()
   parseTierIdx(): void {
-    if (typeof this.tierIdx === 'string') {
+    if (typeof this.tierIdx === "string") {
       this.tierIdx = JSON.parse(this.tierIdx) as number[];
     }
   }
