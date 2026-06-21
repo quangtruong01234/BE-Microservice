@@ -14,6 +14,8 @@ import { LoginUserDto } from "./dto/login-user.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
 import * as bcrypt from "bcryptjs";
 
+type SafeUser = Omit<User, "password">;
+
 @Injectable()
 export class UserService {
   private readonly logger = new Logger(UserService.name);
@@ -25,11 +27,24 @@ export class UserService {
     private readonly roleRepository: Repository<Role>,
   ) {}
 
-  async getAllUsers(): Promise<User[]> {
+  async getAllUsers(): Promise<SafeUser[]> {
     this.logger.log("Fetching all users");
-    return await this.userRepository.find();
+    const users = await this.userRepository.find({
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        name: true,
+        avatar: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+    return users.map((user) => this.toSafeUser(user));
   }
-  async register(dto: RegisterUserDto): Promise<User> {
+
+  async register(dto: RegisterUserDto): Promise<SafeUser> {
     this.logger.log(`Register user: ${dto.username}`);
     const defaultRole = await this.roleRepository.findOne({
       where: { rol_name: RoleName.USER, rol_status: RoleStatus.ACTIVE },
@@ -46,7 +61,8 @@ export class UserService {
       password: hashedPassword,
       role: defaultRole,
     });
-    return await this.userRepository.save(user);
+    const saved = await this.userRepository.save(user);
+    return this.toSafeUser(saved);
   }
 
   async login(dto: LoginUserDto): Promise<User> {
@@ -129,5 +145,11 @@ export class UserService {
   getServiceInfo(): string {
     this.logger.log("getServiceInfo called");
     return "User Service is up and running";
+  }
+
+  private toSafeUser(user: User): SafeUser {
+    const safeUser: Partial<User> = { ...user };
+    delete safeUser.password;
+    return safeUser as SafeUser;
   }
 }
