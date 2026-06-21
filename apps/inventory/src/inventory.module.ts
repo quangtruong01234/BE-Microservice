@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { Inventory } from "./inventory.entity";
+import { InventoryReservation } from "./inventory-reservation.entity";
 import { InventoryController } from "./inventory.controller";
 import { InventoryService } from "./inventory.service";
 import { PostgresDatabaseModule } from "@app/database";
@@ -14,7 +15,7 @@ import { RmqModule, RmqService } from "@app/common";
       envFilePath: "./local/nodeB/.env",
     }),
     PostgresDatabaseModule,
-    TypeOrmModule.forFeature([Inventory]),
+    TypeOrmModule.forFeature([Inventory, InventoryReservation]),
     RmqModule,
     RmqModule.registerDirectPublisher(),
   ],

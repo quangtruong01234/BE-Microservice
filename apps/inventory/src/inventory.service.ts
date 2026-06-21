@@ -9,11 +9,16 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, QueryFailedError } from "typeorm";
 import { Channel } from "amqplib";
 import { Inventory } from "./inventory.entity";
+import {
+  InventoryReservation,
+  InventoryReservationStatus,
+} from "./inventory-reservation.entity";
 import { EXCHANGE } from "@app/common/constants/exchange";
 import { EVENT } from "@app/common/constants/event";
 
 export interface CreateInventoryDto {
   productId: number;
+  productSkuId?: number;
   sku: string;
   availableStock: number;
   minimumStock?: number;
@@ -44,10 +49,16 @@ export class InventoryService {
     @InjectRepository(Inventory)
     private readonly inventoryRepository: Repository<Inventory>,
     @Inject(EXCHANGE.RMQ_PUBLISHER_CHANNEL)
-    private readonly fanoutChannel: Channel,
+    private readonly fanoutChannel: Channel | null,
   ) {}
 
   private emitStockChanged(productId: number, availableStock: number): void {
+    if (!this.fanoutChannel) {
+      this.logger.warn(
+        "Fanout channel unavailable — skipping stock changed emit",
+      );
+      return;
+    }
     const eventPayload = {
       data: { productId, availableStock },
       pattern: EVENT.INVENTORY_STOCK_CHANGED_EVENT,
@@ -133,6 +144,24 @@ export class InventoryService {
     });
   }
 
+  private async findByProductAndSkuOrNull(
+    productId: number,
+    skuId?: number,
+  ): Promise<Inventory | null> {
+    const qb = this.inventoryRepository
+      .createQueryBuilder("inventory")
+      .where("inventory.productId = :productId", { productId })
+      .andWhere("inventory.isActive = :isActive", { isActive: true });
+
+    if (skuId !== undefined) {
+      qb.andWhere("inventory.productSkuId = :skuId", { skuId });
+    } else {
+      qb.andWhere("inventory.productSkuId IS NULL");
+    }
+
+    return qb.getOne();
+  }
+
   async findBySku(sku: string): Promise<Inventory> {
     const result = await this.inventoryRepository.findOne({
       where: { sku, isActive: true },
@@ -177,8 +206,14 @@ export class InventoryService {
   async checkStock(
     productId: number,
     quantity: number,
+    skuId?: number,
   ): Promise<StockCheckResult> {
-    const inventory = await this.findByProductIdOrNull(productId);
+    // SKU-matrix products have one inventory row per SKU sharing the same productId —
+    // without the SKU filter, findOne would return an arbitrary variant's stock.
+    const inventory =
+      skuId !== undefined
+        ? await this.findByProductAndSkuOrNull(productId, skuId)
+        : await this.findByProductIdOrNull(productId);
 
     if (!inventory) {
       return {
@@ -199,8 +234,22 @@ export class InventoryService {
     };
   }
 
-  async reserveStock(productId: number, quantity: number): Promise<boolean> {
-    const result = await this.inventoryRepository
+  async reserveStock(
+    productId: number,
+    quantity: number,
+    skuId?: number,
+    reservationKey?: string,
+  ): Promise<boolean> {
+    if (reservationKey) {
+      return this.reserveStockWithLedger(
+        productId,
+        quantity,
+        reservationKey,
+        skuId,
+      );
+    }
+
+    const qb = this.inventoryRepository
       .createQueryBuilder()
       .update(Inventory)
       .set({
@@ -209,22 +258,44 @@ export class InventoryService {
       })
       .where("product_id = :productId", { productId })
       .andWhere("available_stock >= :quantity", { quantity })
-      .andWhere("is_active = true")
-      .execute();
+      .andWhere("is_active = true");
+
+    if (skuId !== undefined) {
+      qb.andWhere("product_sku_id = :skuId", { skuId });
+    } else {
+      qb.andWhere("product_sku_id IS NULL");
+    }
+
+    const result = await qb.execute();
 
     if (result.affected === 0) {
       return false;
     }
 
-    const updated = await this.findByProductIdOrNull(productId);
+    const updated = await this.findByProductAndSkuOrNull(productId, skuId);
     if (updated) {
       this.emitStockChanged(productId, updated.availableStock);
     }
     return true;
   }
 
-  async releaseStock(productId: number, quantity: number): Promise<boolean> {
-    const inventory = await this.findByProductIdOrNull(productId);
+  async releaseStock(
+    productId: number,
+    quantity: number,
+    skuId?: number,
+    reservationKey?: string,
+  ): Promise<boolean> {
+    if (reservationKey) {
+      return this.transitionReservation(
+        productId,
+        quantity,
+        reservationKey,
+        InventoryReservationStatus.RELEASED,
+        skuId,
+      );
+    }
+
+    const inventory = await this.findByProductAndSkuOrNull(productId, skuId);
 
     if (!inventory || inventory.reservedStock < quantity) {
       return false;
@@ -243,8 +314,20 @@ export class InventoryService {
   async consumeReservedStock(
     productId: number,
     quantity: number,
+    skuId?: number,
+    reservationKey?: string,
   ): Promise<boolean> {
-    const inventory = await this.findByProductIdOrNull(productId);
+    if (reservationKey) {
+      return this.transitionReservation(
+        productId,
+        quantity,
+        reservationKey,
+        InventoryReservationStatus.CONSUMED,
+        skuId,
+      );
+    }
+
+    const inventory = await this.findByProductAndSkuOrNull(productId, skuId);
 
     if (!inventory || inventory.reservedStock < quantity) {
       return false;
@@ -258,11 +341,167 @@ export class InventoryService {
     return true;
   }
 
+  private async reserveStockWithLedger(
+    productId: number,
+    quantity: number,
+    reservationKey: string,
+    skuId?: number,
+  ): Promise<boolean> {
+    let availableStock: number | null = null;
+    const reserved = await this.inventoryRepository.manager.transaction(
+      async (manager): Promise<boolean> => {
+        const inventory = await manager
+          .getRepository(Inventory)
+          .createQueryBuilder("inventory")
+          .setLock("pessimistic_write")
+          .where("inventory.productId = :productId", { productId })
+          .andWhere("inventory.isActive = true")
+          .andWhere(
+            skuId === undefined
+              ? "inventory.productSkuId IS NULL"
+              : "inventory.productSkuId = :skuId",
+            skuId === undefined ? {} : { skuId },
+          )
+          .getOne();
+
+        if (!inventory) return false;
+
+        const reservationRepository =
+          manager.getRepository(InventoryReservation);
+        const existing = await reservationRepository.findOne({
+          where: { reservationKey, inventoryId: inventory.id },
+        });
+        if (existing) {
+          return (
+            existing.quantity === quantity &&
+            existing.status === InventoryReservationStatus.RESERVED
+          );
+        }
+        if (inventory.availableStock < quantity) return false;
+
+        inventory.availableStock -= quantity;
+        inventory.reservedStock += quantity;
+        await manager.save(inventory);
+        await reservationRepository.save(
+          reservationRepository.create({
+            reservationKey,
+            inventoryId: inventory.id,
+            quantity,
+            status: InventoryReservationStatus.RESERVED,
+          }),
+        );
+        availableStock = inventory.availableStock;
+        return true;
+      },
+    );
+
+    if (reserved && availableStock !== null) {
+      this.emitStockChanged(productId, availableStock);
+    }
+    return reserved;
+  }
+
+  private async transitionReservation(
+    productId: number,
+    quantity: number,
+    reservationKey: string,
+    targetStatus: InventoryReservationStatus,
+    skuId?: number,
+  ): Promise<boolean> {
+    let availableStock: number | null = null;
+    const transitioned = await this.inventoryRepository.manager.transaction(
+      async (manager): Promise<boolean> => {
+        const inventory = await manager
+          .getRepository(Inventory)
+          .createQueryBuilder("inventory")
+          .setLock("pessimistic_write")
+          .where("inventory.productId = :productId", { productId })
+          .andWhere("inventory.isActive = true")
+          .andWhere(
+            skuId === undefined
+              ? "inventory.productSkuId IS NULL"
+              : "inventory.productSkuId = :skuId",
+            skuId === undefined ? {} : { skuId },
+          )
+          .getOne();
+        if (!inventory) return false;
+
+        const reservationRepository =
+          manager.getRepository(InventoryReservation);
+        const reservation = await reservationRepository.findOne({
+          where: { reservationKey, inventoryId: inventory.id },
+        });
+        if (!reservation || reservation.quantity !== quantity) return false;
+        if (reservation.status === targetStatus) return true;
+        if (reservation.status !== InventoryReservationStatus.RESERVED) {
+          return false;
+        }
+        if (inventory.reservedStock < quantity) return false;
+
+        inventory.reservedStock -= quantity;
+        if (targetStatus === InventoryReservationStatus.RELEASED) {
+          inventory.availableStock += quantity;
+        }
+        reservation.status = targetStatus;
+        await manager.save(inventory);
+        await reservationRepository.save(reservation);
+        availableStock = inventory.availableStock;
+        return true;
+      },
+    );
+
+    if (transitioned && availableStock !== null) {
+      this.emitStockChanged(productId, availableStock);
+    }
+    return transitioned;
+  }
+
   async getLowStockItems(): Promise<Inventory[]> {
     return await this.inventoryRepository
       .createQueryBuilder("inventory")
       .where("inventory.availableStock <= inventory.minimumStock")
       .andWhere("inventory.isActive = :isActive", { isActive: true })
       .getMany();
+  }
+
+  async createForSku(data: {
+    productId: number;
+    skuId: number;
+    sku: string | null;
+    stockQuantity: number;
+  }): Promise<void> {
+    const existing = await this.inventoryRepository.findOne({
+      where: { productId: data.productId, productSkuId: data.skuId },
+    });
+    if (existing) return;
+
+    const skuValue = `product-${data.productId}-sku-${data.skuId}`;
+    const inventory = this.inventoryRepository.create({
+      productId: data.productId,
+      productSkuId: data.skuId,
+      sku: skuValue,
+      availableStock: data.stockQuantity,
+      reservedStock: 0,
+      minimumStock: 0,
+      isActive: true,
+      location: "default",
+    });
+    await this.inventoryRepository.save(inventory);
+    this.logger.log(
+      `[INVENTORY] Created inventory for product ${data.productId} SKU ${data.skuId} (stock: ${data.stockQuantity})`,
+    );
+  }
+
+  async softDeleteSkus(deletedSkuIds: number[]): Promise<void> {
+    if (deletedSkuIds.length === 0) return;
+    await this.inventoryRepository
+      .createQueryBuilder()
+      .update(Inventory)
+      .set({ isActive: false })
+      .where("product_sku_id IN (:...deletedSkuIds)", { deletedSkuIds })
+      .execute();
+    this.logger.log(
+      `[INVENTORY] Soft-deleted inventory rows for SKU IDs: ${deletedSkuIds.join(", ")}`,
+    );
   }
 }

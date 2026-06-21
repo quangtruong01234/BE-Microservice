@@ -5,16 +5,21 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   Index,
+  Unique,
 } from "typeorm";
 
 @Entity("inventory_v2")
+@Unique(["productId", "productSkuId"])
 export class Inventory {
   @PrimaryGeneratedColumn("increment", { type: "bigint" })
   id!: number;
 
-  @Column({ type: "bigint", unique: true, name: "product_id", nullable: false })
+  @Column({ type: "bigint", name: "product_id", nullable: false })
   @Index("idx_inventory_product_id")
   productId!: number;
+
+  @Column({ type: "bigint", nullable: true, name: "product_sku_id" })
+  productSkuId!: number | null;
 
   @Column({ type: "varchar", length: 100, unique: true, nullable: false })
   @Index("idx_inventory_sku")
