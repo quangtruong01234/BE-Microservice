@@ -186,7 +186,7 @@ A task is complete only when ALL of these pass:
 - Runtime: endpoint responds as expected
 - If task adds/modifies an endpoint: run the test yourself per Self-Test Protocol — do not hand curl commands to the user
 - If task fixes a bug: verify the original symptom no longer occurs before marking done
-- After each task: update `ai-docs/agent-handoff/snapshot.md` — move completed item out of Remaining Tasks, add any new Known Issues discovered.
+- After each task: keep `ai-docs/agent-handoff/snapshot.md` LEAN — remove the finished item from Active Tasks and add any new Known Issues / ops facts. Append the completed-work summary to `ai-docs/agent-handoff/CHANGELOG.md` (not auto-loaded), NOT to snapshot.md. Never paste milestone/changelog history back into snapshot.md, and do not duplicate rules already in `ai-docs/agent-context/`.
 
 ## Test Accounts
 

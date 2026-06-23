@@ -202,7 +202,7 @@ A task is complete only when the relevant checks pass:
 - Service communication, auth, payment, RabbitMQ, startup, or runtime changes: verify the affected runtime flow.
 - Bug fixes: verify the original symptom no longer occurs.
 - Docs-only changes: runtime endpoint tests are not required.
-- After non-trivial backend tasks: update `ai-docs/agent-handoff/snapshot.md` when appropriate.
+- After non-trivial backend tasks: keep `ai-docs/agent-handoff/snapshot.md` LEAN (live state only — Active Tasks, Known Issues, ops facts). Append the completed-work summary to `ai-docs/agent-handoff/CHANGELOG.md` (not auto-loaded), never to snapshot.md, and do not duplicate rules already in `ai-docs/agent-context/`.
 
 ## Test Accounts
 
