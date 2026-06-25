@@ -203,14 +203,15 @@ A task is complete only when the relevant checks pass:
 - Bug fixes: verify the original symptom no longer occurs.
 - Docs-only changes: runtime endpoint tests are not required.
 - After non-trivial backend tasks: keep `ai-docs/agent-handoff/snapshot.md` LEAN (live state only — Active Tasks, Known Issues, ops facts). Append the completed-work summary to `ai-docs/agent-handoff/CHANGELOG.md` (not auto-loaded), never to snapshot.md, and do not duplicate rules already in `ai-docs/agent-context/`.
+- Frontend handoff: when an add/fix/update task is DONE, evaluate whether it has a frontend-facing consequence (new/changed endpoint, response field, status code, RabbitMQ/WS event, or a behavior the FE was mitigating client-side). If yes, first read `../frontend/.ai/agent-handoff/snapshot.md` to find the matching FE-waiting item (reuse its id), then append a contract-first entry (route, method, request/response shape, status codes) to `../.agent-local/frontend-handoff.md` under **Open**, using the template in that file. That file lives at the `MCR/` workspace root, outside both git repos — never commit it. Skip this step if the task has no FE impact.
 
 ## Test Accounts
 
-Stored in: `.agent-local/test-accounts.md`
+Stored in: `../.agent-local/test-accounts.md`
 
-**When running any API test (curl, Postman, manual verification): always read `.agent-local/test-accounts.md` first and use an existing account. Never hardcode credentials inline or invent test users.**
+**When running any API test (curl, Postman, manual verification): always read `../.agent-local/test-accounts.md` first and use an existing account. Never hardcode credentials inline or invent test users.**
 
-When creating a new test account during any task (register, seed, or manual creation), always append it to `.agent-local/test-accounts.md` immediately using this format:
+When creating a new test account during any task (register, seed, or manual creation), always append it to `../.agent-local/test-accounts.md` immediately using this format:
 
 ## <username>
 - Password: <password>
@@ -218,12 +219,12 @@ When creating a new test account during any task (register, seed, or manual crea
 - Role: <role>
 - Created: <date or task context>
 
-Do not push test-accounts.md to git. Verify .gitignore includes it.
+This file lives one level above the `api/` git repo (at the `MCR/` root), so it is outside version control by design — never copy it into the repo or commit credentials.
 
 ## Secret and Cookie Safety
 
 - Never print plaintext passwords, cookies, access tokens, refresh tokens, or Authorization headers in the final response.
-- Use existing local test credentials only from `.agent-local/test-accounts.md`.
+- Use existing local test credentials only from `../.agent-local/test-accounts.md`.
 - Delete temporary cookie files such as `tmpcookies_test.txt` after self-test when possible.
 - Do not store plaintext credentials in shared docs, Postman collections, git-tracked files, or final summaries.
 
@@ -237,13 +238,13 @@ Do not push test-accounts.md to git. Verify .gitignore includes it.
 - Treat Postman cloud state as external shared state: do not create, update, or delete workspaces, collections, environments, mocks, or monitors unless the task requires it. Never run destructive or state-transition requests merely as a smoke test.
 - Postman MCP collections are not automatically synchronized with JSON files under `postman/`; explicitly import/create or update the remote collection when required.
 - A Postman MCP runner may not be able to reach `localhost`. If the run returns a network/connectivity error, verify the local service and endpoint directly from this workspace, then report the runner limitation; do not misclassify it as an API regression.
-- Authenticated runs still follow the Test Accounts rules: read `.agent-local/test-accounts.md`, use an existing role-appropriate account, and never persist plaintext credentials or live cookies in shared Postman collections/environments.
+- Authenticated runs still follow the Test Accounts rules: read `../.agent-local/test-accounts.md`, use an existing role-appropriate account, and never persist plaintext credentials or live cookies in shared Postman collections/environments.
 - Prefer Postman MCP `runCollection` when a suitable collection exists. Otherwise use the direct self-test flow below; do not create permanent Postman assets solely to replace one ad-hoc request unless requested.
 
 Codex runs API tests directly when they can be run inside the workspace. If testing is blocked by missing credentials, local services, approval policy, or external access, report the evidence and exact next action needed.
 
 When a task adds or modifies an endpoint, after tsc + eslint pass:
-1. Read `.agent-local/test-accounts.md` — pick an account with the required role (user / admin / shop)
+1. Read `../.agent-local/test-accounts.md` — pick an account with the required role (user / admin / shop)
 2. Login via `POST /api/auth/login` with `-c tmpcookies_test.txt` to capture the cookie
 3. Run each test curl with `-b tmpcookies_test.txt`
 4. Assert the response: check HTTP status code and key fields in the JSON body

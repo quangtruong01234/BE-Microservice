@@ -187,14 +187,18 @@ A task is complete only when ALL of these pass:
 - If task adds/modifies an endpoint: run the test yourself per Self-Test Protocol — do not hand curl commands to the user
 - If task fixes a bug: verify the original symptom no longer occurs before marking done
 - After each task: keep `ai-docs/agent-handoff/snapshot.md` LEAN — remove the finished item from Active Tasks and add any new Known Issues / ops facts. Append the completed-work summary to `ai-docs/agent-handoff/CHANGELOG.md` (not auto-loaded), NOT to snapshot.md. Never paste milestone/changelog history back into snapshot.md, and do not duplicate rules already in `ai-docs/agent-context/`.
+- **Frontend handoff**: when an add/fix/update task is DONE, evaluate whether it has a frontend-facing consequence (new/changed endpoint, response field, status code, RabbitMQ/WS event, or a behavior the FE was mitigating client-side). If yes:
+  1. First read `../frontend/.ai/agent-handoff/snapshot.md` to find the matching FE-waiting item (e.g. `P1-06`, `P2-02`) so the note closes a real open thread and reuses its id.
+  2. Append a contract-first entry (route, method, request/response shape, status codes) to `../.agent-local/frontend-handoff.md` under **Open**, using the template in that file.
+  - This file lives at the `MCR/` workspace root, outside both git repos — never copy it into the repo or commit it. If the task has no FE impact, skip this step.
 
 ## Test Accounts
 
-Stored in: `.agent-local/test-accounts.md`
+Stored in: `../.agent-local/test-accounts.md`
 
-**When running any API test (curl, Postman, manual verification): always read `.agent-local/test-accounts.md` first and use an existing account. Never hardcode credentials inline or invent test users.**
+**When running any API test (curl, Postman, manual verification): always read `../.agent-local/test-accounts.md` first and use an existing account. Never hardcode credentials inline or invent test users.**
 
-When creating a new test account during any task (register, seed, or manual creation), always append it to `.agent-local/test-accounts.md` immediately using this format:
+When creating a new test account during any task (register, seed, or manual creation), always append it to `../.agent-local/test-accounts.md` immediately using this format:
 
 ## <username>
 - Password: <password>
@@ -202,14 +206,14 @@ When creating a new test account during any task (register, seed, or manual crea
 - Role: <role>
 - Created: <date or task context>
 
-Do not push test-accounts.md to git. Verify .gitignore includes it.
+This file lives one level above the `api/` git repo (at the `MCR/` root), so it is outside version control by design — never copy it into the repo or commit credentials.
 
 ## Self-Test Protocol
 
 **Claude runs all API tests autonomously — never ask the user to run curl commands.**
 
 When a task adds or modifies an endpoint, after tsc + eslint pass:
-1. Read `.agent-local/test-accounts.md` — pick an account with the required role (user / admin / shop)
+1. Read `../.agent-local/test-accounts.md` — pick an account with the required role (user / admin / shop)
 2. Login via `POST /api/auth/login` with `-c tmpcookies_test.txt` to capture the cookie
 3. Run each test curl with `-b tmpcookies_test.txt`
 4. Assert the response: check HTTP status code and key fields in the JSON body

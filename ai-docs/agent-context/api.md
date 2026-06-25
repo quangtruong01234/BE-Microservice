@@ -31,7 +31,8 @@ Auth: HttpOnly cookie set on login. Protected routes require the cookie (sent au
 - POST /api/inventory/, PUT /api/inventory/:id, DELETE /api/inventory/:id (product owner/admin)
 - GET /api/notifications, PATCH /api/notifications/:id/read
 - POST /api/cart, GET /api/cart, PATCH /api/cart/items/:id, DELETE /api/cart/items/:id, DELETE /api/cart
-- POST /api/social/posts, DELETE /api/social/posts/:id
+- POST /api/social/posts, PATCH /api/social/posts/:id, DELETE /api/social/posts/:id
+- POST /api/social/posts/:id/report
 - POST /api/social/posts/:id/like, DELETE /api/social/posts/:id/like
 - POST /api/social/posts/:id/comments, DELETE /api/social/comments/:id
 - POST /api/social/comments/:id/replies
@@ -113,6 +114,13 @@ Auth: HttpOnly cookie set on login. Protected routes require the cookie (sent au
 ```
 page, limit, categoryId, brandId, minPrice, maxPrice, search
 ```
+
+### Product read response — category shape
+Every product read path (list, by-id, by-sku, by-category, by-brand, search,
+with-inventory) returns BOTH the full hydrated `categories[]` (eager ManyToMany
+objects) AND a flat `categoryIds: number[]` derived from it. The gateway
+normalizes this uniformly (`attachCategoryIds` / `withCategoryIds`), so the FE
+multi-category editor gets the same shape on list and detail.
 
 ### Create/Update SKU DTO (`CreateSkuGatewayDto`)
 ```typescript
@@ -242,11 +250,13 @@ All cart endpoints require a valid JWT cookie.
 ### Posts
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/api/social/posts` | Cookie | Create a post |
+| POST | `/api/social/posts` | Cookie | Create a post (optional `productId` to attach a product) |
 | GET | `/api/social/posts` | — | Paginated posts (isLiked populated if cookie present) |
 | GET | `/api/social/posts/user/:userId` | — | Paginated posts by user |
 | GET | `/api/social/posts/:id` | — | Get post by ID |
+| PATCH | `/api/social/posts/:id` | Cookie | Edit a post (owner only; partial: content/imageUrls/videoUrl/productId) |
 | DELETE | `/api/social/posts/:id` | Cookie | Delete a post |
+| POST | `/api/social/posts/:id/report` | Cookie | Report a post (`reason`; one report per user per post) |
 | POST | `/api/social/posts/:id/like` | Cookie | Like a post |
 | DELETE | `/api/social/posts/:id/like` | Cookie | Unlike a post |
 
@@ -435,7 +445,8 @@ get_user_notifications, mark_notification_read
 
 ### Social Patterns (`SOCIAL_MESSAGE_PATTERN`)
 ```
-social_create_post, social_get_posts, social_get_posts_by_user, social_get_post_by_id,
+social_create_post, social_update_post, social_report_post,
+social_get_posts, social_get_posts_by_user, social_get_post_by_id,
 social_delete_post, social_like_post, social_unlike_post,
 social_create_comment, social_get_comments, social_delete_comment,
 social_create_reply, social_get_replies,
