@@ -101,6 +101,13 @@ export class OrdersController {
     );
   }
 
+  @MessagePattern(ORDER_MESSAGE_PATTERN.GET_ORDER_STATUS_COUNTS)
+  async getStatusCounts(
+    @Payload() userId: number,
+  ): Promise<Record<string, number>> {
+    return this.ordersService.getStatusCountsByUser(userId);
+  }
+
   @MessagePattern(ORDER_MESSAGE_PATTERN.GET_ALL_ORDERS)
   async getAllOrders(
     @Payload() payload: { page: number; limit: number },
@@ -197,6 +204,13 @@ export class OrdersController {
     );
   }
 
+  @MessagePattern(ORDER_MESSAGE_PATTERN.GET_REFERENCED_SKU_IDS)
+  async handleGetReferencedSkuIds(
+    @Payload() data: { skuIds: number[] },
+  ): Promise<number[]> {
+    return this.ordersService.findReferencedSkuIds(data.skuIds);
+  }
+
   @MessagePattern(ORDER_MESSAGE_PATTERN.CONFIRM_ORDER)
   async handleConfirmOrder(
     @Payload() data: { orderId: number; sellerId: number },
@@ -209,6 +223,35 @@ export class OrdersController {
     @Payload() data: { orderId: number; sellerId: number },
   ): Promise<Order> {
     return this.ordersService.readyToShip(data.orderId, data.sellerId);
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.GET_SELLER_ORDER_DETAIL)
+  async handleGetSellerOrderDetail(
+    @Payload() data: { orderId: number; sellerId: number; isAdmin: boolean },
+  ): Promise<Order> {
+    return this.ordersService.getSellerOrderDetail(
+      data.orderId,
+      data.sellerId,
+      data.isAdmin,
+    );
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.ADVANCE_ORDER_STATUS)
+  async handleAdvanceOrderStatus(
+    @Payload()
+    data: {
+      orderId: number;
+      sellerId: number;
+      isAdmin: boolean;
+      targetStatus: OrderStatus;
+    },
+  ): Promise<Order> {
+    return this.ordersService.advanceOrderStatus(
+      data.orderId,
+      data.sellerId,
+      data.isAdmin,
+      data.targetStatus,
+    );
   }
 
   @EventPattern(EVENT.PAYMENT_COMPLETED_EVENT)

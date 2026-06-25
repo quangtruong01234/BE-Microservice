@@ -1,19 +1,23 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Inject,
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { In, IsNull, Repository } from "typeorm";
+import { Cron, CronExpression } from "@nestjs/schedule";
+import { In, IsNull, LessThan, Repository } from "typeorm";
 import { Order, OrderStatus } from "./entity/order.entity";
 import { PaymentMethod, PaginatedResponse } from "@app/common";
 import { HttpService } from "@nestjs/axios";
 import { ClientProxy } from "@nestjs/microservices";
 import { catchError, firstValueFrom, throwError, timeout } from "rxjs";
 import { OrderItem } from "./entity/order_item.entity";
+import { CartItem } from "./entity/cart-item.entity";
 import { EVENT } from "@app/common/constants/event";
 import { EXCHANGE } from "@app/common/constants/exchange";
 import { INVENTORY_MESSAGE_PATTERNS } from "libs/constant/message-pattern-inventory.constant";
@@ -157,22 +161,19 @@ export class OrdersService {
       throw error;
     }
 
-    // Publish event to EVENT BUS via FANOUT exchange
-    const exchangeName = EXCHANGE.ORDERS_EXCHANGE;
     const routingKey = EVENT.ORDER_CREATED_EVENT;
-
-    const eventPayload = {
-      data: { ...order, paymentMethod: order.paymentMethod },
-      pattern: routingKey,
-    };
-
-    if (this.fanoutChannel) {
-      this.fanoutChannel.publish(
-        exchangeName,
-        routingKey,
-        Buffer.from(JSON.stringify(eventPayload)),
+    try {
+      this.publishOrderCreatedEvent(order);
+    } catch (error) {
+      this.logger.warn(
+        `[ORDERS] Failed to publish ${EVENT.ORDER_CREATED_EVENT} for order ${order.id}: ${String(error)}`,
       );
-    } else {
+      if (order.paymentMethod !== PaymentMethod.COD) {
+        await this.cancelOrderAfterPaymentInitializationFailure(order);
+        throw new ServiceUnavailableException(
+          "Payment initialization is temporarily unavailable",
+        );
+      }
       this.logger.warn(
         `[ORDERS] RMQ channel unavailable — ${routingKey} event not published for order ${order.id}`,
       );
@@ -414,10 +415,50 @@ export class OrdersService {
     }
   }
 
+  private publishOrderCreatedEvent(
+    order: Order,
+    extraData: Record<string, unknown> = {},
+  ): void {
+    if (!this.fanoutChannel) {
+      throw new ServiceUnavailableException("RabbitMQ publisher unavailable");
+    }
+
+    this.fanoutChannel.publish(
+      EXCHANGE.ORDERS_EXCHANGE,
+      EVENT.ORDER_CREATED_EVENT,
+      Buffer.from(
+        JSON.stringify({
+          pattern: EVENT.ORDER_CREATED_EVENT,
+          data: {
+            ...order,
+            paymentMethod: order.paymentMethod,
+            ...extraData,
+          },
+        }),
+      ),
+    );
+  }
+
+  private async cancelOrderAfterPaymentInitializationFailure(
+    order: Order,
+  ): Promise<void> {
+    await this.orderRepository.update(order.id, {
+      status: OrderStatus.CANCELED,
+    });
+    order.status = OrderStatus.CANCELED;
+    await this.releaseReservedItems(
+      order.items ?? [],
+      order.reservationKey,
+      true,
+    );
+  }
+
   private async releaseReservedItems(
     items: StockReservationItem[],
     reservationKey: string,
+    throwOnFailure = false,
   ): Promise<void> {
+    const failedProductIds: number[] = [];
     for (const item of [...items].reverse()) {
       try {
         const released = await firstValueFrom(
@@ -431,15 +472,22 @@ export class OrdersService {
             .pipe(timeout(5000)),
         );
         if (!released) {
+          failedProductIds.push(item.productId);
           this.logger.error(
             `[ORDERS] Failed to compensate reservation for product ${item.productId}`,
           );
         }
       } catch (error) {
+        failedProductIds.push(item.productId);
         this.logger.error(
           `[ORDERS] Reservation compensation failed for product ${item.productId}: ${String(error)}`,
         );
       }
+    }
+    if (throwOnFailure && failedProductIds.length > 0) {
+      throw new ServiceUnavailableException(
+        `Reservation compensation failed for products: ${failedProductIds.join(", ")}`,
+      );
     }
   }
 
@@ -511,6 +559,33 @@ export class OrdersService {
       take: limit,
     });
     return PaginatedResponse.of(data, total, page, limit);
+  }
+
+  /**
+   * Server-side order counts grouped by status for a single buyer. The FE tab
+   * badges need totals across the whole order history, not just the loaded page,
+   * so this aggregates with a single GROUP BY query (P1-02). Returns every
+   * `OrderStatus` key (zero-filled) plus an `all` total.
+   */
+  async getStatusCountsByUser(userId: number): Promise<Record<string, number>> {
+    const rows = await this.orderRepository
+      .createQueryBuilder("order")
+      .select("order.status", "status")
+      .addSelect("COUNT(*)", "count")
+      .where("order.userId = :userId", { userId })
+      .groupBy("order.status")
+      .getRawMany<{ status: string; count: string }>();
+
+    const counts: Record<string, number> = { all: 0 };
+    for (const status of Object.values(OrderStatus)) {
+      counts[status] = 0;
+    }
+    for (const row of rows) {
+      const count = Number(row.count);
+      counts[row.status] = count;
+      counts.all += count;
+    }
+    return counts;
   }
 
   async getAllOrders(
@@ -619,15 +694,30 @@ export class OrdersService {
       );
     }
 
-    await this.updateOrderStatus(orderId, OrderStatus.CANCELED);
+    await this.finalizeCancellation(order);
+
+    this.logger.log(`[ORDERS] Order ${orderId} canceled by user ${callerId}`);
+    return order;
+  }
+
+  /**
+   * Cancellation side effects shared by the user-facing cancel endpoint and the
+   * stale-reservation sweeper: flip the order to CANCELED, release reserved
+   * stock (idempotent via reservationKey), cancel any GHN shipping order, and
+   * publish the cancel event. Callers are responsible for status/permission
+   * checks before invoking this.
+   */
+  private async finalizeCancellation(order: Order): Promise<void> {
+    await this.updateOrderStatus(order.id, OrderStatus.CANCELED);
     order.status = OrderStatus.CANCELED;
+    await this.releaseReservedItems(order.items, order.reservationKey, true);
 
     // Push the cancel to GHN so the shipping order stops too (non-fatal)
     if (order.ghnOrderCode) {
       try {
         await this.ghnService.cancelShippingOrder(order.ghnOrderCode);
         this.logger.log(
-          `[ORDERS] GHN shipping order ${order.ghnOrderCode} canceled for order ${orderId}`,
+          `[ORDERS] GHN shipping order ${order.ghnOrderCode} canceled for order ${order.id}`,
         );
       } catch (err) {
         this.logger.error(
@@ -656,9 +746,82 @@ export class OrdersService {
         `[ORDERS] RMQ channel unavailable — ${EVENT.ORDER_CANCELED_EVENT} event not published for order ${order.id}`,
       );
     }
+  }
 
-    this.logger.log(`[ORDERS] Order ${orderId} canceled by user ${callerId}`);
-    return order;
+  /**
+   * Default window (hours) after which an order still holding reserved stock
+   * but with no GHN shipping code is considered abandoned/stuck and swept.
+   */
+  private readonly staleReservationTtlHours =
+    Number(process.env.ORDER_STALE_RESERVATION_TTL_HOURS) || 24;
+
+  private isSweepingStaleReservations = false;
+
+  /**
+   * Reclaims stock leaked by orders that can never reach GHN "delivered":
+   * online-payment orders abandoned before payment, COD orders a seller never
+   * confirmed, and orders whose GHN creation failed (ghn_order_code stays
+   * null). Orders already handed to GHN (ghn_order_code set) are never swept —
+   * their terminal state is driven by the delivery webhook. Reuses the
+   * idempotent cancel flow so a swept order releases its reservation exactly
+   * once.
+   */
+  @Cron(CronExpression.EVERY_HOUR)
+  async sweepStaleReservations(): Promise<void> {
+    if (this.isSweepingStaleReservations) {
+      this.logger.warn(
+        "[ORDERS] Stale-reservation sweep already running — skipping this tick",
+      );
+      return;
+    }
+    this.isSweepingStaleReservations = true;
+    try {
+      const cutoff = new Date(
+        Date.now() - this.staleReservationTtlHours * 60 * 60 * 1000,
+      );
+      const staleOrders = await this.orderRepository.find({
+        where: {
+          status: In([
+            OrderStatus.PENDING,
+            OrderStatus.CONFIRMED,
+            OrderStatus.PROCESSING,
+          ]),
+          ghnOrderCode: IsNull(),
+          createdAt: LessThan(cutoff),
+        },
+        relations: ["items"],
+      });
+
+      if (staleOrders.length === 0) return;
+
+      this.logger.log(
+        `[ORDERS] Sweeping ${staleOrders.length} stale order(s) older than ${this.staleReservationTtlHours}h`,
+      );
+
+      let swept = 0;
+      for (const order of staleOrders) {
+        try {
+          await this.finalizeCancellation(order);
+          swept += 1;
+          this.logger.log(
+            `[ORDERS] Stale order ${order.id} canceled and stock released`,
+          );
+        } catch (err) {
+          this.logger.error(
+            `[ORDERS] Failed to sweep stale order ${order.id}: ${String(err)}`,
+          );
+        }
+      }
+      this.logger.log(
+        `[ORDERS] Stale-reservation sweep released ${swept}/${staleOrders.length} order(s)`,
+      );
+    } catch (err) {
+      this.logger.error(
+        `[ORDERS] Stale-reservation sweep failed: ${String(err)}`,
+      );
+    } finally {
+      this.isSweepingStaleReservations = false;
+    }
   }
 
   async handleGhnWebhook(
@@ -735,34 +898,42 @@ export class OrdersService {
     // The conditional status update above ensures duplicate delivered callbacks
     // cannot consume stock or emit payment completion more than once.
     if (newStatus === OrderStatus.COMPLETED) {
-      for (const item of order.items) {
-        await firstValueFrom(
-          this.inventoryClient
-            .send<boolean>(
-              INVENTORY_MESSAGE_PATTERNS.INVENTORY_CONSUME_RESERVED_STOCK,
-              {
-                productId: item.productId,
-                quantity: item.quantity,
-                skuId: item.skuId ?? undefined,
-                reservationKey: order.reservationKey,
-              },
-            )
-            .pipe(
-              timeout(5000),
-              catchError((e: unknown) => throwError(() => e)),
-            ),
-        ).catch((err: unknown) => {
-          this.logger.warn(
-            `[ORDERS] Consume reserved stock for product ${item.productId}${item.skuId ? ` (SKU ${item.skuId})` : ""} failed: ${String(err)}`,
-          );
-        });
-      }
+      await this.finalizeOrderCompletion(order);
+    }
+  }
+
+  /**
+   * Side effects that must run exactly once when an order reaches COMPLETED:
+   * consume the stock reserved at creation and, for COD orders, emit
+   * payment_completed. Callers must transition the order row to COMPLETED via a
+   * conditional update first, so this runs at most once per order — whether the
+   * transition was driven by the GHN delivery webhook or a seller action.
+   */
+  private async finalizeOrderCompletion(order: Order): Promise<void> {
+    for (const item of order.items) {
+      await firstValueFrom(
+        this.inventoryClient
+          .send<boolean>(
+            INVENTORY_MESSAGE_PATTERNS.INVENTORY_CONSUME_RESERVED_STOCK,
+            {
+              productId: item.productId,
+              quantity: item.quantity,
+              skuId: item.skuId ?? undefined,
+              reservationKey: order.reservationKey,
+            },
+          )
+          .pipe(
+            timeout(5000),
+            catchError((e: unknown) => throwError(() => e)),
+          ),
+      ).catch((err: unknown) => {
+        this.logger.warn(
+          `[ORDERS] Consume reserved stock for product ${item.productId}${item.skuId ? ` (SKU ${item.skuId})` : ""} failed: ${String(err)}`,
+        );
+      });
     }
 
-    if (
-      newStatus === OrderStatus.COMPLETED &&
-      order.paymentMethod === PaymentMethod.COD
-    ) {
+    if (order.paymentMethod === PaymentMethod.COD) {
       if (this.fanoutChannel) {
         this.fanoutChannel.publish(
           EXCHANGE.PAYMENTS_EXCHANGE,
@@ -776,11 +947,11 @@ export class OrdersService {
         );
       } else {
         this.logger.warn(
-          `[GHN] RMQ channel unavailable — ${EVENT.PAYMENT_COMPLETED_EVENT} event not published for order ${order.id}`,
+          `[ORDERS] RMQ channel unavailable — ${EVENT.PAYMENT_COMPLETED_EVENT} event not published for order ${order.id}`,
         );
       }
       this.logger.log(
-        `[GHN] payment_completed emitted for COD order ${order.id}`,
+        `[ORDERS] payment_completed emitted for COD order ${order.id}`,
       );
     }
   }
@@ -844,6 +1015,40 @@ export class OrdersService {
         >(PRODUCT_MESSAGE_PATTERNS.GET_PRODUCT_IDS_BY_SELLER, sellerId)
         .pipe(timeout(10000)),
     );
+  }
+
+  /**
+   * Given a list of SKU ids, return the subset that is referenced by at least
+   * one order item or cart item. Used by the product service to protect SKUs
+   * from destructive deletion during a product edit (P0-05).
+   */
+  async findReferencedSkuIds(skuIds: number[]): Promise<number[]> {
+    if (!skuIds || skuIds.length === 0) {
+      return [];
+    }
+    const manager = this.orderItemRepository.manager;
+    const [orderItems, cartItems] = await Promise.all([
+      manager.find(OrderItem, {
+        where: { skuId: In(skuIds) },
+        select: ["skuId"],
+      }),
+      manager.find(CartItem, {
+        where: { skuId: In(skuIds) },
+        select: ["skuId"],
+      }),
+    ]);
+    const referenced = new Set<number>();
+    for (const item of orderItems) {
+      if (item.skuId != null) {
+        referenced.add(item.skuId);
+      }
+    }
+    for (const item of cartItems) {
+      if (item.skuId != null) {
+        referenced.add(item.skuId);
+      }
+    }
+    return [...referenced];
   }
 
   private async verifySellerOwnsOrder(
@@ -942,5 +1147,105 @@ export class OrdersService {
 
     order.status = OrderStatus.PROCESSING;
     return this.orderRepository.save(order);
+  }
+
+  /**
+   * Seller-driven forward transitions after PROCESSING. The GHN webhook is the
+   * primary driver for these; this map lets a seller advance manually when a
+   * webhook is delayed or unavailable. Only single-step forward moves are
+   * allowed — no skipping and no backward moves.
+   */
+  private static readonly SELLER_FORWARD_TRANSITIONS: Partial<
+    Record<OrderStatus, OrderStatus>
+  > = {
+    [OrderStatus.PROCESSING]: OrderStatus.SHIPPED,
+    [OrderStatus.SHIPPED]: OrderStatus.DELIVERING,
+    [OrderStatus.DELIVERING]: OrderStatus.COMPLETED,
+  };
+
+  /**
+   * Owner/admin-scoped order detail with items eagerly loaded. Sellers get a
+   * 403 from the buyer-facing GET /order/:id, so this dedicated path verifies
+   * ownership (or admin) before returning the full order for enrichment (P1-01).
+   */
+  async getSellerOrderDetail(
+    orderId: number,
+    sellerId: number,
+    isAdmin: boolean,
+  ): Promise<Order> {
+    const order = await this.orderRepository.findOne({
+      where: { id: orderId },
+      relations: ["items"],
+    });
+    if (!order) {
+      throw new NotFoundException(`Order ${orderId} not found`);
+    }
+    if (!isAdmin) {
+      const productIds = await this.getSellerProductIds(sellerId);
+      const owns =
+        productIds.length > 0 &&
+        (await this.verifySellerOwnsOrder(orderId, productIds));
+      if (!owns) {
+        throw new ForbiddenException("You do not have access to this order");
+      }
+    }
+    return order;
+  }
+
+  /**
+   * Advance an order one step along the seller lifecycle
+   * (processing → shipped → delivering → completed). Concurrency-safe: the
+   * status guard on the UPDATE prevents a race with the GHN webhook driving the
+   * same transition, so completion side effects run at most once (P1-01).
+   */
+  async advanceOrderStatus(
+    orderId: number,
+    sellerId: number,
+    isAdmin: boolean,
+    targetStatus: OrderStatus,
+  ): Promise<Order> {
+    const order = await this.orderRepository.findOne({
+      where: { id: orderId },
+      relations: ["items"],
+    });
+    if (!order) {
+      throw new NotFoundException(`Order ${orderId} not found`);
+    }
+    if (!isAdmin) {
+      const productIds = await this.getSellerProductIds(sellerId);
+      const owns =
+        productIds.length > 0 &&
+        (await this.verifySellerOwnsOrder(orderId, productIds));
+      if (!owns) {
+        throw new ForbiddenException("You do not have access to this order");
+      }
+    }
+
+    const currentStatus = order.status ?? OrderStatus.PENDING;
+    const expected = OrdersService.SELLER_FORWARD_TRANSITIONS[currentStatus];
+    if (expected !== targetStatus) {
+      throw new BadRequestException(
+        `Cannot transition order from ${currentStatus} to ${targetStatus}`,
+      );
+    }
+
+    const updateResult = await this.orderRepository.update(
+      { id: order.id, status: currentStatus },
+      { status: targetStatus },
+    );
+    if (updateResult.affected !== 1) {
+      throw new ConflictException(
+        `Order ${orderId} was updated concurrently; please retry`,
+      );
+    }
+    order.status = targetStatus;
+    this.logger.log(
+      `[ORDERS] Order ${order.id} advanced to ${targetStatus} by seller ${sellerId}`,
+    );
+
+    if (targetStatus === OrderStatus.COMPLETED) {
+      await this.finalizeOrderCompletion(order);
+    }
+    return order;
   }
 }

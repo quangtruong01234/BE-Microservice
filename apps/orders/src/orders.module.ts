@@ -8,6 +8,7 @@ import { Cart } from "./entity/cart.entity";
 import { CartItem } from "./entity/cart-item.entity";
 import { AllRpcExceptionFilter } from "./filters/rpc-exception.filter";
 import { ConfigModule } from "@nestjs/config";
+import { ScheduleModule } from "@nestjs/schedule";
 import { RmqModule } from "@app/common";
 import { HttpModule } from "@nestjs/axios";
 import { ClientsModule, Transport } from "@nestjs/microservices";
@@ -28,6 +29,7 @@ import { GhnModule } from "./ghn/ghn.module";
       isGlobal: true,
       envFilePath: "./local/nodeA/.env",
     }),
+    ScheduleModule.forRoot(),
     HttpModule.register({
       timeout: 5000,
       maxRedirects: 5,
