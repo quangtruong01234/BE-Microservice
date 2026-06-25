@@ -8,6 +8,7 @@ import { SocialController } from "./social.controller";
 import { SocialService } from "./social.service";
 import { Post } from "./entities/post.entity";
 import { PostLike } from "./entities/post-like.entity";
+import { PostReport } from "./entities/post-report.entity";
 import { Like } from "./entities/like.entity";
 import { Comment } from "./entities/comment.entity";
 import { Follow } from "./entities/follow.entity";
@@ -25,11 +26,11 @@ import { Follow } from "./entities/follow.entity";
       username: process.env.MYSQL_USER,
       password: process.env.MYSQL_PASSWORD,
       database: process.env.MYSQL_DATABASE,
-      entities: [Post, PostLike, Like, Comment, Follow],
+      entities: [Post, PostLike, PostReport, Like, Comment, Follow],
       synchronize: false,
       timezone: "Z",
     }),
-    TypeOrmModule.forFeature([Post, PostLike, Comment, Follow]),
+    TypeOrmModule.forFeature([Post, PostLike, PostReport, Comment, Follow]),
     ScheduleModule.forRoot(),
     CachedModule,
     RmqModule,

@@ -16,6 +16,7 @@ import { EXCHANGE } from "@app/common/constants/exchange";
 import { EVENT } from "@app/common/constants/event";
 import { Post } from "./entities/post.entity";
 import { PostLike } from "./entities/post-like.entity";
+import { PostReport } from "./entities/post-report.entity";
 import { Comment } from "./entities/comment.entity";
 import { Follow } from "./entities/follow.entity";
 
@@ -28,6 +29,8 @@ export class SocialService {
     private readonly postRepository: Repository<Post>,
     @InjectRepository(PostLike)
     private readonly postLikeRepository: Repository<PostLike>,
+    @InjectRepository(PostReport)
+    private readonly postReportRepository: Repository<PostReport>,
     @InjectRepository(Comment)
     private readonly commentRepository: Repository<Comment>,
     @InjectRepository(Follow)
@@ -68,14 +71,76 @@ export class SocialService {
     content: string;
     imageUrls?: string[] | null;
     videoUrl?: string | null;
+    productId?: number | null;
   }): Promise<Post> {
     const post = this.postRepository.create({
       userId: payload.userId,
       content: payload.content,
       imageUrls: payload.imageUrls ?? null,
       videoUrl: payload.videoUrl ?? null,
+      productId: payload.productId ?? null,
     });
     return this.postRepository.save(post);
+  }
+
+  async updatePost(payload: {
+    postId: number;
+    userId: number;
+    content?: string;
+    imageUrls?: string[] | null;
+    videoUrl?: string | null;
+    productId?: number | null;
+  }): Promise<Post> {
+    const post = await this.postRepository.findOne({
+      where: { id: payload.postId },
+    });
+    if (!post) {
+      throw new NotFoundException(`Post ${payload.postId} not found`);
+    }
+    if (post.userId !== payload.userId) {
+      throw new ForbiddenException("You can only edit your own posts");
+    }
+    // Only overwrite fields the caller actually sent — undefined means "leave as-is".
+    if (payload.content !== undefined) post.content = payload.content;
+    if (payload.imageUrls !== undefined) post.imageUrls = payload.imageUrls;
+    if (payload.videoUrl !== undefined) post.videoUrl = payload.videoUrl;
+    if (payload.productId !== undefined) post.productId = payload.productId;
+    return this.postRepository.save(post);
+  }
+
+  async reportPost(payload: {
+    postId: number;
+    reporterId: number;
+    reason: string;
+  }): Promise<{ reported: boolean; postId: number }> {
+    const post = await this.postRepository.findOne({
+      where: { id: payload.postId },
+    });
+    if (!post) {
+      throw new NotFoundException(`Post ${payload.postId} not found`);
+    }
+    if (post.userId === payload.reporterId) {
+      throw new BadRequestException("You cannot report your own post");
+    }
+    try {
+      await this.postReportRepository.save(
+        this.postReportRepository.create({
+          postId: payload.postId,
+          reporterId: payload.reporterId,
+          reason: payload.reason,
+        }),
+      );
+    } catch (err) {
+      if (
+        err instanceof QueryFailedError &&
+        ((err.driverError as { code?: string })?.code === "ER_DUP_ENTRY" ||
+          (err.driverError as { code?: string })?.code === "23505")
+      ) {
+        throw new ConflictException("You have already reported this post");
+      }
+      throw err;
+    }
+    return { reported: true, postId: payload.postId };
   }
 
   async getPosts(payload: {

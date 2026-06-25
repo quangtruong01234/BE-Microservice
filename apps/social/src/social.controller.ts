@@ -24,6 +24,33 @@ export class SocialController {
     return this.socialService.createPost(payload);
   }
 
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.UPDATE_POST)
+  async updatePost(
+    @Payload()
+    payload: {
+      postId: number;
+      userId: number;
+      content?: string;
+      imageUrls?: string[] | null;
+      videoUrl?: string | null;
+      productId?: number | null;
+    },
+  ): Promise<Post> {
+    return this.socialService.updatePost(payload);
+  }
+
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.REPORT_POST)
+  async reportPost(
+    @Payload()
+    payload: {
+      postId: number;
+      reporterId: number;
+      reason: string;
+    },
+  ): Promise<{ reported: boolean; postId: number }> {
+    return this.socialService.reportPost(payload);
+  }
+
   @MessagePattern(SOCIAL_MESSAGE_PATTERN.GET_POSTS)
   async getPosts(
     @Payload()

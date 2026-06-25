@@ -14,6 +14,9 @@ export class Post {
   @Column({ name: "user_id", type: "int", nullable: false })
   userId!: number;
 
+  @Column({ name: "product_id", type: "int", nullable: true, default: null })
+  productId!: number | null;
+
   @Column({ type: "text", nullable: false })
   content!: string;
 
