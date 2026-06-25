@@ -8,6 +8,7 @@ export const INVENTORY_MESSAGE_PATTERNS = {
   INVENTORY_GET_BY_PRODUCT_IDS: "inventory.get_by_product_ids",
   INVENTORY_UPDATE: "inventory.update",
   INVENTORY_REMOVE: "inventory.remove",
+  INVENTORY_REMOVE_BY_PRODUCT: "inventory.remove_by_product",
 
   // Stock operations
   INVENTORY_CHECK_STOCK: "inventory.check_stock",

@@ -22,6 +22,20 @@ export class CachedService {
     return await this.redis.set(key, value);
   }
 
+  /**
+   * Atomically set a key only if it does not already exist (SET NX EX).
+   * Returns true if the key was claimed, false if it already existed.
+   * Used for idempotency locks / single-flight guards.
+   */
+  async setNx(
+    key: string,
+    value: string,
+    expireSeconds: number,
+  ): Promise<boolean> {
+    const result = await this.redis.set(key, value, "EX", expireSeconds, "NX");
+    return result === "OK";
+  }
+
   async del(key: string): Promise<number> {
     return await this.redis.del(key);
   }

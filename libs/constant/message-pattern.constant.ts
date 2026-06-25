@@ -1,6 +1,7 @@
 export const USER_MESSAGE_PATTERN = {
   GET_USER_INFO: "get_user_info",
   GET_ALL_USERS: "get_all_users",
+  GET_USERS_PAGINATED: "get_users_paginated",
   GET_USERS_BY_IDS: "get_users_by_ids",
   REGISTER_USER: "register_user",
   LOGIN_USER: "login_user",
@@ -44,6 +45,10 @@ export const ORDER_MESSAGE_PATTERN = {
   CONFIRM_ORDER: "order.confirm",
   READY_TO_SHIP: "order.ready_to_ship",
   CALCULATE_SHIPPING_FEE: "order.calculate_shipping_fee",
+  GET_REFERENCED_SKU_IDS: "order.get_referenced_sku_ids",
+  GET_SELLER_ORDER_DETAIL: "order.get_seller_detail",
+  ADVANCE_ORDER_STATUS: "order.advance_status",
+  GET_ORDER_STATUS_COUNTS: "order.get_status_counts",
 };
 
 export const PAYMENT_MESSAGE_PATTERN = {
@@ -54,11 +59,14 @@ export const PAYMENT_MESSAGE_PATTERN = {
 
 export const NOTIFICATION_MESSAGE_PATTERN = {
   GET_USER_NOTIFICATIONS: "get_user_notifications",
+  GET_UNREAD_COUNT: "get_notification_unread_count",
   MARK_NOTIFICATION_READ: "mark_notification_read",
 };
 
 export const SOCIAL_MESSAGE_PATTERN = {
   CREATE_POST: "social_create_post",
+  UPDATE_POST: "social_update_post",
+  REPORT_POST: "social_report_post",
   GET_POSTS: "social_get_posts",
   GET_POSTS_BY_USER: "social_get_posts_by_user",
   GET_POST_BY_ID: "social_get_post_by_id",
