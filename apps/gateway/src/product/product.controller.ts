@@ -467,6 +467,20 @@ export class ProductController {
   // AGGREGATOR ENDPOINTS - PRODUCT + INVENTORY
   // ============================================================================
 
+  @Get("shop/stats")
+  @ApiOperation({
+    summary: "Get shop-wide inventory stats for the current seller",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Shop stats retrieved successfully.",
+  })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  async getShopStats(@Req() req: Request) {
+    const sellerId = req.user?.id ?? 0;
+    return await this.productService.getShopStats(sellerId);
+  }
+
   @Get("with-inventory/all")
   @Public()
   @ApiOperation({ summary: "Get all products with inventory information" })

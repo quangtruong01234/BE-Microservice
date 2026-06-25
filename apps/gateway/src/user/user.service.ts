@@ -134,6 +134,30 @@ export class UserService {
     }
   }
 
+  async getUsersPaginated(page: number, limit: number): Promise<unknown> {
+    try {
+      return (await firstValueFrom(
+        this.userClient
+          .send(
+            { cmd: USER_MESSAGE_PATTERN.GET_USERS_PAGINATED },
+            { page, limit },
+          )
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      )) as unknown;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "get users paginated",
+        "User Service",
+      );
+    }
+  }
+
   async getMe(userId: number): Promise<unknown> {
     try {
       return (await firstValueFrom(

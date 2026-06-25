@@ -49,6 +49,7 @@ export class SocialGatewayService {
     content: string,
     imageUrls?: string[],
     videoUrl?: string,
+    productId?: number,
   ): Promise<unknown> {
     try {
       return await firstValueFrom(
@@ -58,6 +59,7 @@ export class SocialGatewayService {
             content,
             imageUrls: imageUrls ?? null,
             videoUrl: videoUrl ?? null,
+            productId: productId ?? null,
           })
           .pipe(timeout(10000)) as Observable<unknown>,
       );
@@ -65,6 +67,59 @@ export class SocialGatewayService {
       MicroserviceErrorHandler.handleError(
         error,
         "create post",
+        "Social Service",
+      );
+    }
+  }
+
+  async updatePost(
+    postId: number,
+    userId: number,
+    changes: {
+      content?: string;
+      imageUrls?: string[];
+      videoUrl?: string;
+      productId?: number;
+    },
+  ): Promise<unknown> {
+    try {
+      return await firstValueFrom(
+        this.socialClient
+          .send(SOCIAL_MESSAGE_PATTERN.UPDATE_POST, {
+            postId,
+            userId,
+            ...changes,
+          })
+          .pipe(timeout(10000)) as Observable<unknown>,
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "update post",
+        "Social Service",
+      );
+    }
+  }
+
+  async reportPost(
+    postId: number,
+    reporterId: number,
+    reason: string,
+  ): Promise<unknown> {
+    try {
+      return await firstValueFrom(
+        this.socialClient
+          .send(SOCIAL_MESSAGE_PATTERN.REPORT_POST, {
+            postId,
+            reporterId,
+            reason,
+          })
+          .pipe(timeout(10000)) as Observable<unknown>,
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "report post",
         "Social Service",
       );
     }

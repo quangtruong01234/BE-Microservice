@@ -6,15 +6,18 @@ import {
   Param,
   Patch,
   ParseIntPipe,
+  Query,
   Request,
   Res,
   UseGuards,
+  ValidationPipe,
 } from "@nestjs/common";
 import { Response } from "express";
 import { UserService } from "./user.service";
 import {
   RegisterUserDto,
   LoginUserDto,
+  ListUsersQueryDto,
   UpdateUserGatewayDto,
 } from "./dto/user.dto";
 import {
@@ -85,6 +88,18 @@ export class UserController {
   @ApiResponse({ status: 200, description: "List all users." })
   async getAllUsers() {
     return await this.userService.getAllUsers();
+  }
+
+  @Get()
+  @Roles("admin")
+  @ApiOperation({ summary: "Get paginated users (admin only)" })
+  @ApiResponse({ status: 200, description: "Paginated user list." })
+  @ApiResponse({ status: 403, description: "Forbidden." })
+  async getUsersPaginated(@Query(ValidationPipe) query: ListUsersQueryDto) {
+    return await this.userService.getUsersPaginated(
+      query.page ?? 1,
+      query.limit ?? 20,
+    );
   }
 
   @Get("me")

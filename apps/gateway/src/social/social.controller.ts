@@ -5,6 +5,7 @@ import {
   Get,
   Param,
   ParseIntPipe,
+  Patch,
   Post,
   Query,
   Req,
@@ -24,6 +25,8 @@ import { Public } from "../common/decorators/public.decorator";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
 import { SocialGatewayService } from "./social.service";
 import { CreatePostDto } from "./dto/create-post.dto";
+import { UpdatePostDto } from "./dto/update-post.dto";
+import { ReportPostDto } from "./dto/report-post.dto";
 import { CreateCommentDto } from "./dto/create-comment.dto";
 import { GetPostsQueryDto } from "./dto/get-posts-query.dto";
 
@@ -48,7 +51,42 @@ export class SocialController {
       body.content,
       body.imageUrls,
       body.videoUrl,
+      body.productId,
     );
+  }
+
+  @Patch(":id")
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth("bearer")
+  @ApiOperation({ summary: "Edit a post (owner only)" })
+  @ApiResponse({ status: 200, description: "Post updated." })
+  @ApiResponse({ status: 403, description: "Forbidden." })
+  @ApiResponse({ status: 404, description: "Post not found." })
+  async updatePost(
+    @Param("id", ParseIntPipe) id: number,
+    @Req() req: Request,
+    @Body() body: UpdatePostDto,
+  ): Promise<unknown> {
+    const userId = req.user?.id ?? 0;
+    return this.socialService.updatePost(id, userId, body);
+  }
+
+  @Post(":id/report")
+  @UseGuards(JwtAuthGuard)
+  @RateLimit({ limit: 20 })
+  @ApiBearerAuth("bearer")
+  @ApiOperation({ summary: "Report a post" })
+  @ApiResponse({ status: 201, description: "Post reported." })
+  @ApiResponse({ status: 400, description: "Cannot report own post." })
+  @ApiResponse({ status: 404, description: "Post not found." })
+  @ApiResponse({ status: 409, description: "Already reported." })
+  async reportPost(
+    @Param("id", ParseIntPipe) id: number,
+    @Req() req: Request,
+    @Body() body: ReportPostDto,
+  ): Promise<unknown> {
+    const userId = req.user?.id ?? 0;
+    return this.socialService.reportPost(id, userId, body.reason);
   }
 
   @Get()

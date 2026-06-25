@@ -20,6 +20,7 @@ import {
   ReviewCategoryDto,
 } from "./dto";
 import { CreateSkuGatewayDto, UpdateSkuGatewayDto } from "./dto/product.dto";
+import { PaginatedResponse } from "@app/common";
 
 export interface ProductWithInventory {
   // Product fields
@@ -132,7 +133,8 @@ export class ProductService {
         `Product created successfully with ID: ${String(result?.id ?? "")}`,
       );
 
-      // Skip auto-inventory for SKU-matrix products — inventory will be managed per-SKU
+      // Skip auto-inventory for SKU-matrix products — inventory is managed
+      // per-SKU asynchronously via the sku_upserted event.
       if (result?.id && !dto.skuList?.length) {
         try {
           await firstValueFrom(
@@ -149,9 +151,16 @@ export class ProductService {
             `Inventory created for product ID: ${String(result.id)}`,
           );
         } catch (invErr) {
-          this.logger.warn(
-            `Failed to create inventory for product ${String(result.id)}: ${String(invErr)}`,
+          // Saga compensation: product and inventory live in separate service
+          // DBs, so we cannot use a single transaction. If inventory creation
+          // fails, roll back the just-created product so the caller never ends
+          // up with an orphan product showing stock 0. A retry then starts clean.
+          this.logger.error(
+            `Inventory creation failed for product ${String(result.id)} — rolling back product`,
+            invErr instanceof Error ? invErr.stack : String(invErr),
           );
+          await this.compensateProductCreate(Number(result.id));
+          throw invErr;
         }
       }
 
@@ -165,47 +174,106 @@ export class ProductService {
     }
   }
 
+  /**
+   * Ensure a product object carries a flat `categoryIds: number[]` derived from
+   * its hydrated `categories[]` relation. The product service already returns
+   * the full `categories[]` (eager ManyToMany) on every read path, but only
+   * `getProductById` historically exposed the flat id list — the FE needs it
+   * uniformly to drive the shop table's multi-category editor (P1-04).
+   */
+  private attachCategoryIds<T extends object>(
+    product: T,
+  ): T & { categoryIds: number[] } {
+    const categories = (product as { categories?: { id: number | string }[] })
+      .categories;
+    return {
+      ...product,
+      categoryIds: Array.isArray(categories)
+        ? categories.map((category) => Number(category.id))
+        : [],
+    };
+  }
+
+  /**
+   * Apply `attachCategoryIds` across whatever shape a product read returns: a
+   * bare product, an array of products, or a paginated `{ data | items: [] }`
+   * envelope. Used by the raw pass-through read paths (by-category, by-brand,
+   * search, by-sku) that do not run user enrichment.
+   */
+  private withCategoryIds(response: unknown): unknown {
+    if (Array.isArray(response)) {
+      return (response as unknown[]).map((item) =>
+        item && typeof item === "object" ? this.attachCategoryIds(item) : item,
+      );
+    }
+    if (response && typeof response === "object") {
+      const envelope = response as { data?: unknown; items?: unknown };
+      if (Array.isArray(envelope.data)) {
+        return { ...envelope, data: this.withCategoryIds(envelope.data) };
+      }
+      if (Array.isArray(envelope.items)) {
+        return { ...envelope, items: this.withCategoryIds(envelope.items) };
+      }
+      return this.attachCategoryIds(response);
+    }
+    return response;
+  }
+
+  /**
+   * Fetch a single page of products from the product service and enrich it
+   * with user info, preserving the pagination metadata (total/page/limit)
+   * returned by the microservice.
+   */
+  private async fetchProductsPage(query: GetProductsQueryDto): Promise<{
+    items: ProductData[];
+    total: number;
+    page: number;
+    limit: number;
+  }> {
+    const response = (await firstValueFrom(
+      this.productClient
+        .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_ALL, query)
+        .pipe(
+          timeout(10000),
+          catchError((err: unknown) => {
+            throw err;
+          }),
+        ),
+    )) as ProductData;
+
+    // Extract products from response structure
+    const products =
+      response?.items ??
+      (response?.data as ProductData[] | undefined) ??
+      response ??
+      [];
+    const productsArr = Array.isArray(products) ? products : [];
+
+    // Enrich with user info, then expose a flat categoryIds[] uniformly (P1-04)
+    const enrichedProducts = (
+      await this.enrichProductsWithUserInfo(productsArr)
+    ).map((product) => this.attachCategoryIds(product));
+
+    const page = Number(query.page ?? 1);
+    const limit = Number(query.limit ?? 10);
+    const total =
+      typeof response?.total === "number"
+        ? response.total
+        : enrichedProducts.length;
+
+    return { items: enrichedProducts, total, page, limit };
+  }
+
   async getAllProducts(query: GetProductsQueryDto): Promise<unknown> {
     try {
       this.logger.log(
         `Fetching all products with query: ${JSON.stringify(query)}`,
       );
-      const response = (await firstValueFrom(
-        this.productClient
-          .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_ALL, query)
-          .pipe(
-            timeout(10000),
-            catchError((err: unknown) => {
-              throw err;
-            }),
-          ),
-      )) as ProductData;
 
-      // Debug logging
-      this.logger.debug(
-        `Raw response from product service:`,
-        JSON.stringify(response, null, 2),
-      );
+      const { items } = await this.fetchProductsPage(query);
 
-      // Extract products from response structure
-      const products =
-        response?.items ??
-        (response?.data as ProductData[] | undefined) ??
-        response ??
-        [];
-      const productsArr = Array.isArray(products) ? products : [];
-      this.logger.debug(
-        `Extracted products type: ${typeof products}, isArray: ${Array.isArray(products)}, length: ${productsArr.length}`,
-      );
-
-      // Enrich products with user information
-      const enrichedProducts =
-        await this.enrichProductsWithUserInfo(productsArr);
-
-      this.logger.log(
-        `Found ${enrichedProducts.length} products with user info`,
-      );
-      return enrichedProducts;
+      this.logger.log(`Found ${items.length} products with user info`);
+      return items;
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -239,17 +307,9 @@ export class ProductService {
         product ? "found" : "not found",
       );
 
-      // Enrich with user information
+      // Enrich with user information, then expose a flat categoryIds[] (P1-04)
       const enriched = await this.enrichProductWithUserInfo(product);
-      const typedEnriched = enriched as {
-        categories?: { id: number }[];
-      } & ProductData;
-      return {
-        ...typedEnriched,
-        categoryIds: Array.isArray(typedEnriched.categories)
-          ? typedEnriched.categories.map((c) => c.id)
-          : [],
-      };
+      return this.attachCategoryIds(enriched);
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -261,7 +321,7 @@ export class ProductService {
 
   async getProductBySku(sku: string): Promise<unknown> {
     try {
-      return (await firstValueFrom(
+      const response = (await firstValueFrom(
         this.productClient
           .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_SKU, sku)
           .pipe(
@@ -271,6 +331,7 @@ export class ProductService {
             }),
           ),
       )) as unknown;
+      return this.withCategoryIds(response);
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -316,8 +377,9 @@ export class ProductService {
     callerRole: string,
   ): Promise<unknown> {
     await this.assertProductMutationAccess(id, callerId, callerRole);
+    let result: unknown;
     try {
-      return (await firstValueFrom(
+      result = (await firstValueFrom(
         this.productClient
           .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_DELETE, id)
           .pipe(timeout(10000)),
@@ -328,6 +390,51 @@ export class ProductService {
         error,
         `delete product ID: ${id}`,
         "Product Service",
+      );
+    }
+
+    // Clean up inventory in the separate inventory-service DB (no cross-DB
+    // cascade). Hard-deleting here prevents stale rows from re-attaching to a
+    // future product that reuses this ID. Best-effort: the product is already
+    // gone, so a failure is logged rather than surfaced.
+    await this.cleanupInventoryForProduct(id);
+
+    return result;
+  }
+
+  private async compensateProductCreate(productId: number): Promise<void> {
+    try {
+      await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_DELETE, productId)
+          .pipe(timeout(10000)),
+        { defaultValue: { success: true } },
+      );
+      this.logger.log(
+        `Compensation: rolled back product ${productId} after inventory failure`,
+      );
+    } catch (err) {
+      this.logger.error(
+        `Compensation failed: could not roll back product ${productId}`,
+        err instanceof Error ? err.stack : String(err),
+      );
+    }
+  }
+
+  private async cleanupInventoryForProduct(productId: number): Promise<void> {
+    try {
+      await firstValueFrom(
+        this.inventoryClient
+          .send(
+            INVENTORY_MESSAGE_PATTERNS.INVENTORY_REMOVE_BY_PRODUCT,
+            productId,
+          )
+          .pipe(timeout(10000)),
+      );
+      this.logger.log(`Inventory cleaned up for deleted product ${productId}`);
+    } catch (err) {
+      this.logger.warn(
+        `Failed to clean up inventory for deleted product ${productId}: ${String(err)}`,
       );
     }
   }
@@ -500,30 +607,33 @@ export class ProductService {
     categoryId: number,
     query: GetProductsQueryDto,
   ): Promise<unknown> {
-    return (await firstValueFrom(
+    const response = (await firstValueFrom(
       this.productClient.send(
         PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_CATEGORY,
         { categoryId, query },
       ),
     )) as unknown;
+    return this.withCategoryIds(response);
   }
 
   async getProductsByBrand(
     brandId: number,
     query: GetProductsQueryDto,
   ): Promise<unknown> {
-    return (await firstValueFrom(
+    const response = (await firstValueFrom(
       this.productClient.send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_BRAND, {
         brandId,
         query,
       }),
     )) as unknown;
+    return this.withCategoryIds(response);
   }
 
   async searchProducts(query: GetProductsQueryDto): Promise<unknown> {
-    return (await firstValueFrom(
+    const response = (await firstValueFrom(
       this.productClient.send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_SEARCH, query),
     )) as unknown;
+    return this.withCategoryIds(response);
   }
 
   // ============================================================================
@@ -697,9 +807,11 @@ export class ProductService {
         product as ProductData,
       );
 
-      // Data aggregation and enrichment
+      // Data aggregation and enrichment (with flat categoryIds[] — P1-04)
       const result: ProductWithInventory = {
-        ...(enrichedProduct as unknown as ProductWithInventory),
+        ...(this.attachCategoryIds(
+          enrichedProduct,
+        ) as unknown as ProductWithInventory),
         inventory: inventory
           ? (this.enrichInventoryData(
               inventory as InventoryData,
@@ -741,6 +853,65 @@ export class ProductService {
     return "NORMAL_STOCK";
   }
 
+  /**
+   * Aggregate shop-wide inventory stats for a seller, independent of any
+   * product-list pagination. Two bounded TCP calls (seller product IDs +
+   * batch inventory) — never an N+1 per-product fan-out.
+   */
+  async getShopStats(sellerId: number): Promise<{
+    productCount: number;
+    totalStock: number;
+    lowStockCount: number;
+  }> {
+    try {
+      const productIds = (await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.GET_PRODUCT_IDS_BY_SELLER, sellerId)
+          .pipe(timeout(10000)),
+      )) as number[];
+
+      if (!productIds || productIds.length === 0) {
+        return { productCount: 0, totalStock: 0, lowStockCount: 0 };
+      }
+
+      const inventoryItems = (await firstValueFrom(
+        this.inventoryClient
+          .send(
+            INVENTORY_MESSAGE_PATTERNS.INVENTORY_GET_BY_PRODUCT_IDS,
+            productIds,
+          )
+          .pipe(timeout(10000)),
+      )) as InventoryData[];
+
+      let totalStock = 0;
+      const lowStockProductIds = new Set<number>();
+      if (Array.isArray(inventoryItems)) {
+        for (const item of inventoryItems) {
+          const available = item.availableStock ?? 0;
+          totalStock += available;
+          if (
+            item.productId !== undefined &&
+            available <= (item.minimumStock ?? 0)
+          ) {
+            lowStockProductIds.add(item.productId);
+          }
+        }
+      }
+
+      return {
+        productCount: productIds.length,
+        totalStock,
+        lowStockCount: lowStockProductIds.size,
+      };
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        `get shop stats for seller ${sellerId}`,
+        "Product Service",
+      );
+    }
+  }
+
   async getProductsWithInventory(
     productIds: number[],
   ): Promise<ProductWithInventory[]> {
@@ -749,15 +920,33 @@ export class ProductService {
         return [];
       }
 
-      // Fetch products and inventory data in parallel
+      // Fetch products and inventory data in parallel. Inventory is optional
+      // context — if the inventory service is unavailable we degrade to
+      // `inventory: null` instead of failing the whole request with a raw 500.
       const [products, inventoryItems] = (await Promise.all([
-        Promise.all(productIds.map((id) => this.getProductById(id))),
-        firstValueFrom(
-          this.inventoryClient.send(
-            INVENTORY_MESSAGE_PATTERNS.INVENTORY_GET_BY_PRODUCT_IDS,
-            productIds,
+        Promise.all(
+          productIds.map((id) =>
+            this.getProductById(id).catch((err: unknown) => {
+              this.logger.warn(
+                `Product service error for ID ${id}: ${err instanceof Error ? err.message : String(err)}`,
+              );
+              return null;
+            }),
           ),
         ),
+        firstValueFrom(
+          this.inventoryClient
+            .send(
+              INVENTORY_MESSAGE_PATTERNS.INVENTORY_GET_BY_PRODUCT_IDS,
+              productIds,
+            )
+            .pipe(timeout(10000)),
+        ).catch((err: unknown) => {
+          this.logger.warn(
+            `Inventory service error for product IDs [${productIds.join(", ")}]: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return [] as InventoryData[];
+        }),
       ])) as [unknown[], unknown];
       const typedInventoryItems = inventoryItems as InventoryData[];
 
@@ -800,21 +989,29 @@ export class ProductService {
 
   async getAllProductsWithInventory(
     query: GetProductsQueryDto,
-  ): Promise<ProductWithInventory[]> {
+  ): Promise<PaginatedResponse<ProductWithInventory>> {
     try {
-      // Fetch all products first
-      const products = (await this.getAllProducts(query)) as
-        | ProductData[]
-        | null;
+      // Fetch the requested page of products (preserving pagination metadata)
+      const {
+        items: products,
+        total,
+        page,
+        limit,
+      } = await this.fetchProductsPage(query);
 
       if (!products || products.length === 0) {
-        return [];
+        return PaginatedResponse.of<ProductWithInventory>(
+          [],
+          total,
+          page,
+          limit,
+        );
       }
 
       // Extract product IDs
       const productIds = products.map((product) => product.id as number);
 
-      // Fetch inventory data for all products
+      // Fetch inventory data for the page in a single batch TCP call
       const inventoryItems = (await firstValueFrom(
         this.inventoryClient.send(
           INVENTORY_MESSAGE_PATTERNS.INVENTORY_GET_BY_PRODUCT_IDS,
@@ -847,7 +1044,7 @@ export class ProductService {
           ) as unknown as ProductWithInventory["inventory"]) ?? null,
       })) as ProductWithInventory[];
 
-      return results;
+      return PaginatedResponse.of(results, total, page, limit);
     } catch (error) {
       this.logger.error(`Error fetching all products with inventory:`, error);
       throw error;

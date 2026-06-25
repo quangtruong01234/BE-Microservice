@@ -1,11 +1,13 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
   IsArray,
+  IsInt,
   IsNotEmpty,
   IsOptional,
   IsString,
   IsUrl,
   MaxLength,
+  Min,
 } from "class-validator";
 
 export class CreatePostDto {
@@ -25,4 +27,10 @@ export class CreatePostDto {
   @IsOptional()
   @IsUrl()
   videoUrl?: string;
+
+  @ApiPropertyOptional({ description: "Optional attached product ID" })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  productId?: number;
 }

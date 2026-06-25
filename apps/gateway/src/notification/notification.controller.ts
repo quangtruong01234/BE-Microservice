@@ -45,6 +45,17 @@ export class NotificationController {
     );
   }
 
+  @Get("unread-count")
+  @ApiOperation({
+    summary: "Get unread notification count for the current user",
+  })
+  @ApiResponse({ status: 200, description: "Unread notification count." })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  async getUnreadCount(@Req() req: Request): Promise<{ unreadCount: number }> {
+    const userId = req.user?.id ?? 0;
+    return this.notificationService.getUnreadCount(userId);
+  }
+
   @Patch(":id/read")
   @ApiOperation({ summary: "Mark a notification as read" })
   @ApiResponse({ status: 200, description: "Notification marked as read." })

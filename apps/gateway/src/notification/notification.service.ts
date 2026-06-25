@@ -53,6 +53,22 @@ export class NotificationGatewayService {
     }
   }
 
+  async getUnreadCount(userId: number): Promise<{ unreadCount: number }> {
+    try {
+      return await firstValueFrom(
+        this.notificationClient
+          .send(NOTIFICATION_MESSAGE_PATTERN.GET_UNREAD_COUNT, { userId })
+          .pipe(timeout(10000)) as Observable<{ unreadCount: number }>,
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "get notification unread count",
+        "Notification Service",
+      );
+    }
+  }
+
   async markNotificationRead(
     notificationId: number,
     userId: number,
