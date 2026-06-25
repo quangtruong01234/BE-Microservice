@@ -9,11 +9,15 @@ import {
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { DataSource, In, Repository, SelectQueryBuilder } from "typeorm";
+import { ClientProxy } from "@nestjs/microservices";
+import { firstValueFrom, timeout } from "rxjs";
 import { Channel } from "amqplib";
 import { PaginatedResponse } from "@app/common";
 import { EXCHANGE } from "@app/common/constants/exchange";
 import { EVENT } from "@app/common/constants/event";
 import { CachedService } from "@app/cached";
+import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
+import { ORDER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { Product } from "./entity/product.entity";
 import { ProductReview } from "./entity/product-review.entity";
 import { ProductSku } from "./entity/product-sku.entity";
@@ -50,7 +54,13 @@ export class ProductService {
     private readonly cachedService: CachedService,
     @Inject(EXCHANGE.RMQ_PUBLISHER_CHANNEL)
     private readonly fanoutChannel: Channel | null,
+    @Inject(NAME_SERVICE_TCP.ORDERS_SERVICE)
+    private readonly ordersClient: ClientProxy,
   ) {}
+
+  async onModuleInit(): Promise<void> {
+    await this.ordersClient.connect();
+  }
 
   private buildSearchCacheKey(query: GetProductsQueryDto): string {
     const stable = JSON.stringify(
@@ -96,32 +106,187 @@ export class ProductService {
     );
   }
 
+  /**
+   * Validate that every SKU's tierIdx is structurally consistent with the
+   * product's variation axes: one index per variation, each index within the
+   * bounds of that variation's options. Rejects malformed combinations (e.g.
+   * a SKU carrying 2 tier indices for a product that has a single variation)
+   * before they reach the database.
+   */
+  private validateSkuTiers(
+    variations: { name: string; options: string[] }[] | null,
+    skuList: CreateProductSkuDto[],
+  ): void {
+    const axes = Array.isArray(variations) ? variations : [];
+    const variationCount = axes.length;
+
+    for (const dto of skuList) {
+      let tierIdx: number[];
+      try {
+        tierIdx = JSON.parse(dto.tierIdx) as number[];
+      } catch {
+        throw new BadRequestException(
+          `Invalid tierIdx "${dto.tierIdx}" — must be a JSON array string`,
+        );
+      }
+
+      if (!Array.isArray(tierIdx)) {
+        throw new BadRequestException(
+          `Invalid tierIdx "${dto.tierIdx}" — must be a JSON array`,
+        );
+      }
+
+      if (tierIdx.length !== variationCount) {
+        throw new BadRequestException(
+          `SKU tierIdx ${dto.tierIdx} has ${tierIdx.length} tier(s) but the product defines ${variationCount} variation(s); counts must match`,
+        );
+      }
+
+      tierIdx.forEach((idx, axis) => {
+        const optionCount = axes[axis]?.options?.length ?? 0;
+        if (!Number.isInteger(idx) || idx < 0 || idx >= optionCount) {
+          throw new BadRequestException(
+            `SKU tierIdx ${dto.tierIdx} index ${idx} is out of range for variation "${axes[axis]?.name ?? axis}" (${optionCount} option(s))`,
+          );
+        }
+      });
+    }
+  }
+
   // SKU methods
+
+  /**
+   * Canonical key for a SKU variation combination, used to diff incoming SKUs
+   * against existing rows. Accepts either the raw VARCHAR string (e.g. "[0,1]")
+   * or the parsed number[] produced by @AfterLoad — both normalize to the same
+   * spaceless JSON string so they compare reliably.
+   */
+  private canonicalTierKey(tierIdx: string | number[]): string {
+    const parsed = Array.isArray(tierIdx)
+      ? tierIdx
+      : (JSON.parse(tierIdx) as number[]);
+    return JSON.stringify(parsed);
+  }
+
+  /**
+   * Ask the orders service which of the given SKU ids are referenced by an
+   * existing order item or cart item. Failures are treated as "all referenced"
+   * (fail-safe) so a transient orders outage never causes silent data loss.
+   */
+  private async getReferencedSkuIds(skuIds: number[]): Promise<number[]> {
+    if (skuIds.length === 0) {
+      return [];
+    }
+    try {
+      return await firstValueFrom(
+        this.ordersClient
+          .send<number[]>(ORDER_MESSAGE_PATTERN.GET_REFERENCED_SKU_IDS, {
+            skuIds,
+          })
+          .pipe(timeout(10000)),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `[PRODUCT] SKU reference check failed; treating all candidates as referenced: ${String(err)}`,
+      );
+      return [...skuIds];
+    }
+  }
+
+  /**
+   * Apply a SKU list to a product as a create/update/delete diff keyed on the
+   * variation combination (tierIdx). Matched SKUs are updated in place so their
+   * id is preserved for any order/cart that references them. Removed SKUs that
+   * are still referenced are soft-deactivated (isActive=false) instead of being
+   * deleted; unreferenced removed SKUs are hard-deleted (P0-05).
+   */
   async upsertSkus(
     productId: number,
     skuList: CreateProductSkuDto[],
   ): Promise<ProductSku[]> {
-    let deletedSkuIds: number[] = [];
+    // 1. Validate the product exists and the incoming tiers are coherent.
+    const product = await this.productRepository.findOne({
+      where: { id: productId },
+      select: ["id", "variations"],
+    });
+    if (!product) {
+      throw new NotFoundException(`Product ${productId} not found`);
+    }
+    this.validateSkuTiers(product.variations, skuList);
 
+    // 2. Load existing SKUs and index them by their variation combination.
+    const existing = await this.skuRepository.find({ where: { productId } });
+    const existingByKey = new Map<string, ProductSku>();
+    for (const sku of existing) {
+      existingByKey.set(this.canonicalTierKey(sku.tierIdx), sku);
+    }
+    const incomingKeys = new Set(
+      skuList.map((dto) => this.canonicalTierKey(dto.tierIdx)),
+    );
+
+    // 3. Removed candidates = existing SKUs absent from the incoming list.
+    const removedCandidates = existing.filter(
+      (sku) => !incomingKeys.has(this.canonicalTierKey(sku.tierIdx)),
+    );
+
+    // 4. Reference check runs OUTSIDE the transaction to avoid holding a DB
+    //    lock across a TCP round-trip to the orders service.
+    const referencedIds = new Set(
+      await this.getReferencedSkuIds(removedCandidates.map((s) => s.id)),
+    );
+
+    const deactivatedSkuIds: number[] = [];
+    const deletedSkuIds: number[] = [];
+
+    // 5. Apply the diff atomically.
     const saved = await this.dataSource.transaction(async (manager) => {
-      const existing = await manager.find(ProductSku, {
-        where: { productId },
-        select: ["id"],
-      });
-      deletedSkuIds = existing.map((s) => s.id);
+      const toPersist: ProductSku[] = [];
 
-      await manager.delete(ProductSku, { productId });
-      const entities = skuList.map((dto) =>
-        manager.create(ProductSku, {
-          productId,
-          tierIdx: dto.tierIdx,
-          price: dto.price,
-          stockQuantity: dto.stockQuantity ?? 0,
-          sku: dto.sku ?? null,
-          isActive: dto.isActive ?? true,
-        }),
-      );
-      const result = await manager.save(ProductSku, entities);
+      for (const dto of skuList) {
+        const match = existingByKey.get(this.canonicalTierKey(dto.tierIdx));
+        if (match) {
+          // Update in place — keep id (and tierIdx) so references survive.
+          match.price = dto.price;
+          match.stockQuantity = dto.stockQuantity ?? match.stockQuantity;
+          match.sku = dto.sku ?? null;
+          match.isActive = dto.isActive ?? true;
+          match.tierIdx = Array.isArray(match.tierIdx)
+            ? JSON.stringify(match.tierIdx)
+            : match.tierIdx;
+          toPersist.push(match);
+        } else {
+          toPersist.push(
+            manager.create(ProductSku, {
+              productId,
+              tierIdx: dto.tierIdx,
+              price: dto.price,
+              stockQuantity: dto.stockQuantity ?? 0,
+              sku: dto.sku ?? null,
+              isActive: dto.isActive ?? true,
+            }),
+          );
+        }
+      }
+
+      for (const candidate of removedCandidates) {
+        if (referencedIds.has(candidate.id)) {
+          // Referenced by an order/cart — soft-deactivate, never delete.
+          candidate.isActive = false;
+          candidate.tierIdx = Array.isArray(candidate.tierIdx)
+            ? JSON.stringify(candidate.tierIdx)
+            : candidate.tierIdx;
+          toPersist.push(candidate);
+          deactivatedSkuIds.push(candidate.id);
+        } else {
+          deletedSkuIds.push(candidate.id);
+        }
+      }
+
+      if (deletedSkuIds.length > 0) {
+        await manager.delete(ProductSku, { id: In(deletedSkuIds) });
+      }
+
+      const result = await manager.save(ProductSku, toPersist);
       for (const sku of result) {
         if (typeof sku.tierIdx === "string") {
           sku.tierIdx = JSON.parse(sku.tierIdx) as number[];
@@ -129,6 +294,12 @@ export class ProductService {
       }
       return result;
     });
+
+    if (deactivatedSkuIds.length > 0) {
+      this.logger.log(
+        `[PRODUCT] Product ${productId}: soft-deactivated referenced SKUs [${deactivatedSkuIds.join(", ")}] instead of deleting`,
+      );
+    }
 
     if (!this.fanoutChannel) {
       this.logger.warn(

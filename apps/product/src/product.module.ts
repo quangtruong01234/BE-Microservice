@@ -11,6 +11,12 @@ import { Category } from "./entity/category.entity";
 import { DatabaseModule } from "@app/database";
 import { RmqModule, RmqService } from "@app/common";
 import { CachedModule } from "@app/cached";
+import { ClientsModule, Transport } from "@nestjs/microservices";
+import {
+  NAME_SERVICE_TCP,
+  PORT_TCP,
+  TCP_HOST,
+} from "libs/constant/port-tcp.constant";
 
 @Module({
   imports: [
@@ -25,6 +31,16 @@ import { CachedModule } from "@app/cached";
       ProductSku,
       Brand,
       Category,
+    ]),
+    ClientsModule.register([
+      {
+        name: NAME_SERVICE_TCP.ORDERS_SERVICE,
+        transport: Transport.TCP,
+        options: {
+          host: TCP_HOST,
+          port: PORT_TCP.ORDERS_TCP_PORT,
+        },
+      },
     ]),
     RmqModule,
     RmqModule.registerDirectPublisher(),
