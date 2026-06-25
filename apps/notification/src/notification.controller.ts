@@ -285,6 +285,13 @@ export class NotificationController {
     );
   }
 
+  @MessagePattern(NOTIFICATION_MESSAGE_PATTERN.GET_UNREAD_COUNT)
+  async getUnreadCount(
+    @Payload() data: { userId: number },
+  ): Promise<{ unreadCount: number }> {
+    return this.notificationService.countUnread(data.userId);
+  }
+
   @MessagePattern(NOTIFICATION_MESSAGE_PATTERN.MARK_NOTIFICATION_READ)
   async markNotificationRead(
     @Payload() data: { notificationId: number; userId: number },

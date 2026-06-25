@@ -74,6 +74,13 @@ export class NotificationService {
     return PaginatedResponse.of(data, total, page, limit);
   }
 
+  async countUnread(userId: number): Promise<{ unreadCount: number }> {
+    const unreadCount = await this.notificationRepository.count({
+      where: { userId, isRead: false },
+    });
+    return { unreadCount };
+  }
+
   async markNotificationRead(
     notificationId: number,
     userId: number,
