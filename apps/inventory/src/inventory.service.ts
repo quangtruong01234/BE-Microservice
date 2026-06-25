@@ -6,7 +6,7 @@ import {
   ConflictException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository, QueryFailedError } from "typeorm";
+import { Repository, QueryFailedError, IsNull } from "typeorm";
 import { Channel } from "amqplib";
 import { Inventory } from "./inventory.entity";
 import {
@@ -72,15 +72,25 @@ export class InventoryService {
 
   async create(data: CreateInventoryDto): Promise<Inventory> {
     try {
-      // Check if inventory for this product already exists
+      // Check if inventory for this product already exists. A simple
+      // (non-SKU) product owns exactly one row with productSkuId NULL.
       const existing = await this.inventoryRepository.findOne({
-        where: { productId: data.productId },
+        where: { productId: data.productId, productSkuId: IsNull() },
       });
 
       if (existing) {
-        throw new ConflictException(
-          `Inventory for product ID ${data.productId} already exists`,
+        // An active row means a live duplicate — reject. An inactive row is
+        // stale (left behind by a previously deleted product); never re-attach
+        // it, hard-delete it and create a fresh row with the new stock values.
+        if (existing.isActive) {
+          throw new ConflictException(
+            `Inventory for product ID ${data.productId} already exists`,
+          );
+        }
+        this.logger.warn(
+          `[INVENTORY] Removing stale inactive inventory row ${existing.id} for product ${data.productId} before re-create`,
         );
+        await this.inventoryRepository.delete(existing.id);
       }
 
       const inventory = this.inventoryRepository.create(data);
@@ -192,6 +202,20 @@ export class InventoryService {
       isActive: false,
     });
     return result.affected != null && result.affected > 0;
+  }
+
+  /**
+   * Hard-delete every inventory row (simple + per-SKU) belonging to a product.
+   * Called when a product is deleted so no stale inventory is left behind to
+   * re-attach to a future product reusing the same ID.
+   */
+  async removeByProductId(productId: number): Promise<{ deleted: number }> {
+    const result = await this.inventoryRepository.delete({ productId });
+    const deleted = result.affected ?? 0;
+    this.logger.log(
+      `[INVENTORY] Hard-deleted ${deleted} inventory row(s) for product ${productId}`,
+    );
+    return { deleted };
   }
 
   async getInventoryByProductIds(productIds: number[]): Promise<Inventory[]> {

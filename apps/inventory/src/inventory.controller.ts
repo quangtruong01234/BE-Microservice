@@ -156,6 +156,14 @@ export class InventoryController {
     return { success };
   }
 
+  @MessagePattern("inventory.remove_by_product")
+  async removeInventoryByProduct(productId: number) {
+    this.logger.log(
+      `[INVENTORY-TCP] Remove all inventory for product ${productId}`,
+    );
+    return this.inventoryService.removeByProductId(productId);
+  }
+
   @EventPattern(EVENT.ORDER_CANCELED_EVENT)
   async handleOrderCanceled(
     @Payload()
