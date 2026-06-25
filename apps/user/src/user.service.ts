@@ -12,6 +12,7 @@ import { In, Repository } from "typeorm";
 import { RegisterUserDto } from "./dto/register-user.dto";
 import { LoginUserDto } from "./dto/login-user.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
+import { PaginatedResponse } from "@app/common";
 import * as bcrypt from "bcryptjs";
 
 type SafeUser = Omit<User, "password">;
@@ -42,6 +43,34 @@ export class UserService {
       },
     });
     return users.map((user) => this.toSafeUser(user));
+  }
+
+  async getUsersPaginated(
+    page: number,
+    limit: number,
+  ): Promise<PaginatedResponse<SafeUser>> {
+    this.logger.log(`Fetching users page=${page} limit=${limit}`);
+    const [users, total] = await this.userRepository.findAndCount({
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        name: true,
+        avatar: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+      order: { createdAt: "DESC" },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+    return PaginatedResponse.of(
+      users.map((user) => this.toSafeUser(user)),
+      total,
+      page,
+      limit,
+    );
   }
 
   async register(dto: RegisterUserDto): Promise<SafeUser> {

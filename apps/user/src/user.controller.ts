@@ -29,6 +29,13 @@ export class UserController {
     return await this.userService.getAllUsers();
   }
 
+  @MessagePattern({ cmd: USER_MESSAGE_PATTERN.GET_USERS_PAGINATED })
+  async getUsersPaginated(
+    @Payload() data: { page: number; limit: number },
+  ): Promise<unknown> {
+    return this.userService.getUsersPaginated(data.page, data.limit);
+  }
+
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS })
   async getUsersByIds(@Payload() userIds: number[]): Promise<unknown> {
     return this.userService.getUsersByIds(userIds);
