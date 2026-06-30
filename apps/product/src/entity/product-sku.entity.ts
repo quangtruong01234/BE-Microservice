@@ -8,6 +8,7 @@ import {
   JoinColumn,
   AfterLoad,
 } from "typeorm";
+import { decimalToNumber } from "@app/common/transformers/decimal-to-number.transformer";
 import { Product } from "./product.entity";
 
 @Entity("product_skus")
@@ -28,7 +29,12 @@ export class ProductSku {
     }
   }
 
-  @Column({ type: "decimal", precision: 12, scale: 2 })
+  @Column({
+    type: "decimal",
+    precision: 12,
+    scale: 2,
+    transformer: decimalToNumber,
+  })
   price!: number;
 
   @Column({ type: "int", default: 0, name: "stock_quantity" })

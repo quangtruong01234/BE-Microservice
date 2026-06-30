@@ -11,6 +11,7 @@ import {
   JoinTable,
   Index,
 } from "typeorm";
+import { decimalToNumber } from "@app/common/transformers/decimal-to-number.transformer";
 import { Brand } from "./brand.entity";
 import { Category } from "./category.entity";
 import { ProductSku } from "./product-sku.entity";
@@ -33,6 +34,7 @@ export class Product {
     scale: 2,
     nullable: true,
     default: null,
+    transformer: decimalToNumber,
   })
   price!: number | null;
 
@@ -113,6 +115,7 @@ export class Product {
     scale: 2,
     default: () => "0.00",
     name: "rating",
+    transformer: decimalToNumber,
   })
   rating!: number;
 
