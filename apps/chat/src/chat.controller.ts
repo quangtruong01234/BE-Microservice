@@ -4,7 +4,7 @@ import { HttpToRpcExceptionFilter } from "@app/common/filters/http-to-rpc-except
 import { CHAT_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { Conversation } from "./entity/conversation.entity";
 import { Message } from "./entity/message.entity";
-import { ChatService } from "./chat.service";
+import { ChatService, ConversationWithMeta } from "./chat.service";
 
 @UseFilters(new HttpToRpcExceptionFilter())
 @Controller()
@@ -24,7 +24,7 @@ export class ChatController {
   @MessagePattern(CHAT_MESSAGE_PATTERN.CHAT_GET_CONVERSATIONS)
   async getConversations(
     @Payload() data: { userId: number },
-  ): Promise<Conversation[]> {
+  ): Promise<ConversationWithMeta[]> {
     return this.chatService.getConversations(data.userId);
   }
 
@@ -66,5 +66,12 @@ export class ChatController {
     @Payload() data: { userId: number; conversationId: number },
   ): Promise<boolean> {
     return this.chatService.checkMembership(data.userId, data.conversationId);
+  }
+
+  @MessagePattern(CHAT_MESSAGE_PATTERN.CHAT_MARK_READ)
+  async markRead(
+    @Payload() data: { userId: number; conversationId: number },
+  ): Promise<null> {
+    return this.chatService.markRead(data.userId, data.conversationId);
   }
 }

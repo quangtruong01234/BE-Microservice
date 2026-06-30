@@ -18,6 +18,12 @@ export class Conversation {
   @Column({ name: "user2_id" })
   user2Id!: number;
 
+  @Column({ name: "user1_last_read_at", type: "datetime", nullable: true })
+  user1LastReadAt!: Date | null;
+
+  @Column({ name: "user2_last_read_at", type: "datetime", nullable: true })
+  user2LastReadAt!: Date | null;
+
   @CreateDateColumn({ name: "created_at" })
   createdAt!: Date;
 
