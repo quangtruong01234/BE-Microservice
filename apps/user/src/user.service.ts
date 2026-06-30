@@ -139,24 +139,17 @@ export class UserService {
     return this.userRepository.find({ where: { id: In(userIds) }, select });
   }
 
-  async getMe(userId: number): Promise<User> {
+  async getMe(userId: number): Promise<SafeUser> {
     this.logger.log(`getMe called with userId: ${userId}`);
-    const user = await this.userRepository.findOne({
-      where: { id: userId },
-      select: {
-        id: true,
-        username: true,
-        email: true,
-        name: true,
-        avatar: true,
-        isActive: true,
-        createdAt: true,
-      },
-    });
+    // No partial `select` here: the `role` relation is `eager: true`, so a plain
+    // findOne auto-joins it (same query shape as `login`). A partial `select`
+    // that also lists relation columns double-joins the eager relation on MySQL
+    // and fails. Strip the password instead of column-selecting.
+    const user = await this.userRepository.findOne({ where: { id: userId } });
     if (!user) {
       throw new NotFoundException("User not found");
     }
-    return user;
+    return this.toSafeUser(user);
   }
 
   async updateUser(userId: number, dto: UpdateUserDto): Promise<User> {

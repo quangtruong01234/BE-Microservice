@@ -21,6 +21,13 @@ const grantList = [
     attributes: "*",
   },
   { role: "admin", resource: "payment", action: "read:any", attributes: "*" },
+  { role: "admin", resource: "shipping", action: "read:any", attributes: "*" },
+  {
+    role: "admin",
+    resource: "shipping",
+    action: "update:any",
+    attributes: "*",
+  },
   { role: "admin", resource: "rewards", action: "read:any", attributes: "*" },
   { role: "admin", resource: "brand", action: "read:any", attributes: "*" },
   { role: "admin", resource: "brand", action: "update:any", attributes: "*" },
@@ -67,6 +74,28 @@ const grantList = [
   },
   { role: "user", resource: "payment", action: "read:own", attributes: "*" },
   { role: "user", resource: "rewards", action: "read:own", attributes: "*" },
+
+  // logistics_operator — read-only GHN/shipping access (web shipping ops)
+  {
+    role: "logistics_operator",
+    resource: "shipping",
+    action: "read:any",
+    attributes: "*",
+  },
+
+  // shipping_manager — read + update GHN/shipping (manual sync, status ops)
+  {
+    role: "shipping_manager",
+    resource: "shipping",
+    action: "read:any",
+    attributes: "*",
+  },
+  {
+    role: "shipping_manager",
+    resource: "shipping",
+    action: "update:any",
+    attributes: "*",
+  },
 ];
 
 export const ac = new AccessControl(grantList);

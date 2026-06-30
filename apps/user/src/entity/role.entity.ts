@@ -10,6 +10,8 @@ export enum RoleName {
   USER = "user",
   SHOP = "shop",
   ADMIN = "admin",
+  LOGISTICS_OPERATOR = "logistics_operator",
+  SHIPPING_MANAGER = "shipping_manager",
 }
 
 export enum RoleStatus {
