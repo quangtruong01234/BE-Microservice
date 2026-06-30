@@ -49,12 +49,31 @@ export const ORDER_MESSAGE_PATTERN = {
   GET_SELLER_ORDER_DETAIL: "order.get_seller_detail",
   ADVANCE_ORDER_STATUS: "order.advance_status",
   GET_ORDER_STATUS_COUNTS: "order.get_status_counts",
+  ADMIN_GHN_ORDERS: "order.admin_ghn_orders",
+  ADMIN_GHN_ORDER_DETAIL: "order.admin_ghn_order_detail",
+  ADMIN_GHN_SYNC: "order.admin_ghn_sync",
+  ADMIN_GHN_HISTORY: "order.admin_ghn_history",
+  ADMIN_GHN_CANCEL: "order.admin_ghn_cancel",
+  ADMIN_GHN_RETURN: "order.admin_ghn_return",
+  ADMIN_GHN_UPDATE_COD: "order.admin_ghn_update_cod",
+  ADMIN_GHN_UPDATE_RECEIVER: "order.admin_ghn_update_receiver",
+  ADMIN_GHN_DEMO_STATUS: "order.admin_ghn_demo_status",
+  RETURN_REQUEST_CREATE: "order.return_request_create",
+  RETURN_REQUEST_LIST_USER: "order.return_request_list_user",
+  RETURN_REQUEST_LIST_MANAGED: "order.return_request_list_managed",
+  RETURN_REQUEST_REVIEW: "order.return_request_review",
+  VOUCHER_VALIDATE: "order.voucher_validate",
+  VOUCHER_CREATE: "order.voucher_create",
+  VOUCHER_LIST: "order.voucher_list",
+  VOUCHER_DEACTIVATE: "order.voucher_deactivate",
 };
 
 export const PAYMENT_MESSAGE_PATTERN = {
   GET_PAYMENT_URL: "get_payment_url",
   GET_PAYMENT_OPTIONS: "get_payment_options",
   INITIATE_MULTI_ORDER_PAYMENT: "payment.initiate_multi_order",
+  COMPLETE_ZALOPAY_RETURN: "payment.complete_zalopay_return",
+  COMPLETE_VNPAY_RETURN: "payment.complete_vnpay_return",
 };
 
 export const NOTIFICATION_MESSAGE_PATTERN = {
@@ -91,6 +110,7 @@ export const CHAT_MESSAGE_PATTERN = {
   CHAT_GET_MESSAGES: "chat.get_messages",
   CHAT_SEND_MESSAGE: "chat.send_message",
   CHAT_CHECK_MEMBERSHIP: "chat.check_membership",
+  CHAT_MARK_READ: "chat.mark_read",
 };
 
 export const CART_MESSAGE_PATTERN = {
