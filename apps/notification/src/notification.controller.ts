@@ -1,4 +1,10 @@
-import { Controller, Inject, Logger, NotFoundException } from "@nestjs/common";
+import {
+  Controller,
+  Inject,
+  Logger,
+  NotFoundException,
+  UseFilters,
+} from "@nestjs/common";
 import {
   ClientProxy,
   Ctx,
@@ -10,7 +16,7 @@ import {
 import { firstValueFrom, Observable, timeout } from "rxjs";
 import { NotificationService } from "./notification.service";
 import { EVENT } from "@app/common/constants/event";
-import { RmqService } from "@app/common";
+import { HttpToRpcExceptionFilter, RmqService } from "@app/common";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import {
   NOTIFICATION_MESSAGE_PATTERN,
@@ -20,9 +26,11 @@ import {
 interface OrderInfo {
   id: number;
   userId: number;
+  sellerId: number;
   total: number;
 }
 
+@UseFilters(HttpToRpcExceptionFilter)
 @Controller()
 export class NotificationController {
   private readonly logger = new Logger(NotificationController.name);
@@ -103,6 +111,132 @@ export class NotificationController {
     } catch (err) {
       this.logger.error(
         `[NOTIFICATION] handleOrderCanceled failed for order ${orderId}: ${err}`,
+      );
+      const channel = context.getChannelRef() as {
+        nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
+      };
+      const originalMsg = context.getMessage();
+      if (err instanceof NotFoundException) {
+        channel.nack(originalMsg, false, false);
+      } else {
+        channel.nack(originalMsg, false, true);
+      }
+    }
+  }
+
+  @EventPattern(EVENT.ORDER_RETURN_REQUESTED_EVENT)
+  async handleOrderReturnRequested(
+    @Payload() data: { orderId: number },
+    @Ctx() context: RmqContext,
+  ): Promise<void> {
+    const { orderId } = data;
+    this.logger.log(
+      `[NOTIFICATION] order_return_requested received for order ${orderId}`,
+    );
+    try {
+      const order = await firstValueFrom(
+        this.ordersClient
+          .send(ORDER_MESSAGE_PATTERN.GET_ORDER_BY_ID, orderId)
+          .pipe(timeout(10000)) as Observable<OrderInfo>,
+      );
+      if (!order) {
+        throw new NotFoundException(`Order ${orderId} not found`);
+      }
+      // Notify the seller that a buyer opened a return request to review.
+      await this.notificationService.saveNotification(
+        order.sellerId,
+        "order_return_requested",
+        orderId,
+        `Đơn hàng #${orderId} có yêu cầu trả hàng cần duyệt`,
+      );
+      this.rmqService.ack(context);
+    } catch (err) {
+      this.logger.error(
+        `[NOTIFICATION] handleOrderReturnRequested failed for order ${orderId}: ${err}`,
+      );
+      const channel = context.getChannelRef() as {
+        nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
+      };
+      const originalMsg = context.getMessage();
+      if (err instanceof NotFoundException) {
+        channel.nack(originalMsg, false, false);
+      } else {
+        channel.nack(originalMsg, false, true);
+      }
+    }
+  }
+
+  @EventPattern(EVENT.ORDER_RETURN_APPROVED_EVENT)
+  async handleOrderReturnApproved(
+    @Payload() data: { orderId: number },
+    @Ctx() context: RmqContext,
+  ): Promise<void> {
+    const { orderId } = data;
+    this.logger.log(
+      `[NOTIFICATION] order_return_approved received for order ${orderId}`,
+    );
+    try {
+      const order = await firstValueFrom(
+        this.ordersClient
+          .send(ORDER_MESSAGE_PATTERN.GET_ORDER_BY_ID, orderId)
+          .pipe(timeout(10000)) as Observable<OrderInfo>,
+      );
+      if (!order) {
+        throw new NotFoundException(`Order ${orderId} not found`);
+      }
+      // Notify the buyer that their return request was approved and refunded.
+      await this.notificationService.saveNotification(
+        order.userId,
+        "order_return_approved",
+        orderId,
+        `Yêu cầu trả hàng cho đơn #${orderId} đã được duyệt và hoàn tiền`,
+      );
+      this.rmqService.ack(context);
+    } catch (err) {
+      this.logger.error(
+        `[NOTIFICATION] handleOrderReturnApproved failed for order ${orderId}: ${err}`,
+      );
+      const channel = context.getChannelRef() as {
+        nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
+      };
+      const originalMsg = context.getMessage();
+      if (err instanceof NotFoundException) {
+        channel.nack(originalMsg, false, false);
+      } else {
+        channel.nack(originalMsg, false, true);
+      }
+    }
+  }
+
+  @EventPattern(EVENT.ORDER_RETURN_REJECTED_EVENT)
+  async handleOrderReturnRejected(
+    @Payload() data: { orderId: number },
+    @Ctx() context: RmqContext,
+  ): Promise<void> {
+    const { orderId } = data;
+    this.logger.log(
+      `[NOTIFICATION] order_return_rejected received for order ${orderId}`,
+    );
+    try {
+      const order = await firstValueFrom(
+        this.ordersClient
+          .send(ORDER_MESSAGE_PATTERN.GET_ORDER_BY_ID, orderId)
+          .pipe(timeout(10000)) as Observable<OrderInfo>,
+      );
+      if (!order) {
+        throw new NotFoundException(`Order ${orderId} not found`);
+      }
+      // Notify the buyer that their return request was rejected.
+      await this.notificationService.saveNotification(
+        order.userId,
+        "order_return_rejected",
+        orderId,
+        `Yêu cầu trả hàng cho đơn #${orderId} đã bị từ chối`,
+      );
+      this.rmqService.ack(context);
+    } catch (err) {
+      this.logger.error(
+        `[NOTIFICATION] handleOrderReturnRejected failed for order ${orderId}: ${err}`,
       );
       const channel = context.getChannelRef() as {
         nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
