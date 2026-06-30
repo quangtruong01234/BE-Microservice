@@ -4,6 +4,7 @@ import { PaymentGatewayFactory } from "./payment-gateway.factory";
 import { PaymentMethod } from "./entity/payment-method.entity";
 import { Payment, PaymentStatus } from "./entity/payment.entity";
 import { PaymentsService } from "./payments.service";
+import { PaymentMethod as PaymentMethodEnum } from "@app/common";
 
 describe("PaymentsService callback idempotency", () => {
   const pendingPayment = {
@@ -58,4 +59,86 @@ describe("PaymentsService callback idempotency", () => {
       expect(publish).toHaveBeenCalledTimes(1);
     },
   );
+});
+
+describe("PaymentsService payment return URLs", () => {
+  const originalFrontendUrl = process.env.FRONTEND_URL;
+
+  afterEach(() => {
+    if (originalFrontendUrl === undefined) {
+      delete process.env.FRONTEND_URL;
+    } else {
+      process.env.FRONTEND_URL = originalFrontendUrl;
+    }
+  });
+
+  function createService(): {
+    service: PaymentsService;
+    createPayment: jest.Mock;
+  } {
+    const payment = {
+      id: 7,
+      orderId: 111,
+      amount: 3900,
+      status: PaymentStatus.PENDING,
+    } as Payment;
+    const createPayment = jest.fn().mockResolvedValue({
+      paymentUrl: "https://gateway.example/pay",
+      transactionId: "txn-1",
+      appTransId: "app-1",
+    });
+    const service = new PaymentsService(
+      {
+        findOne: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockReturnValue(payment),
+        save: jest.fn().mockResolvedValue(payment),
+        update: jest.fn().mockResolvedValue({ affected: 1 }),
+      } as unknown as Repository<Payment>,
+      {} as Repository<PaymentMethod>,
+      {
+        getStrategy: jest.fn().mockReturnValue({
+          createPayment,
+          verifyCallback: jest.fn(),
+        }),
+      } as unknown as PaymentGatewayFactory,
+      { publish: jest.fn() } as unknown as Channel,
+    );
+    return { service, createPayment };
+  }
+
+  it("uses the frontend result route for a single VNPay order", async () => {
+    process.env.FRONTEND_URL = "https://shop.example.com";
+    const { service, createPayment } = createService();
+
+    await service.processPayment(
+      "111",
+      3900,
+      "Payment for order 111",
+      PaymentMethodEnum.VNPAY,
+    );
+
+    expect(createPayment).toHaveBeenCalledWith({
+      id: "111",
+      total: 3900,
+      returnUrl:
+        "https://shop.example.com/payment-result?order=111&method=vnpay",
+    });
+  });
+
+  it("omits order from multi-order ZaloPay return URLs", async () => {
+    process.env.FRONTEND_URL = "https://shop.example.com";
+    const { service, createPayment } = createService();
+
+    await service.processMultiOrderPayment(
+      [110, 111],
+      7800,
+      PaymentMethodEnum.ZALOPAY,
+    );
+
+    expect(createPayment).toHaveBeenCalledWith({
+      id: "7",
+      total: 7800,
+      returnUrl: "https://shop.example.com/payment-result?method=zalopay",
+    });
+  });
 });

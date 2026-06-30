@@ -26,6 +26,7 @@ import {
   PaymentMethod,
   RmqService,
 } from "@app/common";
+import { ZaloPayReturnQuery } from "./zalopay/zalopay.service";
 
 const Public = () => SetMetadata("isPublic", true);
 
@@ -127,6 +128,63 @@ export class PaymentsController {
       data.totalAmount,
       data.paymentMethod,
     );
+  }
+
+  @MessagePattern(PAYMENT_MESSAGE_PATTERN.COMPLETE_ZALOPAY_RETURN)
+  async completeZaloPayReturn(
+    @Payload() query: ZaloPayReturnQuery,
+  ): Promise<{ status: "success" | "failed" }> {
+    if (!this.zaloPayReturnHasValidShape(query)) {
+      return { status: "failed" };
+    }
+    if (!this.paymentsService.verifyZaloPayReturn(query)) {
+      return { status: "failed" };
+    }
+    if (query.status !== "1") {
+      return { status: "failed" };
+    }
+    await this.paymentsService.completeZaloPayReturn(
+      query.apptransid,
+      query.apptransid,
+    );
+    return { status: "success" };
+  }
+
+  @MessagePattern(PAYMENT_MESSAGE_PATTERN.COMPLETE_VNPAY_RETURN)
+  async completeVNPayReturn(
+    @Payload()
+    query: { vnp_TxnRef?: string; vnp_TransactionNo?: string } & Record<
+      string,
+      string | undefined
+    >,
+  ): Promise<{ status: "success" | "failed" }> {
+    if (!query.vnp_TxnRef || !query.vnp_TransactionNo) {
+      return { status: "failed" };
+    }
+    const { success } = await this.vnpayStrategy.verifyCallback(query);
+    if (!success) {
+      return { status: "failed" };
+    }
+    await this.paymentsService.completeVNPayPayment(
+      query.vnp_TxnRef,
+      query.vnp_TransactionNo,
+    );
+    return { status: "success" };
+  }
+
+  private zaloPayReturnHasValidShape(
+    query: Partial<ZaloPayReturnQuery>,
+  ): query is ZaloPayReturnQuery {
+    return [
+      query.appid,
+      query.apptransid,
+      query.pmcid,
+      query.bankcode,
+      query.amount,
+      query.discountamount,
+      query.status,
+      query.checksum,
+    ].every((value) => typeof value === "string");
   }
 
   @Post("zalopay/callback")

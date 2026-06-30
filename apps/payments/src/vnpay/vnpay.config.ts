@@ -4,12 +4,19 @@ function requireEnv(key: string): string {
   return value.trim();
 }
 
+function optionalEnv(key: string, fallback: string): string {
+  return process.env[key]?.trim() || fallback;
+}
+
 export function getVNPayConfig() {
   return {
     tmnCode: requireEnv("VNP_TMN_CODE"),
     hashSecret: requireEnv("VNP_HASH_SECRET"),
     url: requireEnv("VNP_URL"),
-    returnUrl: requireEnv("VNP_RETURN_URL"),
+    returnUrl: optionalEnv(
+      "VNP_RETURN_URL",
+      "http://localhost:5173/payment-result",
+    ),
     ipnUrl: requireEnv("VNPAY_IPN_URL"),
   };
 }

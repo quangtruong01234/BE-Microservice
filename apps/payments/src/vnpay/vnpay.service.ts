@@ -8,11 +8,7 @@ import {
 } from "vnpay";
 import { IPaymentStrategy } from "../payment-strategy.interface";
 import { getVNPayConfig } from "./vnpay.config";
-
-interface VNPayOrder {
-  id: string | number;
-  total: number;
-}
+import { PaymentOrder } from "../payment-strategy.interface";
 
 @Injectable()
 export class VNPayStrategy implements IPaymentStrategy {
@@ -29,7 +25,7 @@ export class VNPayStrategy implements IPaymentStrategy {
     });
   }
 
-  createPayment(order: VNPayOrder): Promise<{
+  createPayment(order: PaymentOrder): Promise<{
     paymentUrl: string;
     transactionId: string;
     appTransId: string;
@@ -43,7 +39,7 @@ export class VNPayStrategy implements IPaymentStrategy {
       vnp_TxnRef,
       vnp_OrderInfo: `Payment for order ${order.id}`,
       vnp_OrderType: ProductCode.Other,
-      vnp_ReturnUrl: config.returnUrl,
+      vnp_ReturnUrl: order.returnUrl ?? config.returnUrl,
       vnp_Locale: VnpLocale.VN,
     });
 

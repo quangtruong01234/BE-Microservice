@@ -14,6 +14,9 @@ import { PaymentMethod as PaymentMethodEnum } from "@app/common";
 import { PaymentGatewayFactory } from "./payment-gateway.factory";
 import { EXCHANGE } from "@app/common/constants/exchange";
 import { EVENT } from "@app/common/constants/event";
+import { ZaloPayReturnQuery } from "./zalopay/zalopay.service";
+import { getZaloPayConfig } from "./zalopay/zalopay.config";
+import { generateMac } from "./zalopay/zalopay.helper";
 
 @Injectable()
 export class PaymentsService {
@@ -67,7 +70,11 @@ export class PaymentsService {
 
       const { paymentUrl, transactionId, appTransId } = await this.factory
         .getStrategy(paymentMethod)
-        .createPayment({ id: orderId, total: amount });
+        .createPayment({
+          id: orderId,
+          total: amount,
+          returnUrl: this.buildFrontendPaymentResultUrl(paymentMethod, orderId),
+        });
       this.logger.log(
         "[PAYMENTS] createPayment done, appTransId=" + appTransId,
       );
@@ -117,7 +124,11 @@ export class PaymentsService {
 
       const { paymentUrl, transactionId, appTransId } = await this.factory
         .getStrategy(paymentMethod)
-        .createPayment({ id: String(payment.id), total: totalAmount });
+        .createPayment({
+          id: String(payment.id),
+          total: totalAmount,
+          returnUrl: this.buildFrontendPaymentResultUrl(paymentMethod),
+        });
       this.logger.log(
         "[PAYMENTS] createPayment done, appTransId=" + appTransId,
       );
@@ -158,6 +169,26 @@ export class PaymentsService {
     return this.completePayment(appTransId, zpTransId, "ZaloPay");
   }
 
+  async completeZaloPayReturn(
+    appTransId: string,
+    transactionId: string,
+  ): Promise<Payment> {
+    return this.completePayment(appTransId, transactionId, "ZaloPay");
+  }
+
+  verifyZaloPayReturn(query: ZaloPayReturnQuery): boolean {
+    const hmacInput = [
+      query.appid,
+      query.apptransid,
+      query.pmcid,
+      query.bankcode,
+      query.amount,
+      query.discountamount,
+      query.status,
+    ].join("|");
+    return generateMac(hmacInput, getZaloPayConfig().key2) === query.checksum;
+  }
+
   async completeVNPayPayment(
     vnpTxnRef: string,
     vnpTransactionNo: string,
@@ -177,6 +208,12 @@ export class PaymentsService {
       throw new NotFoundException(`Payment ${appTransId} not found`);
     }
     if (payment.status === PaymentStatus.COMPLETED) {
+      if (payment.transactionId !== transactionId) {
+        await this.paymentRepository.update(
+          { id: payment.id },
+          { transactionId },
+        );
+      }
       this.logger.log(
         `[PAYMENTS] Duplicate ${gateway} callback ignored appTransId=${appTransId}`,
       );
@@ -253,5 +290,21 @@ export class PaymentsService {
       name: m.name,
       description: m.description,
     }));
+  }
+
+  private buildFrontendPaymentResultUrl(
+    paymentMethod: PaymentMethodEnum,
+    orderId?: string,
+  ): string {
+    const frontendOrigin = (process.env.FRONTEND_URL ?? "http://localhost:5173")
+      .split(",")[0]
+      .trim()
+      .replace(/\/+$/, "");
+    const url = new URL("/payment-result", frontendOrigin);
+    if (orderId) {
+      url.searchParams.set("order", orderId);
+    }
+    url.searchParams.set("method", paymentMethod);
+    return url.toString();
   }
 }

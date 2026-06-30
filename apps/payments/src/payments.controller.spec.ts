@@ -8,16 +8,32 @@ import { RmqContext } from "@nestjs/microservices";
 describe("PaymentsController", () => {
   let paymentsController: PaymentsController;
   let processPayment: jest.Mock;
+  let verifyZaloPayReturn: jest.Mock;
+  let completeZaloPayReturn: jest.Mock;
+  let completeVNPayPayment: jest.Mock;
+  let verifyCallback: jest.Mock;
   let ack: jest.Mock;
 
   beforeEach(async () => {
     processPayment = jest.fn();
+    verifyZaloPayReturn = jest.fn();
+    completeZaloPayReturn = jest.fn();
+    completeVNPayPayment = jest.fn();
+    verifyCallback = jest.fn();
     ack = jest.fn();
     const app: TestingModule = await Test.createTestingModule({
       controllers: [PaymentsController],
       providers: [
-        { provide: PaymentsService, useValue: { processPayment } },
-        { provide: VNPayStrategy, useValue: {} },
+        {
+          provide: PaymentsService,
+          useValue: {
+            processPayment,
+            verifyZaloPayReturn,
+            completeZaloPayReturn,
+            completeVNPayPayment,
+          },
+        },
+        { provide: VNPayStrategy, useValue: { verifyCallback } },
         { provide: RmqService, useValue: { ack } },
       ],
     }).compile();
@@ -78,5 +94,76 @@ describe("PaymentsController", () => {
 
     expect(ack).not.toHaveBeenCalled();
     expect(nack).toHaveBeenCalledWith(message, false, true);
+  });
+
+  it("completes a verified successful ZaloPay browser return", async () => {
+    verifyZaloPayReturn.mockReturnValue(true);
+
+    await expect(
+      paymentsController.completeZaloPayReturn({
+        appid: "2553",
+        apptransid: "260626_2553_1782484597989",
+        pmcid: "38",
+        bankcode: "",
+        amount: "6800",
+        discountamount: "0",
+        status: "1",
+        checksum: "valid",
+      }),
+    ).resolves.toEqual({ status: "success" });
+
+    expect(completeZaloPayReturn).toHaveBeenCalledWith(
+      "260626_2553_1782484597989",
+      "260626_2553_1782484597989",
+    );
+  });
+
+  it("does not complete a ZaloPay browser return with an invalid checksum", async () => {
+    verifyZaloPayReturn.mockReturnValue(false);
+
+    await expect(
+      paymentsController.completeZaloPayReturn({
+        appid: "2553",
+        apptransid: "260626_2553_1782484597989",
+        pmcid: "38",
+        bankcode: "",
+        amount: "6800",
+        discountamount: "0",
+        status: "1",
+        checksum: "invalid",
+      }),
+    ).resolves.toEqual({ status: "failed" });
+
+    expect(completeZaloPayReturn).not.toHaveBeenCalled();
+  });
+
+  it("completes a verified successful VNPay browser return", async () => {
+    verifyCallback.mockResolvedValue({ success: true, orderId: "txn-ref" });
+
+    await expect(
+      paymentsController.completeVNPayReturn({
+        vnp_TxnRef: "txn-ref",
+        vnp_TransactionNo: "gateway-txn",
+        vnp_ResponseCode: "00",
+        vnp_SecureHash: "valid",
+      }),
+    ).resolves.toEqual({ status: "success" });
+
+    expect(completeVNPayPayment).toHaveBeenCalledWith("txn-ref", "gateway-txn");
+  });
+
+  it("does not complete a VNPay browser return that fails verification", async () => {
+    verifyCallback.mockResolvedValue({ success: false, orderId: "txn-ref" });
+
+    await expect(
+      paymentsController.completeVNPayReturn({
+        vnp_TxnRef: "txn-ref",
+        vnp_TransactionNo: "gateway-txn",
+        vnp_ResponseCode: "00",
+        vnp_SecureHash: "invalid",
+      }),
+    ).resolves.toEqual({ status: "failed" });
+
+    expect(completeVNPayPayment).not.toHaveBeenCalled();
   });
 });

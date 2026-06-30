@@ -14,6 +14,17 @@ interface ZaloPayCreateOrderResponse {
   zp_trans_token?: string;
 }
 
+export interface ZaloPayReturnQuery {
+  appid: string;
+  apptransid: string;
+  pmcid: string;
+  bankcode: string;
+  amount: string;
+  discountamount: string;
+  status: string;
+  checksum: string;
+}
+
 @Injectable()
 export class ZaloPayService implements IPaymentStrategy {
   async createPayment(order: PaymentOrder): Promise<{
@@ -28,6 +39,7 @@ export class ZaloPayService implements IPaymentStrategy {
       order.total,
       `Payment for order ${order.id}`,
       appTransId,
+      order.returnUrl,
     );
     if (result.return_code !== 1) {
       throw new Error(result.return_message);
@@ -65,12 +77,13 @@ export class ZaloPayService implements IPaymentStrategy {
     amount: number,
     description: string,
     transId?: string,
+    returnUrl?: string,
   ): Promise<ZaloPayCreateOrderResponse> {
     const config = getZaloPayConfig();
     const appTransId = transId ?? generateTransId(config.appId);
     const appTime = Date.now();
     const embedData = JSON.stringify({
-      redirecturl: config.redirectUrl,
+      redirecturl: returnUrl ?? config.redirectUrl,
       orderId,
     });
     const item = "[]";

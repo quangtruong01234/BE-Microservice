@@ -1,6 +1,7 @@
 export interface PaymentOrder {
   id: string | number;
   total: number;
+  returnUrl?: string;
 }
 
 export interface CallbackPayload {
