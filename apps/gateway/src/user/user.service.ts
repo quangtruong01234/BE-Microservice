@@ -19,7 +19,12 @@ type RoleGrant = {
 };
 
 type UserRole = {
-  rol_name: "admin" | "shop" | "user";
+  rol_name:
+    | "admin"
+    | "shop"
+    | "user"
+    | "logistics_operator"
+    | "shipping_manager";
   rol_grants: RoleGrant[];
 };
 

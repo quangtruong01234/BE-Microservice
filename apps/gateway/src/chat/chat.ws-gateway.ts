@@ -12,13 +12,11 @@ import { firstValueFrom, timeout } from "rxjs";
 import { Server, Socket } from "socket.io";
 import { CHAT_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
+import { gatewayCorsOptions } from "../common/cors";
 
 @Injectable()
 @WebSocketGateway({
-  cors: {
-    origin: (process.env.FRONTEND_URL ?? "http://localhost:5173").split(","),
-    credentials: true,
-  },
+  cors: gatewayCorsOptions,
   namespace: "/chat",
 })
 export class ChatWsGateway implements OnGatewayConnection, OnGatewayDisconnect {

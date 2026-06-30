@@ -20,8 +20,10 @@ import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
 import { PaymentMethod } from "@app/common";
 import { CreateOrderDto } from "./dto/create-order.dto";
+import { CreateVoucherDto, ValidateVoucherDto } from "./dto/voucher.dto";
 import { SellerOrdersQueryDto } from "./dto/seller-orders-query.dto";
 import { ShippingFeeDto } from "./dto/shipping-fee.dto";
+import { AdminGhnOrdersQueryDto } from "./dto/admin-ghn-orders-query.dto";
 
 interface OrderResponse {
   id: number;
@@ -38,6 +40,8 @@ interface ProductPriceResponse {
   userId: number;
   price: number | null;
   isActive: boolean;
+  imageUrls?: string[] | null;
+  variations?: { name: string; options: string[] }[] | null;
 }
 
 interface SkuPriceResponse {
@@ -47,6 +51,19 @@ interface SkuPriceResponse {
   stockQuantity: number;
   isActive: boolean;
   tierIdx?: number[];
+}
+
+interface EnrichedOrderItem {
+  productId: number;
+  productName: string;
+  quantity: number;
+  weight?: number;
+  price: number;
+  skuId: number | null;
+  tierIdx: number[] | undefined;
+  sellerId: number;
+  productImage: string | null;
+  skuLabel: string | null;
 }
 
 export abstract class BaseAggregatorService {
@@ -70,6 +87,8 @@ interface BuyerInfo {
   username: string;
   email: string;
   name: string | null;
+  avatar?: string | null;
+  isActive?: boolean;
 }
 
 interface OrderItemDetail {
@@ -81,6 +100,8 @@ interface OrderItemDetail {
   price: number;
   skuId: number | null;
   skuTierIdx: string | null;
+  productImage?: string | null;
+  skuLabel?: string | null;
 }
 
 interface SellerOrderDetailRaw extends OrderResponse {
@@ -92,6 +113,38 @@ interface ProductDetailResponse {
   name: string;
   imageUrls: string[] | null;
   variations: { name: string; options: string[] }[] | null;
+}
+
+interface UserSummary {
+  id: number;
+  username: string;
+  email: string;
+  name: string | null;
+  avatar?: string | null;
+}
+
+interface AdminGhnOrderListItem {
+  orderId: number;
+  userId: number;
+  sellerId: number;
+  orderStatus: string;
+  ghnOrderCode: string | null;
+  shippingFee: number | null;
+  codAmount: number | null;
+  paymentMethod: string;
+  lastGhnStatus: string | null;
+  lastSyncedAt: string | Date | null;
+  updatedAt: string | Date;
+  availableActions: string[];
+}
+
+interface AdminGhnOrderListResult {
+  data: AdminGhnOrderListItem[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages?: number;
+  hasNext?: boolean;
 }
 
 @Injectable()
@@ -186,16 +239,24 @@ export class OrderService {
     }
   }
 
-  private async createOrderInternal(
-    userId: number,
-    dto: CreateOrderDto,
-  ): Promise<unknown> {
-    // Fetch authoritative prices and sellerId from product service
-    const enrichedItems = await Promise.all(
-      dto.items.map(async (item) => {
+  /**
+   * Resolve authoritative price, sellerId and purchase-time snapshot for each
+   * requested item from the product service. Shared by order creation and the
+   * voucher preview so both price the basket identically.
+   */
+  private async enrichOrderItems(
+    items: CreateOrderDto["items"],
+  ): Promise<EnrichedOrderItem[]> {
+    return Promise.all(
+      items.map(async (item) => {
         let price: number;
         let tierIdx: number[] | undefined;
         let sellerId: number;
+        // Purchase-time snapshot (P2-02): resolved from the authoritative product
+        // so historical orders render correctly even if the product is later
+        // edited or deleted.
+        let productImage: string | null = null;
+        let skuLabel: string | null = null;
 
         if (item.skuId) {
           const sku = await firstValueFrom(
@@ -244,6 +305,13 @@ export class OrderService {
             ),
           );
           sellerId = Number(product.userId);
+          productImage = product.imageUrls?.[0] ?? null;
+          skuLabel = tierIdx
+            ? this.buildSkuLabel(
+                product.variations ?? null,
+                JSON.stringify(tierIdx),
+              )
+            : null;
         } else {
           const product = await firstValueFrom(
             this.productClient
@@ -271,14 +339,39 @@ export class OrderService {
           }
           price = Number(product.price);
           sellerId = Number(product.userId);
+          productImage = product.imageUrls?.[0] ?? null;
         }
 
-        return { ...item, price, skuId: item.skuId ?? null, tierIdx, sellerId };
+        return {
+          ...item,
+          price,
+          skuId: item.skuId ?? null,
+          tierIdx,
+          sellerId,
+          productImage,
+          skuLabel,
+        };
       }),
     );
+  }
+
+  private async createOrderInternal(
+    userId: number,
+    dto: CreateOrderDto,
+  ): Promise<unknown> {
+    // Fetch authoritative prices and sellerId from product service
+    const enrichedItems = await this.enrichOrderItems(dto.items);
 
     const uniqueSellerIds = new Set(enrichedItems.map((i) => i.sellerId));
     const isMultiSeller = uniqueSellerIds.size > 1;
+
+    if (isMultiSeller && dto.voucherCode) {
+      // Discount-splitting across sellers has no defined semantics yet; keep
+      // vouchers to single-seller orders.
+      throw new BadRequestException(
+        "Voucher codes are only supported on single-seller orders",
+      );
+    }
 
     try {
       if (isMultiSeller) {
@@ -343,6 +436,7 @@ export class OrderService {
             paymentMethod: dto.paymentMethod,
             shippingAddress: dto.shippingAddress,
             items: enrichedItems,
+            voucherCode: dto.voucherCode ?? null,
           })
           .pipe(
             timeout(10000),
@@ -355,6 +449,80 @@ export class OrderService {
       MicroserviceErrorHandler.handleError(
         error,
         "create order",
+        "Orders Service",
+      );
+    }
+  }
+
+  /**
+   * Buyer-facing voucher preview: price the basket via the product service, then
+   * ask the orders service to validate the code and compute the discount without
+   * consuming a redemption.
+   */
+  async validateVoucher(
+    userId: number,
+    dto: ValidateVoucherDto,
+  ): Promise<unknown> {
+    const enrichedItems = await this.enrichOrderItems(dto.items);
+    const uniqueSellerIds = new Set(enrichedItems.map((i) => i.sellerId));
+    if (uniqueSellerIds.size > 1) {
+      throw new BadRequestException(
+        "Voucher codes are only supported on single-seller orders",
+      );
+    }
+    const itemsTotal = enrichedItems.reduce(
+      (sum, item) => sum + item.price * item.quantity,
+      0,
+    );
+    return this.errorHandledSend(
+      ORDER_MESSAGE_PATTERN.VOUCHER_VALIDATE,
+      { userId, code: dto.code, itemsTotal },
+      "validate voucher",
+    );
+  }
+
+  async createVoucher(dto: CreateVoucherDto): Promise<unknown> {
+    return this.errorHandledSend(
+      ORDER_MESSAGE_PATTERN.VOUCHER_CREATE,
+      dto,
+      "create voucher",
+    );
+  }
+
+  async listVouchers(page: number, limit: number): Promise<unknown> {
+    return this.errorHandledSend(
+      ORDER_MESSAGE_PATTERN.VOUCHER_LIST,
+      { page, limit },
+      "list vouchers",
+    );
+  }
+
+  async deactivateVoucher(id: number): Promise<unknown> {
+    return this.errorHandledSend(
+      ORDER_MESSAGE_PATTERN.VOUCHER_DEACTIVATE,
+      { id },
+      "deactivate voucher",
+    );
+  }
+
+  private async errorHandledSend(
+    pattern: string,
+    payload: unknown,
+    operation: string,
+  ): Promise<unknown> {
+    try {
+      return (await firstValueFrom(
+        this.ordersClient.send(pattern, payload).pipe(
+          timeout(10000),
+          catchError((err: unknown) => {
+            throw err;
+          }),
+        ),
+      )) as unknown;
+    } catch (error) {
+      return MicroserviceErrorHandler.handleError(
+        error,
+        operation,
         "Orders Service",
       );
     }
@@ -442,7 +610,9 @@ export class OrderService {
 
     const items = (order.items ?? []) as OrderItemDetail[];
     const productMap = await this.buildProductMap(
-      items.map((i) => Number(i.productId)),
+      items
+        .filter((i) => this.itemNeedsLiveProduct(i))
+        .map((i) => Number(i.productId)),
     );
     return {
       ...order,
@@ -496,7 +666,9 @@ export class OrderService {
     // Enrich every item across the page in one batched product fetch (P1-02)
     const productMap = await this.buildProductMap(
       result.data.flatMap((o) =>
-        (o.items ?? []).map((i) => Number(i.productId)),
+        (o.items ?? [])
+          .filter((i) => this.itemNeedsLiveProduct(i))
+          .map((i) => Number(i.productId)),
       ),
     );
     const data = result.data.map((order) => ({
@@ -694,6 +866,303 @@ export class OrderService {
     };
   }
 
+  async getAdminGhnOrders(query: AdminGhnOrdersQueryDto): Promise<
+    Omit<AdminGhnOrderListResult, "data"> & {
+      data: (AdminGhnOrderListItem & {
+        buyer: UserSummary | null;
+        seller: UserSummary | null;
+      })[];
+    }
+  > {
+    let result: AdminGhnOrderListResult;
+    try {
+      result = (await firstValueFrom(
+        this.ordersClient
+          .send(ORDER_MESSAGE_PATTERN.ADMIN_GHN_ORDERS, {
+            page: query.page ?? 1,
+            limit: query.limit ?? 20,
+            status: query.status,
+            ghnStatus: query.ghnStatus,
+            hasGhnCode: query.hasGhnCode,
+            search: query.search,
+            dateFrom: query.dateFrom,
+            dateTo: query.dateTo,
+          })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      )) as AdminGhnOrderListResult;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "get admin GHN orders",
+        "Orders Service",
+      );
+    }
+
+    const users = await this.getUserSummaryMap(
+      result.data.flatMap((order) => [order.userId, order.sellerId]),
+    );
+    return {
+      ...result,
+      data: result.data.map((order) => ({
+        ...order,
+        buyer: users.get(Number(order.userId)) ?? null,
+        seller: users.get(Number(order.sellerId)) ?? null,
+      })),
+    };
+  }
+
+  async getAdminGhnOrderDetail(orderId: number): Promise<unknown> {
+    try {
+      const detail = (await firstValueFrom(
+        this.ordersClient
+          .send(ORDER_MESSAGE_PATTERN.ADMIN_GHN_ORDER_DETAIL, { orderId })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      )) as {
+        localOrder?: { userId?: number; sellerId?: number };
+      };
+      const userIds = [
+        detail.localOrder?.userId,
+        detail.localOrder?.sellerId,
+      ].filter((id): id is number => typeof id === "number");
+      const users = await this.getUserSummaryMap(userIds);
+      return {
+        ...detail,
+        buyer:
+          detail.localOrder?.userId === undefined
+            ? null
+            : (users.get(detail.localOrder.userId) ?? null),
+        seller:
+          detail.localOrder?.sellerId === undefined
+            ? null
+            : (users.get(detail.localOrder.sellerId) ?? null),
+      };
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "get admin GHN order detail",
+        "Orders Service",
+      );
+    }
+  }
+
+  async syncAdminGhnOrder(
+    orderId: number,
+    actorId: number | null,
+  ): Promise<unknown> {
+    try {
+      return await firstValueFrom(
+        this.ordersClient
+          .send(ORDER_MESSAGE_PATTERN.ADMIN_GHN_SYNC, { orderId, actorId })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "sync admin GHN order",
+        "Orders Service",
+      );
+    }
+  }
+
+  async getAdminGhnHistory(orderId: number): Promise<unknown> {
+    try {
+      return await firstValueFrom(
+        this.ordersClient
+          .send(ORDER_MESSAGE_PATTERN.ADMIN_GHN_HISTORY, { orderId })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "get admin GHN history",
+        "Orders Service",
+      );
+    }
+  }
+
+  async cancelAdminGhnOrder(
+    orderId: number,
+    actorId: number | null,
+  ): Promise<unknown> {
+    try {
+      return await firstValueFrom(
+        this.ordersClient
+          .send(ORDER_MESSAGE_PATTERN.ADMIN_GHN_CANCEL, { orderId, actorId })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "cancel admin GHN order",
+        "Orders Service",
+      );
+    }
+  }
+
+  async returnAdminGhnOrder(
+    orderId: number,
+    actorId: number | null,
+  ): Promise<unknown> {
+    try {
+      return await firstValueFrom(
+        this.ordersClient
+          .send(ORDER_MESSAGE_PATTERN.ADMIN_GHN_RETURN, { orderId, actorId })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "return admin GHN order",
+        "Orders Service",
+      );
+    }
+  }
+
+  async updateAdminGhnCod(
+    orderId: number,
+    actorId: number | null,
+    codAmount: number,
+  ): Promise<unknown> {
+    try {
+      return await firstValueFrom(
+        this.ordersClient
+          .send(ORDER_MESSAGE_PATTERN.ADMIN_GHN_UPDATE_COD, {
+            orderId,
+            actorId,
+            codAmount,
+          })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "update admin GHN COD",
+        "Orders Service",
+      );
+    }
+  }
+
+  async updateAdminGhnReceiver(
+    orderId: number,
+    actorId: number | null,
+    receiver: { toName?: string; toPhone?: string; toAddress?: string },
+  ): Promise<unknown> {
+    try {
+      return await firstValueFrom(
+        this.ordersClient
+          .send(ORDER_MESSAGE_PATTERN.ADMIN_GHN_UPDATE_RECEIVER, {
+            orderId,
+            actorId,
+            ...receiver,
+          })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "update admin GHN receiver",
+        "Orders Service",
+      );
+    }
+  }
+
+  async setDemoGhnStatus(
+    orderId: number,
+    actorId: number | null,
+    ghnStatus: string,
+  ): Promise<unknown> {
+    try {
+      return await firstValueFrom(
+        this.ordersClient
+          .send(ORDER_MESSAGE_PATTERN.ADMIN_GHN_DEMO_STATUS, {
+            orderId,
+            actorId,
+            ghnStatus,
+          })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "set demo GHN status",
+        "Orders Service",
+      );
+    }
+  }
+
+  private async getUserSummaryMap(
+    userIds: number[],
+  ): Promise<Map<number, UserSummary>> {
+    const uniqueIds = [...new Set(userIds.map(Number).filter(Boolean))];
+    if (uniqueIds.length === 0) {
+      return new Map();
+    }
+    try {
+      const users = (await firstValueFrom(
+        this.userClient
+          .send({ cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS }, uniqueIds)
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      )) as UserSummary[];
+      return new Map(users.map((user) => [Number(user.id), user]));
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "get users by ids",
+        "User Service",
+      );
+    }
+  }
+
   async getSellerOrders(
     sellerId: number,
     query: SellerOrdersQueryDto,
@@ -802,13 +1271,34 @@ export class OrderService {
 
     const items = order.items ?? [];
     const productMap = await this.buildProductMap(
-      items.map((i) => Number(i.productId)),
+      items
+        .filter((i) => this.itemNeedsLiveProduct(i))
+        .map((i) => Number(i.productId)),
     );
     const enrichedItems = items.map((item) =>
       this.decorateItem(item, productMap),
     );
 
     return { ...order, items: enrichedItems };
+  }
+
+  /**
+   * A read-path item only needs a live product fetch when it predates the
+   * purchase-time snapshot (P2-02): no stored image, or a SKU selection with no
+   * stored label. New orders carry their own snapshot and skip the fetch
+   * entirely, so a deleted/edited product no longer breaks historical orders.
+   */
+  private itemNeedsLiveProduct(item: {
+    productImage?: string | null;
+    skuTierIdx?: string | null;
+    skuLabel?: string | null;
+  }): boolean {
+    const hasImageSnapshot =
+      item.productImage !== undefined && item.productImage !== null;
+    const needsLabel =
+      !!item.skuTierIdx &&
+      (item.skuLabel === undefined || item.skuLabel === null);
+    return !hasImageSnapshot || needsLabel;
   }
 
   /**
@@ -848,17 +1338,24 @@ export class OrderService {
    * endpoints and the seller order detail.
    */
   private decorateItem(
-    item: { productId: number | string; skuTierIdx?: string | null },
+    item: {
+      productId: number | string;
+      skuTierIdx?: string | null;
+      productImage?: string | null;
+      skuLabel?: string | null;
+    },
     productMap: Map<number, ProductDetailResponse>,
   ): Record<string, unknown> {
     const product = productMap.get(Number(item.productId));
+    // Prefer the purchase-time snapshot (P2-02) so historical orders render the
+    // product as it was at checkout; fall back to the live product only for
+    // legacy orders created before the snapshot columns existed.
     return {
       ...item,
-      image: product?.imageUrls?.[0] ?? null,
-      skuLabel: this.buildSkuLabel(
-        product?.variations,
-        item.skuTierIdx ?? null,
-      ),
+      image: item.productImage ?? product?.imageUrls?.[0] ?? null,
+      skuLabel:
+        item.skuLabel ??
+        this.buildSkuLabel(product?.variations, item.skuTierIdx ?? null),
     };
   }
 
@@ -922,6 +1419,134 @@ export class OrderService {
       MicroserviceErrorHandler.handleError(
         error,
         "advance order status",
+        "Orders Service",
+      );
+    }
+  }
+
+  // ----------------------------------------------------------------------------
+  // F2 — Buyer-initiated return / refund request
+  // ----------------------------------------------------------------------------
+
+  async requestReturn(
+    orderId: number,
+    userId: number,
+    reason: string,
+  ): Promise<unknown> {
+    try {
+      return await firstValueFrom(
+        this.ordersClient
+          .send(ORDER_MESSAGE_PATTERN.RETURN_REQUEST_CREATE, {
+            orderId,
+            userId,
+            reason,
+          })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "request order return",
+        "Orders Service",
+      );
+    }
+  }
+
+  async getMyReturnRequests(
+    userId: number,
+    page: number,
+    limit: number,
+  ): Promise<unknown> {
+    try {
+      return await firstValueFrom(
+        this.ordersClient
+          .send(ORDER_MESSAGE_PATTERN.RETURN_REQUEST_LIST_USER, {
+            userId,
+            page,
+            limit,
+          })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "list own return requests",
+        "Orders Service",
+      );
+    }
+  }
+
+  async getManagedReturnRequests(
+    sellerId: number,
+    isAdmin: boolean,
+    page: number,
+    limit: number,
+    status?: string,
+  ): Promise<unknown> {
+    try {
+      return await firstValueFrom(
+        this.ordersClient
+          .send(ORDER_MESSAGE_PATTERN.RETURN_REQUEST_LIST_MANAGED, {
+            sellerId,
+            isAdmin,
+            page,
+            limit,
+            status,
+          })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "list managed return requests",
+        "Orders Service",
+      );
+    }
+  }
+
+  async reviewReturnRequest(
+    requestId: number,
+    reviewerId: number,
+    reviewerRole: string,
+    decision: "approve" | "reject",
+    rejectReason?: string,
+  ): Promise<unknown> {
+    try {
+      return await firstValueFrom(
+        this.ordersClient
+          .send(ORDER_MESSAGE_PATTERN.RETURN_REQUEST_REVIEW, {
+            requestId,
+            reviewerId,
+            reviewerRole,
+            decision,
+            rejectReason,
+          })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "review return request",
         "Orders Service",
       );
     }

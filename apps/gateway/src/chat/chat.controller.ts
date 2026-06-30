@@ -54,4 +54,13 @@ export class ChatController {
       query.limit ?? 50,
     );
   }
+
+  @Post("conversations/:id/read")
+  async markRead(
+    @Req() req: Request,
+    @Param("id", ParseIntPipe) conversationId: number,
+  ): Promise<unknown> {
+    const userId = req.user?.id ?? 0;
+    return this.chatService.markRead(userId, conversationId);
+  }
 }

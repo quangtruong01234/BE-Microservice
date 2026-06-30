@@ -21,7 +21,7 @@ interface GhnWebhookBody {
   status?: string;
 }
 
-@Controller("ghn")
+@Controller()
 export class GhnWebhookController {
   private readonly logger = new Logger(GhnWebhookController.name);
   private readonly webhookSecret: string;
@@ -34,7 +34,10 @@ export class GhnWebhookController {
     this.webhookSecret = webhookSecret;
   }
 
-  @Post("webhook")
+  // Served at both the legacy `/ghn/webhook` and the prefix-consistent
+  // `/api/ghn/webhook` so a GHN dashboard configured with either URL reaches us.
+  // Both paths are excluded from the global `api` prefix in main.ts.
+  @Post(["ghn/webhook", "api/ghn/webhook"])
   @Public()
   @HttpCode(200)
   async handleWebhook(

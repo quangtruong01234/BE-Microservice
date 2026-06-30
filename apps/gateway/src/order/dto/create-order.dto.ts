@@ -70,4 +70,14 @@ export class CreateOrderDto {
   @ValidateNested({ each: true })
   @Type(() => OrderItemDto)
   declare items: OrderItemDto[];
+
+  @ApiPropertyOptional({
+    description:
+      "Voucher / discount code to apply (single-seller orders only). Validated and priced server-side.",
+    example: "SALE10",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  voucherCode?: string;
 }

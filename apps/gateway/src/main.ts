@@ -9,9 +9,18 @@ import { ResponseInterceptor } from "./common/interceptor/response.interceptor";
 import { RequestMethod, ValidationPipe } from "@nestjs/common";
 import { EXCHANGE } from "@app/common/constants/exchange";
 import { QUEUES } from "@app/common/constants/queues";
+import { gatewayCorsOptions } from "./common/cors";
 
 async function bootstrap() {
   dotenv.config({ path: "./local/nodeA/.env" });
+  // Fail fast: the gateway is the only JWT-signing/verifying service, so an
+  // undefined JWT_SECRET must abort startup rather than silently boot and only
+  // surface later as broken authentication.
+  if (!process.env.JWT_SECRET) {
+    throw new Error(
+      "JWT_SECRET is not set — refusing to start the gateway with an undefined JWT secret.",
+    );
+  }
   const app = await NestFactory.create(GatewayModule);
   const expressApp = app
     .getHttpAdapter()
@@ -28,12 +37,15 @@ async function bootstrap() {
   );
   app.useGlobalFilters(new HttpExceptionFilter());
   app.useGlobalInterceptors(new ResponseInterceptor());
-  app.enableCors({
-    origin: (process.env.FRONTEND_URL || "http://localhost:5173").split(","),
-    credentials: true,
-  });
+  app.enableCors(gatewayCorsOptions);
   app.setGlobalPrefix("api", {
-    exclude: [{ path: "ghn/webhook", method: RequestMethod.POST }],
+    // The GHN webhook is served at both the legacy un-prefixed `/ghn/webhook`
+    // and the prefix-consistent `/api/ghn/webhook`; exclude both so neither gets
+    // the `api` prefix prepended (the second path already carries it literally).
+    exclude: [
+      { path: "ghn/webhook", method: RequestMethod.POST },
+      { path: "api/ghn/webhook", method: RequestMethod.POST },
+    ],
   });
   const config = new DocumentBuilder()
     .setTitle("Ecommerce API")

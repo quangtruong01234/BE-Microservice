@@ -7,13 +7,11 @@ import {
 } from "@nestjs/websockets";
 import { JwtService } from "@nestjs/jwt";
 import { Server, Socket } from "socket.io";
+import { gatewayCorsOptions } from "../common/cors";
 
 @Injectable()
 @WebSocketGateway({
-  cors: {
-    origin: (process.env.FRONTEND_URL ?? "http://localhost:5173").split(","),
-    credentials: true,
-  },
+  cors: gatewayCorsOptions,
   namespace: "/notifications",
 })
 export class NotificationWsGateway

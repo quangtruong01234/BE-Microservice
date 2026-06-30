@@ -28,12 +28,20 @@ import { RoleAuthGuard } from "./common/guards/role-auth.guard";
   imports: [
     JwtModule.registerAsync({
       global: true,
-      useFactory: () => ({
-        secret: process.env.JWT_SECRET,
-        signOptions: {
-          expiresIn: (process.env.JWT_EXPIRES_IN ?? "1h") as "7d",
-        },
-      }),
+      useFactory: () => {
+        const secret = process.env.JWT_SECRET;
+        if (!secret) {
+          throw new Error(
+            "JWT_SECRET is not set — refusing to configure JwtModule with an undefined secret.",
+          );
+        }
+        return {
+          secret,
+          signOptions: {
+            expiresIn: (process.env.JWT_EXPIRES_IN ?? "1h") as "7d",
+          },
+        };
+      },
     }),
     ClientsModule.register([
       {

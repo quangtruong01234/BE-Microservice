@@ -75,4 +75,23 @@ export class ChatGatewayService {
       );
     }
   }
+
+  async markRead(userId: number, conversationId: number): Promise<unknown> {
+    try {
+      return await firstValueFrom(
+        this.chatClient
+          .send(CHAT_MESSAGE_PATTERN.CHAT_MARK_READ, {
+            userId,
+            conversationId,
+          })
+          .pipe(timeout(10000)) as Observable<unknown>,
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "mark conversation read",
+        "Chat Service",
+      );
+    }
+  }
 }
