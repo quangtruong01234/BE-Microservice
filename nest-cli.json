@@ -1,14 +1,14 @@
 {
   "$schema": "https://json.schemastore.org/nest-cli",
   "collection": "@nestjs/schematics",
-  "sourceRoot": "apps/ecommerce-nestjs-zzzzz/src",
+  "sourceRoot": "apps/gateway/src",
   "compilerOptions": {
-    "deleteOutDir": true,
+    "deleteOutDir": false,
     "webpack": true,
-    "tsConfigPath": "apps/ecommerce-nestjs-zzzzz/tsconfig.app.json"
+    "tsConfigPath": "apps/gateway/tsconfig.app.json"
   },
   "monorepo": true,
-  "root": "apps/ecommerce-nestjs-zzzzz",
+  "root": "apps/gateway",
   "projects": {
     "cached": {
       "type": "library",
@@ -35,15 +35,6 @@
       "sourceRoot": "libs/database/src",
       "compilerOptions": {
         "tsConfigPath": "libs/database/tsconfig.lib.json"
-      }
-    },
-    "ecommerce-nestjs-zzzzz": {
-      "type": "application",
-      "root": "apps/ecommerce-nestjs-zzzzz",
-      "entryFile": "main",
-      "sourceRoot": "apps/ecommerce-nestjs-zzzzz/src",
-      "compilerOptions": {
-        "tsConfigPath": "apps/ecommerce-nestjs-zzzzz/tsconfig.app.json"
       }
     },
     "gateway": {
