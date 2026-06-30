@@ -8,6 +8,23 @@
 - **ES modules only** — never use `require()`; always `import`
 - Run `tsc --noEmit` after every change; never mark a task done with TS errors
 
+## Naming Rules
+
+- Use meaningful names that describe the value's purpose.
+- Avoid vague names like `a`, `b`, `data`, `result`, `temp`, `value`, `obj`, `arr`, or `list` unless the scope is very small or the project convention requires that shape.
+- Use `camelCase` for variables, functions, DTO properties, entity properties, payload fields, and response fields.
+- Use `PascalCase` for classes, DTO classes, TypeScript types, and interfaces.
+- Use `UPPER_SNAKE_CASE` only for module-level constants.
+- Boolean variables and fields should start with `is`, `has`, `can`, `should`, `will`, or `needs`.
+- Arrays should use plural names, for example `orders`, `shipments`, `selectedItems`, or `skuItems`.
+- `Map`/record objects should include the key relationship, for example `orderById`, `statusLabelMap`, `permissionsByRole`, or `inventoryByProductId`.
+- Functions should start with a verb, for example `fetchOrders`, `createShipment`, `calculateShippingFee`, or `formatCurrency`.
+- API payloads and responses should be named clearly in internal code, for example `loginPayload`, `loginResponse`, or `createShipmentPayload`.
+- Include units in variable names when relevant, for example `timeoutMs`, `priceVnd`, `weightGram`, or `retryCount`.
+- Use domain terms consistently. Prefer existing TryBuy terms such as `order`, `shipment`, `trackingCode`, `ghnStatus`, `logisticsOperator`, and `shippingFee`.
+- Apply these rules to new code and touched internal code. Do not rename existing public API fields, TCP/RabbitMQ contracts, database entity fields, or documented response envelope keys solely for naming cleanup.
+- Exceptions: keep documented framework/project shapes such as `PaginatedResponse.data`, error response `data`, response envelopes, and `@Payload() data`. Do not rename contract fields such as `skuList`, `success`, `available`, `valid`, `reported`, or `liked` without an explicit migration/backward-compatibility plan.
+
 ## Backend: NestJS Service Structure
 
 Each microservice follows this folder layout:
@@ -217,7 +234,7 @@ Kiểm tra cả 2 phía (controller + gateway send) mỗi khi tạo TCP handler 
 Mọi `@Controller` trong microservice phải có `@UseFilters(new HttpToRpcExceptionFilter())`.
 Nếu thiếu: `ForbiddenException`/`BadRequestException` bị NestJS swallow → gateway nhận 500/502 thay vì 403/400.
 Filter nằm tại: `libs/common/src/filters/http-to-rpc-exception.filter.ts`
-Tech debt hiện tại: payments, inventory, rewards, product controllers chưa có filter này.
+Coverage (2026-06-28): payments, inventory, rewards, product, notification controllers all have the filter; user is covered by its global `AllRpcExceptionFilter`. Gateway is HTTP-facing and uses `HttpExceptionFilter` instead. No remaining gap.
 
 ### 3. DECIMAL column từ TypeORM trả về string
 TypeORM serialize DECIMAL/NUMERIC columns thành string (`"222.00"`), không phải number.

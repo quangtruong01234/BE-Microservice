@@ -188,9 +188,13 @@ A task is complete only when ALL of these pass:
 - If task fixes a bug: verify the original symptom no longer occurs before marking done
 - After each task: keep `ai-docs/agent-handoff/snapshot.md` LEAN — remove the finished item from Active Tasks and add any new Known Issues / ops facts. Append the completed-work summary to `ai-docs/agent-handoff/CHANGELOG.md` (not auto-loaded), NOT to snapshot.md. Never paste milestone/changelog history back into snapshot.md, and do not duplicate rules already in `ai-docs/agent-context/`.
 - **Frontend handoff**: when an add/fix/update task is DONE, evaluate whether it has a frontend-facing consequence (new/changed endpoint, response field, status code, RabbitMQ/WS event, or a behavior the FE was mitigating client-side). If yes:
-  1. First read `../frontend/.ai/agent-handoff/snapshot.md` to find the matching FE-waiting item (e.g. `P1-06`, `P2-02`) so the note closes a real open thread and reuses its id.
-  2. Append a contract-first entry (route, method, request/response shape, status codes) to `../.agent-local/frontend-handoff.md` under **Open**, using the template in that file.
-  - This file lives at the `MCR/` workspace root, outside both git repos — never copy it into the repo or commit it. If the task has no FE impact, skip this step.
+  - **Pick the right FE file first** — there are TWO separate frontends, each with its own handoff file at the `MCR/` workspace root. Route by which app actually consumes the change:
+    - **TryBuy storefront** (`../frontend`, React + Vite, dev `5173`; storefront concerns: catalog, cart, orders, checkout, payments, chat, social) → write to `../.agent-local/frontend-handoff.md`. Its FE-waiting backlog is `../frontend/.ai/agent-handoff/snapshot.md`.
+    - **GHN Shipping console** (`../web-flow-GHN`, Next.js, dev `3013`; concerns: auth/role gating for shipping, `GET/POST /api/order/admin/ghn/*`, GHN sync/history, shipping roles) → write to `../.agent-local/frontend-handoff-ghn.md`.
+    - If a change genuinely affects both, add a tailored entry to each file. Never put a GHN-console item in `frontend-handoff.md` or a storefront item in `frontend-handoff-ghn.md`.
+  1. First read the matching FE backlog (storefront: `../frontend/.ai/agent-handoff/snapshot.md`) to find the matching FE-waiting item (e.g. `P1-06`, `P2-02`) so the note closes a real open thread and reuses its id.
+  2. Append a contract-first entry (route, method, request/response shape, status codes) to the chosen handoff file under **Open**, using the template in that file.
+  - Both handoff files live at the `MCR/` workspace root, outside both git repos — never copy them into the repo or commit them. If the task has no FE impact, skip this step.
 
 ## Test Accounts
 
@@ -214,7 +218,7 @@ This file lives one level above the `api/` git repo (at the `MCR/` root), so it 
 
 When a task adds or modifies an endpoint, after tsc + eslint pass:
 1. Read `../.agent-local/test-accounts.md` — pick an account with the required role (user / admin / shop)
-2. Login via `POST /api/auth/login` with `-c tmpcookies_test.txt` to capture the cookie
+2. Login via `POST /api/user/login` with `-c tmpcookies_test.txt` to capture the cookie
 3. Run each test curl with `-b tmpcookies_test.txt`
 4. Assert the response: check HTTP status code and key fields in the JSON body
 5. Report results inline — pass/fail per test case, with actual response snippets

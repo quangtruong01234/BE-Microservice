@@ -44,6 +44,10 @@ Auth: HttpOnly cookie set on login. Protected routes require the cookie (sent au
 **Role: admin only:**
 - GET /api/user/all
 - GET /api/order/admin/orders
+- GET /api/order/admin/ghn/orders
+- GET /api/order/admin/ghn/orders/:id
+- POST /api/order/admin/ghn/orders/:id/sync
+- GET /api/order/admin/ghn/orders/:id/history
 - GET /api/products/brands/pending
 - PATCH /api/products/brands/:id/review
 - GET /api/products/categories/pending
@@ -142,6 +146,10 @@ multi-category editor gets the same shape on list and detail.
 | POST | `/api/order/` | Cookie | Create order — triggers `order_created` event; `total = items + GHN shipping fee`, `shippingFee` persisted on order |
 | POST | `/api/order/shipping-fee` | Cookie | Preview GHN shipping fee for an address — returns `{ shippingFee, expectedDeliveryTime }` |
 | GET | `/api/order/admin/orders` | Role: admin | All orders with buyer info (paginated) |
+| GET | `/api/order/admin/ghn/orders` | JWT + `shipping read:any` (currently granted to admin) | Paginated logistics order list with GHN code/status sync metadata and available actions |
+| GET | `/api/order/admin/ghn/orders/:id` | JWT + `shipping read:any` (currently granted to admin) | Local order + server-fetched GHN detail for shipping admin |
+| POST | `/api/order/admin/ghn/orders/:id/sync` | JWT + `shipping update:any` (currently granted to admin) | Manually fetch GHN detail and safely sync local status through the webhook mapping rules |
+| GET | `/api/order/admin/ghn/orders/:id/history` | JWT + `shipping read:any` (currently granted to admin) | Shipping webhook/manual-sync/action timeline |
 | GET | `/api/order/seller` | Cookie | Paginated orders containing the logged-in seller's products (`?page&limit&status`) |
 | GET | `/api/order/user/:id` | Owner/admin | Get paginated orders by user ID |
 | GET | `/api/order/:id` | Cookie | Get single order (owner or admin only) |
@@ -400,7 +408,7 @@ The personal collection `TryBuy Full E-commerce Success E2E` uses the same
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| GET | `/api/gateway/payment-result` | — | Payment result redirect (ZaloPay/VNPay) |
+| GET | `/api/gateway/payment-result` | — | Payment result verification. VNPay verifies signed gateway params; ZaloPay verifies the `checksum` on browser-return params. Verified success completes the payment row and emits `payment_completed` before returning `success`. |
 | POST | `/ghn/webhook` | Shared secret | GHN delivery status callback (no `/api` prefix); token via `x-ghn-webhook-token` or `?token=` |
 
 ---
@@ -430,12 +438,15 @@ sku.create, sku.findByProduct, sku.findById, sku.update, sku.delete
 create_order, get_orders_by_user, get_order_by_id, get_all_orders,
 cancel_order, get_order_invoice, handle_ghn_webhook,
 order.get_by_seller, order.confirm, order.ready_to_ship,
-order.calculate_shipping_fee
+order.calculate_shipping_fee,
+order.admin_ghn_orders, order.admin_ghn_order_detail,
+order.admin_ghn_sync, order.admin_ghn_history
 ```
 
 ### Payment Patterns (`PAYMENT_MESSAGE_PATTERN`)
 ```
-get_payment_url, get_payment_options
+get_payment_url, get_payment_options, payment.initiate_multi_order,
+payment.complete_zalopay_return, payment.complete_vnpay_return
 ```
 
 ### Notification Patterns (`NOTIFICATION_MESSAGE_PATTERN`)
