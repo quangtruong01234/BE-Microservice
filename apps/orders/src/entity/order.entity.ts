@@ -17,6 +17,8 @@ export enum OrderStatus {
   DELIVERING = "delivering",
   COMPLETED = "completed",
   CANCELED = "canceled",
+  RETURN_REQUESTED = "return_requested",
+  REFUNDED = "refunded",
 }
 
 @Entity("orders")
@@ -83,6 +85,27 @@ export class Order {
 
   @Column({ name: "reservation_key", type: "varchar", length: 36 })
   reservationKey!: string;
+
+  // Voucher applied at checkout (F3). Null when no discount code was used.
+  @Column({
+    name: "voucher_code",
+    type: "varchar",
+    length: 64,
+    nullable: true,
+    default: null,
+  })
+  voucherCode!: string | null;
+
+  // Discount applied to the goods subtotal by the voucher (VND).
+  @Column({
+    name: "discount_amount",
+    type: "decimal",
+    precision: 12,
+    scale: 2,
+    nullable: true,
+    default: null,
+  })
+  discountAmount!: number | null;
 
   @CreateDateColumn({ name: "created_at", type: "datetime" })
   createdAt!: Date;

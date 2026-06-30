@@ -15,6 +15,10 @@ import { ClientsModule, Transport } from "@nestjs/microservices";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { OrderItem } from "./entity/order_item.entity";
 import { Order } from "./entity/order.entity";
+import { ShippingHistory } from "./entity/shipping-history.entity";
+import { OrderReturnRequest } from "./entity/order-return-request.entity";
+import { Voucher } from "./entity/voucher.entity";
+import { VoucherRedemption } from "./entity/voucher-redemption.entity";
 import {
   NAME_SERVICE_TCP,
   PORT_TCP,
@@ -73,11 +77,29 @@ import { GhnModule } from "./ghn/ghn.module";
       username: process.env.MYSQL_USER,
       password: process.env.MYSQL_PASSWORD,
       database: process.env.MYSQL_DATABASE,
-      entities: [Order, OrderItem, Cart, CartItem],
+      entities: [
+        Order,
+        OrderItem,
+        Cart,
+        CartItem,
+        ShippingHistory,
+        OrderReturnRequest,
+        Voucher,
+        VoucherRedemption,
+      ],
       synchronize: true,
       timezone: "Z",
     }),
-    TypeOrmModule.forFeature([Order, OrderItem, Cart, CartItem]),
+    TypeOrmModule.forFeature([
+      Order,
+      OrderItem,
+      Cart,
+      CartItem,
+      ShippingHistory,
+      OrderReturnRequest,
+      Voucher,
+      VoucherRedemption,
+    ]),
   ],
   controllers: [OrdersController, CartController],
   providers: [

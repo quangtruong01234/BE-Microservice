@@ -21,6 +21,8 @@ import {
 } from "@app/common";
 import { ORDER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { Order, OrderStatus } from "./entity/order.entity";
+import { ReturnRequestStatus } from "./entity/order-return-request.entity";
+import { VoucherDiscountType } from "./entity/voucher.entity";
 
 @UseFilters(new HttpToRpcExceptionFilter())
 @Controller("orders")
@@ -48,17 +50,20 @@ export class OrdersController {
         tierIdx?: number[];
         weight?: number;
       }[];
+      voucherCode?: string | null;
     },
   ) {
     this.logger.log(
       `[ORDERS] Received create_order request with payload: ${JSON.stringify(payload)}`,
     );
-    const { userId, paymentMethod, shippingAddress, items } = payload;
+    const { userId, paymentMethod, shippingAddress, items, voucherCode } =
+      payload;
     return await this.ordersService.placeOrder(
       userId,
       paymentMethod,
       shippingAddress,
       items,
+      voucherCode,
     );
   }
 
@@ -113,6 +118,121 @@ export class OrdersController {
     @Payload() payload: { page: number; limit: number },
   ): Promise<unknown> {
     return this.ordersService.getAllOrders(payload.page, payload.limit);
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.ADMIN_GHN_ORDERS)
+  async getAdminGhnOrders(
+    @Payload()
+    payload: {
+      page: number;
+      limit: number;
+      status?: string;
+      ghnStatus?: string;
+      hasGhnCode?: boolean;
+      search?: string;
+      dateFrom?: string;
+      dateTo?: string;
+    },
+  ): Promise<unknown> {
+    return this.ordersService.getAdminGhnOrders(payload);
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.ADMIN_GHN_ORDER_DETAIL)
+  async getAdminGhnOrderDetail(
+    @Payload() payload: { orderId: number },
+  ): Promise<unknown> {
+    return this.ordersService.getAdminGhnOrderDetail(payload.orderId);
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.ADMIN_GHN_SYNC)
+  async syncAdminGhnOrder(
+    @Payload() payload: { orderId: number; actorId: number | null },
+  ): Promise<unknown> {
+    return this.ordersService.syncAdminGhnOrder(
+      payload.orderId,
+      payload.actorId,
+    );
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.ADMIN_GHN_DEMO_STATUS)
+  async setDemoGhnStatus(
+    @Payload()
+    payload: {
+      orderId: number;
+      actorId: number | null;
+      ghnStatus: string;
+    },
+  ): Promise<unknown> {
+    return this.ordersService.setDemoGhnStatus(
+      payload.orderId,
+      payload.actorId,
+      payload.ghnStatus,
+    );
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.ADMIN_GHN_HISTORY)
+  async getAdminGhnHistory(
+    @Payload() payload: { orderId: number },
+  ): Promise<unknown> {
+    return this.ordersService.getAdminGhnHistory(payload.orderId);
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.ADMIN_GHN_CANCEL)
+  async cancelAdminGhnOrder(
+    @Payload() payload: { orderId: number; actorId: number | null },
+  ): Promise<unknown> {
+    return this.ordersService.cancelAdminGhnOrder(
+      payload.orderId,
+      payload.actorId,
+    );
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.ADMIN_GHN_RETURN)
+  async returnAdminGhnOrder(
+    @Payload() payload: { orderId: number; actorId: number | null },
+  ): Promise<unknown> {
+    return this.ordersService.returnAdminGhnOrder(
+      payload.orderId,
+      payload.actorId,
+    );
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.ADMIN_GHN_UPDATE_COD)
+  async updateAdminGhnCod(
+    @Payload()
+    payload: {
+      orderId: number;
+      actorId: number | null;
+      codAmount: number;
+    },
+  ): Promise<unknown> {
+    return this.ordersService.updateAdminGhnCod(
+      payload.orderId,
+      payload.actorId,
+      payload.codAmount,
+    );
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.ADMIN_GHN_UPDATE_RECEIVER)
+  async updateAdminGhnReceiver(
+    @Payload()
+    payload: {
+      orderId: number;
+      actorId: number | null;
+      toName?: string;
+      toPhone?: string;
+      toAddress?: string;
+    },
+  ): Promise<unknown> {
+    return this.ordersService.updateAdminGhnReceiver(
+      payload.orderId,
+      payload.actorId,
+      {
+        toName: payload.toName,
+        toPhone: payload.toPhone,
+        toAddress: payload.toAddress,
+      },
+    );
   }
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.GET_ORDER_BY_ID)
@@ -252,6 +372,114 @@ export class OrdersController {
       data.isAdmin,
       data.targetStatus,
     );
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.RETURN_REQUEST_CREATE)
+  async handleRequestReturn(
+    @Payload() data: { orderId: number; userId: number; reason: string },
+  ) {
+    return this.ordersService.requestReturn(
+      data.orderId,
+      data.userId,
+      data.reason,
+    );
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.RETURN_REQUEST_LIST_USER)
+  async handleGetUserReturnRequests(
+    @Payload() data: { userId: number; page: number; limit: number },
+  ) {
+    return this.ordersService.getUserReturnRequests(
+      data.userId,
+      data.page,
+      data.limit,
+    );
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.RETURN_REQUEST_LIST_MANAGED)
+  async handleGetManagedReturnRequests(
+    @Payload()
+    data: {
+      sellerId: number;
+      isAdmin: boolean;
+      page: number;
+      limit: number;
+      status?: ReturnRequestStatus;
+    },
+  ) {
+    return this.ordersService.getManagedReturnRequests(
+      data.sellerId,
+      data.isAdmin,
+      data.page,
+      data.limit,
+      data.status,
+    );
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.RETURN_REQUEST_REVIEW)
+  async handleReviewReturnRequest(
+    @Payload()
+    data: {
+      requestId: number;
+      reviewerId: number;
+      reviewerRole: string;
+      decision: "approve" | "reject";
+      rejectReason?: string;
+    },
+  ) {
+    return this.ordersService.reviewReturnRequest(
+      data.requestId,
+      data.reviewerId,
+      data.reviewerRole,
+      data.decision,
+      data.rejectReason,
+    );
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.VOUCHER_VALIDATE)
+  async handleValidateVoucher(
+    @Payload()
+    data: {
+      userId: number;
+      code: string;
+      itemsTotal: number;
+    },
+  ) {
+    return this.ordersService.previewVoucher(
+      data.userId,
+      data.code,
+      data.itemsTotal,
+    );
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.VOUCHER_CREATE)
+  async handleCreateVoucher(
+    @Payload()
+    data: {
+      code: string;
+      description?: string | null;
+      discountType: VoucherDiscountType;
+      discountValue: number;
+      minOrderAmount?: number;
+      maxDiscountAmount?: number | null;
+      usageLimit?: number | null;
+      perUserLimit?: number | null;
+      startsAt?: string | null;
+      expiresAt?: string | null;
+      isActive?: boolean;
+    },
+  ) {
+    return this.ordersService.createVoucher(data);
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.VOUCHER_LIST)
+  async handleListVouchers(@Payload() data: { page: number; limit: number }) {
+    return this.ordersService.listVouchers(data.page, data.limit);
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.VOUCHER_DEACTIVATE)
+  async handleDeactivateVoucher(@Payload() data: { id: number }) {
+    return this.ordersService.deactivateVoucher(data.id);
   }
 
   @EventPattern(EVENT.PAYMENT_COMPLETED_EVENT)

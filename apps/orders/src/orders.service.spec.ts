@@ -12,6 +12,13 @@ import { Repository } from "typeorm";
 import { INVENTORY_MESSAGE_PATTERNS } from "libs/constant/message-pattern-inventory.constant";
 import { Order, OrderStatus } from "./entity/order.entity";
 import { OrderItem } from "./entity/order_item.entity";
+import { OrderReturnRequest } from "./entity/order-return-request.entity";
+import { Voucher } from "./entity/voucher.entity";
+import { VoucherRedemption } from "./entity/voucher-redemption.entity";
+import {
+  ShippingHistory,
+  ShippingHistoryType,
+} from "./entity/shipping-history.entity";
 import { GhnService } from "./ghn/ghn.service";
 import { OrdersService } from "./orders.service";
 
@@ -29,16 +36,31 @@ describe("OrdersService.handleGhnWebhook", () => {
   const createService = (
     order: Order,
     affected: number,
+    options: { historySaveRejects?: boolean } = {},
   ): {
     service: OrdersService;
     publish: jest.Mock;
     update: jest.Mock;
+    historySave: jest.Mock;
   } => {
     const publish = jest.fn();
     const update = jest.fn().mockResolvedValue({ affected });
     const orderRepository = {
       findOne: jest.fn().mockResolvedValue(order),
       update,
+    };
+    const historySave = options.historySaveRejects
+      ? jest.fn().mockRejectedValue(new Error("history table unavailable"))
+      : jest.fn((value: unknown) =>
+          Promise.resolve({
+            ...(value as object),
+            id: 1,
+            createdAt: new Date(),
+          }),
+        );
+    const shippingHistoryRepository = {
+      create: jest.fn((value: unknown) => value),
+      save: historySave,
     };
 
     const service = new OrdersService(
@@ -49,10 +71,14 @@ describe("OrdersService.handleGhnWebhook", () => {
       {} as ClientProxy,
       orderRepository as unknown as Repository<Order>,
       {} as Repository<OrderItem>,
+      shippingHistoryRepository as unknown as Repository<ShippingHistory>,
+      {} as Repository<OrderReturnRequest>,
+      {} as Repository<Voucher>,
+      {} as Repository<VoucherRedemption>,
       {} as GhnService,
     );
 
-    return { service, publish, update };
+    return { service, publish, update, historySave };
   };
 
   it("does not change a canceled order", async () => {
@@ -104,6 +130,55 @@ describe("OrdersService.handleGhnWebhook", () => {
 
     expect(publish).not.toHaveBeenCalled();
   });
+
+  it("cancels the order and announces it on a GHN cancel status", async () => {
+    const { service, publish, update } = createService(
+      createOrder(OrderStatus.PROCESSING),
+      1,
+    );
+
+    await service.handleGhnWebhook("GHN-1", "cancel");
+
+    expect(update).toHaveBeenCalledWith(
+      { id: 1, status: OrderStatus.PROCESSING },
+      { status: OrderStatus.CANCELED },
+    );
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels the order on any GHN return status", async () => {
+    const { service, publish, update } = createService(
+      createOrder(OrderStatus.DELIVERING),
+      1,
+    );
+
+    await service.handleGhnWebhook("GHN-1", "return_transporting");
+
+    expect(update).toHaveBeenCalledWith(
+      { id: 1, status: OrderStatus.DELIVERING },
+      { status: OrderStatus.CANCELED },
+    );
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fail webhook processing when history insert fails", async () => {
+    const { service, publish, update, historySave } = createService(
+      createOrder(OrderStatus.DELIVERING),
+      1,
+      { historySaveRejects: true },
+    );
+
+    await expect(
+      service.handleGhnWebhook("GHN-1", "delivered"),
+    ).resolves.toBeUndefined();
+
+    expect(update).toHaveBeenCalledWith(
+      { id: 1, status: OrderStatus.DELIVERING },
+      { status: OrderStatus.COMPLETED },
+    );
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(historySave).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("OrdersService stock reservation", () => {
@@ -144,6 +219,10 @@ describe("OrdersService stock reservation", () => {
       {} as ClientProxy,
       orderRepository as unknown as Repository<Order>,
       {} as Repository<OrderItem>,
+      {} as Repository<ShippingHistory>,
+      {} as Repository<OrderReturnRequest>,
+      {} as Repository<Voucher>,
+      {} as Repository<VoucherRedemption>,
       ghnService as unknown as GhnService,
     );
 
@@ -177,6 +256,10 @@ describe("OrdersService stock reservation", () => {
       {} as ClientProxy,
       orderRepository as unknown as Repository<Order>,
       {} as Repository<OrderItem>,
+      {} as Repository<ShippingHistory>,
+      {} as Repository<OrderReturnRequest>,
+      {} as Repository<Voucher>,
+      {} as Repository<VoucherRedemption>,
       ghnService as unknown as GhnService,
     );
 
@@ -403,6 +486,10 @@ describe("OrdersService.sweepStaleReservations", () => {
       {} as ClientProxy,
       orderRepository as unknown as Repository<Order>,
       {} as Repository<OrderItem>,
+      {} as Repository<ShippingHistory>,
+      {} as Repository<OrderReturnRequest>,
+      {} as Repository<Voucher>,
+      {} as Repository<VoucherRedemption>,
       { cancelShippingOrder } as unknown as GhnService,
     );
 
@@ -538,6 +625,10 @@ describe("OrdersService.advanceOrderStatus", () => {
       {} as ClientProxy,
       orderRepository as unknown as Repository<Order>,
       {} as Repository<OrderItem>,
+      {} as Repository<ShippingHistory>,
+      {} as Repository<OrderReturnRequest>,
+      {} as Repository<Voucher>,
+      {} as Repository<VoucherRedemption>,
       {} as GhnService,
     );
     return { service, update, inventorySend, publish };
@@ -623,6 +714,10 @@ describe("OrdersService payment completion idempotency", () => {
       {} as ClientProxy,
       { findOne, update } as unknown as Repository<Order>,
       {} as Repository<OrderItem>,
+      {} as Repository<ShippingHistory>,
+      {} as Repository<OrderReturnRequest>,
+      {} as Repository<Voucher>,
+      {} as Repository<VoucherRedemption>,
       { createShippingOrder } as unknown as GhnService,
     );
 
@@ -632,5 +727,435 @@ describe("OrdersService payment completion idempotency", () => {
     ]);
 
     expect(createShippingOrder).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("OrdersService.readyToShip GHN waybill gating", () => {
+  const buildService = (
+    createShippingOrder: jest.Mock,
+  ): {
+    service: OrdersService;
+    save: jest.Mock;
+    update: jest.Mock;
+  } => {
+    const order = {
+      id: 50,
+      status: OrderStatus.CONFIRMED,
+      ghnOrderCode: null,
+      items: [{ productId: 1, quantity: 1 }],
+    } as unknown as Order;
+    const findOne = jest.fn().mockResolvedValue(order);
+    const count = jest.fn().mockResolvedValue(1);
+    const update = jest.fn().mockResolvedValue({ affected: 1 });
+    const save = jest.fn().mockImplementation((toSave: Order) => toSave);
+    const productClient = {
+      send: () => of([1]),
+    } as unknown as ClientProxy;
+    const service = new OrdersService(
+      null,
+      {} as HttpService,
+      {} as ClientProxy,
+      {} as ClientProxy,
+      productClient,
+      { findOne, update, save } as unknown as Repository<Order>,
+      { count } as unknown as Repository<OrderItem>,
+      {} as Repository<ShippingHistory>,
+      {} as Repository<OrderReturnRequest>,
+      {} as Repository<Voucher>,
+      {} as Repository<VoucherRedemption>,
+      { createShippingOrder } as unknown as GhnService,
+    );
+    return { service, save, update };
+  };
+
+  it("advances to processing and persists the GHN code on success", async () => {
+    const createShippingOrder = jest.fn().mockResolvedValue("GHN-50");
+    const { service, save, update } = buildService(createShippingOrder);
+
+    const result = await service.readyToShip(50, 0);
+
+    expect(createShippingOrder).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith(50, { ghnOrderCode: "GHN-50" });
+    expect(result.status).toBe(OrderStatus.PROCESSING);
+    expect(result.ghnOrderCode).toBe("GHN-50");
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the order at confirmed and throws when GHN creation fails", async () => {
+    const createShippingOrder = jest
+      .fn()
+      .mockRejectedValue(
+        new BadRequestException(
+          'Cannot resolve province "X" to a GHN province',
+        ),
+      );
+    const { service, save } = buildService(createShippingOrder);
+
+    await expect(service.readyToShip(50, 0)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    // The order must NOT be advanced to PROCESSING without a waybill.
+    expect(save).not.toHaveBeenCalled();
+  });
+});
+
+describe("OrdersService admin GHN actions (cancel / return)", () => {
+  const buildOrder = (overrides: Partial<Order> = {}): Order =>
+    ({
+      id: 90,
+      status: OrderStatus.PROCESSING,
+      ghnOrderCode: "LXEWKY",
+      reservationKey: "reservation-90",
+      items: [{ productId: 1, quantity: 2, skuId: null }],
+      ...overrides,
+    }) as unknown as Order;
+
+  const createService = (
+    order: Order | null,
+    ghn: {
+      cancelShippingOrder?: jest.Mock;
+      returnShippingOrder?: jest.Mock;
+      updateOrderCod?: jest.Mock;
+      updateOrderReceiver?: jest.Mock;
+    },
+    affected = 1,
+  ): {
+    service: OrdersService;
+    update: jest.Mock;
+    save: jest.Mock;
+    publish: jest.Mock;
+    inventorySend: jest.Mock;
+  } => {
+    const update = jest.fn().mockResolvedValue({ affected });
+    const inventorySend = jest.fn().mockReturnValue(of(true));
+    const publish = jest.fn();
+    const save = jest
+      .fn()
+      .mockImplementation((entity: ShippingHistory) =>
+        Promise.resolve({ ...entity, id: 1, createdAt: new Date() }),
+      );
+    const orderRepository = {
+      findOne: jest.fn().mockResolvedValue(order),
+      update,
+    };
+    const shippingHistoryRepository = {
+      create: jest.fn().mockImplementation((data: ShippingHistory) => data),
+      save,
+    };
+    const service = new OrdersService(
+      { publish } as unknown as Channel,
+      {} as HttpService,
+      { send: inventorySend } as unknown as ClientProxy,
+      {} as ClientProxy,
+      {} as ClientProxy,
+      orderRepository as unknown as Repository<Order>,
+      {} as Repository<OrderItem>,
+      shippingHistoryRepository as unknown as Repository<ShippingHistory>,
+      {} as Repository<OrderReturnRequest>,
+      {} as Repository<Voucher>,
+      {} as Repository<VoucherRedemption>,
+      ghn as unknown as GhnService,
+    );
+    return { service, update, save, publish, inventorySend };
+  };
+
+  it("cancels via GHN, flips the order to CANCELED, and records an ACTION history row", async () => {
+    const cancelShippingOrder = jest.fn().mockResolvedValue(true);
+    const { service, update, save, publish, inventorySend } = createService(
+      buildOrder(),
+      { cancelShippingOrder },
+    );
+
+    const result = await service.cancelAdminGhnOrder(90, 42);
+
+    expect(cancelShippingOrder).toHaveBeenCalledWith("LXEWKY");
+    expect(update).toHaveBeenCalledWith(
+      { id: 90, status: OrderStatus.PROCESSING },
+      { status: OrderStatus.CANCELED },
+    );
+    // Reserved stock released + ORDER_CANCELED_EVENT published.
+    expect(inventorySend).toHaveBeenCalled();
+    expect(publish).toHaveBeenCalledTimes(1);
+    const recorded = (save.mock.calls as ShippingHistory[][])[0][0];
+    expect(recorded.type).toBe(ShippingHistoryType.ACTION);
+    expect(recorded.action).toBe("cancel");
+    expect(recorded.success).toBe(true);
+    expect(result.newStatus).toBe(OrderStatus.CANCELED);
+    expect(result.success).toBe(true);
+  });
+
+  it("returns via GHN (parcel back to shop) and cancels the local order", async () => {
+    const returnShippingOrder = jest.fn().mockResolvedValue(true);
+    const { service, update } = createService(
+      buildOrder({ status: OrderStatus.SHIPPED }),
+      { returnShippingOrder },
+    );
+
+    const result = await service.returnAdminGhnOrder(90, 42);
+
+    expect(returnShippingOrder).toHaveBeenCalledWith("LXEWKY");
+    expect(update).toHaveBeenCalledWith(
+      { id: 90, status: OrderStatus.SHIPPED },
+      { status: OrderStatus.CANCELED },
+    );
+    expect(result.action).toBe("return");
+    expect(result.newStatus).toBe(OrderStatus.CANCELED);
+  });
+
+  it("records a failed ACTION row and leaves the order intact when GHN rejects the cancel", async () => {
+    const cancelShippingOrder = jest
+      .fn()
+      .mockRejectedValue(
+        new Error("GHN cancel error: order already delivered"),
+      );
+    const { service, update, save, publish } = createService(buildOrder(), {
+      cancelShippingOrder,
+    });
+
+    await expect(service.cancelAdminGhnOrder(90, 42)).rejects.toThrow(
+      "GHN cancel error",
+    );
+
+    // Local order must NOT change and no cancellation side-effects run.
+    expect(update).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+    const recorded = (save.mock.calls as ShippingHistory[][])[0][0];
+    expect(recorded.type).toBe(ShippingHistoryType.ACTION);
+    expect(recorded.success).toBe(false);
+  });
+
+  it("rejects a return when the order is not in a returnable status", async () => {
+    const returnShippingOrder = jest.fn();
+    const { service } = createService(
+      buildOrder({ status: OrderStatus.CONFIRMED }),
+      { returnShippingOrder },
+    );
+
+    await expect(service.returnAdminGhnOrder(90, 42)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(returnShippingOrder).not.toHaveBeenCalled();
+  });
+
+  it("404s when the order does not exist", async () => {
+    const { service } = createService(null, {
+      cancelShippingOrder: jest.fn(),
+    });
+
+    await expect(service.cancelAdminGhnOrder(999, 42)).rejects.toThrow(
+      /not found/i,
+    );
+  });
+
+  it("400s when the order has no GHN order code", async () => {
+    const { service } = createService(buildOrder({ ghnOrderCode: null }), {
+      cancelShippingOrder: jest.fn(),
+    });
+
+    await expect(service.cancelAdminGhnOrder(90, 42)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+  });
+
+  it("updates GHN COD, mirrors it to the local order, and records an ACTION row", async () => {
+    const updateOrderCod = jest.fn().mockResolvedValue(undefined);
+    const { service, update, save } = createService(
+      buildOrder({ codAmount: 100000 }),
+      { updateOrderCod },
+    );
+
+    const result = await service.updateAdminGhnCod(90, 42, 250000);
+
+    expect(updateOrderCod).toHaveBeenCalledWith("LXEWKY", 250000);
+    expect(update).toHaveBeenCalledWith({ id: 90 }, { codAmount: 250000 });
+    const recorded = (save.mock.calls as ShippingHistory[][])[0][0];
+    expect(recorded.action).toBe("update_cod");
+    expect(recorded.success).toBe(true);
+    expect(result.previousCodAmount).toBe(100000);
+    expect(result.newCodAmount).toBe(250000);
+    expect(result.success).toBe(true);
+  });
+
+  it("records a failed ACTION row and leaves the order intact when GHN rejects the COD update", async () => {
+    const updateOrderCod = jest
+      .fn()
+      .mockRejectedValue(new Error("GHN update COD error: order in transit"));
+    const { service, update, save } = createService(
+      buildOrder({ codAmount: 100000 }),
+      { updateOrderCod },
+    );
+
+    await expect(service.updateAdminGhnCod(90, 42, 250000)).rejects.toThrow(
+      "GHN update COD error",
+    );
+    expect(update).not.toHaveBeenCalled();
+    const recorded = (save.mock.calls as ShippingHistory[][])[0][0];
+    expect(recorded.action).toBe("update_cod");
+    expect(recorded.success).toBe(false);
+  });
+
+  it("400s the COD update when the order is past the editable window", async () => {
+    const updateOrderCod = jest.fn();
+    const { service } = createService(
+      buildOrder({ status: OrderStatus.SHIPPED }),
+      { updateOrderCod },
+    );
+
+    await expect(
+      service.updateAdminGhnCod(90, 42, 250000),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(updateOrderCod).not.toHaveBeenCalled();
+  });
+
+  it("updates GHN receiver and rewrites only the name/phone parts of shippingAddress", async () => {
+    const updateOrderReceiver = jest.fn().mockResolvedValue(undefined);
+    const { service, update, save } = createService(
+      buildOrder({
+        shippingAddress: "Old Name|0900000000|1 Old St|Ward|District|Province",
+      }),
+      { updateOrderReceiver },
+    );
+
+    const result = await service.updateAdminGhnReceiver(90, 42, {
+      toName: "  New Name  ",
+      toPhone: "0911111111",
+    });
+
+    expect(updateOrderReceiver).toHaveBeenCalledWith("LXEWKY", {
+      toName: "New Name",
+      toPhone: "0911111111",
+    });
+    expect(update).toHaveBeenCalledWith(
+      { id: 90 },
+      {
+        shippingAddress: "New Name|0911111111|1 Old St|Ward|District|Province",
+      },
+    );
+    const recorded = (save.mock.calls as ShippingHistory[][])[0][0];
+    expect(recorded.action).toBe("update_receiver");
+    expect(recorded.success).toBe(true);
+    expect(result.updatedFields).toEqual(["toName", "toPhone"]);
+  });
+
+  it("400s the receiver update when no fields are provided", async () => {
+    const updateOrderReceiver = jest.fn();
+    const { service } = createService(buildOrder(), { updateOrderReceiver });
+
+    await expect(
+      service.updateAdminGhnReceiver(90, 42, {}),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(updateOrderReceiver).not.toHaveBeenCalled();
+  });
+});
+
+describe("OrdersService.getAdminGhnOrderDetail (demo-mode GHN status)", () => {
+  const buildOrder = (): Order =>
+    ({
+      id: 62,
+      status: OrderStatus.PROCESSING,
+      ghnOrderCode: "LXD6YV",
+      paymentMethod: PaymentMethod.COD,
+      total: 100,
+      items: [],
+    }) as unknown as Order;
+
+  const buildHistory = (action: string, ghnStatus: string): ShippingHistory =>
+    ({
+      id: 1,
+      orderId: "62", // bigint → string at runtime, as mysql2 returns it
+      type: ShippingHistoryType.MANUAL_SYNC,
+      action,
+      ghnStatus,
+      createdAt: new Date("2026-06-29T00:00:00.000Z"),
+    }) as unknown as ShippingHistory;
+
+  const createService = (
+    history: ShippingHistory[],
+    liveGhnStatus: string,
+  ): { service: OrdersService; getOrderDetail: jest.Mock } => {
+    const orderRepository = {
+      findOne: jest.fn().mockResolvedValue(buildOrder()),
+    };
+    const shippingHistoryRepository = {
+      find: jest.fn().mockResolvedValue(history),
+    };
+    const getOrderDetail = jest.fn().mockResolvedValue({
+      orderCode: "LXD6YV",
+      status: liveGhnStatus,
+      codAmount: 100,
+      totalFee: null,
+      expectedDeliveryTime: null,
+      leadtime: null,
+      toName: "Buyer",
+      toPhone: "0900000000",
+      toAddress: "1 Some St",
+      fromName: null,
+      fromPhone: null,
+      raw: {},
+    });
+    const service = new OrdersService(
+      { publish: jest.fn() } as unknown as Channel,
+      {} as HttpService,
+      {} as ClientProxy,
+      {} as ClientProxy,
+      {} as ClientProxy,
+      orderRepository as unknown as Repository<Order>,
+      {} as Repository<OrderItem>,
+      shippingHistoryRepository as unknown as Repository<ShippingHistory>,
+      {} as Repository<OrderReturnRequest>,
+      {} as Repository<Voucher>,
+      {} as Repository<VoucherRedemption>,
+      { getOrderDetail } as unknown as GhnService,
+    );
+    return { service, getOrderDetail };
+  };
+
+  const previousFlag = process.env.GHN_DEMO_ENDPOINTS_ENABLED;
+  afterEach(() => {
+    if (previousFlag === undefined) {
+      delete process.env.GHN_DEMO_ENDPOINTS_ENABLED;
+    } else {
+      process.env.GHN_DEMO_ENDPOINTS_ENABLED = previousFlag;
+    }
+  });
+
+  it("overrides the stuck live GHN status with the demo status when demo mode is on", async () => {
+    process.env.GHN_DEMO_ENDPOINTS_ENABLED = "true";
+    const { service } = createService(
+      [buildHistory("demo_status", "delivering")],
+      "ready_to_pick", // GHN sandbox never advances the waybill
+    );
+
+    const detail = await service.getAdminGhnOrderDetail(62);
+
+    // GHN-side status reflects the demo-driven state, not the stuck sandbox value.
+    expect(detail.ghnDetail?.status).toBe("delivering");
+    // Real receiver/COD fields from the live detail are preserved.
+    expect(detail.ghnDetail?.toName).toBe("Buyer");
+    expect(detail.lastGhnStatus).toBe("delivering");
+  });
+
+  it("keeps the live GHN status when demo mode is off", async () => {
+    delete process.env.GHN_DEMO_ENDPOINTS_ENABLED;
+    const { service } = createService(
+      [buildHistory("demo_status", "delivering")],
+      "ready_to_pick",
+    );
+
+    const detail = await service.getAdminGhnOrderDetail(62);
+
+    expect(detail.ghnDetail?.status).toBe("ready_to_pick");
+  });
+
+  it("does not override when the latest history is a real sync, even in demo mode", async () => {
+    process.env.GHN_DEMO_ENDPOINTS_ENABLED = "true";
+    const { service } = createService(
+      [buildHistory("sync", "picking")],
+      "ready_to_pick",
+    );
+
+    const detail = await service.getAdminGhnOrderDetail(62);
+
+    expect(detail.ghnDetail?.status).toBe("ready_to_pick");
   });
 });

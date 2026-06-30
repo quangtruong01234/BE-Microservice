@@ -10,7 +10,14 @@ import {
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Cron, CronExpression } from "@nestjs/schedule";
-import { In, IsNull, LessThan, Repository } from "typeorm";
+import {
+  Brackets,
+  EntityManager,
+  In,
+  IsNull,
+  LessThan,
+  Repository,
+} from "typeorm";
 import { Order, OrderStatus } from "./entity/order.entity";
 import { PaymentMethod, PaginatedResponse } from "@app/common";
 import { HttpService } from "@nestjs/axios";
@@ -26,18 +33,137 @@ import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { generateInvoicePdf } from "./invoice/invoice.generator";
 import {
+  GhnOrderDetail,
+  GhnReceiverUpdate,
   GhnService,
   GhnShippingItem,
   ShippingFeePreview,
 } from "./ghn/ghn.service";
 import { Channel } from "amqplib";
 import { randomUUID } from "crypto";
+import {
+  ShippingHistory,
+  ShippingHistoryType,
+  ShippingPayloadSummary,
+} from "./entity/shipping-history.entity";
+import {
+  OrderReturnRequest,
+  RefundStatus,
+  ReturnRequestStatus,
+} from "./entity/order-return-request.entity";
+import { Voucher, VoucherDiscountType } from "./entity/voucher.entity";
+import { VoucherRedemption } from "./entity/voucher-redemption.entity";
 
 type StockReservationItem = {
   productId: number;
   quantity: number;
   skuId?: number | null;
 };
+
+interface AdminGhnOrderListQuery {
+  page: number;
+  limit: number;
+  status?: string;
+  ghnStatus?: string;
+  hasGhnCode?: boolean;
+  search?: string;
+  dateFrom?: string;
+  dateTo?: string;
+}
+
+interface AdminGhnOrderListItem {
+  orderId: number;
+  userId: number;
+  sellerId: number;
+  orderStatus: OrderStatus | undefined;
+  ghnOrderCode: string | null;
+  shippingFee: number | null;
+  codAmount: number | null;
+  paymentMethod: PaymentMethod;
+  lastGhnStatus: string | null;
+  lastSyncedAt: Date | null;
+  updatedAt: Date;
+  availableActions: string[];
+}
+
+interface AdminGhnOrderDetail {
+  localOrder: {
+    orderId: number;
+    userId: number;
+    sellerId: number;
+    orderStatus: OrderStatus | undefined;
+    ghnOrderCode: string | null;
+    shippingAddress: string;
+    shippingFee: number | null;
+    codAmount: number | null;
+    paymentMethod: PaymentMethod;
+    total: number;
+    items: OrderItem[];
+    createdAt: Date;
+    updatedAt: Date;
+  };
+  ghnDetail: GhnOrderDetail | null;
+  ghnDetailError: string | null;
+  lastGhnStatus: string | null;
+  lastSyncedAt: Date | null;
+  availableActions: string[];
+}
+
+interface AdminGhnSyncResult {
+  orderId: number;
+  previousStatus: OrderStatus | undefined;
+  newStatus: OrderStatus | undefined;
+  ghnStatus: string;
+  syncedAt: Date;
+}
+
+type AdminGhnActionType = "cancel" | "return";
+
+interface AdminGhnActionResult {
+  orderId: number;
+  action: AdminGhnActionType;
+  ghnOrderCode: string;
+  previousStatus: OrderStatus | undefined;
+  newStatus: OrderStatus | undefined;
+  success: boolean;
+  message: string;
+  actionedAt: Date;
+}
+
+interface AdminGhnUpdateCodResult {
+  orderId: number;
+  action: "update_cod";
+  ghnOrderCode: string;
+  previousCodAmount: number;
+  newCodAmount: number;
+  success: boolean;
+  message: string;
+  actionedAt: Date;
+}
+
+interface AdminGhnReceiverUpdateInput {
+  toName?: string;
+  toPhone?: string;
+  toAddress?: string;
+}
+
+interface AdminGhnUpdateReceiverResult {
+  orderId: number;
+  action: "update_receiver";
+  ghnOrderCode: string;
+  shippingAddress: string;
+  updatedFields: string[];
+  success: boolean;
+  message: string;
+  actionedAt: Date;
+}
+
+interface GhnStatusApplyResult {
+  previousStatus: OrderStatus | undefined;
+  newStatus: OrderStatus | undefined;
+  changed: boolean;
+  message: string;
+}
 
 @Injectable()
 export class OrdersService {
@@ -58,6 +184,14 @@ export class OrdersService {
     private readonly orderRepository: Repository<Order>,
     @InjectRepository(OrderItem)
     private readonly orderItemRepository: Repository<OrderItem>,
+    @InjectRepository(ShippingHistory)
+    private readonly shippingHistoryRepository: Repository<ShippingHistory>,
+    @InjectRepository(OrderReturnRequest)
+    private readonly returnRequestRepository: Repository<OrderReturnRequest>,
+    @InjectRepository(Voucher)
+    private readonly voucherRepository: Repository<Voucher>,
+    @InjectRepository(VoucherRedemption)
+    private readonly voucherRedemptionRepository: Repository<VoucherRedemption>,
     private readonly ghnService: GhnService,
   ) {}
 
@@ -80,7 +214,10 @@ export class OrdersService {
       skuId?: number | null;
       tierIdx?: number[];
       weight?: number;
+      productImage?: string | null;
+      skuLabel?: string | null;
     }>,
+    voucherCode?: string | null,
   ): Promise<Order> {
     // Single-seller path: gateway enriches every item with the same sellerId
     const sellerId = items[0]?.sellerId;
@@ -114,6 +251,13 @@ export class OrdersService {
       (sum, item) => sum + item.price * item.quantity,
       0,
     );
+    // F3: validate + price the voucher (if any) against the goods subtotal
+    // before reserving stock so an invalid code fails fast. The redemption is
+    // consumed atomically inside the create transaction below.
+    const voucherResult = voucherCode
+      ? await this.validateVoucherForCheckout(userId, voucherCode, itemsTotal)
+      : null;
+    const discountAmount = voucherResult?.discountAmount ?? 0;
     // Shipping fee from GHN preview is added to the order total so the
     // payment (COD or gateway) charges goods + shipping in one amount
     const shippingFee = await this.getShippingFeeOrZero(
@@ -121,7 +265,9 @@ export class OrdersService {
       paymentMethod === PaymentMethod.COD ? itemsTotal : 0,
       items,
     );
-    const total = itemsTotal + shippingFee;
+    // Discount applies to goods only — never to shipping — and can never drive
+    // the total below the shipping fee.
+    const total = itemsTotal - discountAmount + shippingFee;
     const reservationKey = randomUUID();
     await this.reserveOrderItems(items, reservationKey);
 
@@ -139,6 +285,8 @@ export class OrdersService {
               shippingFee,
               codAmount: paymentMethod === PaymentMethod.COD ? total : null,
               reservationKey,
+              voucherCode: voucherResult ? voucherResult.voucher.code : null,
+              discountAmount: voucherResult ? discountAmount : null,
             }),
           );
           const orderItems = items.map((item) =>
@@ -152,6 +300,15 @@ export class OrdersService {
             }),
           );
           await manager.save(OrderItem, orderItems);
+          if (voucherResult) {
+            await this.redeemVoucher(
+              manager,
+              voucherResult.voucher,
+              userId,
+              savedOrder.id,
+              discountAmount,
+            );
+          }
           savedOrder.items = orderItems;
           return savedOrder;
         },
@@ -197,6 +354,227 @@ export class OrdersService {
     return order;
   }
 
+  // ---------------------------------------------------------------------------
+  // F3: Vouchers / discount codes
+  // ---------------------------------------------------------------------------
+
+  private normalizeVoucherCode(code: string): string {
+    return code.trim().toUpperCase();
+  }
+
+  /**
+   * Validate a voucher against a goods subtotal and compute the discount. This
+   * is a pure read — it does NOT consume usage. Throws on any rule violation so
+   * the caller surfaces a clear 400/404.
+   */
+  private async validateVoucherForCheckout(
+    userId: number,
+    rawCode: string,
+    itemsTotal: number,
+  ): Promise<{ voucher: Voucher; discountAmount: number }> {
+    const code = this.normalizeVoucherCode(rawCode);
+    const voucher = await this.voucherRepository.findOne({ where: { code } });
+    if (!voucher || !voucher.isActive) {
+      throw new NotFoundException(`Voucher ${code} not found or inactive`);
+    }
+    const now = new Date();
+    if (voucher.startsAt && now < voucher.startsAt) {
+      throw new BadRequestException(`Voucher ${code} is not active yet`);
+    }
+    if (voucher.expiresAt && now > voucher.expiresAt) {
+      throw new BadRequestException(`Voucher ${code} has expired`);
+    }
+    const minOrder = Number(voucher.minOrderAmount ?? 0);
+    if (itemsTotal < minOrder) {
+      throw new BadRequestException(
+        `Order subtotal must be at least ${minOrder} to use voucher ${code}`,
+      );
+    }
+    if (
+      voucher.usageLimit !== null &&
+      voucher.usedCount >= voucher.usageLimit
+    ) {
+      throw new BadRequestException(`Voucher ${code} has been fully redeemed`);
+    }
+    if (voucher.perUserLimit !== null) {
+      const usedByUser = await this.voucherRedemptionRepository.count({
+        where: { voucherId: voucher.id, userId },
+      });
+      if (usedByUser >= voucher.perUserLimit) {
+        throw new BadRequestException(
+          `You have already used voucher ${code} the maximum number of times`,
+        );
+      }
+    }
+    const discountAmount = this.computeDiscount(voucher, itemsTotal);
+    if (discountAmount <= 0) {
+      throw new BadRequestException(`Voucher ${code} yields no discount`);
+    }
+    return { voucher, discountAmount };
+  }
+
+  /**
+   * Compute the VND discount for a voucher against a goods subtotal. Percentage
+   * vouchers honour an optional cap; the result is always clamped to the
+   * subtotal so the order total can never go negative.
+   */
+  private computeDiscount(voucher: Voucher, itemsTotal: number): number {
+    const value = Number(voucher.discountValue ?? 0);
+    let discount: number;
+    if (voucher.discountType === VoucherDiscountType.PERCENT) {
+      discount = (itemsTotal * value) / 100;
+      const cap =
+        voucher.maxDiscountAmount !== null
+          ? Number(voucher.maxDiscountAmount)
+          : null;
+      if (cap !== null && discount > cap) {
+        discount = cap;
+      }
+    } else {
+      discount = value;
+    }
+    discount = Math.min(discount, itemsTotal);
+    return Math.round(discount);
+  }
+
+  /**
+   * Consume one redemption of the voucher inside the order-create transaction.
+   * The conditional UPDATE makes the usage cap atomic: if the cap was hit by a
+   * concurrent order between validation and here, zero rows change and we abort
+   * (rolling the order back, which releases the reserved stock).
+   */
+  private async redeemVoucher(
+    manager: EntityManager,
+    voucher: Voucher,
+    userId: number,
+    orderId: number,
+    discountAmount: number,
+  ): Promise<void> {
+    const result = await manager
+      .createQueryBuilder()
+      .update(Voucher)
+      .set({ usedCount: () => "used_count + 1" })
+      .where("id = :id", { id: voucher.id })
+      .andWhere("(usage_limit IS NULL OR used_count < usage_limit)")
+      .execute();
+    if (!result.affected) {
+      throw new ConflictException(
+        `Voucher ${voucher.code} has just been fully redeemed`,
+      );
+    }
+    await manager.save(
+      manager.create(VoucherRedemption, {
+        voucherId: voucher.id,
+        userId,
+        orderId,
+        discountAmount: discountAmount.toFixed(2),
+      }),
+    );
+  }
+
+  /**
+   * Buyer-facing preview: validate a code against a goods subtotal and return
+   * the discount it would produce, without consuming a redemption.
+   */
+  async previewVoucher(
+    userId: number,
+    code: string,
+    itemsTotal: number,
+  ): Promise<{
+    code: string;
+    discountType: VoucherDiscountType;
+    discountAmount: number;
+    itemsTotal: number;
+    finalItemsTotal: number;
+  }> {
+    const { voucher, discountAmount } = await this.validateVoucherForCheckout(
+      userId,
+      code,
+      itemsTotal,
+    );
+    return {
+      code: voucher.code,
+      discountType: voucher.discountType,
+      discountAmount,
+      itemsTotal,
+      finalItemsTotal: itemsTotal - discountAmount,
+    };
+  }
+
+  async createVoucher(input: {
+    code: string;
+    description?: string | null;
+    discountType: VoucherDiscountType;
+    discountValue: number;
+    minOrderAmount?: number;
+    maxDiscountAmount?: number | null;
+    usageLimit?: number | null;
+    perUserLimit?: number | null;
+    startsAt?: string | null;
+    expiresAt?: string | null;
+    isActive?: boolean;
+  }): Promise<Voucher> {
+    const code = this.normalizeVoucherCode(input.code);
+    const existing = await this.voucherRepository.findOne({ where: { code } });
+    if (existing) {
+      throw new ConflictException(`Voucher ${code} already exists`);
+    }
+    if (
+      input.discountType === VoucherDiscountType.PERCENT &&
+      (input.discountValue <= 0 || input.discountValue > 100)
+    ) {
+      throw new BadRequestException(
+        "Percent discount value must be between 1 and 100",
+      );
+    }
+    if (
+      input.discountType === VoucherDiscountType.FIXED &&
+      input.discountValue <= 0
+    ) {
+      throw new BadRequestException(
+        "Fixed discount value must be greater than 0",
+      );
+    }
+    const voucher = this.voucherRepository.create({
+      code,
+      description: input.description ?? null,
+      discountType: input.discountType,
+      discountValue: input.discountValue.toFixed(2),
+      minOrderAmount: (input.minOrderAmount ?? 0).toFixed(2),
+      maxDiscountAmount:
+        input.maxDiscountAmount != null
+          ? input.maxDiscountAmount.toFixed(2)
+          : null,
+      usageLimit: input.usageLimit ?? null,
+      perUserLimit: input.perUserLimit ?? null,
+      startsAt: input.startsAt ? new Date(input.startsAt) : null,
+      expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
+      isActive: input.isActive ?? true,
+    });
+    return this.voucherRepository.save(voucher);
+  }
+
+  async listVouchers(
+    page: number,
+    limit: number,
+  ): Promise<PaginatedResponse<Voucher>> {
+    const [data, total] = await this.voucherRepository.findAndCount({
+      order: { createdAt: "DESC" },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+    return PaginatedResponse.of(data, total, page, limit);
+  }
+
+  async deactivateVoucher(id: number): Promise<Voucher> {
+    const voucher = await this.voucherRepository.findOne({ where: { id } });
+    if (!voucher) {
+      throw new NotFoundException(`Voucher ${id} not found`);
+    }
+    voucher.isActive = false;
+    return this.voucherRepository.save(voucher);
+  }
+
   async placeMultiSellerOrder(
     userId: number,
     paymentMethod: PaymentMethod,
@@ -210,6 +588,8 @@ export class OrdersService {
       skuId?: number | null;
       tierIdx?: number[];
       weight?: number;
+      productImage?: string | null;
+      skuLabel?: string | null;
     }>,
   ): Promise<Order[]> {
     // Check stock in inventory for all items before creating any order
@@ -322,7 +702,9 @@ export class OrdersService {
               skuTierIdx: Array.isArray(item.tierIdx)
                 ? JSON.stringify(item.tierIdx)
                 : null,
+              skuLabel: item.skuLabel ?? null,
               weight: item.weight ?? null,
+              productImage: item.productImage ?? null,
             }),
           );
           await manager.save(OrderItem, orderItems);
@@ -601,6 +983,769 @@ export class OrdersService {
     return PaginatedResponse.of(data, total, page, limit);
   }
 
+  async getAdminGhnOrders(
+    query: AdminGhnOrderListQuery,
+  ): Promise<PaginatedResponse<AdminGhnOrderListItem>> {
+    const page = query.page;
+    const limit = query.limit;
+    const qb = this.orderRepository
+      .createQueryBuilder("order")
+      .orderBy("order.updatedAt", "DESC")
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    if (query.status) {
+      qb.andWhere("order.status = :status", { status: query.status });
+    }
+    if (query.hasGhnCode === true) {
+      qb.andWhere("order.ghnOrderCode IS NOT NULL");
+    } else if (query.hasGhnCode === false) {
+      qb.andWhere("order.ghnOrderCode IS NULL");
+    }
+    if (query.ghnStatus) {
+      qb.andWhere(
+        `order.id IN (
+          SELECT DISTINCT shipping_history.order_id
+          FROM shipping_history
+          WHERE shipping_history.ghn_status = :ghnStatus
+        )`,
+        { ghnStatus: query.ghnStatus },
+      );
+    }
+    if (query.search) {
+      const search = query.search.trim();
+      const searchId = Number(search);
+      qb.andWhere(
+        new Brackets((where) => {
+          where.where("order.ghnOrderCode LIKE :search", {
+            search: `%${search}%`,
+          });
+          where.orWhere("order.shippingAddress LIKE :search", {
+            search: `%${search}%`,
+          });
+          if (Number.isInteger(searchId)) {
+            where.orWhere("order.id = :searchId", { searchId });
+          }
+        }),
+      );
+    }
+    if (query.dateFrom) {
+      qb.andWhere("order.createdAt >= :dateFrom", {
+        dateFrom: new Date(query.dateFrom),
+      });
+    }
+    if (query.dateTo) {
+      qb.andWhere("order.createdAt <= :dateTo", {
+        dateTo: new Date(query.dateTo),
+      });
+    }
+
+    const [orders, total] = await qb.getManyAndCount();
+    const latestHistory = await this.findLatestShippingHistory(
+      orders.map((order) => order.id),
+    );
+    const data = orders.map((order) =>
+      this.toAdminGhnOrderListItem(order, latestHistory.get(order.id)),
+    );
+    return PaginatedResponse.of(data, total, page, limit);
+  }
+
+  async getAdminGhnOrderDetail(orderId: number): Promise<AdminGhnOrderDetail> {
+    const order = await this.orderRepository.findOne({
+      where: { id: orderId },
+      relations: ["items"],
+    });
+    if (!order) {
+      throw new NotFoundException(`Order ${orderId} not found`);
+    }
+
+    const latestHistory = await this.findLatestShippingHistory([order.id]);
+    const latest = latestHistory.get(order.id);
+
+    let ghnDetail: GhnOrderDetail | null = null;
+    let ghnDetailError: string | null = null;
+    if (order.ghnOrderCode) {
+      try {
+        ghnDetail = await this.ghnService.getOrderDetail(order.ghnOrderCode);
+      } catch (error) {
+        ghnDetailError = this.toErrorMessage(error);
+      }
+    }
+
+    // Demo mode: the operator drives the GHN lifecycle through `demo-status`
+    // instead of real GHN webhooks, but the GHN sandbox never advances a
+    // waybill — so live `getOrderDetail` stays stuck (e.g. ready_to_pick) and
+    // contradicts the demo-driven local status/history. When demo mode is on
+    // and the latest history row is a demo-driven status, make it authoritative
+    // for the GHN-side field, mirroring how a real webhook would have mutated
+    // GHN's own system. Outside demo mode, live GHN wins unchanged.
+    if (
+      process.env.GHN_DEMO_ENDPOINTS_ENABLED === "true" &&
+      latest?.action === "demo_status" &&
+      latest.ghnStatus
+    ) {
+      ghnDetail = this.buildDemoGhnDetail(
+        ghnDetail,
+        order.ghnOrderCode,
+        latest.ghnStatus,
+      );
+      ghnDetailError = null;
+    }
+
+    return {
+      localOrder: this.toAdminGhnLocalOrder(order),
+      ghnDetail,
+      ghnDetailError,
+      lastGhnStatus: latest?.ghnStatus ?? null,
+      lastSyncedAt: latest?.createdAt ?? null,
+      availableActions: this.getAvailableShippingActions(order),
+    };
+  }
+
+  /**
+   * Overlay a demo-driven GHN status onto the detail surfaced to the console.
+   * When live GHN detail was fetched, only its `status` is overridden so the
+   * real receiver/COD fields are preserved; when it was null (no waybill yet,
+   * or the live fetch failed) a minimal detail is synthesized so the GHN status
+   * badge still reflects the demo state. DEMO ONLY — only reached when
+   * `GHN_DEMO_ENDPOINTS_ENABLED === "true"`.
+   */
+  private buildDemoGhnDetail(
+    liveDetail: GhnOrderDetail | null,
+    orderCode: string | null,
+    demoStatus: string,
+  ): GhnOrderDetail {
+    if (liveDetail) {
+      return { ...liveDetail, status: demoStatus };
+    }
+    return {
+      orderCode: orderCode ?? "",
+      status: demoStatus,
+      codAmount: null,
+      totalFee: null,
+      expectedDeliveryTime: null,
+      leadtime: null,
+      toName: null,
+      toPhone: null,
+      toAddress: null,
+      fromName: null,
+      fromPhone: null,
+      raw: {},
+    };
+  }
+
+  async syncAdminGhnOrder(
+    orderId: number,
+    actorId: number | null,
+  ): Promise<AdminGhnSyncResult> {
+    const order = await this.orderRepository.findOne({
+      where: { id: orderId },
+      relations: ["items"],
+    });
+    if (!order) {
+      throw new NotFoundException(`Order ${orderId} not found`);
+    }
+    if (!order.ghnOrderCode) {
+      throw new BadRequestException(`Order ${orderId} has no GHN order code`);
+    }
+
+    const previousStatus = order.status ?? OrderStatus.PENDING;
+    let detail: GhnOrderDetail;
+    try {
+      detail = await this.ghnService.getOrderDetail(order.ghnOrderCode);
+    } catch (error) {
+      await this.recordShippingHistory({
+        orderId: order.id,
+        type: ShippingHistoryType.MANUAL_SYNC,
+        actorId,
+        action: "sync_detail",
+        previousStatus,
+        newStatus: previousStatus,
+        ghnStatus: null,
+        success: false,
+        message: this.toErrorMessage(error),
+        payloadSummary: { orderCode: order.ghnOrderCode },
+      });
+      throw error;
+    }
+
+    if (!detail.status) {
+      const message = "GHN detail response did not include a status";
+      const history = await this.recordShippingHistory({
+        orderId: order.id,
+        type: ShippingHistoryType.MANUAL_SYNC,
+        actorId,
+        action: "sync_detail",
+        previousStatus,
+        newStatus: previousStatus,
+        ghnStatus: null,
+        success: false,
+        message,
+        payloadSummary: { orderCode: order.ghnOrderCode },
+      });
+      throw new BadRequestException(`${message}; historyId=${history.id}`);
+    }
+
+    const result = await this.applyGhnStatus(order, detail.status);
+    const history = await this.recordShippingHistory({
+      orderId: order.id,
+      type: ShippingHistoryType.MANUAL_SYNC,
+      actorId,
+      action: "sync_detail",
+      previousStatus: result.previousStatus ?? null,
+      newStatus: result.newStatus ?? null,
+      ghnStatus: detail.status,
+      success: true,
+      message: result.message,
+      payloadSummary: {
+        orderCode: detail.orderCode,
+        changed: result.changed,
+      },
+    });
+
+    return {
+      orderId: order.id,
+      previousStatus: result.previousStatus,
+      newStatus: result.newStatus,
+      ghnStatus: detail.status,
+      syncedAt: history.createdAt,
+    };
+  }
+
+  /**
+   * DEMO-ONLY: simulate a GHN status change without calling the real GHN API,
+   * so a demo can drive the full lifecycle (picking → delivering → delivered)
+   * that the GHN sandbox never advances on its own. Behaves exactly like an
+   * inbound webhook/sync — it runs the supplied status through the same
+   * `applyGhnStatus` mapping (forward-only, terminal-safe), records a
+   * `shipping_history` row and updates the order — but the GHN-side status is
+   * provided by the caller instead of fetched. Gated behind
+   * `GHN_DEMO_ENDPOINTS_ENABLED` so it can never be reached in production.
+   */
+  async setDemoGhnStatus(
+    orderId: number,
+    actorId: number | null,
+    ghnStatus: string,
+  ): Promise<AdminGhnSyncResult> {
+    if (process.env.GHN_DEMO_ENDPOINTS_ENABLED !== "true") {
+      throw new ForbiddenException("GHN demo status endpoint is disabled");
+    }
+
+    const order = await this.orderRepository.findOne({
+      where: { id: orderId },
+      relations: ["items"],
+    });
+    if (!order) {
+      throw new NotFoundException(`Order ${orderId} not found`);
+    }
+
+    const result = await this.applyGhnStatus(order, ghnStatus);
+    const history = await this.recordShippingHistory({
+      orderId: order.id,
+      type: ShippingHistoryType.MANUAL_SYNC,
+      actorId,
+      action: "demo_status",
+      previousStatus: result.previousStatus ?? null,
+      newStatus: result.newStatus ?? null,
+      ghnStatus,
+      success: true,
+      message: result.message,
+      payloadSummary: {
+        orderCode: order.ghnOrderCode,
+        changed: result.changed,
+        demo: true,
+      },
+    });
+
+    return {
+      orderId: order.id,
+      previousStatus: result.previousStatus,
+      newStatus: result.newStatus,
+      ghnStatus,
+      syncedAt: history.createdAt,
+    };
+  }
+
+  async cancelAdminGhnOrder(
+    orderId: number,
+    actorId: number | null,
+  ): Promise<AdminGhnActionResult> {
+    return this.applyAdminGhnAction(orderId, actorId, "cancel");
+  }
+
+  async returnAdminGhnOrder(
+    orderId: number,
+    actorId: number | null,
+  ): Promise<AdminGhnActionResult> {
+    return this.applyAdminGhnAction(orderId, actorId, "return");
+  }
+
+  /**
+   * Drives a GHN shop-callable switch-status action (cancel / return) for a
+   * single waybill, then reconciles the local order. Both actions resolve the
+   * order to CANCELED locally (GHN return = parcel sent back to the shop), so
+   * the success path reuses `finalizeGhnCancellation` (release reserved stock +
+   * publish ORDER_CANCELED_EVENT). If GHN rejects the action the local order is
+   * left untouched, an ACTION history row is recorded with `success:false`, and
+   * the error propagates so the gateway surfaces it as 4xx/5xx.
+   */
+  private async applyAdminGhnAction(
+    orderId: number,
+    actorId: number | null,
+    action: AdminGhnActionType,
+  ): Promise<AdminGhnActionResult> {
+    const order = await this.orderRepository.findOne({
+      where: { id: orderId },
+      relations: ["items"],
+    });
+    if (!order) {
+      throw new NotFoundException(`Order ${orderId} not found`);
+    }
+    if (!order.ghnOrderCode) {
+      throw new BadRequestException(`Order ${orderId} has no GHN order code`);
+    }
+    if (!this.getAvailableShippingActions(order).includes(action)) {
+      throw new BadRequestException(
+        `Action "${action}" is not allowed for order ${orderId} in status "${order.status}"`,
+      );
+    }
+
+    const ghnOrderCode = order.ghnOrderCode;
+    const previousStatus = order.status ?? OrderStatus.PENDING;
+
+    try {
+      if (action === "cancel") {
+        await this.ghnService.cancelShippingOrder(ghnOrderCode);
+      } else {
+        await this.ghnService.returnShippingOrder(ghnOrderCode);
+      }
+    } catch (error) {
+      await this.tryRecordShippingHistory({
+        orderId: order.id,
+        type: ShippingHistoryType.ACTION,
+        actorId,
+        action,
+        previousStatus,
+        newStatus: previousStatus,
+        ghnStatus: null,
+        success: false,
+        message: this.toErrorMessage(error),
+        payloadSummary: { orderCode: ghnOrderCode },
+      });
+      throw error;
+    }
+
+    // GHN accepted the action — flip the local order to CANCELED exactly once.
+    const updateResult = await this.orderRepository.update(
+      { id: order.id, status: previousStatus },
+      { status: OrderStatus.CANCELED },
+    );
+    const changed = updateResult.affected === 1;
+    if (changed) {
+      order.status = OrderStatus.CANCELED;
+      await this.finalizeGhnCancellation(order);
+    } else {
+      this.logger.warn(
+        `[GHN] Order ${order.id} changed concurrently; GHN ${action} accepted but local status not flipped`,
+      );
+    }
+
+    const message = changed
+      ? `GHN ${action} accepted; order canceled`
+      : `GHN ${action} accepted; local order already changed concurrently`;
+    const history = await this.recordShippingHistory({
+      orderId: order.id,
+      type: ShippingHistoryType.ACTION,
+      actorId,
+      action,
+      previousStatus,
+      newStatus: changed ? OrderStatus.CANCELED : previousStatus,
+      ghnStatus: null,
+      success: true,
+      message,
+      payloadSummary: { orderCode: ghnOrderCode, changed },
+    });
+
+    return {
+      orderId: order.id,
+      action,
+      ghnOrderCode,
+      previousStatus,
+      newStatus: changed ? OrderStatus.CANCELED : previousStatus,
+      success: true,
+      message,
+      actionedAt: history.createdAt,
+    };
+  }
+
+  /**
+   * Update the COD amount on a GHN waybill and mirror it to the local order.
+   * Only valid while the parcel is still editable (CONFIRMED / PROCESSING, with
+   * a GHN code). GHN is the final arbiter: if it rejects the edit the local
+   * order is left untouched, a `success:false` ACTION row is recorded, and the
+   * error propagates so the gateway surfaces it as 4xx/5xx.
+   */
+  async updateAdminGhnCod(
+    orderId: number,
+    actorId: number | null,
+    codAmount: number,
+  ): Promise<AdminGhnUpdateCodResult> {
+    if (!Number.isFinite(codAmount) || codAmount < 0) {
+      throw new BadRequestException("codAmount must be a non-negative number");
+    }
+    const order = await this.loadEditableGhnOrder(orderId, "update_cod");
+    const ghnOrderCode = order.ghnOrderCode as string;
+    const previousCodAmount = Number(order.codAmount ?? 0);
+    const newCodAmount = Math.round(codAmount);
+
+    try {
+      await this.ghnService.updateOrderCod(ghnOrderCode, newCodAmount);
+    } catch (error) {
+      await this.tryRecordShippingHistory({
+        orderId: order.id,
+        type: ShippingHistoryType.ACTION,
+        actorId,
+        action: "update_cod",
+        previousStatus: order.status ?? null,
+        newStatus: order.status ?? null,
+        ghnStatus: null,
+        success: false,
+        message: this.toErrorMessage(error),
+        payloadSummary: { orderCode: ghnOrderCode, newCodAmount },
+      });
+      throw error;
+    }
+
+    order.codAmount = newCodAmount;
+    await this.orderRepository.update(
+      { id: order.id },
+      { codAmount: newCodAmount },
+    );
+
+    const message = `GHN COD updated from ${previousCodAmount} to ${newCodAmount}`;
+    const history = await this.recordShippingHistory({
+      orderId: order.id,
+      type: ShippingHistoryType.ACTION,
+      actorId,
+      action: "update_cod",
+      previousStatus: order.status ?? null,
+      newStatus: order.status ?? null,
+      ghnStatus: null,
+      success: true,
+      message,
+      payloadSummary: {
+        orderCode: ghnOrderCode,
+        previousCodAmount,
+        newCodAmount,
+      },
+    });
+
+    return {
+      orderId: order.id,
+      action: "update_cod",
+      ghnOrderCode,
+      previousCodAmount,
+      newCodAmount,
+      success: true,
+      message,
+      actionedAt: history.createdAt,
+    };
+  }
+
+  /**
+   * Update the receiver name/phone/address on a GHN waybill and mirror the
+   * changed parts back onto the local pipe-delimited `shippingAddress`. Same
+   * editable-window + GHN-arbiter + history semantics as `updateAdminGhnCod`.
+   */
+  async updateAdminGhnReceiver(
+    orderId: number,
+    actorId: number | null,
+    receiver: AdminGhnReceiverUpdateInput,
+  ): Promise<AdminGhnUpdateReceiverResult> {
+    const update: GhnReceiverUpdate = {};
+    const updatedFields: string[] = [];
+    if (this.hasText(receiver.toName)) {
+      update.toName = receiver.toName.trim();
+      updatedFields.push("toName");
+    }
+    if (this.hasText(receiver.toPhone)) {
+      update.toPhone = receiver.toPhone.trim();
+      updatedFields.push("toPhone");
+    }
+    if (this.hasText(receiver.toAddress)) {
+      update.toAddress = receiver.toAddress.trim();
+      updatedFields.push("toAddress");
+    }
+    if (updatedFields.length === 0) {
+      throw new BadRequestException(
+        "Provide at least one of toName, toPhone, toAddress",
+      );
+    }
+
+    const order = await this.loadEditableGhnOrder(orderId, "update_receiver");
+    const ghnOrderCode = order.ghnOrderCode as string;
+
+    try {
+      await this.ghnService.updateOrderReceiver(ghnOrderCode, update);
+    } catch (error) {
+      await this.tryRecordShippingHistory({
+        orderId: order.id,
+        type: ShippingHistoryType.ACTION,
+        actorId,
+        action: "update_receiver",
+        previousStatus: order.status ?? null,
+        newStatus: order.status ?? null,
+        ghnStatus: null,
+        success: false,
+        message: this.toErrorMessage(error),
+        payloadSummary: {
+          orderCode: ghnOrderCode,
+          fields: updatedFields.join(","),
+        },
+      });
+      throw error;
+    }
+
+    const shippingAddress = this.applyReceiverToShippingAddress(
+      order.shippingAddress,
+      update,
+    );
+    order.shippingAddress = shippingAddress;
+    await this.orderRepository.update({ id: order.id }, { shippingAddress });
+
+    const message = `GHN receiver updated (${updatedFields.join(", ")})`;
+    const history = await this.recordShippingHistory({
+      orderId: order.id,
+      type: ShippingHistoryType.ACTION,
+      actorId,
+      action: "update_receiver",
+      previousStatus: order.status ?? null,
+      newStatus: order.status ?? null,
+      ghnStatus: null,
+      success: true,
+      message,
+      payloadSummary: {
+        orderCode: ghnOrderCode,
+        fields: updatedFields.join(","),
+      },
+    });
+
+    return {
+      orderId: order.id,
+      action: "update_receiver",
+      ghnOrderCode,
+      shippingAddress,
+      updatedFields,
+      success: true,
+      message,
+      actionedAt: history.createdAt,
+    };
+  }
+
+  // Load an order that must have a GHN code and currently allow `action` per the
+  // shipping-action matrix; otherwise 404 / 400 just like the cancel/return path.
+  private async loadEditableGhnOrder(
+    orderId: number,
+    action: string,
+  ): Promise<Order> {
+    const order = await this.orderRepository.findOne({
+      where: { id: orderId },
+      relations: ["items"],
+    });
+    if (!order) {
+      throw new NotFoundException(`Order ${orderId} not found`);
+    }
+    if (!order.ghnOrderCode) {
+      throw new BadRequestException(`Order ${orderId} has no GHN order code`);
+    }
+    if (!this.getAvailableShippingActions(order).includes(action)) {
+      throw new BadRequestException(
+        `Action "${action}" is not allowed for order ${orderId} in status "${order.status}"`,
+      );
+    }
+    return order;
+  }
+
+  private hasText(value: string | undefined): value is string {
+    return typeof value === "string" && value.trim().length > 0;
+  }
+
+  // Replace the name/phone/address parts of the pipe-delimited shippingAddress
+  // (name|phone|addr|ward|district|province) while preserving the resolved
+  // ward/district/province so future GHN resolution stays intact.
+  private applyReceiverToShippingAddress(
+    shippingAddress: string,
+    update: GhnReceiverUpdate,
+  ): string {
+    const parts = shippingAddress.split("|");
+    while (parts.length < 6) {
+      parts.push("");
+    }
+    if (update.toName !== undefined) parts[0] = update.toName;
+    if (update.toPhone !== undefined) parts[1] = update.toPhone;
+    if (update.toAddress !== undefined) parts[2] = update.toAddress;
+    return parts.join("|");
+  }
+
+  async getAdminGhnHistory(orderId: number): Promise<ShippingHistory[]> {
+    const exists = await this.orderRepository.exist({ where: { id: orderId } });
+    if (!exists) {
+      throw new NotFoundException(`Order ${orderId} not found`);
+    }
+    return this.shippingHistoryRepository.find({
+      where: { orderId },
+      order: { createdAt: "DESC" },
+    });
+  }
+
+  private async findLatestShippingHistory(
+    orderIds: number[],
+  ): Promise<Map<number, ShippingHistory>> {
+    if (orderIds.length === 0) {
+      return new Map();
+    }
+    const histories = await this.shippingHistoryRepository.find({
+      where: { orderId: In(orderIds) },
+      order: { createdAt: "DESC", id: "DESC" },
+    });
+    const latest = new Map<number, ShippingHistory>();
+    for (const history of histories) {
+      // `order_id` is a bigint column → mysql2 returns it as a string at
+      // runtime, so coerce to number to match the `order.id` (int) lookup key.
+      // Without this the map is keyed by "108" but read with 108 → always miss,
+      // leaving lastGhnStatus/lastSyncedAt null on every list/detail row.
+      const orderId = Number(history.orderId);
+      if (!latest.has(orderId)) {
+        latest.set(orderId, history);
+      }
+    }
+    return latest;
+  }
+
+  private toAdminGhnOrderListItem(
+    order: Order,
+    latestHistory?: ShippingHistory,
+  ): AdminGhnOrderListItem {
+    return {
+      orderId: order.id,
+      userId: Number(order.userId),
+      sellerId: Number(order.sellerId),
+      orderStatus: order.status,
+      ghnOrderCode: order.ghnOrderCode,
+      shippingFee:
+        order.shippingFee === null ? null : Number(order.shippingFee ?? 0),
+      codAmount: order.codAmount === null ? null : Number(order.codAmount ?? 0),
+      paymentMethod: order.paymentMethod,
+      lastGhnStatus: latestHistory?.ghnStatus ?? null,
+      lastSyncedAt: latestHistory?.createdAt ?? null,
+      updatedAt: order.updatedAt,
+      availableActions: this.getAvailableShippingActions(order),
+    };
+  }
+
+  private toAdminGhnLocalOrder(
+    order: Order,
+  ): AdminGhnOrderDetail["localOrder"] {
+    return {
+      orderId: order.id,
+      userId: Number(order.userId),
+      sellerId: Number(order.sellerId),
+      orderStatus: order.status,
+      ghnOrderCode: order.ghnOrderCode,
+      shippingAddress: order.shippingAddress,
+      shippingFee:
+        order.shippingFee === null ? null : Number(order.shippingFee ?? 0),
+      codAmount: order.codAmount === null ? null : Number(order.codAmount ?? 0),
+      paymentMethod: order.paymentMethod,
+      total: Number(order.total),
+      items: order.items ?? [],
+      createdAt: order.createdAt,
+      updatedAt: order.updatedAt,
+    };
+  }
+
+  private getAvailableShippingActions(order: Order): string[] {
+    const actions = ["read", "history"];
+    if (!order.ghnOrderCode) {
+      return actions;
+    }
+    actions.push("sync");
+
+    const status = order.status;
+    const isTerminal =
+      status === OrderStatus.CANCELED || status === OrderStatus.COMPLETED;
+    if (!isTerminal) {
+      // Cancel: valid while the parcel has not yet entered active delivery.
+      if (
+        status === OrderStatus.CONFIRMED ||
+        status === OrderStatus.PROCESSING ||
+        status === OrderStatus.SHIPPED
+      ) {
+        actions.push("cancel");
+      }
+      // Return: valid once the parcel is in transit (send it back to the shop).
+      if (status === OrderStatus.SHIPPED || status === OrderStatus.DELIVERING) {
+        actions.push("return");
+      }
+      // Update COD / receiver: only while the waybill is still editable, i.e.
+      // before the parcel is picked up. GHN rejects edits once in active
+      // delivery; we surface that as an error rather than pre-blocking here.
+      if (
+        status === OrderStatus.CONFIRMED ||
+        status === OrderStatus.PROCESSING
+      ) {
+        actions.push("update_cod", "update_receiver");
+      }
+    }
+    return actions;
+  }
+
+  private async recordShippingHistory(data: {
+    orderId: number;
+    type: ShippingHistoryType;
+    actorId: number | null;
+    action: string;
+    previousStatus: string | null;
+    newStatus: string | null;
+    ghnStatus: string | null;
+    success: boolean;
+    message: string | null;
+    payloadSummary: ShippingPayloadSummary | null;
+  }): Promise<ShippingHistory> {
+    return this.shippingHistoryRepository.save(
+      this.shippingHistoryRepository.create(data),
+    );
+  }
+
+  private async tryRecordShippingHistory(data: {
+    orderId: number;
+    type: ShippingHistoryType;
+    actorId: number | null;
+    action: string;
+    previousStatus: string | null;
+    newStatus: string | null;
+    ghnStatus: string | null;
+    success: boolean;
+    message: string | null;
+    payloadSummary: ShippingPayloadSummary | null;
+  }): Promise<ShippingHistory | null> {
+    try {
+      return await this.recordShippingHistory(data);
+    } catch (error) {
+      this.logger.warn(
+        `[GHN] Failed to record shipping history for order ${data.orderId}: ${this.toErrorMessage(error)}`,
+      );
+      return null;
+    }
+  }
+
+  private toErrorMessage(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message.slice(0, 500);
+    }
+    return String(error).slice(0, 500);
+  }
+
   async getOrderById(orderId: number): Promise<Order | null> {
     return this.orderRepository.findOne({
       where: { id: orderId },
@@ -726,6 +1871,27 @@ export class OrdersService {
       }
     }
 
+    this.publishOrderCanceledEvent(order);
+  }
+
+  /**
+   * Cancellation triggered by GHN itself (a `cancel`/`return*` shipping status
+   * pulled via webhook or manual sync). The order row is already flipped to
+   * CANCELED by the conditional update in `applyGhnStatus`, so this only runs
+   * the side effects: release the reserved stock (idempotent via
+   * reservationKey) and announce the cancellation. Unlike `finalizeCancellation`
+   * it must NOT push the cancel back to GHN — GHN is the originator here.
+   */
+  private async finalizeGhnCancellation(order: Order): Promise<void> {
+    await this.releaseReservedItems(order.items, order.reservationKey, true);
+    this.publishOrderCanceledEvent(order);
+  }
+
+  /**
+   * Publishes ORDER_CANCELED_EVENT so downstream services (inventory, rewards)
+   * can react. Shared by the user/sweeper cancel flow and the GHN-driven cancel.
+   */
+  private publishOrderCanceledEvent(order: Order): void {
     if (this.fanoutChannel) {
       this.fanoutChannel.publish(
         EXCHANGE.ORDERS_EXCHANGE,
@@ -840,30 +2006,53 @@ export class OrdersService {
       return;
     }
 
-    let newStatus: OrderStatus;
-    const normalized = ghnStatus.toLowerCase();
-    if (normalized === "picking" || normalized === "picked") {
-      newStatus = OrderStatus.SHIPPED;
-    } else if (normalized === "delivering") {
-      newStatus = OrderStatus.DELIVERING;
-    } else if (normalized === "delivered") {
-      newStatus = OrderStatus.COMPLETED;
-    } else {
-      this.logger.log(
-        `[GHN] Unhandled status "${ghnStatus}" for order ${order.id} — skipping`,
-      );
-      return;
+    const result = await this.applyGhnStatus(order, ghnStatus);
+    await this.tryRecordShippingHistory({
+      orderId: order.id,
+      type: ShippingHistoryType.WEBHOOK,
+      actorId: null,
+      action: "ghn_webhook",
+      previousStatus: result.previousStatus ?? null,
+      newStatus: result.newStatus ?? null,
+      ghnStatus,
+      success: true,
+      message: result.message,
+      payloadSummary: {
+        orderCode: ghnOrderCode,
+        changed: result.changed,
+      },
+    });
+  }
+
+  private async applyGhnStatus(
+    order: Order,
+    ghnStatus: string,
+  ): Promise<GhnStatusApplyResult> {
+    const mappedStatus = this.mapGhnStatus(ghnStatus);
+    const currentStatus = order.status ?? OrderStatus.PENDING;
+    if (!mappedStatus) {
+      const message = `Unhandled GHN status "${ghnStatus}"`;
+      this.logger.log(`[GHN] ${message} for order ${order.id} - skipping`);
+      return {
+        previousStatus: currentStatus,
+        newStatus: currentStatus,
+        changed: false,
+        message,
+      };
     }
 
-    const currentStatus = order.status ?? OrderStatus.PENDING;
     if (
       currentStatus === OrderStatus.CANCELED ||
       currentStatus === OrderStatus.COMPLETED
     ) {
-      this.logger.warn(
-        `[GHN] Ignored status "${ghnStatus}" for terminal order ${order.id} (${currentStatus})`,
-      );
-      return;
+      const message = `Ignored GHN status "${ghnStatus}" for terminal order ${order.id} (${currentStatus})`;
+      this.logger.warn(`[GHN] ${message}`);
+      return {
+        previousStatus: currentStatus,
+        newStatus: currentStatus,
+        changed: false,
+        message,
+      };
     }
 
     const statusRank: Record<OrderStatus, number> = {
@@ -874,32 +2063,72 @@ export class OrdersService {
       [OrderStatus.DELIVERING]: 4,
       [OrderStatus.COMPLETED]: 5,
       [OrderStatus.CANCELED]: 6,
+      [OrderStatus.RETURN_REQUESTED]: 7,
+      [OrderStatus.REFUNDED]: 8,
     };
-    if (statusRank[newStatus] <= statusRank[currentStatus]) {
-      this.logger.log(
-        `[GHN] Ignored duplicate or stale status "${ghnStatus}" for order ${order.id} (${currentStatus})`,
-      );
-      return;
+    if (statusRank[mappedStatus] <= statusRank[currentStatus]) {
+      const message = `Ignored duplicate or stale GHN status "${ghnStatus}" for order ${order.id} (${currentStatus})`;
+      this.logger.log(`[GHN] ${message}`);
+      return {
+        previousStatus: currentStatus,
+        newStatus: currentStatus,
+        changed: false,
+        message,
+      };
     }
 
     const updateResult = await this.orderRepository.update(
       { id: order.id, status: currentStatus },
-      { status: newStatus },
+      { status: mappedStatus },
     );
     if (updateResult.affected !== 1) {
-      this.logger.log(
-        `[GHN] Order ${order.id} changed concurrently; webhook "${ghnStatus}" skipped`,
-      );
-      return;
+      const message = `Order ${order.id} changed concurrently; GHN status "${ghnStatus}" skipped`;
+      this.logger.log(`[GHN] ${message}`);
+      return {
+        previousStatus: currentStatus,
+        newStatus: currentStatus,
+        changed: false,
+        message,
+      };
     }
-    this.logger.log(`[GHN] Order ${order.id} status updated to ${newStatus}`);
 
-    // Sale is final on delivery: consume the stock reserved at order creation.
-    // The conditional status update above ensures duplicate delivered callbacks
-    // cannot consume stock or emit payment completion more than once.
-    if (newStatus === OrderStatus.COMPLETED) {
+    order.status = mappedStatus;
+    this.logger.log(
+      `[GHN] Order ${order.id} status updated to ${mappedStatus}`,
+    );
+    if (mappedStatus === OrderStatus.COMPLETED) {
       await this.finalizeOrderCompletion(order);
+    } else if (mappedStatus === OrderStatus.CANCELED) {
+      await this.finalizeGhnCancellation(order);
     }
+
+    return {
+      previousStatus: currentStatus,
+      newStatus: mappedStatus,
+      changed: true,
+      message: `Order status updated to ${mappedStatus}`,
+    };
+  }
+
+  private mapGhnStatus(ghnStatus: string): OrderStatus | null {
+    const normalized = ghnStatus.toLowerCase();
+    if (normalized === "picking" || normalized === "picked") {
+      return OrderStatus.SHIPPED;
+    }
+    if (normalized === "delivering") {
+      return OrderStatus.DELIVERING;
+    }
+    if (normalized === "delivered") {
+      return OrderStatus.COMPLETED;
+    }
+    // GHN cancel (cancel / cancelled) + the whole return family
+    // (waiting_to_return, return, return_transporting, return_sorting,
+    // returning, return_fail, returned) all mean the buyer will not receive the
+    // parcel → cancel locally and release the reserved stock.
+    if (normalized.includes("cancel") || normalized.includes("return")) {
+      return OrderStatus.CANCELED;
+    }
+    return null;
   }
 
   /**
@@ -1123,6 +2352,7 @@ export class OrdersService {
 
     const order = await this.orderRepository.findOne({
       where: { id: orderId },
+      relations: ["items"],
     });
     if (!order) {
       throw new NotFoundException(`Order ${orderId} not found`);
@@ -1133,16 +2363,15 @@ export class OrdersService {
       );
     }
 
+    // Create the GHN waybill BEFORE advancing. If GHN order creation fails
+    // (unresolvable address → 400, GHN unreachable → 500), let it propagate and
+    // keep the order at CONFIRMED so the seller can fix the address and retry.
+    // Never advance to PROCESSING without a waybill — that strands the order
+    // (it would look shipped while GHN has no record and can never be synced).
     if (!order.ghnOrderCode) {
-      try {
-        const ghnCode = await this.ghnService.createShippingOrder(order);
-        await this.orderRepository.update(order.id, { ghnOrderCode: ghnCode });
-        order.ghnOrderCode = ghnCode;
-      } catch (err) {
-        this.logger.error(
-          `[ORDERS] GHN createShippingOrder failed for order ${order.id}: ${err}`,
-        );
-      }
+      const ghnCode = await this.ghnService.createShippingOrder(order);
+      await this.orderRepository.update(order.id, { ghnOrderCode: ghnCode });
+      order.ghnOrderCode = ghnCode;
     }
 
     order.status = OrderStatus.PROCESSING;
@@ -1247,5 +2476,266 @@ export class OrdersService {
       await this.finalizeOrderCompletion(order);
     }
     return order;
+  }
+
+  // ----------------------------------------------------------------------------
+  // F2 — Buyer-initiated return / refund request lifecycle
+  // ----------------------------------------------------------------------------
+
+  /**
+   * Buyer opens a return request on an order they have received. Only orders in
+   * DELIVERING or COMPLETED are eligible (goods are in the buyer's hands). The
+   * order is parked at RETURN_REQUESTED and the seller is notified; the previous
+   * status is captured so a rejection can restore it.
+   */
+  async requestReturn(
+    orderId: number,
+    userId: number,
+    reason: string,
+  ): Promise<OrderReturnRequest> {
+    const order = await this.orderRepository.findOne({
+      where: { id: orderId },
+    });
+    if (!order) {
+      throw new NotFoundException(`Order ${orderId} not found`);
+    }
+    if (Number(order.userId) !== userId) {
+      throw new ForbiddenException(
+        "You do not have permission to request a return for this order",
+      );
+    }
+    if (
+      order.status !== OrderStatus.DELIVERING &&
+      order.status !== OrderStatus.COMPLETED
+    ) {
+      throw new BadRequestException(
+        `Order is not eligible for a return request — current status: ${order.status}`,
+      );
+    }
+
+    const existing = await this.returnRequestRepository.findOne({
+      where: {
+        orderId,
+        status: In([
+          ReturnRequestStatus.PENDING_REVIEW,
+          ReturnRequestStatus.APPROVED,
+        ]),
+      },
+    });
+    if (existing) {
+      throw new ConflictException(
+        "An active return request already exists for this order",
+      );
+    }
+
+    const saved = await this.returnRequestRepository.save(
+      this.returnRequestRepository.create({
+        orderId,
+        userId,
+        reason,
+        status: ReturnRequestStatus.PENDING_REVIEW,
+        previousOrderStatus: order.status ?? null,
+      }),
+    );
+
+    await this.updateOrderStatus(orderId, OrderStatus.RETURN_REQUESTED);
+    this.publishOrderReturnEvent(EVENT.ORDER_RETURN_REQUESTED_EVENT, orderId);
+    this.logger.log(
+      `[ORDERS] Return request ${saved.id} opened for order ${orderId} by user ${userId}`,
+    );
+    return saved;
+  }
+
+  /**
+   * Seller (order owner) or admin reviews a pending return request. Approve →
+   * the order moves to REFUNDED, stock is released, a best-effort GHN return is
+   * pushed, and a refund is recorded (simulated for online, manual_pending for
+   * COD). Reject → the order is restored to its pre-request status.
+   */
+  async reviewReturnRequest(
+    requestId: number,
+    reviewerId: number,
+    reviewerRole: string,
+    decision: "approve" | "reject",
+    rejectReason?: string,
+  ): Promise<OrderReturnRequest> {
+    const request = await this.returnRequestRepository.findOne({
+      where: { id: requestId },
+    });
+    if (!request) {
+      throw new NotFoundException(`Return request ${requestId} not found`);
+    }
+    if (request.status !== ReturnRequestStatus.PENDING_REVIEW) {
+      throw new BadRequestException(
+        `Return request ${requestId} has already been reviewed`,
+      );
+    }
+
+    const order = await this.orderRepository.findOne({
+      where: { id: request.orderId },
+      relations: ["items"],
+    });
+    if (!order) {
+      throw new NotFoundException(`Order ${request.orderId} not found`);
+    }
+
+    if (reviewerRole !== "admin") {
+      const productIds = await this.getSellerProductIds(reviewerId);
+      const owns =
+        productIds.length > 0 &&
+        (await this.verifySellerOwnsOrder(request.orderId, productIds));
+      if (!owns) {
+        throw new ForbiddenException(
+          "You do not have access to this return request",
+        );
+      }
+    }
+
+    if (decision === "approve") {
+      return this.approveReturnRequest(request, order, reviewerId);
+    }
+    return this.rejectReturnRequest(request, order, reviewerId, rejectReason);
+  }
+
+  private async approveReturnRequest(
+    request: OrderReturnRequest,
+    order: Order,
+    reviewerId: number,
+  ): Promise<OrderReturnRequest> {
+    // Best-effort GHN return — non-fatal (sandbox may reject; demo records the
+    // refund regardless).
+    if (order.ghnOrderCode) {
+      try {
+        await this.ghnService.returnShippingOrder(order.ghnOrderCode);
+      } catch (err) {
+        this.logger.warn(
+          `[ORDERS] GHN return failed for ${order.ghnOrderCode} on return approval: ${this.toErrorMessage(err)}`,
+        );
+      }
+    }
+
+    // Release reserved stock (idempotent via reservationKey). For a DELIVERING
+    // order this restores availability; for an already-consumed COMPLETED order
+    // it is a safe no-op.
+    await this.releaseReservedItems(order.items, order.reservationKey, false);
+
+    // Simulated refund (DEMO — no real gateway call). COD never captured money
+    // through a gateway, so it is flagged for a manual/cash settlement.
+    const refundAmount = Number(order.total ?? 0);
+    const refundStatus =
+      order.paymentMethod === PaymentMethod.COD
+        ? RefundStatus.MANUAL_PENDING
+        : RefundStatus.REFUNDED;
+
+    await this.updateOrderStatus(order.id, OrderStatus.REFUNDED);
+
+    request.status = ReturnRequestStatus.APPROVED;
+    request.reviewedBy = reviewerId;
+    request.refundAmount = refundAmount;
+    request.refundMethod = order.paymentMethod;
+    request.refundStatus = refundStatus;
+    const saved = await this.returnRequestRepository.save(request);
+
+    this.publishOrderReturnEvent(EVENT.ORDER_RETURN_APPROVED_EVENT, order.id);
+    this.logger.log(
+      `[ORDERS] Return request ${request.id} approved for order ${order.id}; refund ${refundAmount} (${refundStatus})`,
+    );
+    return saved;
+  }
+
+  private async rejectReturnRequest(
+    request: OrderReturnRequest,
+    order: Order,
+    reviewerId: number,
+    rejectReason?: string,
+  ): Promise<OrderReturnRequest> {
+    if (!rejectReason || rejectReason.trim().length === 0) {
+      throw new BadRequestException(
+        "A reject reason is required to reject a return request",
+      );
+    }
+    const restoreStatus =
+      (request.previousOrderStatus as OrderStatus | null) ??
+      OrderStatus.COMPLETED;
+    await this.updateOrderStatus(order.id, restoreStatus);
+
+    request.status = ReturnRequestStatus.REJECTED;
+    request.reviewedBy = reviewerId;
+    request.rejectReason = rejectReason;
+    const saved = await this.returnRequestRepository.save(request);
+
+    this.publishOrderReturnEvent(EVENT.ORDER_RETURN_REJECTED_EVENT, order.id);
+    this.logger.log(
+      `[ORDERS] Return request ${request.id} rejected for order ${order.id}; restored to ${restoreStatus}`,
+    );
+    return saved;
+  }
+
+  /** Buyer's own return requests, newest first. */
+  async getUserReturnRequests(
+    userId: number,
+    page: number,
+    limit: number,
+  ): Promise<PaginatedResponse<OrderReturnRequest>> {
+    const [data, total] = await this.returnRequestRepository.findAndCount({
+      where: { userId },
+      order: { createdAt: "DESC" },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+    return PaginatedResponse.of(data, total, page, limit);
+  }
+
+  /**
+   * Return requests a reviewer may act on: admins see all; a seller sees only
+   * requests on orders containing their products.
+   */
+  async getManagedReturnRequests(
+    sellerId: number,
+    isAdmin: boolean,
+    page: number,
+    limit: number,
+    status?: ReturnRequestStatus,
+  ): Promise<PaginatedResponse<OrderReturnRequest>> {
+    const qb = this.returnRequestRepository.createQueryBuilder("rr");
+    if (!isAdmin) {
+      const productIds = await this.getSellerProductIds(sellerId);
+      if (productIds.length === 0) {
+        return PaginatedResponse.of([], 0, page, limit);
+      }
+      qb.where(
+        `rr.order_id IN (SELECT DISTINCT order_id FROM order_items WHERE product_id IN (:...productIds))`,
+        { productIds },
+      );
+    }
+    if (status) {
+      qb.andWhere("rr.status = :status", { status });
+    }
+    const [data, total] = await qb
+      .orderBy("rr.created_at", "DESC")
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
+    return PaginatedResponse.of(data, total, page, limit);
+  }
+
+  /**
+   * Publishes a return-lifecycle event so the notification service can fan out a
+   * push to the seller (requested) or buyer (approved/rejected). Mirrors
+   * publishOrderCanceledEvent: ORDERS_EXCHANGE fanout + a `pattern` field so the
+   * @EventPattern consumer can route it.
+   */
+  private publishOrderReturnEvent(eventName: string, orderId: number): void {
+    if (this.fanoutChannel) {
+      this.fanoutChannel.publish(
+        EXCHANGE.ORDERS_EXCHANGE,
+        eventName,
+        Buffer.from(JSON.stringify({ data: { orderId }, pattern: eventName })),
+      );
+    } else {
+      this.logger.warn(
+        `[ORDERS] RMQ channel unavailable — ${eventName} event not published for order ${orderId}`,
+      );
+    }
   }
 }

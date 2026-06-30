@@ -24,6 +24,15 @@ export class OrderItem {
   @Column({ name: "product_name" })
   productName!: string;
 
+  @Column({
+    type: "varchar",
+    length: 2048,
+    nullable: true,
+    default: null,
+    name: "product_image",
+  })
+  productImage!: string | null;
+
   @Column({ type: "int" })
   quantity!: number;
 
@@ -43,6 +52,15 @@ export class OrderItem {
     name: "sku_tier_idx",
   })
   skuTierIdx!: string | null;
+
+  @Column({
+    type: "varchar",
+    length: 512,
+    nullable: true,
+    default: null,
+    name: "sku_label",
+  })
+  skuLabel!: string | null;
 
   @ManyToOne(() => Order, (order) => order.items)
   @JoinColumn({ name: "order_id" })
