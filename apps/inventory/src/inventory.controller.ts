@@ -138,9 +138,9 @@ export class InventoryController {
   }
 
   @MessagePattern("inventory.get_low_stock")
-  async getLowStockItems() {
+  async getLowStockItems(data?: { productIds?: number[] }) {
     this.logger.log(`[INVENTORY-TCP] Get low stock items`);
-    return this.inventoryService.getLowStockItems();
+    return this.inventoryService.getLowStockItems(data?.productIds);
   }
 
   @MessagePattern("inventory.update")

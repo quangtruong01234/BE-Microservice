@@ -33,6 +33,8 @@ export interface UpdateInventoryDto {
   isActive?: boolean;
 }
 
+const LOW_STOCK_MAX_RESULTS = 100;
+
 export interface StockCheckResult {
   productId: number;
   sku: string;
@@ -136,8 +138,10 @@ export class InventoryService {
   }
 
   async findByProductId(productId: number): Promise<Inventory> {
+    // Base (non-SKU) row only — SKU products own one row per SKU and must be
+    // read via product/SKU-specific lookups, never an arbitrary first match.
     const result = await this.inventoryRepository.findOne({
-      where: { productId, isActive: true },
+      where: { productId, productSkuId: IsNull(), isActive: true },
     });
     if (!result)
       throw new NotFoundException(
@@ -480,11 +484,20 @@ export class InventoryService {
     return transitioned;
   }
 
-  async getLowStockItems(): Promise<Inventory[]> {
-    return await this.inventoryRepository
+  async getLowStockItems(productIds?: number[]): Promise<Inventory[]> {
+    const qb = this.inventoryRepository
       .createQueryBuilder("inventory")
       .where("inventory.availableStock <= inventory.minimumStock")
-      .andWhere("inventory.isActive = :isActive", { isActive: true })
+      .andWhere("inventory.isActive = :isActive", { isActive: true });
+
+    if (productIds !== undefined) {
+      if (productIds.length === 0) return [];
+      qb.andWhere("inventory.productId IN (:...productIds)", { productIds });
+    }
+
+    return await qb
+      .orderBy("inventory.availableStock", "ASC")
+      .take(LOW_STOCK_MAX_RESULTS)
       .getMany();
   }
 
