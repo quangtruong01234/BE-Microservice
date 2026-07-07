@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    env:
+      CI: "true"
+      NODE_ENV: test
+      FRONTEND_URL: http://localhost:5173
+      JWT_SECRET: ci-only-dummy-jwt-secret-ci-only-dummy-jwt-secret
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: "6379"
+      RABBITMQ_HOST: 127.0.0.1
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_MANAGEMENT_PORT: "15672"
+      RABBITMQ_USER: trybuy_ci
+      RABBITMQ_PASS: trybuy_ci_password
+      RABBITMQ_VHOST: rabbit-trybuy
+      MYSQL_HOST: 127.0.0.1
+      MYSQL_PORT: "3306"
+      MYSQL_DATABASE: trybuy_ci
+      MYSQL_USER: trybuy_ci
+      MYSQL_PASSWORD: trybuy_ci_password
+      PG_HOST: 127.0.0.1
+      PG_PORT: "5432"
+      PG_DATABASE: trybuy_ci
+      PG_USERNAME: trybuy_ci
+      PG_PASSWORD: trybuy_ci_password
+      TYPEORM_SYNCHRONIZE: "false"
+      TYPEORM_SYNCHRONIZE_ALLOW_PRODUCTION: "false"
+      GHN_DEMO_ENDPOINTS_ENABLED: "false"
+      GHN_API_URL: https://example.invalid/ghn
+      GHN_API_TOKEN: ci_dummy
+      GHN_SHOP_ID: "0"
+      GHN_WEBHOOK_SECRET: ci_dummy
+      CLOUDINARY_CLOUD_NAME: ci_dummy
+      CLOUDINARY_API_KEY: ci_dummy
+      CLOUDINARY_API_SECRET: ci_dummy
+      ZALOPAY_APP_ID: "0"
+      ZALOPAY_KEY1: ci_dummy
+      ZALOPAY_KEY2: ci_dummy
+      ZALOPAY_ENDPOINT: https://example.invalid/zalopay
+      ZALOPAY_REDIRECT_URL: http://localhost:3000/api/gateway/payment-result
+      VNP_TMN_CODE: ci_dummy
+      VNP_HASH_SECRET: ci_dummy
+      VNP_URL: https://example.invalid/vnpay
+      VNP_RETURN_URL: http://localhost:3000/api/gateway/payment-result
+      VNPAY_IPN_URL: http://localhost:3000/vnpay/callback
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check whitespace in committed diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          zero_sha="0000000000000000000000000000000000000000"
+
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            git diff --check "origin/${{ github.base_ref }}...HEAD"
+          elif [[ "${{ github.event.before }}" != "$zero_sha" ]]; then
+            git diff --check "${{ github.event.before }}..${{ github.sha }}"
+          else
+            git diff --check HEAD
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint:check
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Unit tests
+        run: npm test -- --runInBand --passWithNoTests
+
+      - name: Build
+        run: npm run build
+
+      - name: Validate PM2 ecosystem config syntax
+        run: node -c ecosystem.config.js
+
+      - name: Validate Docker Compose config
+        run: docker compose config
