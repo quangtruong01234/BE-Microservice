@@ -35,15 +35,26 @@ export class CartController {
 
   @MessagePattern(CART_MESSAGE_PATTERN.CART_UPDATE_ITEM)
   async updateItem(
-    @Payload() payload: { cartItemId: number; quantity: number },
+    @Payload()
+    payload: {
+      userId: number;
+      cartItemId: number;
+      quantity: number;
+    },
   ): Promise<null> {
-    await this.cartService.updateItem(payload.cartItemId, payload.quantity);
+    await this.cartService.updateItem(
+      payload.userId,
+      payload.cartItemId,
+      payload.quantity,
+    );
     return null;
   }
 
   @MessagePattern(CART_MESSAGE_PATTERN.CART_REMOVE_ITEM)
-  async removeItem(@Payload() payload: { cartItemId: number }): Promise<null> {
-    await this.cartService.removeItem(payload.cartItemId);
+  async removeItem(
+    @Payload() payload: { userId: number; cartItemId: number },
+  ): Promise<null> {
+    await this.cartService.removeItem(payload.userId, payload.cartItemId);
     return null;
   }
 

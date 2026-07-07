@@ -4,10 +4,15 @@ import {
   Column,
   ManyToOne,
   JoinColumn,
+  Index,
 } from "typeorm";
 import { Order } from "./order.entity";
 
+// PERF-04: analytics joins (seller_id) + top-products grouping (product_id).
+// order_id is already indexed by the ManyToOne FK constraint.
 @Entity("order_items")
+@Index("idx_order_items_seller_id", ["sellerId"])
+@Index("idx_order_items_product_id", ["productId"])
 export class OrderItem {
   @PrimaryGeneratedColumn("increment")
   id!: number;

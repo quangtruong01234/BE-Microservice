@@ -11,7 +11,11 @@ import {
   Payload,
   RmqContext,
 } from "@nestjs/microservices";
-import { OrdersService } from "./orders.service";
+import {
+  OrdersService,
+  type AnalyticsQuery,
+  type OrderAnalytics,
+} from "./orders.service";
 import { EVENT } from "@app/common/constants/event";
 import {
   HttpToRpcExceptionFilter,
@@ -111,6 +115,13 @@ export class OrdersController {
     @Payload() userId: number,
   ): Promise<Record<string, number>> {
     return this.ordersService.getStatusCountsByUser(userId);
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.ANALYTICS)
+  async getAnalytics(
+    @Payload() query: AnalyticsQuery,
+  ): Promise<OrderAnalytics> {
+    return this.ordersService.getAnalytics(query);
   }
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.GET_ALL_ORDERS)
@@ -294,6 +305,25 @@ export class OrdersController {
       payload.shippingAddress,
       payload.items,
     );
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.SHIPPING_PROVINCES)
+  async listShippingProvinces(): Promise<{ id: number; name: string }[]> {
+    return this.ordersService.listShippingProvinces();
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.SHIPPING_DISTRICTS)
+  async listShippingDistricts(
+    @Payload() payload: { provinceId: number },
+  ): Promise<{ id: number; name: string }[]> {
+    return this.ordersService.listShippingDistricts(payload.provinceId);
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.SHIPPING_WARDS)
+  async listShippingWards(
+    @Payload() payload: { districtId: number },
+  ): Promise<{ id: string; name: string }[]> {
+    return this.ordersService.listShippingWards(payload.districtId);
   }
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.VERIFY_PRODUCT_PURCHASED)

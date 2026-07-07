@@ -117,6 +117,45 @@ interface AdminGhnSyncResult {
   syncedAt: Date;
 }
 
+// F4 — analytics dashboard aggregates.
+export interface AnalyticsQuery {
+  // null → global scope (admin / shipping console); a number → single seller.
+  sellerId: number | null;
+  from?: string;
+  to?: string;
+  interval?: "day" | "month";
+  topN?: number;
+}
+
+export interface RevenuePoint {
+  period: string;
+  revenue: number;
+  orderCount: number;
+}
+
+export interface TopProduct {
+  productId: number;
+  productName: string;
+  quantitySold: number;
+  revenue: number;
+}
+
+export interface OrderAnalytics {
+  scope: "seller" | "global";
+  from: string;
+  to: string;
+  interval: "day" | "month";
+  summary: {
+    totalRevenue: number;
+    completedOrders: number;
+    totalOrders: number;
+    averageOrderValue: number;
+  };
+  revenueOverTime: RevenuePoint[];
+  statusDistribution: Record<string, number>;
+  topProducts: TopProduct[];
+}
+
 type AdminGhnActionType = "cancel" | "return";
 
 interface AdminGhnActionResult {
@@ -928,6 +967,25 @@ export class OrdersService {
     );
   }
 
+  // GHN master-data proxies for the storefront address dropdowns — delegate to
+  // the cached GHN reads so the FE can build cascading province/district/ward
+  // selectors that yield GHN codes (the fee preview / waybill later consume).
+  async listShippingProvinces(): Promise<{ id: number; name: string }[]> {
+    return this.ghnService.listProvinces();
+  }
+
+  async listShippingDistricts(
+    provinceId: number,
+  ): Promise<{ id: number; name: string }[]> {
+    return this.ghnService.listDistricts(provinceId);
+  }
+
+  async listShippingWards(
+    districtId: number,
+  ): Promise<{ id: string; name: string }[]> {
+    return this.ghnService.listWards(districtId);
+  }
+
   async getOrdersByUser(
     userId: number,
     page: number = 1,
@@ -968,6 +1026,179 @@ export class OrdersService {
       counts.all += count;
     }
     return counts;
+  }
+
+  /**
+   * F4 — dashboard analytics. When `sellerId` is a number the aggregates are
+   * scoped to that seller's orders/items; when it is null they are global
+   * (admin / shipping console). Revenue is goods revenue — SUM(price *
+   * quantity) over `order_items` in COMPLETED orders — so it is consistent with
+   * `topProducts` revenue and excludes shipping fees (paid to GHN) and voucher
+   * discounts. `statusDistribution` counts every order created in the window
+   * regardless of status so pending/canceled/refunded stay visible.
+   */
+  async getAnalytics(query: AnalyticsQuery): Promise<OrderAnalytics> {
+    const interval: "day" | "month" =
+      query.interval === "month" ? "month" : "day";
+    const topN = Math.min(Math.max(query.topN ?? 5, 1), 50);
+    const { fromDate, toDate } = this.resolveAnalyticsRange(
+      query.from,
+      query.to,
+    );
+    const sellerId = query.sellerId;
+    const dateFormat = interval === "month" ? "%Y-%m" : "%Y-%m-%d";
+
+    // 1. Status distribution — every order created in the window.
+    const statusQb = this.orderRepository
+      .createQueryBuilder("order")
+      .select("order.status", "status")
+      .addSelect("COUNT(*)", "count")
+      .where("order.createdAt BETWEEN :fromDate AND :toDate", {
+        fromDate,
+        toDate,
+      })
+      .groupBy("order.status");
+    if (sellerId != null) {
+      statusQb.andWhere("order.sellerId = :sellerId", { sellerId });
+    }
+    const statusRows = await statusQb.getRawMany<{
+      status: string;
+      count: string;
+    }>();
+
+    const statusDistribution: Record<string, number> = {};
+    for (const status of Object.values(OrderStatus)) {
+      statusDistribution[status] = 0;
+    }
+    let totalOrders = 0;
+    for (const row of statusRows) {
+      const count = Number(row.count);
+      statusDistribution[row.status] = count;
+      totalOrders += count;
+    }
+    const completedOrders = statusDistribution[OrderStatus.COMPLETED] ?? 0;
+
+    // 2. Revenue over time — goods revenue from COMPLETED orders per period.
+    const revenueQb = this.orderItemRepository
+      .createQueryBuilder("oi")
+      .innerJoin("oi.order", "o")
+      .select(`DATE_FORMAT(o.createdAt, '${dateFormat}')`, "period")
+      .addSelect("SUM(oi.price * oi.quantity)", "revenue")
+      .addSelect("COUNT(DISTINCT o.id)", "orderCount")
+      .where("o.status = :status", { status: OrderStatus.COMPLETED })
+      .andWhere("o.createdAt BETWEEN :fromDate AND :toDate", {
+        fromDate,
+        toDate,
+      })
+      .groupBy("period")
+      .orderBy("period", "ASC");
+    if (sellerId != null) {
+      revenueQb.andWhere("oi.sellerId = :sellerId", { sellerId });
+    }
+    const revenueRows = await revenueQb.getRawMany<{
+      period: string;
+      revenue: string | null;
+      orderCount: string;
+    }>();
+
+    const revenueOverTime: RevenuePoint[] = revenueRows.map((row) => ({
+      period: row.period,
+      revenue: Math.round(Number(row.revenue ?? 0)),
+      orderCount: Number(row.orderCount),
+    }));
+    const totalRevenue = revenueOverTime.reduce(
+      (sum, point) => sum + point.revenue,
+      0,
+    );
+
+    // 3. Top products by quantity sold (COMPLETED orders only).
+    const topQb = this.orderItemRepository
+      .createQueryBuilder("oi")
+      .innerJoin("oi.order", "o")
+      .select("oi.productId", "productId")
+      .addSelect("MAX(oi.productName)", "productName")
+      .addSelect("SUM(oi.quantity)", "quantitySold")
+      .addSelect("SUM(oi.price * oi.quantity)", "revenue")
+      .where("o.status = :status", { status: OrderStatus.COMPLETED })
+      .andWhere("o.createdAt BETWEEN :fromDate AND :toDate", {
+        fromDate,
+        toDate,
+      })
+      .groupBy("oi.productId")
+      .orderBy("quantitySold", "DESC")
+      .limit(topN);
+    if (sellerId != null) {
+      topQb.andWhere("oi.sellerId = :sellerId", { sellerId });
+    }
+    const topRows = await topQb.getRawMany<{
+      productId: string;
+      productName: string;
+      quantitySold: string;
+      revenue: string | null;
+    }>();
+
+    const topProducts: TopProduct[] = topRows.map((row) => ({
+      productId: Number(row.productId),
+      productName: row.productName,
+      quantitySold: Number(row.quantitySold),
+      revenue: Math.round(Number(row.revenue ?? 0)),
+    }));
+
+    return {
+      scope: sellerId != null ? "seller" : "global",
+      from: fromDate.toISOString(),
+      to: toDate.toISOString(),
+      interval,
+      summary: {
+        totalRevenue,
+        completedOrders,
+        totalOrders,
+        averageOrderValue:
+          completedOrders > 0 ? Math.round(totalRevenue / completedOrders) : 0,
+      },
+      revenueOverTime,
+      statusDistribution,
+      topProducts,
+    };
+  }
+
+  /**
+   * Resolve the analytics window. Both bounds are optional; defaults to the
+   * last 30 days. Dates are treated as calendar-day granular — `from` snaps to
+   * start-of-day and `to` to end-of-day (inclusive).
+   */
+  private resolveAnalyticsRange(
+    from?: string,
+    to?: string,
+  ): { fromDate: Date; toDate: Date } {
+    let toDate: Date;
+    if (to) {
+      toDate = new Date(to);
+      if (Number.isNaN(toDate.getTime())) {
+        throw new BadRequestException(`Invalid "to" date: ${to}`);
+      }
+      toDate.setHours(23, 59, 59, 999);
+    } else {
+      toDate = new Date();
+    }
+
+    let fromDate: Date;
+    if (from) {
+      fromDate = new Date(from);
+      if (Number.isNaN(fromDate.getTime())) {
+        throw new BadRequestException(`Invalid "from" date: ${from}`);
+      }
+      fromDate.setHours(0, 0, 0, 0);
+    } else {
+      fromDate = new Date(toDate);
+      fromDate.setDate(fromDate.getDate() - 30);
+      fromDate.setHours(0, 0, 0, 0);
+    }
+
+    if (fromDate.getTime() > toDate.getTime()) {
+      throw new BadRequestException(`"from" must be on or before "to"`);
+    }
+    return { fromDate, toDate };
   }
 
   async getAllOrders(
@@ -2227,7 +2458,10 @@ export class OrdersService {
           username: string;
           email: string;
           name: string | null;
-        }>({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, order.userId)
+        }>(
+          { cmd: USER_MESSAGE_PATTERN.GET_USER_INFO },
+          { userId: Number(order.userId), includeEmail: true },
+        )
         .pipe(
           timeout(10000),
           catchError((e: unknown) => throwError(() => e)),

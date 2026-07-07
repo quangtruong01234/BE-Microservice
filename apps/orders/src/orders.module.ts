@@ -13,6 +13,7 @@ import { RmqModule } from "@app/common";
 import { HttpModule } from "@nestjs/axios";
 import { ClientsModule, Transport } from "@nestjs/microservices";
 import { TypeOrmModule } from "@nestjs/typeorm";
+import { resolveTypeOrmSynchronize } from "@app/database";
 import { OrderItem } from "./entity/order_item.entity";
 import { Order } from "./entity/order.entity";
 import { ShippingHistory } from "./entity/shipping-history.entity";
@@ -87,7 +88,7 @@ import { GhnModule } from "./ghn/ghn.module";
         Voucher,
         VoucherRedemption,
       ],
-      synchronize: true,
+      synchronize: resolveTypeOrmSynchronize(),
       timezone: "Z",
     }),
     TypeOrmModule.forFeature([

@@ -5,9 +5,10 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   OneToMany,
+  Index,
 } from "typeorm";
 import { OrderItem } from "./order_item.entity";
-import { PaymentMethod } from "@app/common";
+import { PaymentMethod, decimalToNumber } from "@app/common";
 
 export enum OrderStatus {
   PENDING = "pending",
@@ -21,7 +22,14 @@ export enum OrderStatus {
   REFUNDED = "refunded",
 }
 
+// PERF-04: hot read-path indexes — buyer list (user_id), seller list
+// (seller_id), analytics window scans + stale-reservation sweeper
+// (status, created_at), GHN webhook lookup (ghn_order_code).
 @Entity("orders")
+@Index("idx_orders_user_id", ["userId"])
+@Index("idx_orders_seller_id", ["sellerId"])
+@Index("idx_orders_status_created_at", ["status", "createdAt"])
+@Index("idx_orders_ghn_order_code", ["ghnOrderCode"])
 export class Order {
   @PrimaryGeneratedColumn("increment")
   id!: number;
@@ -35,7 +43,12 @@ export class Order {
   @Column({ type: "enum", enum: OrderStatus, default: OrderStatus.PENDING })
   status?: OrderStatus;
 
-  @Column({ type: "decimal", precision: 12, scale: 2 })
+  @Column({
+    type: "decimal",
+    precision: 12,
+    scale: 2,
+    transformer: decimalToNumber,
+  })
   total!: number;
 
   @Column({
@@ -61,6 +74,7 @@ export class Order {
     scale: 2,
     nullable: true,
     default: null,
+    transformer: decimalToNumber,
   })
   codAmount!: number | null;
 
@@ -71,6 +85,7 @@ export class Order {
     scale: 2,
     nullable: true,
     default: null,
+    transformer: decimalToNumber,
   })
   shippingFee!: number | null;
 
@@ -104,6 +119,7 @@ export class Order {
     scale: 2,
     nullable: true,
     default: null,
+    transformer: decimalToNumber,
   })
   discountAmount!: number | null;
 

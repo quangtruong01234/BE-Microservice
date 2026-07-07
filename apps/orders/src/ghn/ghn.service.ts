@@ -254,6 +254,37 @@ export class GhnService {
     );
   }
 
+  // Public master-data proxies for the storefront checkout address dropdowns.
+  // The FE must not hold the GHN token, so the gateway proxies these reads and
+  // returns just the { id, name } the FE needs — id is the GHN code the fee
+  // preview / waybill create later consumes (ProvinceID / DistrictID number,
+  // WardCode string). All three reuse the 24h in-memory master-data cache.
+  async listProvinces(): Promise<{ id: number; name: string }[]> {
+    const provinces = await this.getProvinces();
+    return provinces.map((province) => ({
+      id: province.ProvinceID,
+      name: province.ProvinceName,
+    }));
+  }
+
+  async listDistricts(
+    provinceId: number,
+  ): Promise<{ id: number; name: string }[]> {
+    const districts = await this.getDistricts(provinceId);
+    return districts.map((district) => ({
+      id: district.DistrictID,
+      name: district.DistrictName,
+    }));
+  }
+
+  async listWards(districtId: number): Promise<{ id: string; name: string }[]> {
+    const wards = await this.getWards(districtId);
+    return wards.map((ward) => ({
+      id: ward.WardCode,
+      name: ward.WardName,
+    }));
+  }
+
   async cancelShippingOrder(ghnOrderCode: string): Promise<boolean> {
     return this.switchOrderStatus(ghnOrderCode, "cancel");
   }

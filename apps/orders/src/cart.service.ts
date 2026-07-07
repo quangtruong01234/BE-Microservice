@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { IsNull, Repository } from "typeorm";
 import { Cart } from "./entity/cart.entity";
@@ -71,16 +71,31 @@ export class CartService {
     });
   }
 
-  async updateItem(cartItemId: number, quantity: number): Promise<void> {
+  private async findOwnedCartItem(
+    userId: number,
+    cartItemId: number,
+  ): Promise<CartItem> {
+    const item = await this.cartItemRepository.findOne({
+      where: { id: cartItemId },
+      relations: ["cart"],
+    });
+    if (!item || item.cart.userId !== userId) {
+      throw new NotFoundException("Cart item not found");
+    }
+    return item;
+  }
+
+  async updateItem(
+    userId: number,
+    cartItemId: number,
+    quantity: number,
+  ): Promise<void> {
     if (quantity <= 0) {
-      await this.removeItem(cartItemId);
+      await this.removeItem(userId, cartItemId);
       return;
     }
 
-    const item = await this.cartItemRepository.findOne({
-      where: { id: cartItemId },
-    });
-    if (!item) return;
+    const item = await this.findOwnedCartItem(userId, cartItemId);
 
     await this.cartItemRepository.update(cartItemId, { quantity });
 
@@ -92,12 +107,8 @@ export class CartService {
     }
   }
 
-  async removeItem(cartItemId: number): Promise<void> {
-    const item = await this.cartItemRepository.findOne({
-      where: { id: cartItemId },
-    });
-    if (!item) return;
-
+  async removeItem(userId: number, cartItemId: number): Promise<void> {
+    const item = await this.findOwnedCartItem(userId, cartItemId);
     const cartId = item.cartId;
     await this.cartItemRepository.delete(cartItemId);
 
