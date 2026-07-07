@@ -13,6 +13,12 @@
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "start:prod": "pm2 start ecosystem.config.js --env production",
+    "pm2:start": "pm2 start ecosystem.config.js --env production",
+    "pm2:restart": "pm2 restart ecosystem.config.js --env production",
+    "pm2:stop": "pm2 stop ecosystem.config.js",
+    "pm2:logs": "pm2 logs",
+    "pm2:save": "pm2 save",
+    "deploy:check": "node -c ecosystem.config.js && npx tsc --noEmit && npm run build",
     "start:prod:gateway": "node dist/apps/gateway/main",
     "start:prod:orders": "node dist/apps/orders/main",
     "start:prod:user": "node dist/apps/user/main",
@@ -24,6 +30,7 @@
     "start:prod:payments": "node dist/apps/payments/main",
     "start:prod:rewards": "node dist/apps/rewards/main",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
+    "lint:check": "eslint \"{src,apps,libs,test}/**/*.ts\"",
     "lint:fix": "eslint --fix \"{src,apps,libs,test}/**/*.ts\"",
     "test": "jest",
     "test:watch": "jest --watch",
@@ -40,7 +47,11 @@
     "start:notification": "nest start notification --watch",
     "start:chat": "nest start chat --watch",
     "start:nodeA": "concurrently -n GATEWAY,ORDERS,USER,PRODUCT,SOCIAL,NOTIF,CHAT -c blue,green,pink,yellow,cyan,magenta,white \"npm run start:gateway\" \"npm run start:orders\" \"npm run start:user\" \"npm run start:product\" \"npm run start:social\" \"npm run start:notification\" \"npm run start:chat\"",
-    "start:nodeB": "concurrently -n INVENTORY,PAYMENTS,REWARDS -c yellow,magenta,cyan \"npm run start:inventory\" \"npm run start:payments\" \"npm run start:rewards\""
+    "start:nodeB": "concurrently -n INVENTORY,PAYMENTS,REWARDS -c yellow,magenta,cyan \"npm run start:inventory\" \"npm run start:payments\" \"npm run start:rewards\"",
+    "db:migrate:nodeA": "node scripts/migrate-database.mjs --target=nodeA --mode=apply",
+    "db:migrate:nodeB": "node scripts/migrate-database.mjs --target=nodeB --mode=apply",
+    "db:migrate:status": "node scripts/migrate-database.mjs --mode=status",
+    "db:migrate:dry-run": "node scripts/migrate-database.mjs --mode=dry-run"
   },
   "dependencies": {
     "@nestjs/axios": "^4.0.1",

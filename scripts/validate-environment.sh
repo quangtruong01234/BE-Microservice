@@ -1,134 +1,176 @@
 #!/bin/bash
-# Pre-deployment validation script
-# Chạy script này trước khi deploy để đảm bảo mọi thứ sẵn sàng
+# Pre-deployment validation script.
 
-echo "🔍 Pre-Deployment Validation Starting..."
-echo "=================================="
+echo "Pre-deployment validation starting..."
+echo "===================================="
 
-# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 ERRORS=0
 
-# Function to check and report
 check_requirement() {
-    if [ $1 -eq 0 ]; then
-        echo -e "${GREEN}✅ $2${NC}"
+    if [ "$1" -eq 0 ]; then
+        echo -e "${GREEN}OK${NC} $2"
     else
-        echo -e "${RED}❌ $2${NC}"
+        echo -e "${RED}FAIL${NC} $2"
         ((ERRORS++))
     fi
 }
 
-# Check Node.js version
+check_env_file() {
+    local file_path="$1"
+    local label="$2"
+    shift 2
+
+    if [ ! -f "$file_path" ]; then
+        echo -e "${RED}FAIL${NC} $label env file exists at $file_path"
+        ((ERRORS++))
+        return
+    fi
+
+    echo -e "${GREEN}OK${NC} $label env file exists"
+    echo "Checking $label required variables..."
+
+    for var in "$@"; do
+        if grep -q "^$var=" "$file_path"; then
+            check_requirement 0 "$label $var is set"
+        else
+            check_requirement 1 "$label $var is missing"
+        fi
+    done
+}
+
 echo "Checking Node.js..."
 node_version=$(node --version 2>/dev/null)
-if [[ $node_version =~ ^v18\. ]]; then
-    check_requirement 0 "Node.js 18.x installed: $node_version"
+if [[ $node_version =~ ^v(18|20|22)\. ]]; then
+    check_requirement 0 "Supported Node.js installed: $node_version"
 else
-    check_requirement 1 "Node.js 18.x required, found: $node_version"
+    check_requirement 1 "Node.js 18, 20, or 22 required; found: $node_version"
 fi
 
-# Check npm
 npm --version >/dev/null 2>&1
 check_requirement $? "npm is available"
 
-# Check PM2
 pm2 --version >/dev/null 2>&1
 check_requirement $? "PM2 is installed"
 
-# Check if we're in project directory
 if [ -f "package.json" ] && [ -f "nest-cli.json" ]; then
-    check_requirement 0 "In correct project directory"
+    check_requirement 0 "In project root"
 else
-    check_requirement 1 "Not in project directory or missing files"
+    check_requirement 1 "Not in project root or missing package.json/nest-cli.json"
 fi
 
-# Check environment template
-if [ -f ".env.nodeA.template" ] && [ -f ".env.nodeB.template" ]; then
-    check_requirement 0 "Environment templates exist"
+if [ -f ".env.example" ] && [ -f "local/nodeA/.env.example" ] && [ -f "local/nodeB/.env.example" ]; then
+    check_requirement 0 "Environment examples exist"
 else
-    check_requirement 1 "Environment templates missing"
+    check_requirement 1 "Environment examples missing"
 fi
 
-# Check build scripts
 if [ -f "scripts/build-nodeA.sh" ] && [ -f "scripts/build-nodeB.sh" ]; then
     check_requirement 0 "Build scripts exist"
 else
     check_requirement 1 "Build scripts missing"
 fi
 
-# Check if scripts are executable
 if [ -x "scripts/build-nodeA.sh" ] && [ -x "scripts/build-nodeB.sh" ]; then
     check_requirement 0 "Build scripts are executable"
 else
-    check_requirement 1 "Build scripts not executable (run: chmod +x scripts/*.sh)"
+    check_requirement 1 "Build scripts not executable; run: chmod +x scripts/*.sh"
 fi
 
-# Check dependencies
-if [ -f "node_modules/.package-lock.json" ] || [ -d "node_modules" ]; then
+if [ -d "node_modules" ]; then
     check_requirement 0 "Dependencies appear to be installed"
 else
-    echo -e "${YELLOW}⚠️  Dependencies not installed. Run: npm ci${NC}"
+    echo -e "${YELLOW}WARN${NC} Dependencies not installed. Run: npm ci"
 fi
 
-# Check environment file
-if [ -f ".env" ]; then
-    echo -e "${GREEN}✅ Environment file exists${NC}"
-    
-    # Check for required variables
-    echo "Checking environment variables..."
-    
-    required_vars=("NODE_ENV" "GATEWAY_PORT" "ORDERS_PORT" "USER_PORT" "PRODUCT_PORT")
-    for var in "${required_vars[@]}"; do
-        if grep -q "^$var=" .env; then
-            check_requirement 0 "$var is set"
-        else
-            check_requirement 1 "$var is missing"
-        fi
-    done
-else
-    echo -e "${RED}❌ .env file missing. Copy from template and configure.${NC}"
-    ((ERRORS++))
-fi
+node_a_required_vars=(
+    NODE_ENV
+    GATEWAY_PORT
+    JWT_SECRET
+    FRONTEND_URL
+    MYSQL_HOST
+    MYSQL_PORT
+    MYSQL_DATABASE
+    MYSQL_USER
+    MYSQL_PASSWORD
+    REDIS_HOST
+    REDIS_PORT
+    RABBITMQ_HOST
+    RABBITMQ_PORT
+    RABBITMQ_USER
+    RABBITMQ_PASS
+    RABBITMQ_VHOST
+    CLOUDINARY_CLOUD_NAME
+    CLOUDINARY_API_KEY
+    CLOUDINARY_API_SECRET
+    GHN_API_URL
+    GHN_API_TOKEN
+    GHN_SHOP_ID
+    GHN_WEBHOOK_SECRET
+)
 
-# Check disk space
+node_b_required_vars=(
+    NODE_ENV
+    PG_HOST
+    PG_PORT
+    PG_DATABASE
+    PG_USERNAME
+    PG_PASSWORD
+    RABBITMQ_HOST
+    RABBITMQ_PORT
+    RABBITMQ_USER
+    RABBITMQ_PASS
+    RABBITMQ_VHOST
+    ZALOPAY_APP_ID
+    ZALOPAY_KEY1
+    ZALOPAY_KEY2
+    ZALOPAY_ENDPOINT
+    VNP_TMN_CODE
+    VNP_HASH_SECRET
+    VNP_URL
+    VNPAY_IPN_URL
+)
+
+check_env_file "local/nodeA/.env" "Node A" "${node_a_required_vars[@]}"
+check_env_file "local/nodeB/.env" "Node B" "${node_b_required_vars[@]}"
+
 available_space=$(df . | awk 'NR==2 {print $4}')
-if [ "$available_space" -gt 1048576 ]; then  # 1GB in KB
+if [ "$available_space" -gt 1048576 ]; then
     check_requirement 0 "Sufficient disk space available"
 else
     check_requirement 1 "Low disk space. At least 1GB required"
 fi
 
-# Check memory
-available_memory=$(free | awk 'NR==2{printf "%.0f", $7/1024}')
-if [ "$available_memory" -gt 512 ]; then  # 512MB
-    check_requirement 0 "Sufficient memory available"
-else
-    echo -e "${YELLOW}⚠️  Low memory available: ${available_memory}MB${NC}"
+if command -v free >/dev/null 2>&1; then
+    available_memory=$(free | awk 'NR==2{printf "%.0f", $7/1024}')
+    if [ "$available_memory" -gt 512 ]; then
+        check_requirement 0 "Sufficient memory available"
+    else
+        echo -e "${YELLOW}WARN${NC} Low memory available: ${available_memory}MB"
+    fi
 fi
 
 echo ""
-echo "=================================="
-if [ $ERRORS -eq 0 ]; then
-    echo -e "${GREEN}🎉 All checks passed! Ready for deployment.${NC}"
+echo "===================================="
+if [ "$ERRORS" -eq 0 ]; then
+    echo -e "${GREEN}All checks passed. Ready for deployment.${NC}"
     echo ""
     echo "Next steps:"
-    echo "1. Run build script: ./scripts/build-nodeA.sh (or build-nodeB.sh)"
-    echo "2. Start services: ./scripts/start-nodeA-prod.sh (or start-nodeB-prod.sh)"
+    echo "1. Run build script: ./scripts/build-nodeA.sh or ./scripts/build-nodeB.sh"
+    echo "2. Start services: npm run start:prod or the node-specific PM2 command"
     echo "3. Verify processes: pm2 list"
     exit 0
 else
-    echo -e "${RED}❌ $ERRORS issues found. Please fix before deployment.${NC}"
+    echo -e "${RED}$ERRORS issue(s) found. Fix before deployment.${NC}"
     echo ""
     echo "Common fixes:"
-    echo "- Install Node.js 18: curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash - && sudo apt-get install -y nodejs"
-    echo "- Install PM2: sudo npm install -g pm2"  
     echo "- Install dependencies: npm ci"
+    echo "- Install PM2: sudo npm install -g pm2"
     echo "- Make scripts executable: chmod +x scripts/*.sh"
-    echo "- Copy environment: cp .env.nodeA.template .env (then edit)"
+    echo "- Copy envs: cp local/nodeA/.env.example local/nodeA/.env && cp local/nodeB/.env.example local/nodeB/.env"
     exit 1
 fi

@@ -13,17 +13,26 @@
 //             --only "gateway,orders,user,product,social,notification,chat"
 //   Node B: pm2 start ecosystem.config.js --env production \
 //             --only "inventory,payments,rewards"
-// Persist across reboots: pm2 save && pm2 startup
+// Persist across reboots: pm2 startup, run the printed command, then pm2 save
 //
 // `cwd` is the api root (where this file lives), so each service's
 // `dotenv.config({ path: "./local/node{A,B}/.env" })` resolves correctly.
 
+const logDir = './logs';
+
 const defaults = {
+  cwd: __dirname,
   instances: 1,
   exec_mode: 'fork',
   autorestart: true,
   watch: false,
   max_memory_restart: '500M',
+  min_uptime: '10s',
+  max_restarts: 10,
+  restart_delay: 5000,
+  kill_timeout: 10000,
+  time: true,
+  merge_logs: false,
   env_production: { NODE_ENV: 'production' },
 };
 
@@ -31,6 +40,8 @@ const service = (name) => ({
   ...defaults,
   name,
   script: `dist/apps/${name}/main.js`,
+  out_file: `${logDir}/${name}.out.log`,
+  error_file: `${logDir}/${name}.error.log`,
 });
 
 module.exports = {

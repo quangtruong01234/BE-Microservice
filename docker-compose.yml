@@ -1,37 +1,82 @@
-version: "3.8"
-
 services:
-  # mysql:
-  #   image: mysql:latest
-  #   container_name: mysql
-  #   restart: always
-  #   environment:
-  #     MYSQL_ROOT_PASSWORD: 123123
-  #   ports:
-  #     - "3306:3306"
-  #   volumes:
-  #     - C:/Users/Quang Truong/Desktop/nginx-project/sql:/var/lib/mysql
-
   redis:
-    image: redis:7
-    container_name: redis
-    restart: always
+    image: redis:7-alpine
+    container_name: trybuy-redis
+    restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    command: >
+      sh -c 'if [ -n "$$REDIS_PASSWORD" ];
+      then redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD";
+      else redis-server --appendonly yes;
+      fi'
     volumes:
-      - C:/redis-data:/data
-    command: redis-server --appendonly yes
+      - redis-data:/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "if [ -n \"$${REDIS_PASSWORD}\" ]; then redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep PONG; else redis-cli ping | grep PONG; fi",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   rabbitmq:
     image: rabbitmq:4-management
-    container_name: rabbitmq
-    restart: always
+    container_name: trybuy-rabbitmq
+    restart: unless-stopped
     environment:
-      RABBITMQ_DEFAULT_USER: user_vh
-      RABBITMQ_DEFAULT_PASS: root1234
-      RABBITMQ_DEFAULT_VHOST: rabbit-trybuy
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?set RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:?set RABBITMQ_PASS}
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST:-rabbit-trybuy}
     ports:
-      - "5672:5672" # app connect
-      - "15672:15672" # UI
+      - "127.0.0.1:${RABBITMQ_PORT:-5672}:5672"
+      - "127.0.0.1:${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
     volumes:
-      - C:/rabbitmq-data:/var/lib/rabbitmq
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  redisinsight:
+    image: redis/redisinsight:latest
+    container_name: trybuy-redisinsight
+    restart: unless-stopped
+    profiles:
+      - local-tools
+    ports:
+      - "127.0.0.1:${REDISINSIGHT_PORT:-5540}:5540"
+    volumes:
+      - redisinsight-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    container_name: trybuy-uptime-kuma
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    ports:
+      - "127.0.0.1:${UPTIME_KUMA_PORT:-13001}:3001"
+    volumes:
+      - uptime-kuma-data:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+volumes:
+  redis-data:
+  rabbitmq-data:
+  redisinsight-data:
+  uptime-kuma-data:
