@@ -15,6 +15,21 @@ export class CachedService {
     return await this.redis.get(key);
   }
 
+  async ping(): Promise<string> {
+    return await this.redis.ping();
+  }
+
+  /**
+   * Batch read (MGET). Returns one entry per key, in the same order —
+   * `null` for keys that do not exist. One round-trip instead of N gets.
+   */
+  async mget(keys: string[]): Promise<(string | null)[]> {
+    if (keys.length === 0) {
+      return [];
+    }
+    return await this.redis.mget(...keys);
+  }
+
   async set(key: string, value: string, expireSeconds?: number): Promise<"OK"> {
     if (expireSeconds) {
       return await this.redis.set(key, value, "EX", expireSeconds);

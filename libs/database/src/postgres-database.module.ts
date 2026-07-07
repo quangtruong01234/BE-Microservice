@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { TypeOrmModule } from "@nestjs/typeorm";
+import { resolveTypeOrmSynchronize } from "./typeorm-synchronize";
 
 @Module({
   imports: [
@@ -17,7 +18,7 @@ import { TypeOrmModule } from "@nestjs/typeorm";
       database: process.env.PG_DATABASE || "inventory",
       ssl: { rejectUnauthorized: false },
       autoLoadEntities: true,
-      synchronize: true, // Re-enabled after fixing entity issues
+      synchronize: resolveTypeOrmSynchronize(),
       logging: false,
       extra: { max: parseInt(process.env.PG_POOL_SIZE || "10", 10) },
     }),

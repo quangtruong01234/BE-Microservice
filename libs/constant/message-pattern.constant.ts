@@ -1,12 +1,17 @@
 export const USER_MESSAGE_PATTERN = {
   GET_USER_INFO: "get_user_info",
-  GET_ALL_USERS: "get_all_users",
   GET_USERS_PAGINATED: "get_users_paginated",
   GET_USERS_BY_IDS: "get_users_by_ids",
+  GET_FEATURED_SELLERS: "user.featured_sellers",
   REGISTER_USER: "register_user",
   LOGIN_USER: "login_user",
   GET_ME: "user.get_me",
   UPDATE_USER: "user.update",
+  ADDRESS_LIST: "user.address_list",
+  ADDRESS_CREATE: "user.address_create",
+  ADDRESS_UPDATE: "user.address_update",
+  ADDRESS_DELETE: "user.address_delete",
+  ADDRESS_SET_DEFAULT: "user.address_set_default",
 };
 
 export const PRODUCT_MESSAGE_PATTERN = {
@@ -62,10 +67,14 @@ export const ORDER_MESSAGE_PATTERN = {
   RETURN_REQUEST_LIST_USER: "order.return_request_list_user",
   RETURN_REQUEST_LIST_MANAGED: "order.return_request_list_managed",
   RETURN_REQUEST_REVIEW: "order.return_request_review",
+  SHIPPING_PROVINCES: "order.shipping_provinces",
+  SHIPPING_DISTRICTS: "order.shipping_districts",
+  SHIPPING_WARDS: "order.shipping_wards",
   VOUCHER_VALIDATE: "order.voucher_validate",
   VOUCHER_CREATE: "order.voucher_create",
   VOUCHER_LIST: "order.voucher_list",
   VOUCHER_DEACTIVATE: "order.voucher_deactivate",
+  ANALYTICS: "order.analytics",
 };
 
 export const PAYMENT_MESSAGE_PATTERN = {
@@ -74,6 +83,8 @@ export const PAYMENT_MESSAGE_PATTERN = {
   INITIATE_MULTI_ORDER_PAYMENT: "payment.initiate_multi_order",
   COMPLETE_ZALOPAY_RETURN: "payment.complete_zalopay_return",
   COMPLETE_VNPAY_RETURN: "payment.complete_vnpay_return",
+  ZALOPAY_CALLBACK: "payment.zalopay_callback",
+  VNPAY_CALLBACK: "payment.vnpay_callback",
 };
 
 export const NOTIFICATION_MESSAGE_PATTERN = {
@@ -102,6 +113,11 @@ export const SOCIAL_MESSAGE_PATTERN = {
   GET_FOLLOWERS: "social_get_followers",
   GET_FOLLOWING: "social_get_following",
   GET_FOLLOWING_FEED: "social_get_following_feed",
+  ADMIN_LIST_REPORTED_POSTS: "social_admin_list_reported_posts",
+  ADMIN_HIDE_POST: "social_admin_hide_post",
+  ADMIN_UNHIDE_POST: "social_admin_unhide_post",
+  ADMIN_DISMISS_REPORTS: "social_admin_dismiss_reports",
+  ADMIN_DELETE_POST: "social_admin_delete_post",
 };
 
 export const CHAT_MESSAGE_PATTERN = {

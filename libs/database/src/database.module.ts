@@ -1,7 +1,7 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule, ConfigService } from "@nestjs/config";
 import { TypeOrmModule } from "@nestjs/typeorm";
-import { DatabaseHealthService } from "./database-health.service";
+import { resolveTypeOrmSynchronize } from "./typeorm-synchronize";
 
 @Module({
   imports: [
@@ -20,7 +20,7 @@ import { DatabaseHealthService } from "./database-health.service";
         password: config.get<string>("MYSQL_PASSWORD"),
         database: config.get<string>("MYSQL_DATABASE"),
         autoLoadEntities: true,
-        synchronize: true,
+        synchronize: resolveTypeOrmSynchronize(),
         logging: ["error", "warn", "info", "schema"] as const,
         ssl: config.get<string>("MYSQL_HOST")?.includes("aivencloud.com")
           ? { rejectUnauthorized: false }
@@ -35,7 +35,6 @@ import { DatabaseHealthService } from "./database-health.service";
       }),
     }),
   ],
-  providers: [DatabaseHealthService],
-  exports: [TypeOrmModule, DatabaseHealthService],
+  exports: [TypeOrmModule],
 })
 export class DatabaseModule {}

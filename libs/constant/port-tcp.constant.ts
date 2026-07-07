@@ -1,4 +1,4 @@
-export const TCP_HOST = "localhost";
+export const TCP_HOST = "127.0.0.1";
 
 export const PORT_TCP = {
   PRODUCT_TCP_PORT: 3006,

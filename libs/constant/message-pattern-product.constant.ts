@@ -7,6 +7,7 @@ export const PRODUCT_MESSAGE_PATTERNS = {
   PRODUCT_CREATE: "product.create",
   PRODUCT_FIND_ALL: "product.findAll",
   PRODUCT_FIND_BY_ID: "product.findById",
+  PRODUCT_FIND_BY_IDS: "product.findByIds",
   PRODUCT_FIND_BY_SKU: "product.findBySku",
   PRODUCT_UPDATE: "product.update",
   PRODUCT_DELETE: "product.delete",
@@ -27,11 +28,8 @@ export const PRODUCT_MESSAGE_PATTERNS = {
   CATEGORY_REVIEW: "category.review",
 
   // SKU patterns
-  SKU_CREATE: "sku.create",
   SKU_FIND_BY_PRODUCT: "sku.findByProduct",
   SKU_FIND_BY_ID: "sku.findById",
-  SKU_UPDATE: "sku.update",
-  SKU_DELETE: "sku.delete",
 
   // Seller patterns
   GET_PRODUCT_IDS_BY_SELLER: "product.get_ids_by_seller",
@@ -40,6 +38,11 @@ export const PRODUCT_MESSAGE_PATTERNS = {
   REVIEW_CREATE: "product.review.create",
   REVIEW_DELETE: "product.review.delete",
   REVIEW_FIND_BY_PRODUCT: "product.review.findByProduct",
+
+  // Wishlist patterns
+  WISHLIST_ADD: "product.wishlist.add",
+  WISHLIST_REMOVE: "product.wishlist.remove",
+  WISHLIST_LIST: "product.wishlist.list",
 } as const;
 
 export type ProductMessagePattern =
