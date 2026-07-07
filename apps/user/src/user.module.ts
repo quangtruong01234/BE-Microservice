@@ -5,6 +5,7 @@ import { TypeOrmModule } from "@nestjs/typeorm";
 import { User } from "./entity/user.entity";
 import { Resource } from "./entity/resource.entity";
 import { Role } from "./entity/role.entity";
+import { UserAddress } from "./entity/user-address.entity";
 import { DatabaseModule } from "@app/database";
 
 @Module({
@@ -24,7 +25,7 @@ import { DatabaseModule } from "@app/database";
     //   synchronize: true,
     // }),
     DatabaseModule,
-    TypeOrmModule.forFeature([User, Resource, Role]),
+    TypeOrmModule.forFeature([User, Resource, Role, UserAddress]),
   ],
   controllers: [UserController],
   providers: [UserService],

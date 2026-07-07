@@ -1,6 +1,8 @@
 import { getRepositoryToken } from "@nestjs/typeorm";
 import { Test, TestingModule } from "@nestjs/testing";
+import { DataSource } from "typeorm";
 import { Role, RoleName, RoleStatus } from "./entity/role.entity";
+import { UserAddress } from "./entity/user-address.entity";
 import { User } from "./entity/user.entity";
 import { UserService } from "./user.service";
 
@@ -26,10 +28,18 @@ describe("UserService", () => {
   const userRepository = {
     create: jest.fn(),
     find: jest.fn(),
+    findAndCount: jest.fn(),
+    findOne: jest.fn(),
     save: jest.fn(),
   };
   const roleRepository = {
     findOne: jest.fn(),
+  };
+  const addressRepository = {
+    find: jest.fn(),
+  };
+  const dataSource = {
+    transaction: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -45,6 +55,14 @@ describe("UserService", () => {
           provide: getRepositoryToken(Role),
           useValue: roleRepository,
         },
+        {
+          provide: getRepositoryToken(UserAddress),
+          useValue: addressRepository,
+        },
+        {
+          provide: DataSource,
+          useValue: dataSource,
+        },
       ],
     }).compile();
 
@@ -52,23 +70,25 @@ describe("UserService", () => {
   });
 
   it("does not return password hashes when listing users", async () => {
-    userRepository.find.mockResolvedValue([persistedUser]);
+    userRepository.findAndCount.mockResolvedValue([[persistedUser], 1]);
 
-    const users = await service.getAllUsers();
+    const usersPage = await service.getUsersPaginated(1, 20);
 
-    expect(users[0]).not.toHaveProperty("password");
-    expect(userRepository.find).toHaveBeenCalledWith({
-      select: {
-        id: true,
-        username: true,
-        email: true,
-        name: true,
-        avatar: true,
-        isActive: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-    });
+    expect(usersPage.data[0]).not.toHaveProperty("password");
+    expect(userRepository.findAndCount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: {
+          id: true,
+          username: true,
+          email: true,
+          name: true,
+          avatar: true,
+          isActive: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      }),
+    );
   });
 
   it("does not return the password hash after registration", async () => {
@@ -83,5 +103,93 @@ describe("UserService", () => {
     });
 
     expect(user).not.toHaveProperty("password");
+  });
+
+  it("does not select email for public user info", async () => {
+    userRepository.findOne.mockResolvedValue({
+      id: persistedUser.id,
+      username: persistedUser.username,
+      name: persistedUser.name,
+      avatar: persistedUser.avatar,
+      isActive: persistedUser.isActive,
+    });
+
+    const user = await service.getInfo(1);
+
+    expect(user).not.toHaveProperty("email");
+    expect(userRepository.findOne).toHaveBeenCalledWith({
+      where: { id: 1 },
+      select: {
+        id: true,
+        username: true,
+        name: true,
+        avatar: true,
+        isActive: true,
+      },
+    });
+  });
+
+  it("does not select email for batched public user info", async () => {
+    userRepository.find.mockResolvedValue([
+      {
+        id: persistedUser.id,
+        username: persistedUser.username,
+        name: persistedUser.name,
+        avatar: persistedUser.avatar,
+        isActive: persistedUser.isActive,
+      },
+    ]);
+
+    const users = await service.getUsersByIds([1]);
+
+    expect(users[0]).not.toHaveProperty("email");
+    expect(userRepository.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: {
+          id: true,
+          username: true,
+          name: true,
+          avatar: true,
+          isActive: true,
+        },
+      }),
+    );
+  });
+
+  it("selects email only when public user info explicitly asks for it", async () => {
+    userRepository.findOne.mockResolvedValue(persistedUser);
+
+    await service.getInfo(1, true);
+
+    expect(userRepository.findOne).toHaveBeenCalledWith({
+      where: { id: 1 },
+      select: {
+        id: true,
+        username: true,
+        name: true,
+        avatar: true,
+        isActive: true,
+        email: true,
+      },
+    });
+  });
+
+  it("selects email only when batched user info explicitly asks for it", async () => {
+    userRepository.find.mockResolvedValue([persistedUser]);
+
+    await service.getUsersByIds([1], true);
+
+    expect(userRepository.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: {
+          id: true,
+          username: true,
+          name: true,
+          avatar: true,
+          isActive: true,
+          email: true,
+        },
+      }),
+    );
   });
 });

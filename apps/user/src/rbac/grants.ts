@@ -38,6 +38,10 @@ const grantList = [
     action: "update:any",
     attributes: "*",
   },
+  // post — social post moderation (admin-only)
+  { role: "admin", resource: "post", action: "read:any", attributes: "*" },
+  { role: "admin", resource: "post", action: "update:any", attributes: "*" },
+  { role: "admin", resource: "post", action: "delete:any", attributes: "*" },
 
   // shop — quản lý sản phẩm của mình, xem order
   { role: "shop", resource: "product", action: "create:own", attributes: "*" },

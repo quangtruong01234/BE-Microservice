@@ -4,6 +4,10 @@ import { MessagePattern, Payload } from "@nestjs/microservices";
 import { RegisterUserDto } from "./dto/register-user.dto";
 import { LoginUserDto } from "./dto/login-user.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
+import {
+  CreateUserAddressDto,
+  UpdateUserAddressDto,
+} from "./dto/user-address.dto";
 import { USER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 
 @Controller()
@@ -13,20 +17,19 @@ export class UserController {
 
   // Get information about the user service
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO })
-  getUserInfo(@Payload() userId: number) {
+  getUserInfo(
+    @Payload() payload: number | { userId: number; includeEmail?: boolean },
+  ) {
+    const userId = typeof payload === "number" ? payload : payload.userId;
+    const includeEmail =
+      typeof payload === "number" ? false : payload.includeEmail === true;
     this.logger.log(`getUserInfo called with userId: ${userId}`);
-    return this.userService.getInfo(userId);
+    return this.userService.getInfo(userId, includeEmail);
   }
 
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.REGISTER_USER })
   async register(@Payload() payload: RegisterUserDto) {
     return await this.userService.register(payload);
-  }
-
-  //GET_ALL_USERS
-  @MessagePattern({ cmd: USER_MESSAGE_PATTERN.GET_ALL_USERS })
-  async getAllUsers() {
-    return await this.userService.getAllUsers();
   }
 
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.GET_USERS_PAGINATED })
@@ -37,8 +40,22 @@ export class UserController {
   }
 
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS })
-  async getUsersByIds(@Payload() userIds: number[]): Promise<unknown> {
-    return this.userService.getUsersByIds(userIds);
+  async getUsersByIds(
+    @Payload()
+    payload: number[] | { userIds: number[]; includeEmail?: boolean },
+  ): Promise<unknown> {
+    const userIds = Array.isArray(payload) ? payload : payload.userIds;
+    const includeEmail = Array.isArray(payload)
+      ? false
+      : payload.includeEmail === true;
+    return this.userService.getUsersByIds(userIds, includeEmail);
+  }
+
+  @MessagePattern({ cmd: USER_MESSAGE_PATTERN.GET_FEATURED_SELLERS })
+  async getFeaturedSellers(
+    @Payload() data: { limit: number },
+  ): Promise<unknown> {
+    return this.userService.getFeaturedSellers(data.limit);
   }
 
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.LOGIN_USER })
@@ -56,5 +73,45 @@ export class UserController {
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.UPDATE_USER })
   async updateUser(@Payload() data: { userId: number; dto: UpdateUserDto }) {
     return this.userService.updateUser(data.userId, data.dto);
+  }
+
+  @MessagePattern({ cmd: USER_MESSAGE_PATTERN.ADDRESS_LIST })
+  async listAddresses(@Payload() data: { userId: number }) {
+    return this.userService.listAddresses(data.userId);
+  }
+
+  @MessagePattern({ cmd: USER_MESSAGE_PATTERN.ADDRESS_CREATE })
+  async createAddress(
+    @Payload() data: { userId: number; dto: CreateUserAddressDto },
+  ) {
+    return this.userService.createAddress(data.userId, data.dto);
+  }
+
+  @MessagePattern({ cmd: USER_MESSAGE_PATTERN.ADDRESS_UPDATE })
+  async updateAddress(
+    @Payload()
+    data: {
+      userId: number;
+      addressId: number;
+      dto: UpdateUserAddressDto;
+    },
+  ) {
+    return this.userService.updateAddress(
+      data.userId,
+      data.addressId,
+      data.dto,
+    );
+  }
+
+  @MessagePattern({ cmd: USER_MESSAGE_PATTERN.ADDRESS_DELETE })
+  async deleteAddress(@Payload() data: { userId: number; addressId: number }) {
+    return this.userService.deleteAddress(data.userId, data.addressId);
+  }
+
+  @MessagePattern({ cmd: USER_MESSAGE_PATTERN.ADDRESS_SET_DEFAULT })
+  async setDefaultAddress(
+    @Payload() data: { userId: number; addressId: number },
+  ) {
+    return this.userService.setDefaultAddress(data.userId, data.addressId);
   }
 }
