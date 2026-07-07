@@ -2,6 +2,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
@@ -9,6 +10,7 @@ import {
 import { Conversation } from "./conversation.entity";
 
 @Entity("messages")
+@Index("idx_messages_conversation_created_at", ["conversationId", "createdAt"])
 export class Message {
   @PrimaryGeneratedColumn("increment", { type: "bigint" })
   id!: number;
