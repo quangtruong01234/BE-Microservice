@@ -172,6 +172,28 @@ export class PaymentsController {
     return { status: "success" };
   }
 
+  @MessagePattern(PAYMENT_MESSAGE_PATTERN.ZALOPAY_CALLBACK)
+  handleZaloPayProviderCallback(
+    @Payload() body: { data: string; mac: string },
+  ): Promise<{ return_code: number; return_message: string }> {
+    return handleZaloPayCallback(body, this.paymentsService);
+  }
+
+  @MessagePattern(PAYMENT_MESSAGE_PATTERN.VNPAY_CALLBACK)
+  handleVNPayProviderCallback(
+    @Payload()
+    payload: { vnp_TxnRef: string; vnp_TransactionNo: string } & Record<
+      string,
+      string
+    >,
+  ): Promise<{ RspCode: string; Message: string }> {
+    return handleVNPayCallback(
+      payload,
+      this.vnpayStrategy,
+      this.paymentsService,
+    );
+  }
+
   private zaloPayReturnHasValidShape(
     query: Partial<ZaloPayReturnQuery>,
   ): query is ZaloPayReturnQuery {

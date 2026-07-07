@@ -3,6 +3,7 @@ import {
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
+  Index,
 } from "typeorm";
 
 export enum PaymentStatus {
@@ -12,6 +13,10 @@ export enum PaymentStatus {
 }
 
 @Entity("payments")
+@Index("idx_payments_order_id", ["orderId"], { where: "order_id IS NOT NULL" })
+@Index("idx_payments_app_trans_id", ["appTransId"], {
+  where: "app_trans_id IS NOT NULL",
+})
 export class Payment {
   @PrimaryGeneratedColumn("increment")
   id!: number;

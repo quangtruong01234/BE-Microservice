@@ -43,7 +43,7 @@ async function bootstrap() {
     }),
   );
   await app.startAllMicroservices();
-  await app.listen(PAYMENTS_HTTP_PORT);
+  await app.listen(PAYMENTS_HTTP_PORT, TCP_HOST);
   console.log(
     `💳 Payments microservice is running. HTTP on :${PAYMENTS_HTTP_PORT}`,
   );
