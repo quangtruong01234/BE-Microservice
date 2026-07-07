@@ -1,5 +1,19 @@
 {
   "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|apply_patch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const j=JSON.parse(s);const f=(j.tool_input&&j.tool_input.file_path)||(j.tool_response&&j.tool_response.filePath)||'';if(f&&f.endsWith('.ts')){const g=JSON.stringify(f.split(String.fromCharCode(92)).join('/'));const{execSync}=require('child_process');execSync('npx prettier --write '+g,{stdio:'ignore'});execSync('npx eslint --fix '+g,{stdio:'ignore'})}}catch(e){}})\"",
+            "commandWindows": "node -e \"let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const j=JSON.parse(s);const f=(j.tool_input&&j.tool_input.file_path)||(j.tool_response&&j.tool_response.filePath)||'';if(f&&f.endsWith('.ts')){const g=JSON.stringify(f.split(String.fromCharCode(92)).join('/'));const{execSync}=require('child_process');execSync('npx prettier --write '+g,{stdio:'ignore'});execSync('npx eslint --fix '+g,{stdio:'ignore'})}}catch(e){}})\"",
+            "timeout": 60,
+            "statusMessage": "Formatting edited .ts file"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

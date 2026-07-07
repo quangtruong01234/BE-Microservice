@@ -1,13 +1,24 @@
 {
   "hooks": {
-    "PostToolUse": [],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=$(node -p \"(()=>{try{return JSON.parse(require('fs').readFileSync(0,'utf8')).tool_input.file_path||''}catch(e){return ''}})()\"); case \"$f\" in *.ts) cd \"$CLAUDE_PROJECT_DIR\" && { npx prettier --write \"$f\" && npx eslint --fix \"$f\"; } >/dev/null 2>&1 || true;; esac",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && npx tsc --noEmit 2>&1 | tail -20",
-            "timeout": 30
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && out=$(npx tsc --noEmit 2>&1) || { echo \"$out\" | tail -30 >&2; exit 2; }",
+            "timeout": 60
           },
           {
             "type": "command",
@@ -43,6 +54,16 @@
       "Bash(npx tsc *)",
       "Bash(npx eslint *)",
       "Bash(npx prettier *)",
+      "Bash(npx jest *)",
+      "Bash(npm.cmd run start:nodeA)",
+      "Bash(npm.cmd run start:nodeB)",
+      "Bash(npm.cmd run build*)",
+      "Bash(npm.cmd run lint*)",
+      "Bash(npm.cmd run test*)",
+      "Bash(npx.cmd tsc *)",
+      "Bash(npx.cmd eslint *)",
+      "Bash(npx.cmd prettier *)",
+      "Bash(npx.cmd jest *)",
       "Bash(cat *)",
       "Bash(ls *)",
       "Bash(grep *)",

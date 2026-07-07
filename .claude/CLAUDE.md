@@ -139,6 +139,7 @@ When debugging, run `/debug` — full protocol in `commands/debug.md`.
 - `/review` (`commands/review.md`): Review code against project standards.
 - `/debug` (`commands/debug.md`): Diagnose a failing feature.
 - `/perf-audit` (`commands/perf-audit.md`): Audit endpoints for performance issues; report fixes + side effects (read-only, does not implement).
+- `/sweep` (`commands/sweep.md`): Weekly backlog sweep — fix top snapshot item(s) end-to-end (`/sweep`, `/sweep 3`), audit-only (`/sweep audit`), or propose features (`/sweep propose`).
 
 ## Agent Skills
 

@@ -36,3 +36,12 @@ These rules apply at all times, not only during a dedicated review command or sk
 - `POST /api/user/login` and `POST /api/user/register` must have rate limiting applied.
 - Do not remove or bypass the `ThrottlerGuard` on these endpoints.
 - If adding a new auth-adjacent endpoint (password reset, token refresh), apply rate limiting by default.
+- Gateway rate limiting is Redis-backed. In production, Redis rate-limit failures fail closed with a 503; outside production they fail open to avoid breaking local development.
+
+## Gateway Production Hardening
+
+- Gateway Swagger is enabled by default outside production and disabled by default in production unless `SWAGGER_ENABLED=true`.
+- Gateway CORS is controlled by `FRONTEND_URL`; production does not fall back to localhost and ignores wildcard origins because credentials are enabled.
+- Auth cookies are HttpOnly. Production sets `secure=true`; `AUTH_COOKIE_SAME_SITE` controls same-site behavior and defaults to `lax`.
+- Gateway request body limits are controlled by `JSON_BODY_LIMIT` and `URLENCODED_BODY_LIMIT`.
+- `/live`, `/ready`, and `/health` remain public, unprefixed operational endpoints.

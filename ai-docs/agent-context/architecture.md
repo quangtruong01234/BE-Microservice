@@ -6,9 +6,9 @@
 - **Frontend**: React 19 + Vite (plain JavaScript)
 - **Sync Transport**: TCP via NestJS `ClientProxy.send()` + `firstValueFrom()`
 - **Async Transport**: RabbitMQ via `ClientProxy.emit()` / `@EventPattern()`
-- **Primary DB**: MySQL 8 (orders, products, users, payments, rewards)
-- **Secondary DB**: PostgreSQL (inventory)
-- **Cache**: Redis (`@app/cached`)
+- **Node A DB**: Aiven MySQL 8 (orders, user, product, social, notification, chat)
+- **Node B DB**: Aiven PostgreSQL (inventory, payments, rewards)
+- **Cache/Broker**: Redis + RabbitMQ via Docker (`@app/cached`, `@app/common`)
 - **API Docs**: Swagger at `http://localhost:3000/doc`
 
 ## Service Map
@@ -17,10 +17,10 @@ See the active agent entry point (`AGENTS.md` or `.claude/CLAUDE.md`) for the se
 
 ## Shared Libraries
 
-- **`@app/common`** (`api/libs/common/`): MySQL/PostgreSQL/RabbitMQ modules; message pattern + event constants
-- **`@app/cached`** (`api/libs/cached/`): Redis caching module
-- **`@app/database`** (`api/libs/database/`): DB health utilities
-- **`@app/constant`** (`api/libs/constant/`): Port numbers, service name strings, message pattern enums
+- **`@app/common`** (`api/libs/common/`): RabbitMQ modules and shared constants/helpers.
+- **`@app/cached`** (`api/libs/cached/`): Redis caching module.
+- **`@app/database`** (`api/libs/database/`): shared TypeORM MySQL/PostgreSQL modules and synchronize safety helper.
+- **`@app/constant`** (`api/libs/constant/`): port numbers, service names, and message pattern constants.
 
 ## Communication Patterns
 
@@ -47,21 +47,22 @@ async handleOrderCreated(data: OrderCreatedEvent): Promise<void> { ... }
 
 ## Key Design Decisions
 
-- **Gateway is the only HTTP-facing service** — all other services are TCP-only and unreachable from outside.
-- **HttpOnly cookies for auth** — JWT never touches localStorage; all frontend requests use `credentials: 'include'`.
-- **Constants-first** — every message pattern, queue name, port number lives in `@app/constant` or `@app/common/src/constants/`; never hardcode strings inline.
-- **Node grouping** — Node A runs gateway + orders + user + product (MySQL); Node B runs inventory + payments + rewards (PostgreSQL + async).
+- **Gateway is the only HTTP-facing service**: all other services are TCP-only and unreachable from outside.
+- **HttpOnly cookies for auth**: JWT never touches localStorage; all frontend requests use `credentials: "include"`.
+- **Constants-first**: every message pattern, queue name, and port number lives in `@app/constant` or `@app/common/src/constants/`.
+- **Node grouping**: Node A runs gateway + orders + user + product + social + notification + chat. Node B runs inventory + payments + rewards.
+- **Production schema control**: production must use explicit SQL migrations, not TypeORM `synchronize:true`; current migration runner is incremental-only and does not bootstrap an empty Aiven database.
 
 ## Run Commands
 
 ```bash
 # Backend
-npm run start:nodeA      # gateway + orders + user + product
+npm run start:nodeA      # gateway + orders + user + product + social + notification + chat
 npm run start:nodeB      # inventory + payments + rewards
 
 # Frontend
 npm run dev              # http://localhost:5173
 
 # Infrastructure
-docker-compose up -d     # MySQL :3306, PostgreSQL :5432
+docker-compose up -d     # Redis :6379, RabbitMQ :5672/:15672
 ```

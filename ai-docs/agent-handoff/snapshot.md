@@ -55,36 +55,37 @@ Base URL: http://localhost:3000 | Swagger: /doc
 > valid). Nothing further gates deploy.
 >
 > **Deploy gate items (production-readiness, verified 2026-06-28):**
+>
 > - [x] **G1 — `npm run build` fixed.** `nest-cli.json` default project repointed
->   off the removed `apps/ecommerce-nestjs-zzzzz` to `gateway` (+ dead project entry
->   removed, `deleteOutDir:false`); `package.json` `build` now runs `npm run clean`
->   then `nest build <svc>` for all 10 real services, `start:prod` → `pm2 start
->   ecosystem.config.js --env production`, plus per-service `start:prod:<svc>` →
->   `node dist/apps/<svc>/main`. Verified: full build green, all 10
->   `dist/apps/<svc>/main.js` present.
+>       off the removed `apps/ecommerce-nestjs-zzzzz` to `gateway` (+ dead project entry
+>       removed, `deleteOutDir:false`); `package.json` `build` now runs `npm run clean`
+>       then `nest build <svc>` for all 10 real services, `start:prod` → `pm2 start
+ecosystem.config.js --env production`, plus per-service `start:prod:<svc>` →
+>       `node dist/apps/<svc>/main`. Verified: full build green, all 10
+>       `dist/apps/<svc>/main.js` present.
 > - [x] **G2 — `ecosystem.config.js` now runs compiled prod.** Replaced the two
->   `npm run start:nodeA|nodeB` wrappers with one pm2 app per microservice running
->   `node dist/apps/<svc>/main.js` (fork mode, autorestart, 500M max-mem). pm2 now
->   supervises each service directly so a single runtime crash IS restarted. Per-node
->   start via `--only "gateway,orders,…"` (Node A) / `--only "inventory,payments,
->   rewards"` (Node B), documented in the file header.
+>       `npm run start:nodeA|nodeB` wrappers with one pm2 app per microservice running
+>       `node dist/apps/<svc>/main.js` (fork mode, autorestart, 500M max-mem). pm2 now
+>       supervises each service directly so a single runtime crash IS restarted. Per-node
+>       start via `--only "gateway,orders,…"` (Node A) / `--only "inventory,payments,
+rewards"` (Node B), documented in the file header.
 > - [x] **G3 — JWT_SECRET fail-fast added.** Gateway `main.ts` throws right after
->   `dotenv.config` if `JWT_SECRET` is absent (before any port bind); the
->   `JwtModule` useFactory in `gateway.module.ts` also throws on an undefined secret.
->   Verified: `JWT_SECRET="" node dist/apps/gateway/main.js` → exit 1 with the guard
->   message; normal boot with the secret present → login still 201.
+>       `dotenv.config` if `JWT_SECRET` is absent (before any port bind); the
+>       `JwtModule` useFactory in `gateway.module.ts` also throws on an undefined secret.
+>       Verified: `JWT_SECRET="" node dist/apps/gateway/main.js` → exit 1 with the guard
+>       message; normal boot with the secret present → login still 201.
 > - [x] **G4 — `HttpToRpcExceptionFilter` coverage complete.** Audit found
->   payments/inventory/rewards/product controllers ALREADY had `@UseFilters(
->   HttpToRpcExceptionFilter)` (commit 83b567c); user is covered by its global
->   `AllRpcExceptionFilter`. The only real gap was `notification.controller.ts` —
->   filter now added there. Gateway is HTTP-facing (uses `HttpExceptionFilter`),
->   correctly excluded. `nest build notification` green.
+>       payments/inventory/rewards/product controllers ALREADY had `@UseFilters(
+HttpToRpcExceptionFilter)` (commit 83b567c); user is covered by its global
+>       `AllRpcExceptionFilter`. The only real gap was `notification.controller.ts` —
+>       filter now added there. Gateway is HTTP-facing (uses `HttpExceptionFilter`),
+>       correctly excluded. `nest build notification` green.
 > - [x] **G5 — nginx config verified.** `nginx/trybuy.conf` DOES exist under
->   `api/` (the prior "no nginx/ dir" note was stale) + `nginx/trybuy-local.conf`.
->   `trybuy.conf` is a valid prod conf: `/` → gateway `localhost:3000`,
->   `/socket.io/` → `:3010` (WS upgrade), zalopay/vnpay callbacks → `:3007`,
->   TLS via letsencrypt, `server_name yourdomain.com` placeholder + deploy steps
->   in header. Replace the domain placeholder + run certbot at deploy time.
+>       `api/` (the prior "no nginx/ dir" note was stale) + `nginx/trybuy-local.conf`.
+>       `trybuy.conf` is a valid prod conf: `/` → gateway `localhost:3000`,
+>       `/socket.io/` → `:3010` (WS upgrade), zalopay/vnpay callbacks → `:3007`,
+>       TLS via letsencrypt, `server_name yourdomain.com` placeholder + deploy steps
+>       in header. Replace the domain placeholder + run certbot at deploy time.
 >
 > **Not gate items (ship without them):** `storing` action, analytics aggregation
 > endpoints, GHN webhook public-URL registration (operational — email api@ghn.vn at
@@ -101,6 +102,7 @@ Base URL: http://localhost:3000 | Swagger: /doc
 > base URL defaulting to `http://localhost:3000/api`.
 
 Implementation order for GHN Web:
+
 - Step 1: auth API integration only; add TanStack Query provider, login submit,
   auth hydration, protected layout, logout, unauthenticated redirect to `/login`,
   forbidden redirect to `/403`; do not connect shipment APIs yet.
@@ -191,57 +193,480 @@ FE: analytics charts.
 > when shipped and delete its line here.
 
 - [x] **F1 — Product reviews & ratings** — DONE (was already implemented in commits
-  `3ceb9f6`/`984ff2b`; the roadmap entry was stale). Runtime-verified 2026-06-30
-  (8/8 self-tests). `product_reviews` table + `product.rating`/`ratingCount`
-  aggregate; gateway `GET/POST /api/products/:id/reviews` (POST gated on a COMPLETED
-  order containing the product via `order.verify_product_purchased`, 404 if not
-  purchased, 409 on duplicate) + `DELETE /api/products/reviews/:reviewId` (owner only,
-  403 otherwise). See CHANGELOG + Ops/Runtime applied-migration note.
+      `3ceb9f6`/`984ff2b`; the roadmap entry was stale). Runtime-verified 2026-06-30
+      (8/8 self-tests). `product_reviews` table + `product.rating`/`ratingCount`
+      aggregate; gateway `GET/POST /api/products/:id/reviews` (POST gated on a COMPLETED
+      order containing the product via `order.verify_product_purchased`, 404 if not
+      purchased, 409 on duplicate) + `DELETE /api/products/reviews/:reviewId` (owner only,
+      403 otherwise). See CHANGELOG + Ops/Runtime applied-migration note.
 - [x] **F2 — Buyer-initiated return/refund request** — DONE and runtime-verified
-  2026-06-30 (7/7 self-tests). `order_return_requests` lifecycle: buyer `POST
-  /api/order/:id/return-request` (eligible only on own DELIVERING/COMPLETED orders;
-  dedupes active requests; order → RETURN_REQUESTED), seller(order owner)/admin
-  review via `POST /api/order/return-requests/:id/{approve,reject}` (gated
-  in-service by seller product ownership or admin role). Approve → best-effort GHN
-  return + release reserved stock + refund **recorded/simulated** (online→`refunded`,
-  COD→`manual_pending`, NO real gateway call) + order → REFUNDED; reject (reason
-  required) restores `previousOrderStatus`. Lists: buyer `GET
-  /api/order/return-requests/mine`, seller/admin `GET /api/order/return-requests`
-  (seller-scoped by owned products, `status` filter). Async fanout
-  `order.return_{requested,approved,rejected}` → notification consumers. See
-  CHANGELOG + Ops/Runtime applied-migration note.
+      2026-06-30 (7/7 self-tests). `order_return_requests` lifecycle: buyer `POST
+/api/order/:id/return-request` (eligible only on own DELIVERING/COMPLETED orders;
+      dedupes active requests; order → RETURN*REQUESTED), seller(order owner)/admin
+      review via `POST /api/order/return-requests/:id/{approve,reject}` (gated
+      in-service by seller product ownership or admin role). Approve → best-effort GHN
+      return + release reserved stock + refund **recorded/simulated** (online→`refunded`,
+      COD→`manual_pending`, NO real gateway call) + order → REFUNDED; reject (reason
+      required) restores `previousOrderStatus`. Lists: buyer `GET
+/api/order/return-requests/mine`, seller/admin `GET /api/order/return-requests`
+      (seller-scoped by owned products, `status` filter). Async fanout
+      `order.return*{requested,approved,rejected}` → notification consumers. See
+      CHANGELOG + Ops/Runtime applied-migration note.
 - [x] **F3 — Voucher / coupon / discount codes** — DONE and runtime-verified
-  2026-06-30 (10/10 self-tests). OWNED BY ORDERS (MySQL), not Rewards — chosen for
-  transactional integrity (redemption + discount recorded in the same tx as order
-  create; Rewards has no TCP server). `vouchers` + `voucher_redemptions` tables;
-  `orders.voucher_code`/`discount_amount` columns. Admin CRUD: `POST/GET
-  /api/order/admin/vouchers`, `PATCH /api/order/admin/vouchers/:id/deactivate`
-  (`@CheckPermission("order", create:any|read:any|update:any)`). Buyer preview:
-  `POST /api/order/voucher/validate` (JwtAuthGuard; prices the basket via product
-  service, returns discount without consuming). Checkout: optional `voucherCode` on
-  `POST /api/order` — validated + priced server-side, redemption consumed atomically
-  in the create tx (conditional `used_count+1` UPDATE guards the usage cap). Discount
-  applies to goods subtotal only (never shipping), clamped to subtotal, percent honours
-  `maxDiscountAmount`. **Single-seller only** — multi-seller baskets reject voucher with
-  400. See CHANGELOG + Ops/Runtime migration note.
-- [ ] **F4 — Seller analytics dashboard**. Already flagged post-launch + the GHN
-  console is waiting on analytics charts. Aggregation endpoints: revenue/orders over
-  time, top products, status distribution (seller-scoped + shipping-scoped). Read-only;
-  orders + product, no migration. Unblocks the one remaining GHN-console FE contract.
-- [ ] **F5 — Post moderation actions**. `POST /posts/:id/report` exists but admin has
-  no review/resolve flow. Admin list reported posts + hide/dismiss/delete + resolve
-  the report row. Small; social + gateway, maybe a `status` column on `post_reports`.
-- [ ] **F6 — Wishlist / favorites**. Basic UX gap. `wishlist_items` table + add/remove/
-  list endpoints. Small; product or user service + migration.
+      2026-06-30 (10/10 self-tests). OWNED BY ORDERS (MySQL), not Rewards — chosen for
+      transactional integrity (redemption + discount recorded in the same tx as order
+      create; Rewards has no TCP server). `vouchers` + `voucher_redemptions` tables;
+      `orders.voucher_code`/`discount_amount` columns. Admin CRUD: `POST/GET
+/api/order/admin/vouchers`, `PATCH /api/order/admin/vouchers/:id/deactivate`
+      (`@CheckPermission("order", create:any|read:any|update:any)`). Buyer preview:
+      `POST /api/order/voucher/validate` (JwtAuthGuard; prices the basket via product
+      service, returns discount without consuming). Checkout: optional `voucherCode` on
+      `POST /api/order` — validated + priced server-side, redemption consumed atomically
+      in the create tx (conditional `used_count+1` UPDATE guards the usage cap). Discount
+      applies to goods subtotal only (never shipping), clamped to subtotal, percent honours
+      `maxDiscountAmount`. **Single-seller only** — multi-seller baskets reject voucher with 400. See CHANGELOG + Ops/Runtime migration note.
+- [x] **F4 — Seller analytics dashboard** — DONE and runtime-verified 2026-07-01
+      (6/6 self-tests). Read-only aggregation, no migration. See CHANGELOG + Ops/Runtime.
+- [x] **F5 — Post moderation actions** — DONE and runtime-verified 2026-07-02
+      (10/10 self-tests). Admin-only review/resolve flow over the existing report
+      endpoint + post hide/unhide. See CHANGELOG + Ops/Runtime + applied-migration note.
+- [x] **F6 — Wishlist / favorites** — DONE and runtime-verified 2026-07-07
+      (7/7 endpoint checks). Product-owned `wishlist_items` table + authenticated
+      add/remove/list endpoints. See CHANGELOG + Ops/Runtime migration note.
 - [ ] **F7 — Email notifications**. In-app + WS only today → lost when offline. Add an
-  email channel (order confirmed, payment, shipping) off the existing notification
-  RMQ consumers. Notification service + provider config; no migration.
+      email channel (order confirmed, payment, shipping) off the existing notification
+      RMQ consumers. Notification service + provider config; no migration.
+
+### 🧠 Product Intelligence Roadmap — AI-01..AI-04 (recorded 2026-07-06, planning only, not implemented)
+
+> Four product-intelligence features approved by the user. Constraint: **zero
+> mandatory cost** — free-tier signup is acceptable (Google AI Studio Gemini key,
+> NO credit card), anything pay-only is out of scope. NO new microservice: all
+> logic lands in the existing **product service** (owner of catalog data) + thin
+> gateway routes; Gemini access via ONE shared client in `libs/` reused by AI-03/
+> AI-04. Recommended order: **AI-01 → AI-02 → AI-03 → AI-04** (01 feeds 02's
+> price-anomaly signal; 03 builds the Gemini client + image-download util that 04
+> and 02's pHash both reuse). Move each to CHANGELOG when shipped.
+
+**AI-01 — AI Price Suggestion** (no external API, no migration — smallest, do first)
+
+- **User flow:** seller opens the create/edit product form → picks category
+  (+brand/condition) → FE calls the suggestion endpoint → form shows a hint
+  "Sản phẩm tương tự bán khoảng X–Y, phổ biến Z" with one-tap apply; purely
+  advisory, never blocks submit.
+- **Backend flow:** gateway → TCP `product.price_suggestion` → product service
+  aggregates over its own MySQL: active products matching `categoryId`
+  (+optional `brandId`, `condition`) → `COUNT`, `MIN/MAX`, median & P25/P75 of
+  `COALESCE(sku.price, product.price)`. `sampleSize < 3` → return
+  `{sufficientData:false}` and FE hides the widget.
+- **Endpoints/patterns:** `GET /api/products/price-suggestion?categoryId=&brandId=&condition=`
+  (JwtAuthGuard, any authed user) → new `PRODUCT_PRICE_SUGGESTION:
+"product.price_suggestion"` in `PRODUCT_MESSAGE_PATTERNS`. Response
+  `{sufficientData, sampleSize, median, p25, p75, min, max}` (integer VND).
+- **DB changes:** none. Existing `idx_products_price` + category join table serve
+  the query.
+- **FE:** price-hint widget inside the existing seller product form (storefront
+  `../frontend`); debounce on category/brand change.
+- **Reuse:** aggregation style mirrors orders `getAnalytics` (F4); DECIMAL columns
+  arrive as strings → reuse `decimalToNumber`/`Math.round(Number(...))` gotcha #3.
+- **Risks/edge cases:** tiny catalog → sparse samples (the `sufficientData` gate
+  is the mitigation); outlier listings skew min/max (report P25/P75 as the band,
+  not min/max); SKU-priced products must use SKU prices, not the null base price.
+- **MVP:** catalog-only stats as above. **Later:** blend actual sold prices from
+  `order_items` of COMPLETED orders via a TCP call to orders (needs a new orders
+  pattern), weight recent sales higher, per-condition curves.
+
+**AI-02 — Risk Score / Duplicate Detection** (npm-only: `sharp` + blockhash; 1 additive migration)
+
+- **User flow:** invisible to buyers. Seller sees a non-blocking "ảnh trùng với
+  listing khác" warning on create. Admin gets a risk queue (sort by score) in the
+  same console family as F5 moderation and can unlist via the existing product
+  delete/deactivate paths.
+- **Backend flow:** on `product.create`/`product.update` (image change), product
+  service — post-commit, fire-and-forget, NEVER fails the create — downloads each
+  Cloudinary image, computes a perceptual hash (`sharp` decode → blockhash
+  64-bit hex), stores hashes, then scores: (a) pHash Hamming distance ≤ threshold
+  vs other sellers' products → duplicate flag; (b) price < ~40% of the AI-01
+  median for its category → anomaly flag; (c) near-duplicate name (normalized
+  trigram overlap) same category, different seller. `riskScore` = weighted sum,
+  `riskFlags` = JSON detail array. Recompute endpoint for admins.
+- **Endpoints/patterns:** admin `GET /api/products/admin/risk?minScore=&page=&limit=`
+  and `POST /api/products/admin/risk/:id/rescore` (both `@CheckPermission` admin,
+  like brands/pending) → new patterns `product.admin_risk_list`,
+  `product.admin_risk_rescore`. Optional seller-facing
+  `POST /api/products/check-duplicate {imageUrl}` pre-submit.
+- **DB changes:** `products` + 3 columns: `image_phashes` JSON NULL,
+  `risk_score` INT DEFAULT 0 (+index), `risk_flags` JSON NULL. Product service
+  syncs in dev; add guarded `database/add_risk_columns_to_products.sql` for prod.
+- **FE:** admin risk tab (table: product, score, flags, links) reusing the F5
+  moderation console layout; small warning banner in seller create form.
+- **Reuse:** AI-01 median query (price-anomaly signal); F5 console pattern for
+  the admin surface; report counts from social `post_reports` as a later signal.
+- **Risks/edge cases:** Cloudinary download failures → skip hash, log, retry on
+  rescore; pHash false positives on plain/white-background studio shots → keep
+  the threshold strict and duplicates advisory-only (no auto-unlist, admin
+  decides); brute-force Hamming scan is O(catalog) — fine now, needs an index
+  strategy only at ≥10k products; never block product create on scoring.
+- **MVP:** create-time scoring (3 signals) + admin list + rescore. **Later:**
+  seller pre-submit duplicate check, account-age/user-report signals (TCP to
+  user/social), auto-hide above a hard threshold, BK-tree for hash lookup.
+
+**AI-03 — Sell From Photo (Gemini)** (Google AI Studio free tier, no card; no migration)
+
+- **User flow:** seller taps "Đăng bán từ ảnh" on the create form → uploads photo
+  via the EXISTING Cloudinary signature flow (`POST /api/upload/signature`) → FE
+  sends the Cloudinary URL to the draft endpoint → form prefills name/description/
+  category/condition/attributes (+AI-01 price hint) → seller edits → normal
+  product create. AI output is always editable, never auto-published.
+- **Backend flow:** gateway `AiModule` route (stateless, no product-service hop —
+  nothing persisted): validate the URL is our Cloudinary cloud (SSRF guard) →
+  download image bytes → new shared `GeminiClient` in `libs/common/src/gemini/`
+  (`GEMINI_API_KEY` + `GEMINI_MODEL` env, flash model, responseSchema JSON mode)
+  → prompt includes the REAL category list (id+name, from the cached
+  brand/category read) so Gemini picks existing `categoryIds`, output fields in
+  Vietnamese → return `{name, description, categoryIds, condition, attributes[],
+confidence}`.
+- **Endpoints/patterns:** `POST /api/products/ai/draft-from-photo {imageUrl}`
+  (JwtAuthGuard + explicit `@RateLimit` — protect the free-tier quota). No TCP
+  pattern needed. Redis cache (`@app/cached`) keyed by image URL hash to dedupe
+  repeat calls.
+- **DB changes:** none.
+- **FE:** "Đăng bán từ ảnh" entry on the create form → loading state → prefilled
+  form with an "AI suggested" badge per field.
+- **Reuse:** upload signature flow untouched; category cache from PERF-09 work;
+  rate-limit guard; `@app/cached`.
+- **Risks/edge cases:** Gemini free-tier RPM/daily caps → per-user rate limit +
+  Redis dedupe + graceful `503 "AI đang bận, thử lại sau"` on quota errors (FE
+  falls back to manual form — feature must degrade, never block selling);
+  hallucinated categories → validate returned ids against the real list, drop
+  unknowns; non-product/NSFW photos → Gemini safety block returns an error →
+  map to 400 "ảnh không phù hợp"; NEVER expose the API key to FE.
+- **MVP:** single photo → draft fields. **Later:** multi-photo, brand detection
+  mapped to the brands table, auto price via AI-01 wiring, suggested SKU
+  variations from the photo.
+
+**AI-04 — Visual Search** (reuses AI-03's GeminiClient + tag pipeline; 1 additive migration)
+
+- **User flow:** camera icon in the storefront search bar → user uploads a photo
+  → results page shows catalog products ranked by visual/tag similarity.
+- **Backend flow:** two halves. **Index half:** after product create/update,
+  product service fire-and-forget calls Gemini once per product (primary image)
+  → normalized Vietnamese+English tag list + a one-line caption → saved to
+  `products.ai_tags`. Shares the image-download util and (if batched later) the
+  same call that AI-02 uses for hashing. Backfill script tags the existing
+  catalog once. **Query half:** gateway `POST /api/products/visual-search
+{imageUrl}` → Gemini tags the query image (same client, same cache) → TCP
+  `product.search_by_tags {tags[]}` → product service scores tag overlap
+  (weighted Jaccard; ties broken by rating/viewCount) → returns a standard
+  `PaginatedResponse` of the SAME product shape as `product.search` (so FE result
+  cards are reused as-is).
+- **Endpoints/patterns:** `POST /api/products/visual-search {imageUrl, page?,
+limit?}` (JwtAuthGuard + `@RateLimit`) → new `PRODUCT_SEARCH_BY_TAGS:
+"product.search_by_tags"`. Internal `product.retag` admin pattern for backfill/
+  refresh.
+- **DB changes:** `products.ai_tags` JSON NULL (+ optional `ai_caption`
+  VARCHAR(512) NULL). Dev sync + guarded `database/add_ai_tags_to_products.sql`
+  for prod. (A separate indexed tags table only if/when catalog outgrows
+  in-memory overlap scoring.)
+- **FE:** camera button in the search bar, upload/crop modal, results grid
+  reusing existing product cards + "kết quả tương tự theo ảnh" header.
+- **Reuse:** GeminiClient + Redis cache + SSRF/Cloudinary guard from AI-03;
+  Cloudinary upload flow for the query photo; existing search response shape +
+  FE product cards; AI-02's image-download util.
+- **Risks/edge cases:** tag quality gates relevance — constrain the prompt to a
+  controlled vocabulary (color/type/material/style) to keep index & query tags
+  aligned; untagged products (Gemini failed at create) are invisible to visual
+  search → retag path + nightly sweep fixes; free-tier quota shared with AI-03 →
+  same rate-limit budget; empty overlap → fall back to text search on the
+  caption; catalog growth → this is explicitly the cheap MVP, the upgrade path
+  is CLIP embeddings + pgvector (Node B PG) WITHOUT changing the public API.
+- **MVP:** tag-overlap search as above. **Later:** CLIP/pgvector similarity,
+  "find similar" button on product detail (no upload needed — reuse stored
+  tags), category-constrained visual search.
+
+**Shared prerequisites (do once, in AI-03 unless pulled earlier):** `GEMINI_API_KEY`
+
+- `GEMINI_MODEL` in `local/nodeA/.env` (+ `.env.example`); `GeminiClient` in
+  `libs/common/src/gemini/` (typed JSON-schema responses, timeout, quota-error
+  classification); image-download util with Cloudinary-host allowlist (SSRF guard);
+  `sharp` + a blockhash lib as deps (AI-02). All AI paths are best-effort: catalog
+  CRUD must never fail or block because Gemini/pHash failed.
+
+### 🔒 Production-control backlog (route-inventory audit, 2026-07-05)
+
+> From a static route-inventory + coverage-matrix pass over all 125 HTTP routes
+> (121 gateway + GHN webhook dual-path + 3 payments callbacks). Defensive
+> app-engineering hardening; none verified as exploited, all found by code
+> inspection only. Fix top-down. Each item: affected route(s) → file → missing
+> control → defensive fix → test to add. Move to CHANGELOG when shipped, delete
+> the line here. Open questions (OQ-1..6) below gate some items.
+
+**🔴 Critical**
+
+**🟠 High**
+
+- [ ] **SEC-H2 — public POST with unvalidated unbounded body.** `POST
+/api/products/with-inventory/multiple` (gateway `product.controller.ts`, inline
+      `{productIds:number[]}`, no DTO → whitelist never runs). Fix: DTO with
+      `@ArrayMaxSize(50) @IsInt({each:true}) @Type(()=>Number)` + dedupe. Test: 51 ids
+      → 400; non-numeric → 400.
+- [ ] **SEC-H3 — auth endpoints rely on fail-open default rate limit.** `login`/
+      `register` (policy) + all routes (fail-open). `common/guards/rate-limit.guard.ts`
+      catch returns `true` on Redis error and uses banned `console.warn`. Fix: explicit
+      `@RateLimit` on login/register; swap `console.warn`→`Logger.warn`; consider
+      fail-closed for sensitive routes (OQ-4). Test: guard unit test over-limit → 429,
+      Redis-error path asserts Logger.warn.
+- [ ] **SEC-H4 — payment callback duplicate runtime test remains.** Public
+      `POST /zalopay/callback`, `POST|GET /vnpay/callback` now enter through the
+      gateway facade and Nginx proxies them to `127.0.0.1:3000`; payments app
+      `:3007` binds to loopback only. Gateway facade now has explicit 200 responses,
+      raw provider response bodies, minimal runtime body/query shape checks,
+      callback-specific 300/min rate limits, and Nginx `64k` callback body caps.
+      Signature/MAC verification and idempotent completion are preserved in payments
+      service. Remaining test: valid callback applied twice → no second transition /
+      no duplicate `payment_completed` emit.
+
+**🟡 Medium**
+
+- [ ] **SEC-M1 — GHN webhook hardening.** `POST /ghn/webhook` + `/api/ghn/webhook`
+      (`ghn-webhook.controller.ts`). Secret accepted via `?token=` (log leakage);
+      body is TS-interface only (no runtime validation); missing fields silently 200;
+      global 20/60s per-IP may throttle GHN bursts. Fix: prefer header token (deprecate
+      query, OQ-2), add validation DTO, `Logger.warn` on missing fields, explicit higher
+      `@RateLimit`. Test: bad/absent token → 401/403; missing `order_code` → 200 + warn log.
+- [ ] **SEC-M2 — unbounded list endpoints** (overlaps PERF-09). Remaining:
+      `GET /api/products/brands|categories` (unbounded AND uncached → cache-aside).
+      Mostly closed 2026-07-06 by the unused-API sweep (see CHANGELOG): `GET
+/api/user/all` removed end-to-end, `GET /api/inventory` (findAll) no longer
+      HTTP-exposed, `/inventory/low-stock` rebuilt gated+capped. Note
+      T[]→PaginatedResponse is FE-breaking (grep `frontend/src`).
+- [ ] **SEC-M4 — bounded DTOs on raw-input routes.** `GET /api/products/:id/reviews`
+      (raw page/limit, no `@Max`), `GET /api/gateway/payment-result` (raw query record).
+      Fix: reuse paginated-query DTO (`@Min(1)@Max(100)`); permissive discriminator DTO
+      for payment-result. Test: `?limit=100000` clamped/400.
+- [ ] **SEC-M5 — no security-header middleware on gateway.** All gateway responses;
+      `apps/gateway/src/main.ts` (zero `helmet`). Fix: `helmet()` early in main.ts
+      (relax CSP only for `/doc` in dev), or own it in nginx (OQ-3). Test: supertest
+      asserts `X-Content-Type-Options`/HSTS/frame-ancestors.
+- [ ] **SEC-M6 — Swagger `/doc` exposed unconditionally.** `main.ts`. Fix: wrap
+      `SwaggerModule.setup` in `NODE_ENV !== "production"` (or nginx allowlist). Test:
+      prod boot → `/doc` 404; dev still serves.
+- [ ] **SEC-M7 — orphaned Cloudinary assets on entity update** (from FE upload
+      audit, backend-handoff 2026-07-07 item b). FE never Cloudinary-deletes media
+      whose URL is already persisted (P0-05: edit may be canceled), and has no
+      `public_id` for persisted URLs. So when a post/product edit commits with an image
+      removed, or an avatar is overwritten, the dropped Cloudinary asset is orphaned
+      forever. Fix: on update, BE diffs old vs new `imageUrls`/`videoUrl`/`avatar`,
+      derives the `public_id` from the URL path, and destroys the dropped assets
+      (best-effort, post-commit, never fail the update) — or a periodic sweep. Spans
+      social + product + user + the gateway Cloudinary-destroy helper (>2 services → needs
+      researcher→planner). Test: edit a post removing one image → old asset destroyed,
+      kept images untouched; canceled edit → nothing destroyed.
+- [ ] **SEC-M8 — signed upload constraints (optional hardening)** (backend-handoff
+      2026-07-07 item c). `POST /api/upload/signature` signs only `folder`/`public_id`/
+      `timestamp`, so client-side size/format limits are bypassable via direct-to-Cloudinary
+      with the signature. Fix: also sign `allowed_formats=jpg,png,webp,mp4` and/or an
+      upload preset with a max size so limits hold server-side. **Contract change** — FE
+      must send the matching signed params in its upload POST, so coordinate before
+      shipping (Cloudinary rejects on signed-param mismatch). Test: signature response
+      includes the constraint params; upload of a disallowed format is rejected by Cloudinary.
+
+**🟢 Low**
+
+- [ ] **SEC-L1 — missing `ParseIntPipe` on numeric path params.** Remaining:
+      several `GET/PATCH /api/order/:id*` using `+id` coercion. `GET /api/user/:id`
+      FIXED 2026-07-06 (`ParseIntPipe` added; `/api/user/abc` → 400 — it was falling
+      through to an arbitrary user via NaN after `/user/all` was removed). Fix rest:
+      add `ParseIntPipe` uniformly.
+- [ ] **SEC-L2 — ad-hoc login response shaping.** `POST /api/user/login`
+      (`user.controller.ts:74-79` manual `delete safeUser["password"]`). Fix: return a
+      typed `SafeUser` select from the user service so the hash never reaches the gateway.
+- [ ] **SEC-L3 — duplicate brand/category proposal semantics unverified.** `POST
+/api/products/brands|categories`. Fix: verify + add case-insensitive uniqueness
+      (approved+pending) → 409.
+- [ ] **SEC-L4 — document cookie/CSRF posture.** Cookie is `sameSite:lax`, `secure`
+      prod-only, no CSRF token (lax mitigates most cross-site POSTs). Fix: no code change;
+      record in `security.md` that mutations must never be GET/HEAD and sameSite must not
+      drop to `none` without CSRF tokens. Add a `/review` checklist rule flagging any new
+      `@Get()` that calls a mutating service method.
+
+**Open questions (gate the above):** OQ-1 RESOLVED 2026-07-06 — SEC-M3 closed by
+the unused-API sweep (HTTP inventory list/reserve/release removed; low-stock gated
+shop/admin + seller-scoped). OQ-2 GHN dashboard header vs `?token=` → blocks part of SEC-M1.
+OQ-3 is nginx guaranteed in front of gateway + :3007 (headers/rate/size owner) →
+blocks SEC-H4/SEC-M5. OQ-4 is fail-open rate limiting an accepted trade-off →
+blocks SEC-H3 final shape. OQ-5 RESOLVED 2026-07-07 — public product/social/user
+profiles do not need email; order/admin/invoice paths explicitly opt into email.
+OQ-6 target rate-limit numbers for
+login/register/upload/checkout (product decision).
+
+### ⚡ Perf-audit backlog (full-project audit, 2026-07-02)
+
+> `/perf-audit` swept all 10 services (gateway/orders/user/product/social/chat/
+> notification + inventory/payments/rewards). Clean paths confirmed: gateway social
+> (batched `get_users_by_ids`), gateway admin-orders buyer merge, chat conversation
+> list (3 grouped queries), `getAllProductsWithInventory` (batch inventory),
+> notification RMQ consumers (lean, correct ack/nack), `getReplies` (single-comment
+> only, depth capped 5). Fix top-down via `/feature` or `prompts/refactor.md`;
+> the two 🔴 product items need a `researcher → implement` pass (new TCP pattern).
+
+**🔴 Critical — N+1 on hot read paths (latency scales with page size)**
+
+- [x] **PERF-01 — DONE 2026-07-02** (see CHANGELOG): `enrichProductsWithUserInfo`
+      now one batched `GET_USERS_BY_IDS` send instead of N per-user `GET_USER_INFO`.
+      Runtime-verified on list + with-inventory/multiple; same response shape.
+- [x] **PERF-02 — DONE 2026-07-02** (see CHANGELOG): GAP-01 closed
+      (`PRODUCT_FIND_BY_IDS` pattern + `findProductsByIds` handler, missing ids
+      skipped); `getProductsWithInventory` now 1 batch product send ∥ 1 batch
+      inventory send + single enrichment pass (3N→3). Runtime-verified.
+- [x] **PERF-03 — DONE 2026-07-03** (see CHANGELOG): GAP-02 closed
+      (`CachedService.mget`); the triplicated per-post decoration in getPosts/
+      getPostsByUser/getFollowingFeed replaced by one shared batched `decoratePosts`
+      (2 MGETs + grouped fallbacks + 1 GROUP BY comment count per page, was ≈2N
+      Redis + N COUNTs). Same shape; `resolveIsLiked` kept for `getPostById`.
+      Runtime-verified on all 3 feeds incl. like/unlike + second viewer + anonymous.
+
+**🟡 Important**
+
+- [x] **PERF-04 — DONE 2026-07-03** (see CHANGELOG): `@Index` added to the orders
+      entities (`idx_orders_{user_id,seller_id,status_created_at,ghn_order_code}`,
+      `idx_order_items_{seller_id,product_id}`); auto-applied via `synchronize:true`
+      (service booted clean post-restart). `EXPLAIN` spot-check still pending.
+- [x] **PERF-05 — DONE 2026-07-07** (see CHANGELOG): social feed/comment hot-path
+      indexes added via `database/add_social_performance_indexes.sql` and applied to
+      Aiven Node A (`nodeA-20260707-002-add-social-performance-indexes`).
+- [x] **PERF-06 — DONE 2026-07-07** (see CHANGELOG): chat message and payments
+      callback lookup indexes added through scoped manifest applies:
+      `nodeA-20260707-003-add-chat-message-performance-indexes`,
+      `nodeB-20260707-001-add-payments-order-id-index`, and
+      `nodeB-20260707-002-add-payments-app-trans-id-index`.
+- [x] **PERF-07 — DONE 2026-07-02** (see CHANGELOG): `buildProductMap` now one
+      batched `PRODUCT_FIND_BY_IDS` send (empty set short-circuits; batch failure →
+      empty map, same skip semantics). Runtime-verified on legacy buyer list + detail.
+- [x] **PERF-08 — DONE 2026-07-03** (see CHANGELOG): `enrichOrderItems` now fetches
+      SKU ∥ product via `Promise.all` (product lookup only needs `item.productId`), and
+      a `productPromiseById` memo dedupes repeated productIds to one in-flight
+      `PRODUCT_FIND_BY_ID`. Same response shape + error semantics. Runtime-verified on
+      create-order (base-price 2-line same product 114; SKU 2-line same product 115 →
+      labels/tierIdx correct; mismatch still 400).
+- [ ] **PERF-09 unbounded list endpoints** — Remaining: brand/category lists
+      (`apps/gateway/src/product/product.service.ts:654-730`) unbounded AND uncached —
+      ideal `@app/cached` cache-aside candidates (invalidate on brand/category
+      mutation). Closed 2026-07-06 by the unused-API sweep (see CHANGELOG): `GET
+/api/user/all` removed end-to-end (route + gateway/user service methods + TCP
+      handler + `GET_ALL_USERS` constant; paginated `GET /user?page=` is the
+      replacement) and `GET /api/inventory/` route deleted (`findAll` no longer
+      HTTP-reachable). Side-effect: pagination changes response `T[]` →
+      `PaginatedResponse` — **breaking for FE**, grep `frontend/src` callers first.
+- [x] **PERF-10 — DONE 2026-07-03** (see CHANGELOG): product `findAllProducts`
+      split-query pagination — count + DISTINCT id-page (raw offset/limit, sort column
+      in SELECT for MySQL DISTINCT+ORDER BY), then hydrate brand/categories via
+      `In(ids)` with order restored. No more distinct-subquery/cartesian inflation;
+      bonus: category-filtered products now hydrate their FULL `categories[]` (old
+      joinAndSelect truncated to the matched category). Gateway DTO also gained a
+      scalar→array `@Transform` on `categoryIds`/`brandIds` (single `?categoryIds=18`
+      used to 400). Runtime-verified (TCP probe + HTTP filters/sort/pagination).
+      **Found during verification:** FE sends singular `categoryId`/`brandId` →
+      whitelist-stripped → marketplace filter was a silent NO-OP; handoff entry
+      written (see Known Issues).
+
+**🟢 Minor**
+
+- [ ] PERF-11 `getPaymentUrl` runs full `getOrderById` product enrichment purely for
+      an ownership check (`apps/gateway/src/order/order.service.ts:785-809`) — fetch the
+      bare order instead.
+- [x] PERF-12 — MOOT 2026-07-06: the standalone SKU mutation routes and their
+      gateway `updateSku`/`deleteSku` methods were removed in the unused-API sweep
+      (canonical SKU edit path is `PATCH /api/products/:id` with `skuList`).
+- [x] PERF-13 — DONE 2026-07-06 (unused-API sweep): `getLowStockItems` now
+      filters `isActive`, accepts optional `productIds` seller scoping, orders
+      `availableStock ASC`, and caps at 100 rows (`LOW_STOCK_MAX_RESULTS`).
+
+**TOP FIX (next):** PERF-09 remainder (brands/categories cache-aside; pagination
+is FE-breaking, grep `frontend/src` first), then PERF-11. **SUMMARY:** 0 critical,
+1 important, 1 minor remaining
+(PERF-01/02/07 + GAP-01 done 2026-07-02; PERF-03/04/08/10 + GAP-02 done
+2026-07-03 — all 🔴 critical closed; PERF-12/13 closed 2026-07-06 by the
+unused-API sweep, which also removed the PERF-09 user/inventory offenders;
+PERF-05/06 closed 2026-07-07).
+
+### 📈 Scalability backlog — high-concurrency readiness (recorded 2026-07-07, planning only)
+
+> Question answered 2026-07-07: "can the API survive 1,000–10,000 concurrent
+> requests?" Verdict: architecture is sound (batched TCP, MGET, async RMQ side
+> effects, Redis rate limit fail-closed in prod) and fine for a few hundred
+> concurrent, but the RUNTIME configuration bottlenecks well before 1k. Fix in
+> the order below — SCALE-01/02 are the load-bearing items, the rest amplify.
+> Each item should ship with a k6/autocannon before/after number (SCALE-06).
+> Move to CHANGELOG when shipped, delete the line here.
+
+- [ ] **SCALE-01 — gateway is a single Node process (1 core).**
+      `ecosystem.config.js` runs every service `instances:1, exec_mode:'fork'`; the
+      gateway's one event loop takes ALL HTTP + both WS namespaces (`/chat`,
+      `/notifications`). Biggest bottleneck. Fix in two steps: (a) add
+      `@socket.io/redis-adapter` to both WS gateways (Redis already provisioned via
+      `@app/cached` env) — WITHOUT this, multi-instance gateway breaks WS rooms/
+      emits silently; (b) then scale gateway via pm2 `instances:'max'` cluster mode
+      (HTTP is stateless — JWT cookie, no in-memory session) or N fork instances
+      behind an nginx `upstream` + `least_conn`. WS needs sticky sessions
+      (`ip_hash`) OR polling disabled (`transports:['websocket']` on FE) when going
+      multi-instance. TCP-only services (orders/product/user…) can also multiply —
+      NestJS TCP clients reconnect per instance — but gateway first.
+- [ ] **SCALE-02 — DB pools are 10 connections/service.** MySQL
+      `connectionLimit:10` hardcoded (`libs/database/src/database.module.ts:29`),
+      PG `max:10` (`postgres-database.module.ts:23`, `PG_POOL_SIZE` env already
+      exists). Thousands of concurrent requests queue behind 10 conns → latency
+      explodes quadratically. Fix: make the MySQL limit env-driven
+      (`MYSQL_POOL_SIZE`, default 10 dev / 30–50 prod) and raise per Aiven plan —
+      CHECK the Aiven plan's max_connections first; total = pool × service count ×
+      pm2 instances, so cluster mode (SCALE-01) multiplies pool consumption.
+- [ ] **SCALE-03 — nginx does zero load absorption.** `nginx/trybuy.conf` has
+      no `limit_req`/`limit_conn` (L7 floods reach Node), no `gzip`, no upstream
+      `keepalive` (new conn per proxied request), no `proxy_cache`. Fix: `limit_req`
+      zone per IP (burst tuned above FE's normal fan-out), `gzip on` for JSON,
+      `keepalive 32` in the upstream block, and a 1–5s micro-cache
+      (`proxy_cache` + `proxy_cache_lock on` = stampede guard) for public GETs
+      (product list/detail, brands, categories) — absorbs most read bursts before
+      Node sees them. Nginx owning gzip means no Node `compression` middleware
+      needed.
+- [ ] **SCALE-04 — hot public reads still uncached in-app** (= PERF-09
+      remainder, listed here for the concurrency angle): brands/categories
+      unbounded AND uncached; every burst hits MySQL through the 10-conn pool.
+      Fix: `@app/cached` cache-aside (5–15min TTL + DEL on brand/category mutation).
+      Also consider product detail cache-aside (short TTL) if SCALE-03 micro-cache
+      is not adopted.
+- [ ] **SCALE-05 — overload failure modes untuned.** (a) `timeout(10000)` on
+      every TCP call is too long under saturation — one slow service parks
+      requests+sockets for 10s and the pileup cascades; drop read paths to 3–5s
+      (keep 10s for checkout/payment writes). (b) Rate-limit guard does Redis
+      INCR(+EXPIRE) on EVERY request and is fail-closed in prod → single Redis is
+      a shared choke/kill switch; verify Redis maxclients/latency under load,
+      consider skipping the guard for `@Public` cacheable GETs once nginx
+      `limit_req` (SCALE-03) owns L7 flood control. (c) No backpressure signal:
+      add a cheap `503` guard (event-loop-delay or in-flight counter) so the
+      gateway sheds load instead of timing out everything at once.
+- [ ] **SCALE-06 — no load-test evidence.** Nothing in the repo proves ANY
+      concurrency number. Add a k6 (or autocannon) script under `scripts/load/`
+      covering: anonymous product list/detail (cache path), logged-in cart+order
+      read, checkout write path; run at 500 → 1k → 5k VU against a prod-like build
+      (`npm run build` + pm2, NOT `nest --watch`). Record p95/p99 + error% in the
+      script header; re-run after each SCALE item to attribute gains. Gate: declare
+      "handles N concurrent" only from these numbers, never from code reading.
+
+**Recommended order:** SCALE-01a (redis-adapter) → SCALE-06 baseline → SCALE-02
+→ SCALE-01b (cluster) → SCALE-03 → SCALE-04 → SCALE-05, re-running the k6
+baseline between steps. **Cost note:** all items are config/infra-level on the
+existing single-VPS+Aiven+Redis stack — no new paid services required; true
+10k concurrent sustained likely also needs a bigger VPS/Aiven tier, which the
+SCALE-06 numbers will prove or disprove.
 
 ## Known Issues
 
+- Array query params on the gateway (discovered in PERF-10 verification, 2026-07-03): Express runs the **simple** query parser, so bracket syntax `?categoryIds[]=18` arrives as literal key `"categoryIds[]"` and the global `ValidationPipe({whitelist:true})` silently strips it → 200 UNFILTERED, no error. Supported syntaxes: repeated keys `?categoryIds=16&categoryIds=18` or a single `?categoryIds=18` (scalar→array `@Transform` added to `GetProductsQueryDto`). The storefront FE has been sending singular `categoryId`/`brandId` (never matched the DTO) — marketplace filter was a silent NO-OP; FE handoff entry written 2026-07-03 (`../.agent-local/frontend-handoff.md`). Any future array-typed query DTO field needs the same guard-and-wrap `@Transform`.
 - GHN free-text address resolution is best-effort: a garbage/placeholder address (e.g. `District 1 | Ward 1`) can resolve to a wrong-but-valid GHN location instead of failing, because short numeric master-data names match many free-text parts via containment. Real well-formed VN addresses resolve correctly. Durable fix is collecting GHN numeric IDs at checkout rather than resolving free-text at ship time. (Truly unresolvable addresses now correctly return 400, not 502 — see the ready-to-ship ops note below.)
 - nodeB services (inventory/payments/rewards) used to silently crash after an idle period (e.g. machine sleep / broker restart): `RmqModule.registerDirectPublisher()` opened a raw amqplib connection+channel with NO `'error'`/`'close'` listeners, so an idle connection drop was thrown as an uncaught exception and killed the process (the `nest --watch` wrapper survived, masking it). FIXED 2026-06-26: the publisher now attaches error/close handlers, uses a `?heartbeat=30` URI, connects in the background (never blocks bootstrap), and auto-reconnects via a self-healing Proxy. If a nodeB service is ever found down, check whether its compiled `dist/apps/<svc>/main` process is actually running — `--watch` does NOT auto-restart a runtime crash.
 - Login route is `POST /api/user/login` (sets the HttpOnly `access_token` cookie). (The CLAUDE.md self-test protocol text was corrected to match on 2026-06-28.)
+- **Stale doc (perf-audit 2026-07-02): `ai-docs/agent-context/database.md` index/entity info is partially out of date** vs current entities (e.g. orders entities have no indexes at all; inventory/social uniques exist that the doc doesn't reflect). Cross-check entities directly when planning index migrations.
 
 ## Ops / Runtime Reference
 
@@ -258,16 +683,27 @@ FE: analytics charts.
 - GHN demo-status endpoint (DEMO ONLY): `POST /api/order/admin/ghn/orders/:id/demo-status` (`@CheckPermission("shipping","update:any")`, TCP `order.admin_ghn_demo_status`) simulates a GHN status WITHOUT calling real GHN and drives the local lifecycle through the same `mapGhnStatus`/`applyGhnStatus` path as real sync (writes a MANUAL_SYNC `shipping_history` row with `action:"demo_status"`, returns the sync shape `{orderId,previousStatus,newStatus,ghnStatus,syncedAt}`). Body `{ghnStatus}` ∈ `ready_to_pick|picking|delivering|delivered|delivery_fail|waiting_to_return|returned|cancelled`. **Gated behind env `GHN_DEMO_ENDPOINTS_ENABLED`** — unless set to `"true"` it returns `403 "GHN demo status endpoint is disabled"` (inert in prod; must be ABSENT/false in production). No migration. Lets the GHN console demo `picking→delivering→delivered` on a sandbox order GHN never advances. **Detail override (fixed 2026-06-30):** when demo mode is ON and the latest `shipping_history` row is a `demo_status`, `GET /api/order/admin/ghn/orders/:id` surfaces that demo status as `ghnDetail.status` (overlaying the still-fetched live detail so receiver/COD fields stay real, or synthesizing a minimal detail if the live fetch failed) — so the console GHN badge advances exactly as a real webhook would, instead of staying stuck at the sandbox's `ready_to_pick`. Outside demo mode, live GHN `getOrderDetail.status` wins unchanged.
 - Stale-reservation sweeper (orders): hourly `@Cron` cancels orders in PENDING/CONFIRMED/PROCESSING with `ghn_order_code` null older than `ORDER_STALE_RESERVATION_TTL_HOURS` (default 24h, set in `local/nodeA/.env`), reusing the idempotent cancel flow to release stock. Orders with a GHN code are never swept (driven by the delivery webhook).
 - payment_methods table: `is_active` controls active options; `PAYMENT_GATEWAY` env is fully unused (strategy chosen per-request from `paymentMethod`).
+- Low-stock endpoint (unused-API sweep, 2026-07-06): `GET /api/inventory/low-stock` — `@Roles("shop","admin")`. Admin → all low-stock rows; shop → auto-scoped server-side (gateway first fetches the seller's productIds via `PRODUCT_MESSAGE_PATTERNS.GET_PRODUCT_IDS_BY_SELLER`, empty → `[]` without hitting inventory). Returns `Inventory[]` (max 100, `availableStock ASC`, `isActive` only; bigint ids serialize as strings). Remaining HTTP inventory surface: `POST /api/inventory`, `GET /api/inventory/product/:productId` (`@Public`), `PUT /api/inventory/:id` — list/sku/by-id/delete/check-stock/reserve/release HTTP routes were removed (internal TCP paths unchanged).
 - CORS: one shared gateway delegate `apps/gateway/src/common/cors.ts` (`gatewayCorsOptions`) used by HTTP (`main.ts` `enableCors`) + both WS gateways (`/chat`, `/notifications`). Allows: no-Origin requests, any origin in `FRONTEND_URL` (comma-split), and — only when `NODE_ENV !== "production"` — any `localhost`/`127.0.0.1` origin on any port. Prod is strict (localhost bypass off) → every allowed web origin MUST be in `FRONTEND_URL`. Sockets live on the gateway origin/port (3000), namespaces `/chat`+`/notifications`, connect `withCredentials:true`.
-- Cloudinary: client uploads direct; server signs via `POST /api/upload/signature`; folders `trybuy/products/`, `trybuy/posts/`.
-- Deploy: `pm2 start ecosystem.config.js --env production` → `pm2 save && pm2 startup`; set the real domain in `nginx/trybuy.conf`.
+- Cloudinary: client uploads direct; server signs via `POST /api/upload/signature`; allowed folders are `trybuy/products`, `trybuy/posts`, and existing storefront avatar folder `avatars`. Upload `publicId` must be a basename matching `${userId}_...` (server generates one if omitted); delete `public_id` must be full `<allowed-folder>/${userId}_...` unless caller role is admin. Invalid folder/path → 400; foreign prefix → 403 before Cloudinary is called. Delete ownership enforcement runtime-verified 2026-07-08 (user 17 deleting a `18_` leaf → 403; disallowed folder → 400; no-folder public_id → 400; unauth → 401; all reject inside `generateDeleteSignature` before any Cloudinary destroy). Remaining FE-handoff follow-ups: orphan cleanup of dropped media on entity update + optional signed upload-constraint hardening — see SEC-M7/M8.
+- Deploy runtime: host PM2 runs compiled NestJS apps from `ecosystem.config.js`; Docker Compose runs Redis/RabbitMQ only (`docker compose up -d redis rabbitmq`); MySQL/PostgreSQL are external Aiven services; internal TCP/payments callback listeners bind to `127.0.0.1`; production Nginx exposes the gateway on `127.0.0.1:3000` only (including `/zalopay/callback` and `/vnpay/callback` facades); VPS firewall/security group must expose only 80/443 publicly; set the real domain in `nginx/trybuy.conf`.
+- CI: `.github/workflows/ci.yml` validates PRs and pushes to `main` only; it runs npm install/lint/typecheck/Jest/build/PM2 syntax/Compose config/whitespace checks with safe dummy env values. It does not deploy, publish Docker images, connect to Aiven, run migrations, or require repository secrets.
 - Applied migrations (P1-03, social DB, `synchronize:false`): `database/add_product_id_to_posts.sql` (`posts.product_id INT NULL`) and `database/create_post_reports_table.sql` (`post_reports` table) — both applied to Aiven on 2026-06-25. Re-run on any fresh DB before the post-edit / report endpoints work.
 - Applied migration (P1-06, chat read-tracking, `synchronize:false`): `database/add_read_tracking_to_conversations.sql` (`conversations.user1_last_read_at` / `user2_last_read_at` DATETIME NULL) — applied to Aiven on 2026-06-26. Re-run on any fresh DB before `unreadCount` / mark-read work.
 - Applied migration (P2-02, order snapshot, `synchronize:false`): `database/add_snapshot_columns_to_order_items.sql` (`order_items.product_image` VARCHAR(2048) NULL, `order_items.sku_label` VARCHAR(512) NULL) — applied to Aiven on 2026-06-26. Re-run on any fresh DB before order-snapshot rendering works.
 - Applied migration (F1 product reviews, `synchronize:false`): `database/create_product_reviews_table.sql` (`product_reviews` table: `product_id`, `user_id`, `rating` TINYINT 1–5, `comment`, unique `(product_id,user_id)`) — already present on Aiven (confirmed live 2026-06-30: GET/POST/DELETE review endpoints all work). Re-run on any fresh DB before review endpoints work. `product.rating`/`ratingCount` (already on `products`) are recalculated by the product service on every review create/delete. Note: `product-review.entity.ts` declares `product_id` as `int` while the migration + `products.id` are `bigint` — harmless for current id ranges, latent inconsistency.
+- Applied migration (F6 wishlist/favorites): `database/create_wishlist_items_table.sql` — creates `wishlist_items` (`user_id`, `product_id`, unique `(user_id, product_id)`, indexes for user-created ordering and product cleanup, FK to `products(id)` with cascade delete). Product service runs TypeORM sync in dev, but the SQL is enabled in `database/migrations.manifest.json` for production deploy/fresh reviewed Node A schemas. Re-run before wishlist endpoints work on a DB without sync.
 - Applied migration (GHN Web Step 2 shipping roles, `synchronize:false`): `database/add_shipping_roles.sql` — extends `roles.rol_name` enum with `logistics_operator`/`shipping_manager`, adds the `shipping` resource (res_id=7 on Aiven), seeds both role rows (rol_id 4/5). Applied to Aiven on 2026-06-27. Authorization is driven by `apps/user/src/rbac/grants.ts` (`ac`), not the DB `rol_grants` JSON. Re-run on any fresh DB before the shipping roles resolve.
 - Applied migration (F2 buyer return/refund): `database/create_order_return_requests_table.sql` — extends `orders.status` enum with `return_requested`/`refunded` and creates the `order_return_requests` table (`order_id`, `user_id`, `reason`, `status` enum `pending_review|approved|rejected`, `reject_reason`, `previous_order_status`, `refund_amount`, `refund_method`, `refund_status`, `reviewed_by`, timestamps + idx on order/user/status). NOTE: the orders service runs TypeORM `synchronize:true`, so on a normal restart the new entity/enum auto-sync and the table already exists (confirmed live 2026-06-30 — return-request inserts succeeded). The SQL file is for fresh/`synchronize:false` DBs; run it before the return endpoints work there. Refund is **recorded only** (no real payment-gateway call): online methods (vnpay/zalopay) set `refund_status=refunded`, COD sets `manual_pending`. On approve, reserved stock is released and a GHN return is attempted best-effort (failure non-fatal).
 - Applied migration (F3 vouchers): `database/create_vouchers_table.sql` — creates `vouchers` (`code` UNIQUE, `discount_type` enum `percent|fixed`, `discount_value`, `min_order_amount`, `max_discount_amount`, `usage_limit`, `used_count`, `per_user_limit`, `starts_at`, `expires_at`, `is_active`) + `voucher_redemptions` (`voucher_id`, `user_id`, `order_id`, `discount_amount`, UNIQUE `(voucher_id,order_id)`, idx `(voucher_id,user_id)`) and ALTERs `orders` to add `voucher_code` VARCHAR(64) NULL + `discount_amount` DECIMAL(12,2) NULL. NOTE: orders runs TypeORM `synchronize:true`, so a normal restart auto-creates the tables/columns (confirmed live 2026-06-30 — voucher create + checkout-apply succeeded; orders 113). The SQL file is for fresh/`synchronize:false` DBs. Usage cap is enforced atomically via a conditional `used_count = used_count + 1 WHERE id=? AND (usage_limit IS NULL OR used_count < usage_limit)` UPDATE inside the order-create tx; per-user limit via a `voucher_redemptions` count. Codes are normalized to UPPERCASE on create/lookup. Vouchers are single-seller only (multi-seller checkout rejects with 400).
+- Checkout addressing (2026-07-01): GHN master-data proxy `GET /api/shipping/{provinces,districts?provinceId=,wards?districtId=}` (gateway `ShippingModule` → orders TCP `order.shipping_{provinces,districts,wards}` → `GhnService.list*`, reuses the existing 24h master-data cache; `JwtAuthGuard`; each item `{id,name}` where `id` is the GHN code — ProvinceID/DistrictID number, WardCode string; missing/invalid query param → 400; FE never sees the GHN token). Per-user address book `GET/POST /api/user/me/addresses`, `PATCH /api/user/me/addresses/:id`, `PATCH .../:id/default`, `DELETE .../:id` (all `JwtAuthGuard`, scoped to `req.user.id`; USER TCP `user.address_{list,create,update,delete,set_default}`, `{cmd:…}` wrapper). Single-default invariant enforced in a tx: first address forced default, `isDefault:true` demotes others, deleting the default auto-promotes the newest remaining; not-owned/unknown id → 404. `Order` money fields (`total`/`codAmount`/`shippingFee`/`discountAmount`) now serialize as JSON **numbers** via the `decimalToNumber` transformer, so the `GET /api/order/:id` fee matches the `POST /api/order/shipping-fee` preview.
+- Applied migration (user address book): `database/create_user_addresses_table.sql` — `user_addresses` (recipient_name/phone/address_line + province_id/province_name/district_id/district_name/ward_code/ward_name + is_default TINYINT, idx on user_id). User service runs TypeORM `synchronize:true`, so the table auto-created on restart (confirmed live on Aiven: `user_addresses` present). SQL file is for fresh/`synchronize:false` DBs.
+- Analytics (F4, 2026-07-01, NO migration — read-only aggregation): gateway `GET /api/order/seller/analytics` (JwtAuthGuard, self-scoped to `req.user.id`) and `GET /api/order/admin/analytics` (`@CheckPermission("shipping","read:any")`, global) → orders TCP `order.analytics` (`ORDER_MESSAGE_PATTERN.ANALYTICS`, bare-string pattern) → `OrdersService.getAnalytics({sellerId, from?, to?, interval?, topN?})`. `sellerId:number` → seller scope (filters `order.sellerId`/`oi.sellerId`, valid because orders are single-seller); `sellerId:null` → global. Query: `from`/`to` ISO dates (validated `@IsDateString`; service snaps `from`→start-of-day, `to`→end-of-day inclusive; default = last 30 days; invalid or from>to → 400), `interval` `day|month` (default `day`, MySQL `DATE_FORMAT` group), `topN` 1–50 (default 5). Response `{scope, from, to, interval, summary{totalRevenue,completedOrders,totalOrders,averageOrderValue}, revenueOverTime[{period,revenue,orderCount}], statusDistribution(zero-filled all OrderStatus), topProducts[{productId,productName,quantitySold,revenue}]}`. **Revenue = goods GMV** = `SUM(oi.price*oi.quantity)` over COMPLETED orders only (excludes shipping fee + voucher discount; consistent with topProducts revenue), rounded to integer VND. `statusDistribution`/`totalOrders` count ALL orders in the window regardless of status. New gateway route ordering: `seller/analytics` + `admin/analytics` declared BEFORE `seller/:id`. Runtime-verified 2026-07-01: seller scope 200 (techstore_demo, 6 orders zero-filled), global 200 (10 completed, revenue 1,224,843, monthly series + top 3), invalid-date/from>to 400, shop→admin 403, unauth 401.
+- Post moderation (F5, 2026-07-02): admin-only review/resolve flow over the existing `POST /social/posts/:id/report`. New RBAC resource `post` (admin `read:any`/`update:any`/`delete:any`) added to `apps/user/src/rbac/grants.ts` — **no DB grant migration** (grants are in-memory, imported by the gateway `RoleAuthGuard`). Gateway `SocialAdminController` (`@Controller("social/admin")`): `GET reports?status=pending|resolved|dismissed&page=&limit=` (`post read:any`) → PaginatedResponse grouped by post `{post{…,isHidden,hiddenAt,author{id,username,avatar}},reportCount,pendingCount,latestReportedAt,reports[{id,reporterId,reason,status,createdAt}]}` ordered by most-recent report, `total`=distinct reported posts; `POST posts/:id/hide` (`update:any`) hides + flips `pending` reports→`resolved` (stamps `resolvedBy`/`resolvedAt`); `POST posts/:id/unhide`; `POST posts/:id/dismiss` marks `pending`→`dismissed`, post stays visible, returns `{postId,dismissed:n}`; `DELETE posts/:id` (`delete:any`) tx-removes post + its report rows. TCP `social_admin_{list_reported_posts,hide_post,unhide_post,dismiss_reports,delete_post}` (bare-string patterns). **Feed impact:** hidden posts excluded from `GET /social/posts`, `/social/posts/user/:userId`, and the following-feed; `GET /social/posts/:id` → 404 when hidden. Any action on a missing post → 404. Runtime-verified 2026-07-02 (10/10 self-tests: create→report→list(pending)→hide→404+resolved→unhide→200→re-report→dismiss→delete→404; non-admin→403).
+- Applied migration (F5 post moderation, social runs `synchronize:false` so REQUIRED): `database/add_moderation_to_social.sql` — ALTERs `post_reports` add `status` ENUM('pending','resolved','dismissed') DEFAULT 'pending' + `resolved_by` INT NULL + `resolved_at` TIMESTAMP NULL + idx `idx_post_reports_status`; ALTERs `posts` add `is_hidden` TINYINT(1) DEFAULT 0 + `hidden_at` TIMESTAMP NULL. Applied to Aiven 2026-07-02 (idempotent script, existence-guarded). Re-run on any fresh DB before the moderation endpoints work — unlike the orders service, social will NOT auto-create these columns.
+- Applied migration (PERF-05 social indexes, social runs `synchronize:false`): `database/add_social_performance_indexes.sql` — adds `idx_comments_post_id_created_at (post_id, created_at)`, `idx_posts_visible_created_at (is_hidden, created_at)`, and `idx_posts_user_visible_created_at (user_id, is_hidden, created_at)` with `ALGORITHM=INPLACE, LOCK=NONE`. Applied to Aiven Node A on 2026-07-07 via `nodeA-20260707-002-add-social-performance-indexes`.
+- Applied migration (PERF-06 chat/payments indexes): `database/add_chat_message_performance_indexes.sql` adds `idx_messages_conversation_created_at (conversation_id, created_at)` on Node A MySQL; `database/add_payments_order_id_index.sql` adds `idx_payments_order_id (order_id) WHERE order_id IS NOT NULL` on Node B PostgreSQL; `database/add_payments_app_trans_id_index.sql` adds `idx_payments_app_trans_id (app_trans_id) WHERE app_trans_id IS NOT NULL` on Node B PostgreSQL. Applied to Aiven on 2026-07-07 via scoped `--only` applies: `nodeA-20260707-003-add-chat-message-performance-indexes`, `nodeB-20260707-001-add-payments-order-id-index`, and `nodeB-20260707-002-add-payments-app-trans-id-index`.
+- Applied migration (social-notification metadata, notification runs `synchronize:false` so REQUIRED): `database/add_social_notification_metadata.sql` — widens `notifications.order_id` INT→BIGINT NULL and ADDs `post_id` INT NULL + `actor_id` INT NULL + `preview` VARCHAR(255) NULL (idempotent, INFORMATION_SCHEMA-guarded). Applied to Aiven 2026-07-06. **REQUIRED once this code deploys** — the `Notification` entity now declares those 3 columns, so with `synchronize:false` every `saveNotification` INSERT (ALL notification types, not just comment/reply) fails with "Unknown column" until the table has them. Comment→post-owner and reply→comment-owner notifications now persist `type:"comment"|"reply"`, `orderId:null`, `postId`, `actorId`, `preview` (first 255 chars; WS push + `GET /api/notifications` carry the same fields); FE can deep-link `/post/:id` and render "X commented: <preview>". Re-run on any fresh DB.
 
 ## History
 

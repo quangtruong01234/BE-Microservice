@@ -151,6 +151,7 @@ When debugging, invoke `$debug`.
 - `$review`: review code against project standards.
 - `$debug`: diagnose a failing feature.
 - `$perf-audit`: audit performance without editing.
+- `$sweep`: work through the backend backlog or run sweep audit/propose mode.
 - `$commit`: create scoped local commits.
 - `$refactor`: perform a constrained refactor.
 

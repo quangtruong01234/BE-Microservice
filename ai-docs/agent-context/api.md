@@ -17,6 +17,8 @@ Auth: HttpOnly cookie set on login. Protected routes require the cookie (sent au
 - GET /api/inventory/ (read-only)
 - GET /api/gateway/payment-result
 - GET /api/payment/options
+- POST /zalopay/callback (ZaloPay server callback, no `/api` prefix)
+- POST /vnpay/callback, GET /vnpay/callback (VNPay server callback, no `/api` prefix)
 - GET /api/social/posts, GET /api/social/posts/:id, GET /api/social/posts/user/:userId
 - GET /api/social/posts/:id/comments, GET /api/social/comments/:id/replies
 - GET /api/social/users/:id/followers, GET /api/social/users/:id/following, GET /api/social/users/:id/feed
@@ -24,6 +26,7 @@ Auth: HttpOnly cookie set on login. Protected routes require the cookie (sent au
 
 **Cookie required (authenticated user):**
 - POST /api/products/, PATCH /api/products/:id, DELETE /api/products/:id
+- GET /api/products/wishlist, POST /api/products/wishlist/:productId, DELETE /api/products/wishlist/:productId
 - POST /api/products/:id/skus, PATCH /api/products/:id/skus/:skuId, DELETE /api/products/:id/skus/:skuId
 - POST /api/order/, POST /api/order/shipping-fee, GET /api/order/:id, GET /api/order/user/:id, PATCH /api/order/:id/cancel, GET /api/order/:id/invoice
 - GET /api/order/:id/payment-url
@@ -67,7 +70,7 @@ Auth: HttpOnly cookie set on login. Protected routes require the cookie (sent au
 | POST | `/api/user/logout` | Public | Clears auth cookie |
 | GET | `/api/user/all` | Role: admin | Get all users |
 | GET | `/api/user/me` | Cookie | Get current authenticated user |
-| GET | `/api/user/:id` | Cookie | Get user by ID |
+| GET | `/api/user/:id` | Cookie | Get public user profile by ID (no email) |
 | PATCH | `/api/user/:id` | Cookie | Update user profile (own account only) |
 
 ### Register DTO
@@ -80,6 +83,17 @@ Auth: HttpOnly cookie set on login. Protected routes require the cookie (sent au
 { username: string; password: string }
 ```
 
+### User response privacy
+`GET /api/user/:id` is a public-profile projection:
+
+```typescript
+{ id: number; username: string; name: string | null; avatar: string | null; isActive: boolean }
+```
+
+It does not return `email`. Email remains available only in private/admin
+contexts such as `GET /api/user/me`, admin user pagination, order buyer/admin
+views, and invoices.
+
 ---
 
 ## Product Endpoints (`/api/products/`)
@@ -88,6 +102,9 @@ Auth: HttpOnly cookie set on login. Protected routes require the cookie (sent au
 |---|---|---|---|
 | GET | `/api/products/` | — | All products (filter/paginate) |
 | POST | `/api/products/` | Cookie | Create product |
+| GET | `/api/products/wishlist` | Cookie | Current user's wishlist products (paginated) |
+| POST | `/api/products/wishlist/:productId` | Cookie | Add product to current user's wishlist |
+| DELETE | `/api/products/wishlist/:productId` | Cookie | Remove product from current user's wishlist (204) |
 | GET | `/api/products/search` | — | Search by keyword |
 | GET | `/api/products/brands` | — | All active brands |
 | POST | `/api/products/brands` | Cookie | Submit brand for review (status=pending, isActive=false) |
@@ -125,6 +142,17 @@ with-inventory) returns BOTH the full hydrated `categories[]` (eager ManyToMany
 objects) AND a flat `categoryIds: number[]` derived from it. The gateway
 normalizes this uniformly (`attachCategoryIds` / `withCategoryIds`), so the FE
 multi-category editor gets the same shape on list and detail.
+
+Product seller enrichment uses the same public-profile projection as
+`GET /api/user/:id`; `product.user` does not include `email`.
+
+### Wishlist response
+
+`GET /api/products/wishlist?page=&limit=` returns:
+
+```typescript
+{ data: Array<Product & { categoryIds: number[]; wishlistedAt: string }>, total: number, page: number, limit: number, totalPages: number, hasNext: boolean }
+```
 
 ### Create/Update SKU DTO (`CreateSkuGatewayDto`)
 ```typescript
@@ -251,6 +279,10 @@ All cart endpoints require a valid JWT cookie.
 | GET | `/api/notifications` | Cookie | Paginated notifications for current user |
 | PATCH | `/api/notifications/:id/read` | Cookie | Mark notification as read |
 
+Comment/reply notification items include social metadata for deep links:
+`postId`, `actorId`, and `preview`; `orderId` is `null` for these social
+notifications. Order-related notifications continue to use `orderId`.
+
 ---
 
 ## Social Endpoints (`/api/social/`)
@@ -286,6 +318,9 @@ All cart endpoints require a valid JWT cookie.
 | GET | `/api/social/users/:id/following` | — | Get users a user follows |
 | GET | `/api/social/users/:id/feed` | — | Posts from users the user follows |
 
+Social author/user decoration uses public profiles only; `author` objects do not
+include `email`.
+
 ---
 
 ## Chat Endpoints (`/api/chat/`)
@@ -307,7 +342,12 @@ All chat endpoints require a valid JWT cookie. WebSocket on `gateway:3000/chat` 
 | POST | `/api/upload/signature` | Cookie | Get Cloudinary signed upload params |
 | DELETE | `/api/upload/media` | Cookie | Delete media from Cloudinary |
 
-Cloudinary folders: `trybuy/products/`, `trybuy/posts/`
+Cloudinary allowed folders: `trybuy/products`, `trybuy/posts`, `avatars`.
+Upload `publicId` is optional; when provided it must be a basename owned by the
+caller (`${userId}_...`, no `/`). Delete `public_id` must include the allowed
+folder and an owned basename (`trybuy/posts/${userId}_...`,
+`trybuy/products/${userId}_...`, or `avatars/${userId}_...`) unless the caller is
+admin.
 
 ### Create product with uploaded images
 
@@ -408,7 +448,13 @@ The personal collection `TryBuy Full E-commerce Success E2E` uses the same
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
+| GET | `/live` | Public | Gateway liveness probe; checks only that the HTTP process is alive. |
+| GET | `/ready` | Public | Gateway readiness probe; checks only safe existing dependencies and returns 503 when a required checked dependency fails. |
+| GET | `/health` | Public | Gateway health summary for ops tooling; reports service status, uptime, timestamp, and safe dependency statuses without secrets or host details. |
 | GET | `/api/gateway/payment-result` | — | Payment result verification. VNPay verifies signed gateway params; ZaloPay verifies the `checksum` on browser-return params. Verified success completes the payment row and emits `payment_completed` before returning `success`. |
+| POST | `/zalopay/callback` | Public provider callback | Gateway facade for ZaloPay server callback. Forwards the raw body to the payments service over TCP, where MAC validation and idempotent completion run. Returns ZaloPay's raw `{ return_code, return_message }` shape. |
+| POST | `/vnpay/callback` | Public provider callback | Gateway facade for VNPay server callback body. Forwards the raw body to the payments service over TCP, where checksum validation and idempotent completion run. Returns VNPay's raw `{ RspCode, Message }` shape. |
+| GET | `/vnpay/callback` | Public provider callback | Gateway facade for VNPay IPN query callback. Forwards the raw query to the payments service over TCP. Returns VNPay's raw `{ RspCode, Message }` shape. |
 | POST | `/ghn/webhook` | Shared secret | GHN delivery status callback (no `/api` prefix); token via `x-ghn-webhook-token` or `?token=` |
 
 ---
@@ -430,7 +476,8 @@ product.update, product.delete, product.findByCategory, product.findByBrand,
 product.search,
 brand.create, brand.findAll, brand.findById, brand.review,
 category.create, category.findAll, category.findById, category.review,
-sku.create, sku.findByProduct, sku.findById, sku.update, sku.delete
+sku.create, sku.findByProduct, sku.findById, sku.update, sku.delete,
+product.wishlist.add, product.wishlist.remove, product.wishlist.list
 ```
 
 ### Order Patterns (`ORDER_MESSAGE_PATTERN`)
@@ -446,7 +493,8 @@ order.admin_ghn_sync, order.admin_ghn_history
 ### Payment Patterns (`PAYMENT_MESSAGE_PATTERN`)
 ```
 get_payment_url, get_payment_options, payment.initiate_multi_order,
-payment.complete_zalopay_return, payment.complete_vnpay_return
+payment.complete_zalopay_return, payment.complete_vnpay_return,
+payment.zalopay_callback, payment.vnpay_callback
 ```
 
 ### Notification Patterns (`NOTIFICATION_MESSAGE_PATTERN`)
