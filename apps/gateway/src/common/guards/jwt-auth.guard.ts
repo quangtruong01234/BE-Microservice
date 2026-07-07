@@ -60,9 +60,8 @@ export class JwtAuthGuard implements CanActivate {
         grants: payload.grants ?? [],
       };
       return true;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Invalid token";
-      throw new UnauthorizedException(message);
+    } catch {
+      throw new UnauthorizedException("Unauthorized");
     }
   }
 

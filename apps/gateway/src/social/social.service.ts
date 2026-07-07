@@ -7,6 +7,7 @@ import {
 } from "libs/constant/message-pattern.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
+import { assertCloudinaryUrlsOwnedBy } from "../common/media/cloudinary-ownership";
 
 interface UserInfo {
   id: number;
@@ -51,6 +52,7 @@ export class SocialGatewayService {
     videoUrl?: string,
     productId?: number,
   ): Promise<unknown> {
+    assertCloudinaryUrlsOwnedBy([...(imageUrls ?? []), videoUrl], userId);
     try {
       return await firstValueFrom(
         this.socialClient
@@ -82,6 +84,10 @@ export class SocialGatewayService {
       productId?: number;
     },
   ): Promise<unknown> {
+    assertCloudinaryUrlsOwnedBy(
+      [...(changes.imageUrls ?? []), changes.videoUrl],
+      userId,
+    );
     try {
       return await firstValueFrom(
         this.socialClient
@@ -533,6 +539,119 @@ export class SocialGatewayService {
       MicroserviceErrorHandler.handleError(
         error,
         "get following feed",
+        "Social Service",
+      );
+    }
+  }
+
+  // ── Moderation (admin) ──────────────────────────────────────────────
+
+  async listReportedPosts(
+    status: "pending" | "resolved" | "dismissed" | undefined,
+    page: number,
+    limit: number,
+  ): Promise<unknown> {
+    try {
+      const result = (await firstValueFrom(
+        this.socialClient
+          .send(SOCIAL_MESSAGE_PATTERN.ADMIN_LIST_REPORTED_POSTS, {
+            status,
+            page,
+            limit,
+          })
+          .pipe(timeout(10000)) as Observable<unknown>,
+      )) as {
+        data: Array<{ post: { userId: number } }>;
+        total: number;
+        page: number;
+        limit: number;
+        totalPages: number;
+        hasNext: boolean;
+      };
+      const authorMap = await this.fetchAuthorMap([
+        ...new Set(result.data.map((entry) => entry.post.userId)),
+      ]);
+      return {
+        ...result,
+        data: result.data.map((entry) => ({
+          ...entry,
+          post: {
+            ...entry.post,
+            author: authorMap.get(entry.post.userId) ?? null,
+          },
+        })),
+      };
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "list reported posts",
+        "Social Service",
+      );
+    }
+  }
+
+  async hidePost(postId: number, adminId: number): Promise<unknown> {
+    try {
+      return await firstValueFrom(
+        this.socialClient
+          .send(SOCIAL_MESSAGE_PATTERN.ADMIN_HIDE_POST, { postId, adminId })
+          .pipe(timeout(10000)) as Observable<unknown>,
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "hide post",
+        "Social Service",
+      );
+    }
+  }
+
+  async unhidePost(postId: number): Promise<unknown> {
+    try {
+      return await firstValueFrom(
+        this.socialClient
+          .send(SOCIAL_MESSAGE_PATTERN.ADMIN_UNHIDE_POST, { postId })
+          .pipe(timeout(10000)) as Observable<unknown>,
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "unhide post",
+        "Social Service",
+      );
+    }
+  }
+
+  async dismissReports(postId: number, adminId: number): Promise<unknown> {
+    try {
+      return await firstValueFrom(
+        this.socialClient
+          .send(SOCIAL_MESSAGE_PATTERN.ADMIN_DISMISS_REPORTS, {
+            postId,
+            adminId,
+          })
+          .pipe(timeout(10000)) as Observable<unknown>,
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "dismiss reports",
+        "Social Service",
+      );
+    }
+  }
+
+  async adminDeletePost(postId: number): Promise<unknown> {
+    try {
+      return await firstValueFrom(
+        this.socialClient
+          .send(SOCIAL_MESSAGE_PATTERN.ADMIN_DELETE_POST, { postId })
+          .pipe(timeout(10000)) as Observable<unknown>,
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "admin delete post",
         "Social Service",
       );
     }

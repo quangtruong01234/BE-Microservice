@@ -11,6 +11,7 @@ import {
 } from "class-validator";
 import { Type } from "class-transformer";
 import { ApiPropertyOptional } from "@nestjs/swagger";
+import { IsCloudinaryUrl } from "../../common/validators/is-cloudinary-url.validator";
 
 export class UpdateProductDto {
   @ApiPropertyOptional({
@@ -105,7 +106,10 @@ export class UpdateProductDto {
   })
   @IsOptional()
   @IsArray()
-  @IsString({ each: true })
+  @IsCloudinaryUrl(
+    { folder: "trybuy/products", media: "image" },
+    { each: true },
+  )
   imageUrls?: string[];
 
   @ApiPropertyOptional({

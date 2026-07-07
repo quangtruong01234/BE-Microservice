@@ -5,10 +5,13 @@ import {
   HttpException,
   HttpStatus,
   Injectable,
+  Logger,
+  ServiceUnavailableException,
 } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { RATE_LIMIT_OPTIONS_KEY } from "../decorators/rate-limit.decorator";
 import { Request } from "express";
+import { isProduction, resolvePositiveIntegerEnv } from "../security";
 
 interface RateLimitInfo {
   limit: number;
@@ -23,8 +26,20 @@ interface RequestWithRateLimit extends Request {
 
 @Injectable()
 export class CustomRateLimitGuard implements CanActivate {
-  private readonly defaultLimit: number = 20;
-  private readonly defaultTtl: number = 60;
+  private readonly logger = new Logger(CustomRateLimitGuard.name);
+  private readonly defaultLimit: number = resolvePositiveIntegerEnv(
+    "RATE_LIMIT_DEFAULT_LIMIT",
+    120,
+  );
+  private readonly defaultTtl: number = resolvePositiveIntegerEnv(
+    "RATE_LIMIT_DEFAULT_TTL_SECONDS",
+    60,
+  );
+  private readonly redisTimeoutMs: number = resolvePositiveIntegerEnv(
+    "RATE_LIMIT_REDIS_TIMEOUT_MS",
+    500,
+  );
+
   constructor(
     private cachedService: CachedService,
     private reflector: Reflector,
@@ -46,10 +61,10 @@ export class CustomRateLimitGuard implements CanActivate {
       const route = `${request.method}:${routePath}`;
       const key = `throttle:${route}:${identifier}`;
 
-      const current = await this.cachedService.incr(key);
+      const current = await this.withRedisTimeout(this.cachedService.incr(key));
 
       if (current === 1) {
-        await this.cachedService.expire(key, ttl);
+        await this.withRedisTimeout(this.cachedService.expire(key, ttl));
       }
 
       if (current > limit) {
@@ -76,8 +91,37 @@ export class CustomRateLimitGuard implements CanActivate {
         throw error;
       }
 
-      console.warn("Rate limit check failed:", error);
+      const message = error instanceof Error ? error.message : "Unknown error";
+      if (isProduction()) {
+        this.logger.error(
+          `Rate limit check failed in production; failing closed: ${message}`,
+        );
+        throw new ServiceUnavailableException(
+          "Rate limit protection is temporarily unavailable",
+        );
+      }
+
+      this.logger.warn(
+        `Rate limit check failed in non-production; allowing request: ${message}`,
+      );
       return true;
+    }
+  }
+
+  private async withRedisTimeout<T>(operation: Promise<T>): Promise<T> {
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        reject(new Error("Redis rate limit operation timed out"));
+      }, this.redisTimeoutMs);
+    });
+
+    try {
+      return await Promise.race([operation, timeout]);
+    } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
     }
   }
 

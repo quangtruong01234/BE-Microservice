@@ -1,4 +1,5 @@
 import { CorsOptions } from "@nestjs/common/interfaces/external/cors-options.interface";
+import { isProduction } from "./security";
 
 /**
  * Single source of truth for the gateway CORS allow-list, shared by the HTTP
@@ -18,10 +19,18 @@ const LOCALHOST_ORIGIN_PATTERN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
  * This is the only set honoured in production.
  */
 export function resolveAllowedOrigins(): string[] {
-  return (process.env.FRONTEND_URL || DEFAULT_DEV_ORIGIN)
+  const configuredOrigins = process.env.FRONTEND_URL?.trim();
+  const originSource =
+    configuredOrigins && configuredOrigins.length > 0
+      ? configuredOrigins
+      : isProduction()
+        ? ""
+        : DEFAULT_DEV_ORIGIN;
+
+  return originSource
     .split(",")
     .map((origin) => origin.trim())
-    .filter((origin) => origin.length > 0);
+    .filter((origin) => origin.length > 0 && origin !== "*");
 }
 
 type CorsOriginCallback = (err: Error | null, allow?: boolean) => void;

@@ -8,6 +8,9 @@ interface NotificationPayload {
   userId: number;
   type: string;
   orderId: number | null;
+  postId: number | null;
+  actorId: number | null;
+  preview: string | null;
   message: string;
   isRead: boolean;
   createdAt: Date;

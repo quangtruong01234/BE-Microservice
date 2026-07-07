@@ -52,9 +52,11 @@ export class CartController {
   @ApiResponse({ status: 200, description: "Item updated or removed" })
   async updateItem(
     @Param("id", ParseIntPipe) cartItemId: number,
+    @Req() req: Request,
     @Body() dto: UpdateCartItemDto,
   ): Promise<void> {
-    return this.cartService.updateItem(cartItemId, dto.quantity);
+    const userId = (req.user as { id: number }).id;
+    return this.cartService.updateItem(userId, cartItemId, dto.quantity);
   }
 
   @Delete("items/:id")
@@ -62,8 +64,10 @@ export class CartController {
   @ApiResponse({ status: 200, description: "Item removed" })
   async removeItem(
     @Param("id", ParseIntPipe) cartItemId: number,
+    @Req() req: Request,
   ): Promise<void> {
-    return this.cartService.removeItem(cartItemId);
+    const userId = (req.user as { id: number }).id;
+    return this.cartService.removeItem(userId, cartItemId);
   }
 
   @Delete()

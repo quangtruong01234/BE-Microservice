@@ -1,14 +1,15 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
+  ArrayMaxSize,
   IsArray,
   IsInt,
   IsNotEmpty,
   IsOptional,
   IsString,
-  IsUrl,
   MaxLength,
   Min,
 } from "class-validator";
+import { IsCloudinaryUrl } from "../../common/validators/is-cloudinary-url.validator";
 
 export class CreatePostDto {
   @ApiProperty({ description: "Post content" })
@@ -20,12 +21,13 @@ export class CreatePostDto {
   @ApiPropertyOptional({ description: "Optional image URLs", type: [String] })
   @IsOptional()
   @IsArray()
-  @IsUrl({}, { each: true })
+  @ArrayMaxSize(10)
+  @IsCloudinaryUrl({ folder: "trybuy/posts", media: "image" }, { each: true })
   imageUrls?: string[];
 
   @ApiPropertyOptional({ description: "Optional video URL" })
   @IsOptional()
-  @IsUrl()
+  @IsCloudinaryUrl({ folder: "trybuy/posts", media: "video" })
   videoUrl?: string;
 
   @ApiPropertyOptional({ description: "Optional attached product ID" })

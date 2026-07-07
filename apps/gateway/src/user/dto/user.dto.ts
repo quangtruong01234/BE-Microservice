@@ -5,11 +5,11 @@ import {
   IsInt,
   IsOptional,
   IsString,
-  IsUrl,
   Max,
   Min,
   MinLength,
 } from "class-validator";
+import { IsCloudinaryUrl } from "../../common/validators/is-cloudinary-url.validator";
 
 export class RegisterUserDto {
   @ApiProperty({ example: "john_doe" })
@@ -57,6 +57,21 @@ export class ListUsersQueryDto {
   limit?: number = 20;
 }
 
+export class FeaturedSellersQueryDto {
+  @ApiPropertyOptional({
+    description: "Max sellers to return",
+    default: 5,
+    minimum: 1,
+    maximum: 20,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(20)
+  @Type(() => Number)
+  limit?: number = 5;
+}
+
 export class UpdateUserGatewayDto {
   @ApiPropertyOptional({ example: "John Doe" })
   @IsOptional()
@@ -69,8 +84,11 @@ export class UpdateUserGatewayDto {
   @IsEmail()
   declare email?: string;
 
-  @ApiPropertyOptional({ example: "https://example.com/avatar.jpg" })
+  @ApiPropertyOptional({
+    example:
+      "https://res.cloudinary.com/example/image/upload/v1/avatars/20_abc.jpg",
+  })
   @IsOptional()
-  @IsUrl()
+  @IsCloudinaryUrl({ folder: "avatars", media: "image" })
   declare avatar?: string;
 }

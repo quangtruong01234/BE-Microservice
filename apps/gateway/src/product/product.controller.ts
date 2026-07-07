@@ -23,8 +23,8 @@ import {
   ReviewBrandDto,
   CreateCategoryDto,
   ReviewCategoryDto,
+  WishlistQueryDto,
 } from "./dto";
-import { CreateSkuGatewayDto, UpdateSkuGatewayDto } from "./dto/product.dto";
 import { CreateReviewDto } from "./dto/review.dto";
 import {
   ApiTags,
@@ -258,6 +258,53 @@ export class ProductController {
   }
 
   // ============================================================================
+  // WISHLIST ENDPOINTS
+  // ============================================================================
+
+  @Get("wishlist")
+  @ApiOperation({ summary: "Get current user's wishlist products" })
+  @ApiResponse({
+    status: 200,
+    description: "Wishlist products retrieved successfully.",
+  })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  async getWishlist(
+    @Req() req: Request,
+    @Query(ValidationPipe) query: WishlistQueryDto,
+  ): Promise<unknown> {
+    const userId = (req.user as { id: number }).id;
+    return await this.productService.getWishlist(userId, query);
+  }
+
+  @Post("wishlist/:productId")
+  @ApiOperation({ summary: "Add a product to the current user's wishlist" })
+  @ApiParam({ name: "productId", description: "Product ID", type: Number })
+  @ApiResponse({ status: 201, description: "Product added to wishlist." })
+  @ApiResponse({ status: 404, description: "Product not found." })
+  async addWishlistItem(
+    @Param("productId", ParseIntPipe) productId: number,
+    @Req() req: Request,
+  ): Promise<unknown> {
+    const userId = (req.user as { id: number }).id;
+    return await this.productService.addWishlistItem(productId, userId);
+  }
+
+  @Delete("wishlist/:productId")
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: "Remove a product from the current user's wishlist",
+  })
+  @ApiParam({ name: "productId", description: "Product ID", type: Number })
+  @ApiResponse({ status: 204, description: "Product removed from wishlist." })
+  async removeWishlistItem(
+    @Param("productId", ParseIntPipe) productId: number,
+    @Req() req: Request,
+  ): Promise<void> {
+    const userId = (req.user as { id: number }).id;
+    await this.productService.removeWishlistItem(productId, userId);
+  }
+
+  // ============================================================================
   // REVIEW ENDPOINTS
   // ============================================================================
 
@@ -321,87 +368,6 @@ export class ProductController {
   @ApiResponse({ status: 404, description: "Product not found." })
   async getSkusByProduct(@Param("id", ParseIntPipe) id: number) {
     return await this.productService.getSkusByProduct(id);
-  }
-
-  @Post(":id/skus")
-  @ApiOperation({ summary: "Add a SKU to a product" })
-  @ApiParam({ name: "id", description: "Product ID", type: Number })
-  @ApiBody({ type: CreateSkuGatewayDto })
-  @ApiResponse({ status: 201, description: "SKU added successfully." })
-  @ApiResponse({
-    status: 400,
-    description: "Bad Request - Invalid input data.",
-  })
-  @ApiResponse({ status: 404, description: "Product not found." })
-  @ApiResponse({
-    status: 403,
-    description: "Forbidden - not the product owner.",
-  })
-  async addSku(
-    @Param("id", ParseIntPipe) id: number,
-    @Body() dto: CreateSkuGatewayDto,
-    @Req() req: Request,
-  ) {
-    return await this.productService.addSku(
-      id,
-      dto,
-      req.user?.id ?? 0,
-      req.user?.role ?? "user",
-    );
-  }
-
-  @Patch(":id/skus/:skuId")
-  @ApiOperation({ summary: "Update a SKU" })
-  @ApiParam({ name: "id", description: "Product ID", type: Number })
-  @ApiParam({ name: "skuId", description: "SKU ID", type: Number })
-  @ApiBody({ type: UpdateSkuGatewayDto })
-  @ApiResponse({ status: 200, description: "SKU updated successfully." })
-  @ApiResponse({
-    status: 400,
-    description: "Bad Request - Invalid input data.",
-  })
-  @ApiResponse({ status: 404, description: "SKU not found." })
-  @ApiResponse({
-    status: 403,
-    description: "Forbidden - not the product owner.",
-  })
-  async updateSku(
-    @Param("id", ParseIntPipe) id: number,
-    @Param("skuId", ParseIntPipe) skuId: number,
-    @Body() dto: UpdateSkuGatewayDto,
-    @Req() req: Request,
-  ) {
-    return await this.productService.updateSku(
-      id,
-      skuId,
-      dto,
-      req.user?.id ?? 0,
-      req.user?.role ?? "user",
-    );
-  }
-
-  @Delete(":id/skus/:skuId")
-  @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({ summary: "Delete a SKU" })
-  @ApiParam({ name: "id", description: "Product ID", type: Number })
-  @ApiParam({ name: "skuId", description: "SKU ID", type: Number })
-  @ApiResponse({ status: 204, description: "SKU deleted successfully." })
-  @ApiResponse({ status: 404, description: "SKU not found." })
-  @ApiResponse({
-    status: 403,
-    description: "Forbidden - not the product owner.",
-  })
-  async deleteSku(
-    @Param("id", ParseIntPipe) id: number,
-    @Param("skuId", ParseIntPipe) skuId: number,
-    @Req() req: Request,
-  ) {
-    return await this.productService.deleteSku(
-      id,
-      skuId,
-      req.user?.id ?? 0,
-      req.user?.role ?? "user",
-    );
   }
 
   @Get(":id")

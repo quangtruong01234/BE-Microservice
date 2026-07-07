@@ -5,6 +5,7 @@ import {
   IsBoolean,
   IsArray,
   ArrayMinSize,
+  ArrayMaxSize,
   IsInt,
   Min,
   Matches,
@@ -12,6 +13,7 @@ import {
 } from "class-validator";
 import { Type } from "class-transformer";
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { IsCloudinaryUrl } from "../../common/validators/is-cloudinary-url.validator";
 
 class SkuItemDto {
   @ApiProperty({ description: 'Tier index e.g. "[0,0]"', example: "[0,0]" })
@@ -174,7 +176,11 @@ export class CreateProductDto {
   })
   @IsOptional()
   @IsArray()
-  @IsString({ each: true })
+  @ArrayMaxSize(10)
+  @IsCloudinaryUrl(
+    { folder: "trybuy/products", media: "image" },
+    { each: true },
+  )
   imageUrls?: string[];
 
   @ApiPropertyOptional({

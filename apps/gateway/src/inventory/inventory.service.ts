@@ -70,48 +70,6 @@ export class InventoryService {
     }
   }
 
-  async findAll(): Promise<unknown> {
-    try {
-      return (await firstValueFrom(
-        this.inventoryClient
-          .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_FIND_ALL, {})
-          .pipe(
-            timeout(10000),
-            catchError((err: unknown) => {
-              throw err;
-            }),
-          ),
-      )) as unknown;
-    } catch (error) {
-      MicroserviceErrorHandler.handleError(
-        error,
-        "find all inventory",
-        "Inventory Service",
-      );
-    }
-  }
-
-  async findOne(id: number): Promise<unknown> {
-    try {
-      return (await firstValueFrom(
-        this.inventoryClient
-          .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_FIND_ONE, id)
-          .pipe(
-            timeout(10000),
-            catchError((err: unknown) => {
-              throw err;
-            }),
-          ),
-      )) as unknown;
-    } catch (error) {
-      MicroserviceErrorHandler.handleError(
-        error,
-        `find inventory by ID: ${id}`,
-        "Inventory Service",
-      );
-    }
-  }
-
   async findByProductId(productId: number): Promise<unknown> {
     try {
       return (await firstValueFrom(
@@ -136,22 +94,33 @@ export class InventoryService {
     }
   }
 
-  async findBySku(sku: string): Promise<unknown> {
+  async getLowStock(callerId: number, callerRole: string): Promise<unknown> {
     try {
+      // Admin sees the whole catalog; a shop is scoped to its own products.
+      let lowStockPayload: { productIds?: number[] } = {};
+      if (callerRole !== "admin") {
+        const productIds = (await firstValueFrom(
+          this.productClient
+            .send(PRODUCT_MESSAGE_PATTERNS.GET_PRODUCT_IDS_BY_SELLER, callerId)
+            .pipe(timeout(10000)),
+        )) as number[];
+        if (!Array.isArray(productIds) || productIds.length === 0) {
+          return [];
+        }
+        lowStockPayload = { productIds };
+      }
       return (await firstValueFrom(
         this.inventoryClient
-          .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_FIND_BY_SKU, sku)
-          .pipe(
-            timeout(10000),
-            catchError((err: unknown) => {
-              throw err;
-            }),
-          ),
+          .send(
+            INVENTORY_MESSAGE_PATTERNS.INVENTORY_GET_LOW_STOCK,
+            lowStockPayload,
+          )
+          .pipe(timeout(10000)),
       )) as unknown;
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
-        `find inventory by SKU: ${sku}`,
+        "get low stock inventory",
         "Inventory Service",
       );
     }
@@ -179,140 +148,6 @@ export class InventoryService {
       MicroserviceErrorHandler.handleError(
         error,
         `update inventory ID: ${id}`,
-        "Inventory Service",
-      );
-    }
-  }
-
-  async remove(
-    id: number,
-    callerId: number,
-    callerRole: string,
-  ): Promise<unknown> {
-    await this.assertInventoryMutationAccess(id, callerId, callerRole);
-    try {
-      return (await firstValueFrom(
-        this.inventoryClient
-          .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_REMOVE, id)
-          .pipe(
-            timeout(10000),
-            catchError((err: unknown) => {
-              throw err;
-            }),
-          ),
-      )) as unknown;
-    } catch (error) {
-      MicroserviceErrorHandler.handleError(
-        error,
-        `remove inventory ID: ${id}`,
-        "Inventory Service",
-      );
-    }
-  }
-
-  async checkStock(
-    productId: number,
-    quantity: number,
-    skuId?: number,
-  ): Promise<unknown> {
-    try {
-      return (await firstValueFrom(
-        this.inventoryClient
-          .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_CHECK_STOCK, {
-            productId,
-            quantity,
-            skuId,
-          })
-          .pipe(
-            timeout(10000),
-            catchError((err: unknown) => {
-              throw err;
-            }),
-          ),
-      )) as unknown;
-    } catch (error) {
-      MicroserviceErrorHandler.handleError(
-        error,
-        `check stock for product ${productId}`,
-        "Inventory Service",
-      );
-    }
-  }
-
-  async reserveStock(
-    productId: number,
-    quantity: number,
-    skuId?: number,
-  ): Promise<unknown> {
-    try {
-      return (await firstValueFrom(
-        this.inventoryClient
-          .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK, {
-            productId,
-            quantity,
-            skuId,
-          })
-          .pipe(
-            timeout(10000),
-            catchError((err: unknown) => {
-              throw err;
-            }),
-          ),
-      )) as unknown;
-    } catch (error) {
-      MicroserviceErrorHandler.handleError(
-        error,
-        `reserve stock for product ${productId}`,
-        "Inventory Service",
-      );
-    }
-  }
-
-  async releaseStock(
-    productId: number,
-    quantity: number,
-    skuId?: number,
-  ): Promise<unknown> {
-    try {
-      return (await firstValueFrom(
-        this.inventoryClient
-          .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK, {
-            productId,
-            quantity,
-            skuId,
-          })
-          .pipe(
-            timeout(10000),
-            catchError((err: unknown) => {
-              throw err;
-            }),
-          ),
-      )) as unknown;
-    } catch (error) {
-      MicroserviceErrorHandler.handleError(
-        error,
-        `release stock for product ${productId}`,
-        "Inventory Service",
-      );
-    }
-  }
-
-  async getLowStock(): Promise<unknown> {
-    try {
-      return (await firstValueFrom(
-        this.inventoryClient
-          .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_GET_LOW_STOCK, {})
-          .pipe(
-            timeout(10000),
-            catchError((err: unknown) => {
-              throw err;
-            }),
-          ),
-      )) as unknown;
-    } catch (error) {
-      MicroserviceErrorHandler.handleError(
-        error,
-        "get low stock items",
         "Inventory Service",
       );
     }

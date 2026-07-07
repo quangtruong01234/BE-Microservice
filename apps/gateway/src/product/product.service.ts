@@ -10,6 +10,7 @@ import {
 } from "libs/constant/message-pattern.constant";
 import { CreateReviewDto } from "./dto/review.dto";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
+import { assertCloudinaryUrlsOwnedBy } from "../common/media/cloudinary-ownership";
 import {
   CreateProductDto,
   UpdateProductDto,
@@ -18,8 +19,8 @@ import {
   ReviewBrandDto,
   CreateCategoryDto,
   ReviewCategoryDto,
+  WishlistQueryDto,
 } from "./dto";
-import { CreateSkuGatewayDto, UpdateSkuGatewayDto } from "./dto/product.dto";
 import { PaginatedResponse } from "@app/common";
 
 export interface ProductWithInventory {
@@ -42,7 +43,6 @@ export interface ProductWithInventory {
   user?: {
     id: number;
     name: string;
-    email?: string;
     avatar?: string;
   };
 
@@ -83,13 +83,7 @@ type UserData = {
   id?: number;
   name?: string;
   username?: string;
-  email?: string;
   avatar?: string;
-};
-
-type SkuOwnershipData = {
-  id: number;
-  productId: number;
 };
 
 @Injectable()
@@ -111,6 +105,9 @@ export class ProductService {
   // ============================================================================
 
   async createProduct(dto: CreateProductDto, userId: number): Promise<unknown> {
+    if (dto.imageUrls?.length) {
+      assertCloudinaryUrlsOwnedBy(dto.imageUrls, userId);
+    }
     try {
       this.logger.log(`Creating product with SKU: ${dto.sku}`);
       const response = (await firstValueFrom(
@@ -348,6 +345,11 @@ export class ProductService {
     callerRole: string,
   ): Promise<unknown> {
     await this.assertProductMutationAccess(id, callerId, callerRole);
+    // Admins may edit another seller's product, whose images belong to that
+    // seller — only enforce media ownership for a non-admin (the owner).
+    if (dto.imageUrls?.length && callerRole !== "admin") {
+      assertCloudinaryUrlsOwnedBy(dto.imageUrls, callerId);
+    }
     try {
       return (await firstValueFrom(
         this.productClient
@@ -464,89 +466,6 @@ export class ProductService {
     }
   }
 
-  async addSku(
-    productId: number,
-    dto: CreateSkuGatewayDto,
-    callerId: number,
-    callerRole: string,
-  ): Promise<unknown> {
-    await this.assertProductMutationAccess(productId, callerId, callerRole);
-    try {
-      return (await firstValueFrom(
-        this.productClient
-          .send(PRODUCT_MESSAGE_PATTERNS.SKU_CREATE, {
-            productId,
-            skuList: [dto],
-          })
-          .pipe(
-            timeout(10000),
-            catchError((err: unknown) => {
-              throw err;
-            }),
-          ),
-      )) as unknown;
-    } catch (error) {
-      MicroserviceErrorHandler.handleError(
-        error,
-        `add SKU to product ID: ${productId}`,
-        "Product Service",
-      );
-    }
-  }
-
-  async updateSku(
-    productId: number,
-    skuId: number,
-    dto: UpdateSkuGatewayDto,
-    callerId: number,
-    callerRole: string,
-  ): Promise<unknown> {
-    await this.assertProductMutationAccess(productId, callerId, callerRole);
-    await this.assertSkuBelongsToProduct(skuId, productId);
-    try {
-      return (await firstValueFrom(
-        this.productClient
-          .send(PRODUCT_MESSAGE_PATTERNS.SKU_UPDATE, { id: skuId, dto })
-          .pipe(
-            timeout(10000),
-            catchError((err: unknown) => {
-              throw err;
-            }),
-          ),
-      )) as unknown;
-    } catch (error) {
-      MicroserviceErrorHandler.handleError(
-        error,
-        `update SKU ID: ${skuId}`,
-        "Product Service",
-      );
-    }
-  }
-
-  async deleteSku(
-    productId: number,
-    skuId: number,
-    callerId: number,
-    callerRole: string,
-  ): Promise<unknown> {
-    await this.assertProductMutationAccess(productId, callerId, callerRole);
-    await this.assertSkuBelongsToProduct(skuId, productId);
-    try {
-      return (await firstValueFrom(
-        this.productClient
-          .send(PRODUCT_MESSAGE_PATTERNS.SKU_DELETE, skuId)
-          .pipe(timeout(10000)),
-        { defaultValue: { success: true } },
-      )) as unknown;
-    } catch (error) {
-      MicroserviceErrorHandler.handleError(
-        error,
-        `delete SKU ID: ${skuId}`,
-        "Product Service",
-      );
-    }
-  }
-
   private async assertProductMutationAccess(
     productId: number,
     callerId: number,
@@ -559,31 +478,6 @@ export class ProductService {
     const product = await this.fetchProductForAccess(productId);
     if (Number(product.userId) !== callerId) {
       throw new ForbiddenException("You cannot modify another user's product");
-    }
-  }
-
-  private async assertSkuBelongsToProduct(
-    skuId: number,
-    productId: number,
-  ): Promise<void> {
-    try {
-      const sku = (await firstValueFrom(
-        this.productClient
-          .send(PRODUCT_MESSAGE_PATTERNS.SKU_FIND_BY_ID, skuId)
-          .pipe(timeout(10000)),
-      )) as SkuOwnershipData;
-      if (Number(sku.productId) !== productId) {
-        throw new ForbiddenException("SKU does not belong to this product");
-      }
-    } catch (error) {
-      if (error instanceof ForbiddenException) {
-        throw error;
-      }
-      MicroserviceErrorHandler.handleError(
-        error,
-        `verify SKU ID: ${skuId}`,
-        "Product Service",
-      );
     }
   }
 
@@ -920,20 +814,22 @@ export class ProductService {
         return [];
       }
 
-      // Fetch products and inventory data in parallel. Inventory is optional
-      // context — if the inventory service is unavailable we degrade to
-      // `inventory: null` instead of failing the whole request with a raw 500.
+      // Fetch products (one batched call — PERF-02: was N per-id sends) and
+      // inventory data in parallel. Inventory is optional context — if the
+      // inventory service is unavailable we degrade to `inventory: null`
+      // instead of failing the whole request with a raw 500. Missing product
+      // ids are skipped by the batch handler (treated as deleted).
       const [products, inventoryItems] = (await Promise.all([
-        Promise.all(
-          productIds.map((id) =>
-            this.getProductById(id).catch((err: unknown) => {
-              this.logger.warn(
-                `Product service error for ID ${id}: ${err instanceof Error ? err.message : String(err)}`,
-              );
-              return null;
-            }),
-          ),
-        ),
+        firstValueFrom(
+          this.productClient
+            .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_IDS, productIds)
+            .pipe(timeout(10000)),
+        ).catch((err: unknown) => {
+          this.logger.warn(
+            `Product service error for IDs [${productIds.join(", ")}]: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return [] as ProductData[];
+        }),
         firstValueFrom(
           this.inventoryClient
             .send(
@@ -955,7 +851,9 @@ export class ProductService {
       if (typedInventoryItems && Array.isArray(typedInventoryItems)) {
         typedInventoryItems.forEach((item) => {
           if (item.productId !== undefined) {
-            inventoryMap.set(item.productId, {
+            // PG bigint serializes productId as a string — normalize the key
+            // to number so it matches the Number(product.id) lookup below.
+            inventoryMap.set(Number(item.productId), {
               ...item,
               totalStock:
                 (item.availableStock ?? 0) + (item.reservedStock ?? 0),
@@ -966,17 +864,23 @@ export class ProductService {
         });
       }
 
-      // Enrich products with user information
-      const validProducts = products.filter((p) => p !== null) as ProductData[];
+      // Enrich products with user information (single pass — PERF-02: was
+      // double-enriched via getProductById + a second whole-list pass), then
+      // expose a flat categoryIds[] (P1-04) to match the per-id read shape.
+      const validProducts = (
+        Array.isArray(products) ? products.filter((p) => p !== null) : []
+      ) as ProductData[];
       const enrichedProducts =
         await this.enrichProductsWithUserInfo(validProducts);
 
       // Combine products with their inventory data
       const results = enrichedProducts.map((product) => ({
-        ...(product as unknown as ProductWithInventory),
+        ...(this.attachCategoryIds(
+          product as object,
+        ) as unknown as ProductWithInventory),
         inventory:
           (inventoryMap.get(
-            product.id as number,
+            Number(product.id),
           ) as unknown as ProductWithInventory["inventory"]) ?? null,
       })) as ProductWithInventory[];
 
@@ -1068,6 +972,73 @@ export class ProductService {
         error,
       );
       throw error;
+    }
+  }
+
+  async addWishlistItem(productId: number, userId: number): Promise<unknown> {
+    try {
+      return (await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.WISHLIST_ADD, { productId, userId })
+          .pipe(timeout(10000)),
+      )) as unknown;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        `add wishlist product ID: ${productId}`,
+        "Product Service",
+      );
+    }
+  }
+
+  async removeWishlistItem(productId: number, userId: number): Promise<void> {
+    try {
+      await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.WISHLIST_REMOVE, { productId, userId })
+          .pipe(timeout(10000)),
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        `remove wishlist product ID: ${productId}`,
+        "Product Service",
+      );
+    }
+  }
+
+  async getWishlist(userId: number, query: WishlistQueryDto): Promise<unknown> {
+    try {
+      const response = (await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.WISHLIST_LIST, {
+            userId,
+            page: query.page ?? 1,
+            limit: query.limit ?? 20,
+          })
+          .pipe(timeout(10000)),
+      )) as unknown;
+      const withCategoryIds = this.withCategoryIds(response);
+
+      if (
+        withCategoryIds &&
+        typeof withCategoryIds === "object" &&
+        Array.isArray((withCategoryIds as { data?: unknown }).data)
+      ) {
+        const envelope = withCategoryIds as { data: ProductData[] };
+        return {
+          ...withCategoryIds,
+          data: await this.enrichProductsWithUserInfo(envelope.data),
+        };
+      }
+
+      return withCategoryIds;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        `get wishlist for user ID: ${userId}`,
+        "Product Service",
+      );
     }
   }
 
@@ -1186,7 +1157,9 @@ export class ProductService {
             }),
           ),
       )) as UserData | null;
-      this.logger.debug(`Single user response for userId ${userId}:`, user);
+      this.logger.debug(
+        `Single user response for userId ${userId}: ${user ? "found" : "not found"}`,
+      );
 
       return {
         ...product,
@@ -1194,7 +1167,6 @@ export class ProductService {
           ? {
               id: user.id,
               name: user.username,
-              email: user.email,
               avatar: user.avatar,
             }
           : null,
@@ -1231,48 +1203,32 @@ export class ProductService {
         return products;
       }
 
-      // Fetch user information for all unique user IDs
+      // Fetch all unique users in one batched TCP call (PERF-01: was N per-user sends)
       this.logger.debug(
         `Fetching user info for userIds: ${JSON.stringify(userIds)}`,
       );
-      const users = await Promise.all(
-        userIds.map(async (userId) => {
-          try {
-            this.logger.debug(`Calling User service for userId: ${userId}`);
-            const user = (await firstValueFrom(
-              this.userClient
-                .send({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, userId)
-                .pipe(
-                  timeout(5000),
-                  catchError((err: unknown) => {
-                    this.logger.warn(
-                      `Failed to fetch user info for userId: ${userId}`,
-                      err instanceof Error ? err.message : String(err),
-                    );
-                    return of(null);
-                  }),
-                ),
-            )) as UserData | null;
-            this.logger.debug(
-              `User service response for userId ${userId}:`,
-              user,
-            );
-            return { userId, user };
-          } catch (error) {
-            this.logger.error(`Error fetching user ${userId}:`, error);
-            return { userId, user: null as UserData | null };
-          }
-        }),
-      );
+      const users = (await firstValueFrom(
+        this.userClient
+          .send({ cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS }, userIds)
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              this.logger.warn(
+                `Failed to fetch users by ids: ${JSON.stringify(userIds)}`,
+                err instanceof Error ? err.message : String(err),
+              );
+              return of([] as UserData[]);
+            }),
+          ),
+      )) as UserData[];
 
       // Create user map for quick lookup
       const userMap = new Map<number, UserData>();
-      users.forEach(({ userId, user }) => {
-        if (user) {
-          userMap.set(userId, {
+      users.forEach((user) => {
+        if (user && typeof user.id === "number") {
+          userMap.set(user.id, {
             id: user.id,
             name: user.name,
-            email: user.email,
             avatar: user.avatar,
           });
         }

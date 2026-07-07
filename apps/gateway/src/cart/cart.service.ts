@@ -128,11 +128,19 @@ export class CartGatewayService {
     }
   }
 
-  async updateItem(cartItemId: number, quantity: number): Promise<void> {
+  async updateItem(
+    userId: number,
+    cartItemId: number,
+    quantity: number,
+  ): Promise<void> {
     try {
       await firstValueFrom(
         this.ordersClient
-          .send(CART_MESSAGE_PATTERN.CART_UPDATE_ITEM, { cartItemId, quantity })
+          .send(CART_MESSAGE_PATTERN.CART_UPDATE_ITEM, {
+            userId,
+            cartItemId,
+            quantity,
+          })
           .pipe(
             timeout(10000),
             catchError((err: unknown) => {
@@ -149,11 +157,11 @@ export class CartGatewayService {
     }
   }
 
-  async removeItem(cartItemId: number): Promise<void> {
+  async removeItem(userId: number, cartItemId: number): Promise<void> {
     try {
       await firstValueFrom(
         this.ordersClient
-          .send(CART_MESSAGE_PATTERN.CART_REMOVE_ITEM, { cartItemId })
+          .send(CART_MESSAGE_PATTERN.CART_REMOVE_ITEM, { userId, cartItemId })
           .pipe(
             timeout(10000),
             catchError((err: unknown) => {

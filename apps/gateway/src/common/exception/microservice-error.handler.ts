@@ -25,9 +25,7 @@ export class MicroserviceErrorHandler {
     }
 
     const errorSummary =
-      error instanceof Error
-        ? `${error.constructor.name}: ${error.message}`
-        : JSON.stringify(error);
+      error instanceof Error ? error.constructor.name : typeof error;
     this.logger.error(`${serviceName} ${operation} failed: ${errorSummary}`);
 
     const err = error as ErrorLike;
@@ -45,9 +43,7 @@ export class MicroserviceErrorHandler {
     const statusCode = this.extractStatusCode(rpcError);
     const message = this.extractErrorMessage(rpcError);
 
-    this.logger.debug(
-      `Throwing HttpException with status: ${statusCode}, message: ${message}`,
-    );
+    this.logger.debug(`Throwing HttpException with status: ${statusCode}`);
     throw new HttpException(message, statusCode);
   }
 

@@ -44,9 +44,13 @@ export class GetProductsQueryDto {
     type: [Number],
   })
   @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    value === undefined || value === null
+      ? value
+      : (Array.isArray(value) ? value : [value]).map(Number),
+  )
   @IsArray()
   @IsNumber({}, { each: true })
-  @Type(() => Number)
   categoryIds?: number[];
 
   @ApiPropertyOptional({
@@ -55,9 +59,13 @@ export class GetProductsQueryDto {
     type: [Number],
   })
   @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    value === undefined || value === null
+      ? value
+      : (Array.isArray(value) ? value : [value]).map(Number),
+  )
   @IsArray()
   @IsNumber({}, { each: true })
-  @Type(() => Number)
   brandIds?: number[];
 
   @ApiPropertyOptional({

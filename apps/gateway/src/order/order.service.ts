@@ -24,6 +24,7 @@ import { CreateVoucherDto, ValidateVoucherDto } from "./dto/voucher.dto";
 import { SellerOrdersQueryDto } from "./dto/seller-orders-query.dto";
 import { ShippingFeeDto } from "./dto/shipping-fee.dto";
 import { AdminGhnOrdersQueryDto } from "./dto/admin-ghn-orders-query.dto";
+import { AnalyticsQueryDto } from "./dto/analytics-query.dto";
 
 interface OrderResponse {
   id: number;
@@ -247,6 +248,32 @@ export class OrderService {
   private async enrichOrderItems(
     items: CreateOrderDto["items"],
   ): Promise<EnrichedOrderItem[]> {
+    // Dedupe product fetches: repeated productIds across items share one
+    // in-flight request instead of re-fetching per line (PERF-08).
+    const productPromiseById = new Map<number, Promise<ProductPriceResponse>>();
+    const fetchProduct = (productId: number): Promise<ProductPriceResponse> => {
+      const inFlight = productPromiseById.get(productId);
+      if (inFlight) {
+        return inFlight;
+      }
+      const pending = firstValueFrom(
+        this.productClient
+          .send<ProductPriceResponse>(
+            PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_ID,
+            productId,
+          )
+          .pipe(timeout(10000)),
+      ).catch((err: unknown) =>
+        MicroserviceErrorHandler.handleError(
+          err,
+          `fetch product ${productId}`,
+          "Product Service",
+        ),
+      );
+      productPromiseById.set(productId, pending);
+      return pending;
+    };
+
     return Promise.all(
       items.map(async (item) => {
         let price: number;
@@ -259,7 +286,7 @@ export class OrderService {
         let skuLabel: string | null = null;
 
         if (item.skuId) {
-          const sku = await firstValueFrom(
+          const skuPromise = firstValueFrom(
             this.productClient
               .send<SkuPriceResponse>(
                 PRODUCT_MESSAGE_PATTERNS.SKU_FIND_BY_ID,
@@ -273,6 +300,12 @@ export class OrderService {
               "Product Service",
             ),
           );
+          // The product lookup only depends on item.productId (known upfront),
+          // not on the SKU response — fetch both in parallel (PERF-08).
+          const [sku, product] = await Promise.all([
+            skuPromise,
+            fetchProduct(item.productId),
+          ]);
           if (!sku.isActive) {
             throw new BadRequestException(`SKU ${item.skuId} is not available`);
           }
@@ -289,21 +322,6 @@ export class OrderService {
           price = Number(sku.price);
           tierIdx = Array.isArray(sku.tierIdx) ? sku.tierIdx : undefined;
 
-          // Fetch product to get sellerId (sku response has productId but not userId)
-          const product = await firstValueFrom(
-            this.productClient
-              .send<ProductPriceResponse>(
-                PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_ID,
-                item.productId,
-              )
-              .pipe(timeout(10000)),
-          ).catch((err: unknown) =>
-            MicroserviceErrorHandler.handleError(
-              err,
-              `fetch product ${item.productId}`,
-              "Product Service",
-            ),
-          );
           sellerId = Number(product.userId);
           productImage = product.imageUrls?.[0] ?? null;
           skuLabel = tierIdx
@@ -313,20 +331,7 @@ export class OrderService {
               )
             : null;
         } else {
-          const product = await firstValueFrom(
-            this.productClient
-              .send<ProductPriceResponse>(
-                PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_ID,
-                item.productId,
-              )
-              .pipe(timeout(10000)),
-          ).catch((err: unknown) =>
-            MicroserviceErrorHandler.handleError(
-              err,
-              `fetch product ${item.productId}`,
-              "Product Service",
-            ),
-          );
+          const product = await fetchProduct(item.productId);
           if (!product.isActive) {
             throw new BadRequestException(
               `Product ${item.productId} is not available`,
@@ -834,7 +839,10 @@ export class OrderService {
       try {
         buyers = (await firstValueFrom(
           this.userClient
-            .send({ cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS }, userIds)
+            .send(
+              { cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS },
+              { userIds, includeEmail: true },
+            )
             .pipe(
               timeout(10000),
               catchError((err: unknown) => {
@@ -1145,7 +1153,10 @@ export class OrderService {
     try {
       const users = (await firstValueFrom(
         this.userClient
-          .send({ cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS }, uniqueIds)
+          .send(
+            { cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS },
+            { userIds: uniqueIds, includeEmail: true },
+          )
           .pipe(
             timeout(10000),
             catchError((err: unknown) => {
@@ -1189,6 +1200,44 @@ export class OrderService {
         "get seller orders",
         "Orders Service",
       );
+    }
+  }
+
+  async getSellerAnalytics(
+    sellerId: number,
+    query: AnalyticsQueryDto,
+  ): Promise<unknown> {
+    return this.fetchAnalytics(sellerId, query, "get seller analytics");
+  }
+
+  async getShippingAnalytics(query: AnalyticsQueryDto): Promise<unknown> {
+    return this.fetchAnalytics(null, query, "get shipping analytics");
+  }
+
+  private async fetchAnalytics(
+    sellerId: number | null,
+    query: AnalyticsQueryDto,
+    operation: string,
+  ): Promise<unknown> {
+    try {
+      return await firstValueFrom(
+        this.ordersClient
+          .send(ORDER_MESSAGE_PATTERN.ANALYTICS, {
+            sellerId,
+            from: query.from,
+            to: query.to,
+            interval: query.interval,
+            topN: query.topN,
+          })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(error, operation, "Orders Service");
     }
   }
 
@@ -1302,33 +1351,39 @@ export class OrderService {
   }
 
   /**
-   * Fetch product detail (image + variations) for a set of product ids in
-   * parallel, de-duplicated. Failures are logged and skipped so a single
-   * missing product never fails the whole order response.
+   * Fetch product detail (image + variations) for a set of product ids in one
+   * batched TCP call, de-duplicated (PERF-07: was N per-id sends). Missing ids
+   * are skipped by the batch handler and a batch failure degrades to an empty
+   * map, so a missing product never fails the whole order response.
    */
   private async buildProductMap(
     productIds: number[],
   ): Promise<Map<number, ProductDetailResponse>> {
     const productMap = new Map<number, ProductDetailResponse>();
-    await Promise.all(
-      [...new Set(productIds)].map(async (pid) => {
-        try {
-          const product = await firstValueFrom(
-            this.productClient
-              .send<ProductDetailResponse>(
-                PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_ID,
-                pid,
-              )
-              .pipe(timeout(10000)),
-          );
-          if (product) {
-            productMap.set(pid, product);
+    const uniqueProductIds = [...new Set(productIds)];
+    if (uniqueProductIds.length === 0) {
+      return productMap;
+    }
+    try {
+      const products = await firstValueFrom(
+        this.productClient
+          .send<
+            ProductDetailResponse[]
+          >(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_IDS, uniqueProductIds)
+          .pipe(timeout(10000)),
+      );
+      if (Array.isArray(products)) {
+        products.forEach((product) => {
+          if (product && product.id !== undefined) {
+            productMap.set(Number(product.id), product);
           }
-        } catch (err) {
-          this.logger.warn(`Failed to enrich product ${pid}: ${String(err)}`);
-        }
-      }),
-    );
+        });
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Failed to enrich products [${uniqueProductIds.join(", ")}]: ${String(err)}`,
+      );
+    }
     return productMap;
   }
 

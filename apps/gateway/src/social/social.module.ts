@@ -6,6 +6,7 @@ import {
   TCP_HOST,
 } from "libs/constant/port-tcp.constant";
 import { SocialController } from "./social.controller";
+import { SocialAdminController } from "./social-admin.controller";
 import { SocialCommentController } from "./social-comment.controller";
 import { SocialFollowController } from "./social-follow.controller";
 import { SocialGatewayService } from "./social.service";
@@ -34,6 +35,7 @@ import { OptionalJwtAuthGuard } from "../common/guards/optional-jwt-auth.guard";
   ],
   controllers: [
     SocialController,
+    SocialAdminController,
     SocialCommentController,
     SocialFollowController,
   ],

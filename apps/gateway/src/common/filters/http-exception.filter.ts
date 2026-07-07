@@ -7,12 +7,13 @@ import {
   Logger,
 } from "@nestjs/common";
 import { Request, Response } from "express";
+import { isProduction } from "../security";
 
 @Catch() // Catch all exceptions, not just HttpException
 export class HttpExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(HttpExceptionFilter.name);
 
-  catch(exception: unknown, host: ArgumentsHost) {
+  catch(exception: unknown, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
@@ -69,7 +70,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
       error = errorObj.error ?? "MicroserviceError";
 
       this.logger.error(
-        `Microservice error: Status=${status}, Message=${Array.isArray(message) ? message.join(", ") : message}`,
+        `Microservice error: Status=${status}`,
         undefined,
         `${request.method} ${request.url}`,
       );
@@ -82,9 +83,17 @@ export class HttpExceptionFilter implements ExceptionFilter {
 
     // Log raw exception — warn for 4xx (expected), error for 5xx (unexpected)
     if (status >= 500) {
+      const exceptionType =
+        exception instanceof Error
+          ? exception.constructor.name
+          : typeof exception;
       this.logger.error(
-        `Raw exception caught: ${JSON.stringify(exception)}`,
-        exception instanceof Error ? exception.stack : undefined,
+        `Unexpected exception caught: ${exceptionType}`,
+        isProduction()
+          ? undefined
+          : exception instanceof Error
+            ? exception.stack
+            : undefined,
         `${request.method} ${request.url}`,
       );
     }
@@ -95,6 +104,14 @@ export class HttpExceptionFilter implements ExceptionFilter {
         `Invalid status code detected: ${status}, using 500 instead`,
       );
       status = HttpStatus.INTERNAL_SERVER_ERROR;
+    }
+
+    if (isProduction() && status >= 500) {
+      message = "Internal server error";
+      error = "InternalServerError";
+    } else if (isProduction() && status === 401) {
+      message = "Unauthorized";
+      error = "Unauthorized";
     }
 
     // Format and send the error response
@@ -125,9 +142,13 @@ export class HttpExceptionFilter implements ExceptionFilter {
 
     try {
       response.status(status).json(errorResponse);
-    } catch (responseError) {
+    } catch (responseError: unknown) {
+      const responseErrorMessage =
+        responseError instanceof Error
+          ? responseError.message
+          : "Unknown response error";
       this.logger.error(
-        `Failed to send error response: ${responseError}`,
+        `Failed to send error response: ${responseErrorMessage}`,
         undefined,
         `${request.method} ${request.url}`,
       );

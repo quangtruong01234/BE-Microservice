@@ -52,38 +52,63 @@ describe("ProductService ownership", () => {
     expect(productClient.send).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects adding a SKU to another user's product", async () => {
-    productClient.send.mockReturnValue(of({ id: 16, userId: 20 }));
-
-    await expect(
-      service.addSku(16, { tierIdx: "[0]", price: 100 }, 18, "user"),
-    ).rejects.toBeInstanceOf(ForbiddenException);
-    expect(productClient.send).toHaveBeenCalledTimes(1);
-  });
-
-  it("rejects a SKU ID that belongs to another product", async () => {
-    productClient.send
-      .mockReturnValueOnce(of({ id: 16, userId: 18 }))
-      .mockReturnValueOnce(of({ id: 5, productId: 17 }));
-
-    await expect(
-      service.updateSku(16, 5, {}, 18, "user"),
-    ).rejects.toBeInstanceOf(ForbiddenException);
-    expect(productClient.send).toHaveBeenCalledTimes(2);
-  });
-
-  it("allows an owner to delete a SKU from their product", async () => {
-    productClient.send
-      .mockReturnValueOnce(of({ id: 16, userId: 18 }))
-      .mockReturnValueOnce(of({ id: 5, productId: 16 }))
-      .mockReturnValueOnce(of({ success: true }));
-
-    await expect(service.deleteSku(16, 5, 18, "user")).resolves.toEqual({
-      success: true,
-    });
-    expect(productClient.send).toHaveBeenLastCalledWith(
-      PRODUCT_MESSAGE_PATTERNS.SKU_DELETE,
-      5,
+  it("omits email from single-product seller enrichment", async () => {
+    productClient.send.mockReturnValue(
+      of({ id: 16, userId: 20, categories: [] }),
     );
+    userClient.send.mockReturnValue(
+      of({
+        id: 20,
+        username: "seller20",
+        name: "Seller 20",
+        avatar: "avatar.jpg",
+        email: "seller20@example.test",
+      }),
+    );
+
+    const product = (await service.getProductById(16)) as {
+      user: Record<string, unknown> | null;
+    };
+
+    expect(product.user).toEqual({
+      id: 20,
+      name: "seller20",
+      avatar: "avatar.jpg",
+    });
+    expect(product.user).not.toHaveProperty("email");
+  });
+
+  it("omits email from batched product seller enrichment", async () => {
+    productClient.send.mockReturnValue(
+      of({
+        items: [{ id: 16, userId: 20, categories: [] }],
+        total: 1,
+      }),
+    );
+    userClient.send.mockReturnValue(
+      of([
+        {
+          id: 20,
+          username: "seller20",
+          name: "Seller 20",
+          avatar: "avatar.jpg",
+          email: "seller20@example.test",
+        },
+      ]),
+    );
+
+    const products = (await service.getAllProducts({
+      page: 1,
+      limit: 5,
+    })) as Array<{
+      user: Record<string, unknown> | null;
+    }>;
+
+    expect(products[0].user).toEqual({
+      id: 20,
+      name: "Seller 20",
+      avatar: "avatar.jpg",
+    });
+    expect(products[0].user).not.toHaveProperty("email");
   });
 });

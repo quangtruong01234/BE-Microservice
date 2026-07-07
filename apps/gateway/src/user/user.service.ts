@@ -5,10 +5,15 @@ import {
   LoginUserDto,
   UpdateUserGatewayDto,
 } from "./dto/user.dto";
+import {
+  CreateUserAddressDto,
+  UpdateUserAddressDto,
+} from "./dto/user-address.dto";
 import { firstValueFrom, timeout, catchError } from "rxjs";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { USER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
+import { assertCloudinaryUrlsOwnedBy } from "../common/media/cloudinary-ownership";
 import { JwtService } from "@nestjs/jwt";
 
 type RoleGrant = {
@@ -118,27 +123,6 @@ export class UserService {
     }
   }
 
-  async getAllUsers(): Promise<unknown> {
-    try {
-      return (await firstValueFrom(
-        this.userClient
-          .send({ cmd: USER_MESSAGE_PATTERN.GET_ALL_USERS }, {})
-          .pipe(
-            timeout(10000),
-            catchError((err: unknown) => {
-              throw err;
-            }),
-          ),
-      )) as unknown;
-    } catch (error) {
-      MicroserviceErrorHandler.handleError(
-        error,
-        "get all users",
-        "User Service",
-      );
-    }
-  }
-
   async getUsersPaginated(page: number, limit: number): Promise<unknown> {
     try {
       return (await firstValueFrom(
@@ -158,6 +142,27 @@ export class UserService {
       MicroserviceErrorHandler.handleError(
         error,
         "get users paginated",
+        "User Service",
+      );
+    }
+  }
+
+  async getFeaturedSellers(limit: number): Promise<unknown> {
+    try {
+      return (await firstValueFrom(
+        this.userClient
+          .send({ cmd: USER_MESSAGE_PATTERN.GET_FEATURED_SELLERS }, { limit })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      )) as unknown;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "get featured sellers",
         "User Service",
       );
     }
@@ -188,6 +193,9 @@ export class UserService {
     if (requesterId !== targetId) {
       throw new ForbiddenException("Cannot update another user");
     }
+    if (dto.avatar) {
+      assertCloudinaryUrlsOwnedBy([dto.avatar], requesterId);
+    }
     try {
       return (await firstValueFrom(
         this.userClient
@@ -206,6 +214,127 @@ export class UserService {
       MicroserviceErrorHandler.handleError(
         error,
         `update user ${targetId}`,
+        "User Service",
+      );
+    }
+  }
+
+  async listAddresses(userId: number): Promise<unknown> {
+    try {
+      return (await firstValueFrom(
+        this.userClient
+          .send({ cmd: USER_MESSAGE_PATTERN.ADDRESS_LIST }, { userId })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      )) as unknown;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "list addresses",
+        "User Service",
+      );
+    }
+  }
+
+  async createAddress(
+    userId: number,
+    dto: CreateUserAddressDto,
+  ): Promise<unknown> {
+    try {
+      return (await firstValueFrom(
+        this.userClient
+          .send({ cmd: USER_MESSAGE_PATTERN.ADDRESS_CREATE }, { userId, dto })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      )) as unknown;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "create address",
+        "User Service",
+      );
+    }
+  }
+
+  async updateAddress(
+    userId: number,
+    addressId: number,
+    dto: UpdateUserAddressDto,
+  ): Promise<unknown> {
+    try {
+      return (await firstValueFrom(
+        this.userClient
+          .send(
+            { cmd: USER_MESSAGE_PATTERN.ADDRESS_UPDATE },
+            { userId, addressId, dto },
+          )
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      )) as unknown;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        `update address ${addressId}`,
+        "User Service",
+      );
+    }
+  }
+
+  async deleteAddress(userId: number, addressId: number): Promise<unknown> {
+    try {
+      return (await firstValueFrom(
+        this.userClient
+          .send(
+            { cmd: USER_MESSAGE_PATTERN.ADDRESS_DELETE },
+            { userId, addressId },
+          )
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      )) as unknown;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        `delete address ${addressId}`,
+        "User Service",
+      );
+    }
+  }
+
+  async setDefaultAddress(userId: number, addressId: number): Promise<unknown> {
+    try {
+      return (await firstValueFrom(
+        this.userClient
+          .send(
+            { cmd: USER_MESSAGE_PATTERN.ADDRESS_SET_DEFAULT },
+            { userId, addressId },
+          )
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      )) as unknown;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        `set default address ${addressId}`,
         "User Service",
       );
     }

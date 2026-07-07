@@ -1,7 +1,6 @@
 import { ForbiddenException } from "@nestjs/common";
 import { ClientProxy } from "@nestjs/microservices";
 import { of } from "rxjs";
-import { INVENTORY_MESSAGE_PATTERNS } from "libs/constant/message-pattern-inventory.constant";
 import { InventoryService } from "./inventory.service";
 
 describe("InventoryService ownership", () => {
@@ -71,27 +70,5 @@ describe("InventoryService ownership", () => {
       ),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(inventoryClient.send).not.toHaveBeenCalled();
-  });
-
-  it("allows an admin to remove inventory", async () => {
-    inventoryClient.send.mockReturnValue(of({ success: true }));
-
-    await expect(service.remove(8, 21, "admin")).resolves.toEqual({
-      success: true,
-    });
-    expect(inventoryClient.send).toHaveBeenCalledWith(
-      INVENTORY_MESSAGE_PATTERNS.INVENTORY_REMOVE,
-      8,
-    );
-  });
-
-  it("forwards skuId for stock operations", async () => {
-    inventoryClient.send.mockReturnValue(of(true));
-
-    await expect(service.reserveStock(16, 2, 5)).resolves.toBe(true);
-    expect(inventoryClient.send).toHaveBeenCalledWith(
-      INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK,
-      { productId: 16, quantity: 2, skuId: 5 },
-    );
   });
 });

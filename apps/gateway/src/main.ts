@@ -6,12 +6,37 @@ import * as cookieParser from "cookie-parser";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import { HttpExceptionFilter } from "./common/filters/http-exception.filter";
 import { ResponseInterceptor } from "./common/interceptor/response.interceptor";
-import { RequestMethod, ValidationPipe } from "@nestjs/common";
+import {
+  BadRequestException,
+  Logger,
+  RequestMethod,
+  ValidationPipe,
+} from "@nestjs/common";
 import { EXCHANGE } from "@app/common/constants/exchange";
 import { QUEUES } from "@app/common/constants/queues";
 import { gatewayCorsOptions } from "./common/cors";
+import { ValidationError } from "class-validator";
+import { json, urlencoded } from "express";
+import {
+  isSwaggerEnabled,
+  resolveBodyLimit,
+  securityHeadersMiddleware,
+} from "./common/security";
+
+function collectValidationMessages(errors: ValidationError[]): string[] {
+  const messages = errors.flatMap((error) => {
+    const constraintMessages = Object.values(error.constraints ?? {});
+    const childMessages = error.children?.length
+      ? collectValidationMessages(error.children)
+      : [];
+    return [...constraintMessages, ...childMessages];
+  });
+
+  return messages.length > 0 ? messages : ["Validation failed"];
+}
 
 async function bootstrap() {
+  const logger = new Logger("GatewayBootstrap");
   dotenv.config({ path: "./local/nodeA/.env" });
   // Fail fast: the gateway is the only JWT-signing/verifying service, so an
   // undefined JWT_SECRET must abort startup rather than silently boot and only
@@ -21,18 +46,37 @@ async function bootstrap() {
       "JWT_SECRET is not set — refusing to start the gateway with an undefined JWT secret.",
     );
   }
-  const app = await NestFactory.create(GatewayModule);
+  const app = await NestFactory.create(GatewayModule, { bodyParser: false });
+  app.enableShutdownHooks();
   const expressApp = app
     .getHttpAdapter()
     .getInstance() as import("express").Application;
   expressApp.set("trust proxy", 1);
+  app.use(securityHeadersMiddleware());
+  app.use(json({ limit: resolveBodyLimit("JSON_BODY_LIMIT", "1mb") }));
+  app.use(
+    urlencoded({
+      extended: true,
+      limit: resolveBodyLimit("URLENCODED_BODY_LIMIT", "1mb"),
+    }),
+  );
   app.use(
     (cookieParser as unknown as () => import("express").RequestHandler)(),
   );
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
+      forbidNonWhitelisted: true,
       transform: true,
+      validationError: {
+        target: false,
+        value: false,
+      },
+      exceptionFactory: (errors: ValidationError[]) =>
+        new BadRequestException({
+          message: collectValidationMessages(errors),
+          error: "Bad Request",
+        }),
     }),
   );
   app.useGlobalFilters(new HttpExceptionFilter());
@@ -45,20 +89,30 @@ async function bootstrap() {
     exclude: [
       { path: "ghn/webhook", method: RequestMethod.POST },
       { path: "api/ghn/webhook", method: RequestMethod.POST },
+      { path: "zalopay/callback", method: RequestMethod.POST },
+      { path: "vnpay/callback", method: RequestMethod.POST },
+      { path: "vnpay/callback", method: RequestMethod.GET },
+      { path: "live", method: RequestMethod.GET },
+      { path: "ready", method: RequestMethod.GET },
+      { path: "health", method: RequestMethod.GET },
     ],
   });
-  const config = new DocumentBuilder()
-    .setTitle("Ecommerce API")
-    .setDescription("API docs")
-    .setVersion("1.0")
-    .addBearerAuth({
-      type: "http",
-      scheme: "bearer",
-      bearerFormat: "JWT",
-    })
-    .build();
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup("doc", app, document);
+  if (isSwaggerEnabled()) {
+    const config = new DocumentBuilder()
+      .setTitle("Ecommerce API")
+      .setDescription("API docs")
+      .setVersion("1.0")
+      .addBearerAuth({
+        type: "http",
+        scheme: "bearer",
+        bearerFormat: "JWT",
+      })
+      .build();
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup("doc", app, document);
+  } else {
+    logger.log("Swagger UI is disabled for this environment.");
+  }
 
   // RabbitMQ consumer: receive notification push events from notification service
   if (process.env.RABBITMQ_HOST) {
@@ -81,6 +135,6 @@ async function bootstrap() {
 
   const port = process.env.GATEWAY_PORT || 3000;
   await app.listen(port);
-  console.log(`Gateway listening on http://localhost:${port}`);
+  logger.log(`Gateway listening on http://localhost:${port}`);
 }
 void bootstrap();

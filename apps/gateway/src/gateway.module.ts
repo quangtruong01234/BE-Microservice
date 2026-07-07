@@ -12,6 +12,8 @@ import { SocialGatewayModule } from "./social/social.module";
 import { ChatGatewayModule } from "./chat/chat.module";
 import { UploadModule } from "./upload/upload.module";
 import { CartModule } from "./cart/cart.module";
+import { ShippingModule } from "./shipping/shipping.module";
+import { PaymentCallbackModule } from "./payment-callback/payment-callback.module";
 import { CachedModule } from "@app/cached";
 import {
   NAME_SERVICE_TCP,
@@ -23,6 +25,7 @@ import { CustomRateLimitGuard } from "./common/guards/rate-limit.guard";
 import { JwtModule } from "@nestjs/jwt";
 import { JwtAuthGuard } from "./common/guards/jwt-auth.guard";
 import { RoleAuthGuard } from "./common/guards/role-auth.guard";
+import { HealthModule } from "./health/health.module";
 
 @Module({
   imports: [
@@ -113,6 +116,9 @@ import { RoleAuthGuard } from "./common/guards/role-auth.guard";
     ChatGatewayModule,
     UploadModule,
     CartModule,
+    ShippingModule,
+    PaymentCallbackModule,
+    HealthModule,
   ],
   controllers: [GatewayController],
   providers: [

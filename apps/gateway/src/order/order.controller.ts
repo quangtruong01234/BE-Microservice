@@ -28,6 +28,7 @@ import { ShippingFeeDto } from "./dto/shipping-fee.dto";
 import { GetOrdersByUserQueryDto } from "./dto/get-orders-query.dto";
 import { SellerOrdersQueryDto } from "./dto/seller-orders-query.dto";
 import { AdminGhnOrdersQueryDto } from "./dto/admin-ghn-orders-query.dto";
+import { AnalyticsQueryDto } from "./dto/analytics-query.dto";
 import {
   SetGhnDemoStatusDto,
   UpdateGhnCodDto,
@@ -408,6 +409,44 @@ export class OrderController {
   ): Promise<unknown> {
     const sellerId = req.user?.id ?? 0;
     return this.orderService.getSellerOrders(sellerId, query);
+  }
+
+  @Get("seller/analytics")
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({
+    summary: "Analytics dashboard for the logged-in seller",
+    description:
+      "Revenue over time, order status distribution, and top products " +
+      "scoped to the seller's own orders. Defaults to the last 30 days.",
+  })
+  @ApiResponse({ status: 200, description: "Seller analytics aggregates." })
+  @ApiResponse({ status: 400, description: "Invalid date range." })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  async getSellerAnalytics(
+    @Query(ValidationPipe) query: AnalyticsQueryDto,
+    @Req() req: Request,
+  ): Promise<unknown> {
+    const sellerId = req.user?.id ?? 0;
+    return this.orderService.getSellerAnalytics(sellerId, query);
+  }
+
+  @Get("admin/analytics")
+  @UseGuards(JwtAuthGuard)
+  @CheckPermission("shipping", "read:any")
+  @ApiOperation({
+    summary: "Global analytics dashboard (admin / shipping console)",
+    description:
+      "Revenue over time, order status distribution, and top products " +
+      "across all sellers. Defaults to the last 30 days.",
+  })
+  @ApiResponse({ status: 200, description: "Global analytics aggregates." })
+  @ApiResponse({ status: 400, description: "Invalid date range." })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  @ApiResponse({ status: 403, description: "Forbidden." })
+  async getShippingAnalytics(
+    @Query(ValidationPipe) query: AnalyticsQueryDto,
+  ): Promise<unknown> {
+    return this.orderService.getShippingAnalytics(query);
   }
 
   @Get("seller/:id")

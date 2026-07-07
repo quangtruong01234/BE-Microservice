@@ -6,6 +6,7 @@ import {
 } from "@nestjs/common";
 import { Response } from "express";
 import { map, Observable } from "rxjs";
+import { SKIP_RESPONSE_WRAP_KEY } from "../decorators/skip-response-wrap.decorator";
 
 export interface StandardResponse<T> {
   statusCode: number;
@@ -23,6 +24,14 @@ export class ResponseInterceptor<T> implements NestInterceptor<
     context: ExecutionContext,
     next: CallHandler,
   ): Observable<StandardResponse<T>> {
+    const shouldSkipWrap =
+      Reflect.getMetadata(SKIP_RESPONSE_WRAP_KEY, context.getHandler()) ===
+        true ||
+      Reflect.getMetadata(SKIP_RESPONSE_WRAP_KEY, context.getClass()) === true;
+    if (shouldSkipWrap) {
+      return next.handle() as Observable<StandardResponse<T>>;
+    }
+
     const ctx = context.switchToHttp();
     const response = ctx.getResponse<Response>();
     const statusCode = response.statusCode;
