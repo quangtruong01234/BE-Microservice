@@ -7,6 +7,20 @@ import { EXCHANGE } from "@app/common/constants/exchange";
 import { EVENT } from "@app/common/constants/event";
 import { Notification } from "./entities/notification.entity";
 
+interface NotificationMetadata {
+  postId?: number | null;
+  actorId?: number | null;
+  preview?: string | null;
+}
+
+const NOTIFICATION_TEXT_MAX_LENGTH = 255;
+
+function truncateNotificationText(
+  text: string | null | undefined,
+): string | null {
+  return text == null ? null : text.slice(0, NOTIFICATION_TEXT_MAX_LENGTH);
+}
+
 @Injectable()
 export class NotificationService {
   private readonly logger = new Logger(NotificationService.name);
@@ -23,12 +37,16 @@ export class NotificationService {
     type: string,
     orderId: number | null,
     message: string,
+    metadata: NotificationMetadata = {},
   ): Promise<void> {
     const notification = this.notificationRepository.create({
       userId,
       type,
       orderId,
-      message,
+      message: message.slice(0, NOTIFICATION_TEXT_MAX_LENGTH),
+      postId: metadata.postId ?? null,
+      actorId: metadata.actorId ?? null,
+      preview: truncateNotificationText(metadata.preview),
     });
     const saved = await this.notificationRepository.save(notification);
 

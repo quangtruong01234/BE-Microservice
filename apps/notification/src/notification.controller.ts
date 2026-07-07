@@ -262,7 +262,7 @@ export class NotificationController {
     },
     @Ctx() context: RmqContext,
   ): Promise<void> {
-    const { postOwnerId, commentId } = data;
+    const { postId, postOwnerId, commenterId, commentId, preview } = data;
     this.logger.log(
       `[NOTIFICATION] comment_created received commentId=${commentId} owner=${postOwnerId}`,
     );
@@ -270,8 +270,13 @@ export class NotificationController {
       await this.notificationService.saveNotification(
         postOwnerId,
         "comment",
-        commentId,
-        "Someone commented on your post",
+        null,
+        "New comment on your post",
+        {
+          postId,
+          actorId: commenterId,
+          preview,
+        },
       );
       this.rmqService.ack(context);
     } catch (err) {
@@ -287,6 +292,7 @@ export class NotificationController {
   async handleReplyCreated(
     @Payload()
     data: {
+      postId: number;
       parentCommentId: number;
       commentOwnerId: number;
       replierId: number;
@@ -295,7 +301,7 @@ export class NotificationController {
     },
     @Ctx() context: RmqContext,
   ): Promise<void> {
-    const { commentOwnerId, replyId } = data;
+    const { postId, commentOwnerId, replierId, replyId, preview } = data;
     this.logger.log(
       `[NOTIFICATION] reply_created received replyId=${replyId} owner=${commentOwnerId}`,
     );
@@ -303,8 +309,13 @@ export class NotificationController {
       await this.notificationService.saveNotification(
         commentOwnerId,
         "reply",
-        replyId,
-        "Someone replied to your comment",
+        null,
+        "New reply to your comment",
+        {
+          postId,
+          actorId: replierId,
+          preview,
+        },
       );
       this.rmqService.ack(context);
     } catch (err) {

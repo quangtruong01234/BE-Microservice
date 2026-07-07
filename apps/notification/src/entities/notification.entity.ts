@@ -19,6 +19,15 @@ export class Notification {
   @Column({ name: "order_id", type: "bigint", nullable: true })
   orderId!: number | null;
 
+  @Column({ name: "post_id", type: "int", nullable: true })
+  postId!: number | null;
+
+  @Column({ name: "actor_id", type: "int", nullable: true })
+  actorId!: number | null;
+
+  @Column({ type: "varchar", length: 255, nullable: true })
+  preview!: string | null;
+
   @Column({ type: "varchar", length: 255, nullable: false })
   message!: string;
 
