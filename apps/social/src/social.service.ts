@@ -23,6 +23,11 @@ import { Follow } from "./entities/follow.entity";
 @Injectable()
 export class SocialService {
   private readonly logger = new Logger(SocialService.name);
+  private static readonly NOTIFICATION_PREVIEW_MAX_LENGTH = 255;
+  private readonly brokenLegacyImageUrlMarkers = [
+    "/trybuy/posts/trybuy/posts/",
+    "/undefined_",
+  ];
 
   constructor(
     @InjectRepository(Post)
@@ -46,6 +51,21 @@ export class SocialService {
     return this.dataSource.getTreeRepository(Comment);
   }
 
+  private isBrokenLegacyPostImageUrl(imageUrl: string): boolean {
+    return this.brokenLegacyImageUrlMarkers.some((marker) =>
+      imageUrl.includes(marker),
+    );
+  }
+
+  private sanitizePostImageUrls(post: Post): Post {
+    if (!post.imageUrls || post.imageUrls.length === 0) return post;
+    const validImageUrls = post.imageUrls.filter(
+      (imageUrl) => !this.isBrokenLegacyPostImageUrl(imageUrl),
+    );
+    if (validImageUrls.length === post.imageUrls.length) return post;
+    return { ...post, imageUrls: validImageUrls };
+  }
+
   private async resolveIsLiked(
     postId: number,
     viewerUserId: number | null | undefined,
@@ -64,6 +84,146 @@ export class SocialService {
       isLiked ? "1" : "0",
     );
     return isLiked;
+  }
+
+  /**
+   * Batch like-count lookup (PERF-03): one Redis MGET for the whole page;
+   * cache misses fall back to a single GROUP BY count query and are written
+   * back per-key so single-post reads keep hitting the same keys.
+   */
+  private async resolveLikeCounts(
+    postIds: number[],
+  ): Promise<Map<number, number>> {
+    const likeCountByPostId = new Map<number, number>();
+    if (postIds.length === 0) return likeCountByPostId;
+    const cachedCounts = await this.cachedService.mget(
+      postIds.map((postId) => `post:like_count:${postId}`),
+    );
+    const missedPostIds: number[] = [];
+    postIds.forEach((postId, i) => {
+      const cached = cachedCounts[i];
+      if (cached !== null && cached !== undefined) {
+        likeCountByPostId.set(postId, parseInt(cached, 10));
+      } else {
+        missedPostIds.push(postId);
+      }
+    });
+    if (missedPostIds.length > 0) {
+      const countRows = await this.postLikeRepository
+        .createQueryBuilder("pl")
+        .select("pl.postId", "postId")
+        .addSelect("COUNT(*)", "count")
+        .where("pl.postId IN (:...postIds)", { postIds: missedPostIds })
+        .groupBy("pl.postId")
+        .getRawMany<{ postId: number; count: string }>();
+      const dbCountByPostId = new Map<number, number>(
+        countRows.map((row) => [Number(row.postId), parseInt(row.count, 10)]),
+      );
+      await Promise.all(
+        missedPostIds.map((postId) => {
+          const count = dbCountByPostId.get(postId) ?? 0;
+          likeCountByPostId.set(postId, count);
+          return this.cachedService.set(
+            `post:like_count:${postId}`,
+            count.toString(),
+          );
+        }),
+      );
+    }
+    return likeCountByPostId;
+  }
+
+  /**
+   * Batch isLiked lookup (PERF-03): one MGET over the viewer's liked flags;
+   * misses resolve with a single In(postIds) query and write back per-key
+   * (same keys as resolveIsLiked, so single-post reads stay consistent).
+   */
+  private async resolveLikedPostIds(
+    postIds: number[],
+    viewerUserId: number | null | undefined,
+  ): Promise<Set<number>> {
+    const likedPostIds = new Set<number>();
+    if (!viewerUserId || postIds.length === 0) return likedPostIds;
+    const cachedFlags = await this.cachedService.mget(
+      postIds.map((postId) => `post:liked:${postId}:${viewerUserId}`),
+    );
+    const missedPostIds: number[] = [];
+    postIds.forEach((postId, i) => {
+      const cached = cachedFlags[i];
+      if (cached === "1") {
+        likedPostIds.add(postId);
+      } else if (cached === null || cached === undefined) {
+        missedPostIds.push(postId);
+      }
+    });
+    if (missedPostIds.length > 0) {
+      const likeRows = await this.postLikeRepository.find({
+        where: { postId: In(missedPostIds), userId: viewerUserId },
+        select: ["postId"],
+      });
+      const likedMissSet = new Set(likeRows.map((row) => row.postId));
+      await Promise.all(
+        missedPostIds.map((postId) => {
+          const isLiked = likedMissSet.has(postId);
+          if (isLiked) likedPostIds.add(postId);
+          return this.cachedService.set(
+            `post:liked:${postId}:${viewerUserId}`,
+            isLiked ? "1" : "0",
+          );
+        }),
+      );
+    }
+    return likedPostIds;
+  }
+
+  /**
+   * Batch comment counts (PERF-03): one GROUP BY query for the whole page
+   * instead of N COUNT queries. Replies carry the same postId, so totals
+   * match the previous per-post count() behavior.
+   */
+  private async resolveCommentCounts(
+    postIds: number[],
+  ): Promise<Map<number, number>> {
+    if (postIds.length === 0) return new Map<number, number>();
+    const countRows = await this.commentRepository
+      .createQueryBuilder("c")
+      .select("c.postId", "postId")
+      .addSelect("COUNT(*)", "count")
+      .where("c.postId IN (:...postIds)", { postIds })
+      .groupBy("c.postId")
+      .getRawMany<{ postId: number; count: string }>();
+    return new Map<number, number>(
+      countRows.map((row) => [Number(row.postId), parseInt(row.count, 10)]),
+    );
+  }
+
+  /**
+   * Decorate a page of posts with likeCount / isLiked / commentCount using
+   * the batched lookups above. Shared by the three feed reads.
+   */
+  private async decoratePosts(
+    posts: Post[],
+    viewerUserId: number | null | undefined,
+  ): Promise<
+    (Post & { likeCount: number; isLiked: boolean; commentCount: number })[]
+  > {
+    if (posts.length === 0) return [];
+    const postIds = posts.map((post) => post.id);
+    const [likeCountByPostId, likedPostIds, commentCountByPostId] =
+      await Promise.all([
+        this.resolveLikeCounts(postIds),
+        this.resolveLikedPostIds(postIds, viewerUserId),
+        this.resolveCommentCounts(postIds),
+      ]);
+    return posts.map((post) => {
+      const sanitizedPost = this.sanitizePostImageUrls(post);
+      return {
+        ...sanitizedPost,
+        likeCount: likeCountByPostId.get(post.id) ?? 0,
+        isLiked: likedPostIds.has(post.id),
+        commentCount: commentCountByPostId.get(post.id) ?? 0,
+      };
+    });
   }
 
   async createPost(payload: {
@@ -155,43 +315,13 @@ export class SocialService {
     const { page, limit, viewerUserId } = payload;
     try {
       const [posts, total] = await this.postRepository.findAndCount({
+        where: { isHidden: false },
         order: { createdAt: "DESC" },
         skip: (page - 1) * limit,
         take: limit,
       });
-      const [counts, likedFlags, commentCounts] = await Promise.all([
-        Promise.all(
-          posts.map(async (post) => {
-            const cached = await this.cachedService.get(
-              `post:like_count:${post.id}`,
-            );
-            if (cached !== null) return parseInt(cached, 10);
-            const count = await this.postLikeRepository.count({
-              where: { postId: post.id },
-            });
-            await this.cachedService.set(
-              `post:like_count:${post.id}`,
-              count.toString(),
-            );
-            return count;
-          }),
-        ),
-        Promise.all(
-          posts.map((post) => this.resolveIsLiked(post.id, viewerUserId)),
-        ),
-        Promise.all(
-          posts.map((post) =>
-            this.commentRepository.count({ where: { postId: post.id } }),
-          ),
-        ),
-      ]);
       return PaginatedResponse.of(
-        posts.map((post, i) => ({
-          ...post,
-          likeCount: counts[i] ?? 0,
-          isLiked: likedFlags[i] ?? false,
-          commentCount: commentCounts[i] ?? 0,
-        })),
+        await this.decoratePosts(posts, viewerUserId),
         total,
         page,
         limit,
@@ -217,44 +347,13 @@ export class SocialService {
   > {
     const { userId, page, limit, viewerUserId } = payload;
     const [posts, total] = await this.postRepository.findAndCount({
-      where: { userId },
+      where: { userId, isHidden: false },
       order: { createdAt: "DESC" },
       skip: (page - 1) * limit,
       take: limit,
     });
-    const [counts, likedFlags, commentCounts] = await Promise.all([
-      Promise.all(
-        posts.map(async (post) => {
-          const cached = await this.cachedService.get(
-            `post:like_count:${post.id}`,
-          );
-          if (cached !== null) return parseInt(cached, 10);
-          const count = await this.postLikeRepository.count({
-            where: { postId: post.id },
-          });
-          await this.cachedService.set(
-            `post:like_count:${post.id}`,
-            count.toString(),
-          );
-          return count;
-        }),
-      ),
-      Promise.all(
-        posts.map((post) => this.resolveIsLiked(post.id, viewerUserId)),
-      ),
-      Promise.all(
-        posts.map((post) =>
-          this.commentRepository.count({ where: { postId: post.id } }),
-        ),
-      ),
-    ]);
     return PaginatedResponse.of(
-      posts.map((post, i) => ({
-        ...post,
-        likeCount: counts[i] ?? 0,
-        isLiked: likedFlags[i] ?? false,
-        commentCount: commentCounts[i] ?? 0,
-      })),
+      await this.decoratePosts(posts, viewerUserId),
       total,
       page,
       limit,
@@ -268,7 +367,7 @@ export class SocialService {
     Post & { likeCount: number; isLiked: boolean; commentCount: number }
   > {
     const post = await this.postRepository.findOne({ where: { id: postId } });
-    if (!post) {
+    if (!post || post.isHidden) {
       throw new NotFoundException(`Post ${postId} not found`);
     }
     const cacheKey = `post:like_count:${postId}`;
@@ -286,7 +385,12 @@ export class SocialService {
       this.resolveIsLiked(postId, viewerUserId),
       this.commentRepository.count({ where: { postId } }),
     ]);
-    return { ...post, likeCount, isLiked, commentCount };
+    return {
+      ...this.sanitizePostImageUrls(post),
+      likeCount,
+      isLiked,
+      commentCount,
+    };
   }
 
   async likePost(payload: {
@@ -388,7 +492,10 @@ export class SocialService {
                 postOwnerId: post.userId,
                 commenterId: payload.userId,
                 commentId: saved.id,
-                preview: payload.content.slice(0, 20),
+                preview: payload.content.slice(
+                  0,
+                  SocialService.NOTIFICATION_PREVIEW_MAX_LENGTH,
+                ),
               },
               pattern: EVENT.COMMENT_CREATED_EVENT,
             }),
@@ -472,11 +579,15 @@ export class SocialService {
           Buffer.from(
             JSON.stringify({
               data: {
+                postId: payload.postId,
                 parentCommentId: payload.parentCommentId,
                 commentOwnerId: parentComment.userId,
                 replierId: payload.userId,
                 replyId: saved.id,
-                preview: payload.content.slice(0, 20),
+                preview: payload.content.slice(
+                  0,
+                  SocialService.NOTIFICATION_PREVIEW_MAX_LENGTH,
+                ),
               },
               pattern: EVENT.REPLY_CREATED_EVENT,
             }),
@@ -607,47 +718,190 @@ export class SocialService {
     }
     const followingIds = following.map((f) => f.followingId);
     const [posts, total] = await this.postRepository.findAndCount({
-      where: { userId: In(followingIds) },
+      where: { userId: In(followingIds), isHidden: false },
       order: { createdAt: "DESC" },
       skip: (page - 1) * limit,
       take: limit,
     });
-    const [counts, likedFlags, commentCounts] = await Promise.all([
-      Promise.all(
-        posts.map(async (post) => {
-          const cached = await this.cachedService.get(
-            `post:like_count:${post.id}`,
-          );
-          if (cached !== null) return parseInt(cached, 10);
-          const count = await this.postLikeRepository.count({
-            where: { postId: post.id },
-          });
-          await this.cachedService.set(
-            `post:like_count:${post.id}`,
-            count.toString(),
-          );
-          return count;
-        }),
-      ),
-      Promise.all(
-        posts.map((post) => this.resolveIsLiked(post.id, viewerUserId)),
-      ),
-      Promise.all(
-        posts.map((post) =>
-          this.commentRepository.count({ where: { postId: post.id } }),
-        ),
-      ),
-    ]);
     return PaginatedResponse.of(
-      posts.map((post, i) => ({
-        ...post,
-        likeCount: counts[i] ?? 0,
-        isLiked: likedFlags[i] ?? false,
-        commentCount: commentCounts[i] ?? 0,
-      })),
+      await this.decoratePosts(posts, viewerUserId),
       total,
       page,
       limit,
     );
+  }
+
+  // ── Moderation (admin) ──────────────────────────────────────────────
+
+  async listReportedPosts(payload: {
+    status?: "pending" | "resolved" | "dismissed";
+    page: number;
+    limit: number;
+  }): Promise<
+    PaginatedResponse<{
+      post: Post;
+      reportCount: number;
+      pendingCount: number;
+      latestReportedAt: Date;
+      reports: Array<{
+        id: number;
+        reporterId: number;
+        reason: string;
+        status: "pending" | "resolved" | "dismissed";
+        createdAt: Date;
+      }>;
+    }>
+  > {
+    const { status, page, limit } = payload;
+
+    const groupedQb = this.postReportRepository
+      .createQueryBuilder("report")
+      .select("report.postId", "postId")
+      .addSelect("COUNT(report.id)", "reportCount")
+      .addSelect("MAX(report.createdAt)", "latestReportedAt")
+      .groupBy("report.postId")
+      .orderBy("latestReportedAt", "DESC")
+      .offset((page - 1) * limit)
+      .limit(limit);
+    if (status) groupedQb.where("report.status = :status", { status });
+
+    const totalQb = this.postReportRepository
+      .createQueryBuilder("report")
+      .select("COUNT(DISTINCT report.postId)", "cnt");
+    if (status) totalQb.where("report.status = :status", { status });
+
+    const [grouped, totalRaw] = await Promise.all([
+      groupedQb.getRawMany<{
+        postId: number;
+        reportCount: string;
+        latestReportedAt: Date;
+      }>(),
+      totalQb.getRawOne<{ cnt: string }>(),
+    ]);
+    const total = Number(totalRaw?.cnt ?? 0);
+
+    const postIds = grouped.map((row) => Number(row.postId));
+    if (postIds.length === 0) {
+      return PaginatedResponse.of([], total, page, limit);
+    }
+
+    const [posts, reports] = await Promise.all([
+      this.postRepository.find({ where: { id: In(postIds) } }),
+      this.postReportRepository.find({
+        where: { postId: In(postIds) },
+        order: { createdAt: "DESC" },
+      }),
+    ]);
+    const postById = new Map(posts.map((post) => [post.id, post]));
+    const reportsByPostId = new Map<number, PostReport[]>();
+    for (const report of reports) {
+      const existing = reportsByPostId.get(report.postId);
+      if (existing) existing.push(report);
+      else reportsByPostId.set(report.postId, [report]);
+    }
+
+    const data = grouped
+      .map((row) => {
+        const postId = Number(row.postId);
+        const post = postById.get(postId);
+        // Report rows can outlive their post only if a post was hard-deleted
+        // without cleaning reports; skip those orphans.
+        if (!post) return null;
+        const postReports = reportsByPostId.get(postId) ?? [];
+        return {
+          post: this.sanitizePostImageUrls(post),
+          reportCount: Number(row.reportCount),
+          pendingCount: postReports.filter((r) => r.status === "pending")
+            .length,
+          latestReportedAt: row.latestReportedAt,
+          reports: postReports.map((r) => ({
+            id: r.id,
+            reporterId: r.reporterId,
+            reason: r.reason,
+            status: r.status,
+            createdAt: r.createdAt,
+          })),
+        };
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+
+    return PaginatedResponse.of(data, total, page, limit);
+  }
+
+  async hidePost(payload: {
+    postId: number;
+    adminId: number;
+  }): Promise<{ postId: number; isHidden: boolean }> {
+    const post = await this.postRepository.findOne({
+      where: { id: payload.postId },
+    });
+    if (!post) {
+      throw new NotFoundException(`Post ${payload.postId} not found`);
+    }
+    post.isHidden = true;
+    post.hiddenAt = new Date();
+    await this.postRepository.save(post);
+    // Hiding resolves the outstanding reports that triggered the action.
+    await this.postReportRepository.update(
+      { postId: payload.postId, status: "pending" },
+      {
+        status: "resolved",
+        resolvedBy: payload.adminId,
+        resolvedAt: new Date(),
+      },
+    );
+    return { postId: payload.postId, isHidden: true };
+  }
+
+  async unhidePost(payload: {
+    postId: number;
+  }): Promise<{ postId: number; isHidden: boolean }> {
+    const post = await this.postRepository.findOne({
+      where: { id: payload.postId },
+    });
+    if (!post) {
+      throw new NotFoundException(`Post ${payload.postId} not found`);
+    }
+    post.isHidden = false;
+    post.hiddenAt = null;
+    await this.postRepository.save(post);
+    return { postId: payload.postId, isHidden: false };
+  }
+
+  async dismissReports(payload: {
+    postId: number;
+    adminId: number;
+  }): Promise<{ postId: number; dismissed: number }> {
+    const post = await this.postRepository.findOne({
+      where: { id: payload.postId },
+    });
+    if (!post) {
+      throw new NotFoundException(`Post ${payload.postId} not found`);
+    }
+    const result = await this.postReportRepository.update(
+      { postId: payload.postId, status: "pending" },
+      {
+        status: "dismissed",
+        resolvedBy: payload.adminId,
+        resolvedAt: new Date(),
+      },
+    );
+    return { postId: payload.postId, dismissed: result.affected ?? 0 };
+  }
+
+  async adminDeletePost(payload: {
+    postId: number;
+  }): Promise<{ success: boolean }> {
+    const post = await this.postRepository.findOne({
+      where: { id: payload.postId },
+    });
+    if (!post) {
+      throw new NotFoundException(`Post ${payload.postId} not found`);
+    }
+    await this.dataSource.transaction(async (manager) => {
+      await manager.delete(PostReport, { postId: payload.postId });
+      await manager.remove(post);
+    });
+    return { success: true };
   }
 }

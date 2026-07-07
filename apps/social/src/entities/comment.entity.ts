@@ -2,12 +2,14 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   PrimaryGeneratedColumn,
   Tree,
   TreeChildren,
   TreeParent,
 } from "typeorm";
 
+@Index("idx_comments_post_id_created_at", ["postId", "createdAt"])
 @Entity("comments")
 @Tree("materialized-path")
 export class Comment {

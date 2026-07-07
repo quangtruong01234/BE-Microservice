@@ -2,10 +2,13 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from "typeorm";
 
+@Index("idx_posts_visible_created_at", ["isHidden", "createdAt"])
+@Index("idx_posts_user_visible_created_at", ["userId", "isHidden", "createdAt"])
 @Entity("posts")
 export class Post {
   @PrimaryGeneratedColumn("increment")
@@ -31,6 +34,12 @@ export class Post {
     default: null,
   })
   videoUrl!: string | null;
+
+  @Column({ name: "is_hidden", type: "boolean", default: false })
+  isHidden!: boolean;
+
+  @Column({ name: "hidden_at", type: "timestamp", nullable: true })
+  hiddenAt!: Date | null;
 
   @CreateDateColumn({ name: "created_at", type: "timestamp" })
   createdAt!: Date;

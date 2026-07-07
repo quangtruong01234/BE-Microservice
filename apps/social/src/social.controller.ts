@@ -185,4 +185,44 @@ export class SocialController {
   ): Promise<unknown> {
     return this.socialService.getFollowingFeed(payload);
   }
+
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.ADMIN_LIST_REPORTED_POSTS)
+  async adminListReportedPosts(
+    @Payload()
+    payload: {
+      status?: "pending" | "resolved" | "dismissed";
+      page: number;
+      limit: number;
+    },
+  ): Promise<unknown> {
+    return this.socialService.listReportedPosts(payload);
+  }
+
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.ADMIN_HIDE_POST)
+  async adminHidePost(
+    @Payload() payload: { postId: number; adminId: number },
+  ): Promise<{ postId: number; isHidden: boolean }> {
+    return this.socialService.hidePost(payload);
+  }
+
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.ADMIN_UNHIDE_POST)
+  async adminUnhidePost(
+    @Payload() payload: { postId: number },
+  ): Promise<{ postId: number; isHidden: boolean }> {
+    return this.socialService.unhidePost(payload);
+  }
+
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.ADMIN_DISMISS_REPORTS)
+  async adminDismissReports(
+    @Payload() payload: { postId: number; adminId: number },
+  ): Promise<{ postId: number; dismissed: number }> {
+    return this.socialService.dismissReports(payload);
+  }
+
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.ADMIN_DELETE_POST)
+  async adminDeletePost(
+    @Payload() payload: { postId: number },
+  ): Promise<{ success: boolean }> {
+    return this.socialService.adminDeletePost(payload);
+  }
 }
