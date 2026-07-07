@@ -25,10 +25,6 @@ import { CreateBrandDto } from "./dto/create-brand.dto";
 import { CreateCategoryDto } from "./dto/create-category.dto";
 import { GetProductsQueryDto } from "./dto/get-products-query.dto";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
-import {
-  CreateProductSkuDto,
-  UpdateProductSkuDto,
-} from "./dto/create-product-sku.dto";
 
 @UseFilters(HttpToRpcExceptionFilter)
 @Controller()
@@ -57,6 +53,11 @@ export class ProductController {
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_ID)
   async findProductById(@Payload() id: number) {
     return this.productService.findProductById(id);
+  }
+
+  @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_IDS)
+  async findProductsByIds(@Payload() ids: number[]) {
+    return this.productService.findProductsByIds(ids);
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_SKU)
@@ -189,13 +190,6 @@ export class ProductController {
   // SKU MESSAGE PATTERNS
   // ============================================================================
 
-  @MessagePattern(PRODUCT_MESSAGE_PATTERNS.SKU_CREATE)
-  async upsertSkus(
-    @Payload() data: { productId: number; skuList: CreateProductSkuDto[] },
-  ) {
-    return this.productService.upsertSkus(data.productId, data.skuList);
-  }
-
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.SKU_FIND_BY_PRODUCT)
   async findSkusByProduct(@Payload() productId: number) {
     return this.productService.findSkusByProduct(productId);
@@ -204,16 +198,6 @@ export class ProductController {
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.SKU_FIND_BY_ID)
   async findSkuById(@Payload() id: number) {
     return this.productService.findSkuById(id);
-  }
-
-  @MessagePattern(PRODUCT_MESSAGE_PATTERNS.SKU_UPDATE)
-  async updateSku(@Payload() data: { id: number; dto: UpdateProductSkuDto }) {
-    return this.productService.updateSku(data.id, data.dto);
-  }
-
-  @MessagePattern(PRODUCT_MESSAGE_PATTERNS.SKU_DELETE)
-  async deleteSku(@Payload() id: number) {
-    return this.productService.deleteSku(id);
   }
 
   // ============================================================================
@@ -247,6 +231,35 @@ export class ProductController {
   ): Promise<PaginatedResponse<ProductReview>> {
     return this.productService.findReviewsByProduct(
       data.productId,
+      data.page,
+      data.limit,
+    );
+  }
+
+  // ============================================================================
+  // WISHLIST MESSAGE PATTERNS
+  // ============================================================================
+
+  @MessagePattern(PRODUCT_MESSAGE_PATTERNS.WISHLIST_ADD)
+  async addWishlistItem(
+    @Payload() data: { userId: number; productId: number },
+  ): Promise<{ productId: number; isWishlisted: boolean; createdAt: Date }> {
+    return this.productService.addWishlistItem(data.userId, data.productId);
+  }
+
+  @MessagePattern(PRODUCT_MESSAGE_PATTERNS.WISHLIST_REMOVE)
+  async removeWishlistItem(
+    @Payload() data: { userId: number; productId: number },
+  ): Promise<null> {
+    return this.productService.removeWishlistItem(data.userId, data.productId);
+  }
+
+  @MessagePattern(PRODUCT_MESSAGE_PATTERNS.WISHLIST_LIST)
+  async findWishlistByUser(
+    @Payload() data: { userId: number; page?: number; limit?: number },
+  ): Promise<PaginatedResponse<unknown>> {
+    return this.productService.findWishlistByUser(
+      data.userId,
       data.page,
       data.limit,
     );

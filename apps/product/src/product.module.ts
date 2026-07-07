@@ -6,6 +6,7 @@ import { ProductController } from "./product.controller";
 import { Product } from "./entity/product.entity";
 import { ProductReview } from "./entity/product-review.entity";
 import { ProductSku } from "./entity/product-sku.entity";
+import { WishlistItem } from "./entity/wishlist-item.entity";
 import { Brand } from "./entity/brand.entity";
 import { Category } from "./entity/category.entity";
 import { DatabaseModule } from "@app/database";
@@ -29,6 +30,7 @@ import {
       Product,
       ProductReview,
       ProductSku,
+      WishlistItem,
       Brand,
       Category,
     ]),

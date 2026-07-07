@@ -8,6 +8,7 @@ import { Brand } from "./entity/brand.entity";
 import { Category } from "./entity/category.entity";
 import { ProductReview } from "./entity/product-review.entity";
 import { ProductSku } from "./entity/product-sku.entity";
+import { WishlistItem } from "./entity/wishlist-item.entity";
 
 type SkuRow = Pick<
   ProductSku,
@@ -67,6 +68,7 @@ describe("ProductService.upsertSkus diff (P0-05)", () => {
       {} as unknown as Repository<Category>,
       {} as unknown as Repository<ProductReview>,
       skuRepository as unknown as Repository<ProductSku>,
+      {} as unknown as Repository<WishlistItem>,
       dataSource as unknown as DataSource,
       {} as unknown as CachedService,
       null,

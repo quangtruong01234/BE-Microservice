@@ -21,6 +21,7 @@ import { ORDER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { Product } from "./entity/product.entity";
 import { ProductReview } from "./entity/product-review.entity";
 import { ProductSku } from "./entity/product-sku.entity";
+import { WishlistItem } from "./entity/wishlist-item.entity";
 import { Brand } from "./entity/brand.entity";
 import { Category } from "./entity/category.entity";
 import { CreateProductDto } from "./dto/create-product.dto";
@@ -28,12 +29,19 @@ import { UpdateProductDto } from "./dto/update-product.dto";
 import { CreateBrandDto } from "./dto/create-brand.dto";
 import { CreateCategoryDto } from "./dto/create-category.dto";
 import { GetProductsQueryDto } from "./dto/get-products-query.dto";
-import {
-  CreateProductSkuDto,
-  UpdateProductSkuDto,
-} from "./dto/create-product-sku.dto";
+import { CreateProductSkuDto } from "./dto/create-product-sku.dto";
 
 const SEARCH_CACHE_TTL = 5; // seconds
+
+type WishlistMutationResult = {
+  productId: number;
+  isWishlisted: boolean;
+  createdAt: Date;
+};
+
+type WishlistedProduct = Product & {
+  wishlistedAt: Date;
+};
 
 @Injectable()
 export class ProductService {
@@ -50,6 +58,8 @@ export class ProductService {
     private readonly reviewRepository: Repository<ProductReview>,
     @InjectRepository(ProductSku)
     private readonly skuRepository: Repository<ProductSku>,
+    @InjectRepository(WishlistItem)
+    private readonly wishlistRepository: Repository<WishlistItem>,
     private readonly dataSource: DataSource,
     private readonly cachedService: CachedService,
     @Inject(EXCHANGE.RMQ_PUBLISHER_CHANNEL)
@@ -350,18 +360,6 @@ export class ProductService {
     return sku;
   }
 
-  async updateSku(id: number, dto: UpdateProductSkuDto): Promise<ProductSku> {
-    const sku = await this.findSkuById(id);
-    Object.assign(sku, dto);
-    return this.skuRepository.save(sku);
-  }
-
-  async deleteSku(id: number): Promise<{ success: boolean }> {
-    await this.findSkuById(id);
-    await this.skuRepository.delete(id);
-    return { success: true };
-  }
-
   // Product methods
   async createProduct(createProductDto: CreateProductDto): Promise<Product> {
     const { skuList, categoryIds, ...rest } = createProductDto;
@@ -455,10 +453,12 @@ export class ProductService {
       skuSearch,
     } = query;
 
-    const queryBuilder: SelectQueryBuilder<Product> = this.productRepository
-      .createQueryBuilder("product")
-      .leftJoinAndSelect("product.brand", "brand")
-      .leftJoinAndSelect("product.categories", "categories");
+    // PERF-10: filter/paginate on product ids only (no joinAndSelect), then
+    // hydrate relations via In(ids). Joining brand + categories (ManyToMany)
+    // on a paginated list forced TypeORM into its distinct-subquery pagination
+    // path with cartesian row inflation per category.
+    const queryBuilder: SelectQueryBuilder<Product> =
+      this.productRepository.createQueryBuilder("product");
 
     if (search) {
       queryBuilder.andWhere(
@@ -480,9 +480,13 @@ export class ProductService {
     }
 
     if (categoryIds && categoryIds.length > 0) {
-      queryBuilder.andWhere("categories.id IN (:...categoryIds)", {
-        categoryIds,
-      });
+      // Join without select — only needed for the filter; full categories are
+      // hydrated in the relation-load step below.
+      queryBuilder
+        .leftJoin("product.categories", "categories")
+        .andWhere("categories.id IN (:...categoryIds)", {
+          categoryIds,
+        });
     }
 
     if (brandIds && brandIds.length > 0) {
@@ -521,12 +525,39 @@ export class ProductService {
       queryBuilder.andWhere("product.rating <= :maxRating", { maxRating });
     }
 
-    queryBuilder.orderBy(`product.${sortBy}`, sortOrder);
-
     const skip = (page - 1) * limit;
-    queryBuilder.skip(skip).take(limit);
 
-    const [data, total] = await queryBuilder.getManyAndCount();
+    // Step 1: count + page ids on the filtered single-table query. DISTINCT
+    // guards against row duplication from the to-many filter joins
+    // (categories/sku); the sort column must be selected for MySQL to allow
+    // DISTINCT + ORDER BY.
+    const total = await queryBuilder.getCount();
+    const pagedIdRows = await queryBuilder
+      .clone()
+      .select("product.id", "productId")
+      .addSelect(`product.${sortBy}`, "sortValue")
+      .distinct(true)
+      .orderBy("sortValue", sortOrder)
+      .offset(skip)
+      .limit(limit)
+      .getRawMany<{ productId: string }>();
+    const pagedProductIds = pagedIdRows.map((row) => row.productId);
+
+    // Step 2: hydrate the page's entities with relations, preserving the
+    // sorted id order (In() gives no ordering guarantee).
+    let data: Product[] = [];
+    if (pagedProductIds.length > 0) {
+      const products = await this.productRepository.find({
+        where: { id: In(pagedProductIds) },
+        relations: ["brand", "categories"],
+      });
+      const productById = new Map(
+        products.map((product) => [String(product.id), product]),
+      );
+      data = pagedProductIds
+        .map((id) => productById.get(String(id)))
+        .filter((product): product is Product => product !== undefined);
+    }
 
     const result = PaginatedResponse.of(data, total, page, limit);
 
@@ -552,6 +583,18 @@ export class ProductService {
       throw new NotFoundException("Product not found");
     }
     return product;
+  }
+
+  // Batch variant of findProductById (GAP-01). Missing ids are skipped —
+  // callers treat absent products as deleted and fall back to snapshots/null.
+  async findProductsByIds(ids: number[]): Promise<Product[]> {
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return [];
+    }
+    return this.productRepository.find({
+      where: { id: In(ids) },
+      relations: ["brand", "categories", "skus"],
+    });
   }
 
   async findProductBySku(sku: string): Promise<Product> {
@@ -939,5 +982,78 @@ export class ProductService {
       where: { userId: sellerId, isActive: true },
     });
     return products.map((p) => p.id);
+  }
+
+  async addWishlistItem(
+    userId: number,
+    productId: number,
+  ): Promise<WishlistMutationResult> {
+    const product = await this.productRepository.findOne({
+      select: ["id"],
+      where: { id: productId, isActive: true },
+    });
+    if (!product) {
+      throw new NotFoundException("Product not found");
+    }
+
+    try {
+      const saved = await this.wishlistRepository.save(
+        this.wishlistRepository.create({ userId, productId }),
+      );
+      return {
+        productId,
+        isWishlisted: true,
+        createdAt: saved.createdAt,
+      };
+    } catch (err: unknown) {
+      const dbErr = err as { code?: string };
+      if (dbErr.code !== "ER_DUP_ENTRY") {
+        throw err;
+      }
+
+      const existing = await this.wishlistRepository.findOne({
+        where: { userId, productId },
+      });
+      return {
+        productId,
+        isWishlisted: true,
+        createdAt: existing?.createdAt ?? new Date(),
+      };
+    }
+  }
+
+  async removeWishlistItem(userId: number, productId: number): Promise<null> {
+    await this.wishlistRepository.delete({ userId, productId });
+    return null;
+  }
+
+  async findWishlistByUser(
+    userId: number,
+    page = 1,
+    limit = 20,
+  ): Promise<PaginatedResponse<WishlistedProduct>> {
+    const safePage = Math.max(1, Math.trunc(page));
+    const safeLimit = Math.min(100, Math.max(1, Math.trunc(limit)));
+    const [wishlistItems, total] = await this.wishlistRepository.findAndCount({
+      where: { userId, product: { isActive: true } },
+      relations: {
+        product: {
+          brand: true,
+          categories: true,
+        },
+      },
+      order: { createdAt: "DESC" },
+      skip: (safePage - 1) * safeLimit,
+      take: safeLimit,
+    });
+
+    const products = wishlistItems.map(
+      (wishlistItem): WishlistedProduct => ({
+        ...wishlistItem.product,
+        wishlistedAt: wishlistItem.createdAt,
+      }),
+    );
+
+    return PaginatedResponse.of(products, total, safePage, safeLimit);
   }
 }
