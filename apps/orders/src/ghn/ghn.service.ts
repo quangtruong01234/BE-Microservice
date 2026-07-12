@@ -9,104 +9,23 @@ import {
 import { HttpService } from "@nestjs/axios";
 import { AxiosResponse } from "axios";
 import { firstValueFrom } from "rxjs";
+import { GHN_MESSAGE } from "libs/constant/response-message.constant";
 import { Order } from "../entity/order.entity";
-
-interface GhnResponseData {
-  order_code?: string;
-  total_fee?: number;
-  expected_delivery_time?: string;
-}
-
-interface GhnResponse {
-  data?: GhnResponseData;
-  message?: string;
-}
-
-interface GhnSwitchStatusResult {
-  order_code?: string;
-  result?: boolean;
-  message?: string;
-}
-
-interface GhnSwitchStatusResponse {
-  data?: GhnSwitchStatusResult[];
-  message?: string;
-}
-
-interface GhnDetailResponse {
-  data?: Record<string, unknown>;
-  message?: string;
-}
-
-interface GhnMutationResponse {
-  code?: number;
-  message?: string;
-  data?: unknown;
-}
-
-export interface GhnReceiverUpdate {
-  toName?: string;
-  toPhone?: string;
-  toAddress?: string;
-}
-
-interface GhnMasterDataResponse<T> {
-  code?: number;
-  message?: string;
-  data?: T[];
-}
-
-interface GhnProvince {
-  ProvinceID: number;
-  ProvinceName: string;
-  NameExtension?: string[];
-}
-
-interface GhnDistrict {
-  DistrictID: number;
-  ProvinceID: number;
-  DistrictName: string;
-  NameExtension?: string[];
-}
-
-interface GhnWard {
-  WardCode: string;
-  DistrictID: number;
-  WardName: string;
-  NameExtension?: string[];
-}
-
-interface CacheEntry<T> {
-  value: T;
-  expiresAt: number;
-}
-
-export interface GhnShippingItem {
-  productName: string;
-  quantity: number;
-  price: number;
-  weight?: number;
-}
-
-export interface ShippingFeePreview {
-  shippingFee: number;
-  expectedDeliveryTime: string | null;
-}
-
-export interface GhnOrderDetail {
-  orderCode: string;
-  status: string | null;
-  codAmount: number | null;
-  totalFee: number | null;
-  expectedDeliveryTime: string | null;
-  leadtime: string | null;
-  toName: string | null;
-  toPhone: string | null;
-  toAddress: string | null;
-  fromName: string | null;
-  fromPhone: string | null;
-  raw: Record<string, unknown>;
-}
+import {
+  CacheEntry,
+  GhnDetailResponse,
+  GhnDistrict,
+  GhnMasterDataResponse,
+  GhnMutationResponse,
+  GhnOrderDetail,
+  GhnProvince,
+  GhnReceiverUpdate,
+  GhnResponse,
+  GhnShippingItem,
+  GhnSwitchStatusResponse,
+  GhnWard,
+  ShippingFeePreview,
+} from "./ghn.types";
 
 function requireEnv(key: string): string {
   const value = process.env[key];
@@ -155,9 +74,7 @@ export class GhnService {
     ] = shippingAddress.split("|").map((part) => (part ?? "").trim());
 
     if (!to_ward_name || !to_district_name || !to_province_name) {
-      throw new BadRequestException(
-        "Shipping address is missing the ward/district/province parts required by GHN",
-      );
+      throw new BadRequestException(GHN_MESSAGE.ADDRESS_MISSING_PARTS);
     }
 
     // GHN's create/preview endpoints require the numeric to_district_id +
@@ -217,7 +134,7 @@ export class GhnService {
     }
 
     throw new InternalServerErrorException(
-      `GHN error: ${response.data?.message ?? "Unknown error"}`,
+      GHN_MESSAGE.CREATE_ERROR(response.data?.message ?? "Unknown error"),
     );
   }
 
@@ -250,7 +167,7 @@ export class GhnService {
     }
 
     throw new InternalServerErrorException(
-      `GHN preview error: ${response.data?.message ?? "Unknown error"}`,
+      GHN_MESSAGE.PREVIEW_ERROR(response.data?.message ?? "Unknown error"),
     );
   }
 
@@ -321,7 +238,10 @@ export class GhnService {
     }
 
     throw new InternalServerErrorException(
-      `GHN ${action} error: ${result?.message ?? response.data?.message ?? "Unknown error"}`,
+      GHN_MESSAGE.ACTION_ERROR(
+        action,
+        result?.message ?? response.data?.message ?? "Unknown error",
+      ),
     );
   }
 
@@ -378,7 +298,10 @@ export class GhnService {
       const code = response.data?.code;
       if (code !== undefined && code !== 200) {
         throw new InternalServerErrorException(
-          `GHN ${action} error: ${response.data?.message ?? "Unknown error"}`,
+          GHN_MESSAGE.ACTION_ERROR(
+            action,
+            response.data?.message ?? "Unknown error",
+          ),
         );
       }
     } catch (error) {
@@ -386,7 +309,7 @@ export class GhnService {
         throw error;
       }
       throw new InternalServerErrorException(
-        `GHN ${action} error: ${this.extractGhnErrorMessage(error)}`,
+        GHN_MESSAGE.ACTION_ERROR(action, this.extractGhnErrorMessage(error)),
       );
     }
   }
@@ -439,14 +362,17 @@ export class GhnService {
       // returns an actionable status instead of an opaque 502.
       if (this.isGhnHttpRejection(error)) {
         throw new NotFoundException(
-          `GHN order ${ghnOrderCode} not found: ${this.extractGhnErrorMessage(error)}`,
+          GHN_MESSAGE.ORDER_NOT_FOUND(
+            ghnOrderCode,
+            this.extractGhnErrorMessage(error),
+          ),
         );
       }
       // No HTTP response (timeout / DNS / connection refused): GHN is transiently
       // unreachable. Surface 503 so the operator can distinguish infra from a
       // genuinely missing waybill and retry.
       throw new ServiceUnavailableException(
-        `GHN detail request failed: ${this.extractGhnErrorMessage(error)}`,
+        GHN_MESSAGE.DETAIL_REQUEST_FAILED(this.extractGhnErrorMessage(error)),
       );
     }
 
@@ -454,7 +380,10 @@ export class GhnService {
     if (!data) {
       // GHN can also report a missing order via HTTP 200 + empty data.
       throw new NotFoundException(
-        `GHN order ${ghnOrderCode} not found: ${response.data?.message ?? "Unknown error"}`,
+        GHN_MESSAGE.ORDER_NOT_FOUND(
+          ghnOrderCode,
+          response.data?.message ?? "Unknown error",
+        ),
       );
     }
 
@@ -621,7 +550,7 @@ export class GhnService {
     );
     if (provinceCandidates.length === 0) {
       throw new BadRequestException(
-        `Cannot resolve province "${provinceName}" to a GHN province`,
+        GHN_MESSAGE.PROVINCE_UNRESOLVED(provinceName),
       );
     }
 
@@ -651,7 +580,7 @@ export class GhnService {
     }
 
     throw new BadRequestException(
-      `Cannot resolve shipping address "${wardName}, ${districtName}, ${provinceName}" to a GHN district/ward`,
+      GHN_MESSAGE.ADDRESS_UNRESOLVED(wardName, districtName, provinceName),
     );
   }
 

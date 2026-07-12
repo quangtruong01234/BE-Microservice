@@ -32,13 +32,13 @@ import { USER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { generateInvoicePdf } from "./invoice/invoice.generator";
+import { GhnService } from "./ghn/ghn.service";
 import {
   GhnOrderDetail,
   GhnReceiverUpdate,
-  GhnService,
   GhnShippingItem,
   ShippingFeePreview,
-} from "./ghn/ghn.service";
+} from "./ghn/ghn.types";
 import { Channel } from "amqplib";
 import { randomUUID } from "crypto";
 import {
@@ -53,156 +53,27 @@ import {
 } from "./entity/order-return-request.entity";
 import { Voucher, VoucherDiscountType } from "./entity/voucher.entity";
 import { VoucherRedemption } from "./entity/voucher-redemption.entity";
-
-type StockReservationItem = {
-  productId: number;
-  quantity: number;
-  skuId?: number | null;
-};
-
-interface AdminGhnOrderListQuery {
-  page: number;
-  limit: number;
-  status?: string;
-  ghnStatus?: string;
-  hasGhnCode?: boolean;
-  search?: string;
-  dateFrom?: string;
-  dateTo?: string;
-}
-
-interface AdminGhnOrderListItem {
-  orderId: number;
-  userId: number;
-  sellerId: number;
-  orderStatus: OrderStatus | undefined;
-  ghnOrderCode: string | null;
-  shippingFee: number | null;
-  codAmount: number | null;
-  paymentMethod: PaymentMethod;
-  lastGhnStatus: string | null;
-  lastSyncedAt: Date | null;
-  updatedAt: Date;
-  availableActions: string[];
-}
-
-interface AdminGhnOrderDetail {
-  localOrder: {
-    orderId: number;
-    userId: number;
-    sellerId: number;
-    orderStatus: OrderStatus | undefined;
-    ghnOrderCode: string | null;
-    shippingAddress: string;
-    shippingFee: number | null;
-    codAmount: number | null;
-    paymentMethod: PaymentMethod;
-    total: number;
-    items: OrderItem[];
-    createdAt: Date;
-    updatedAt: Date;
-  };
-  ghnDetail: GhnOrderDetail | null;
-  ghnDetailError: string | null;
-  lastGhnStatus: string | null;
-  lastSyncedAt: Date | null;
-  availableActions: string[];
-}
-
-interface AdminGhnSyncResult {
-  orderId: number;
-  previousStatus: OrderStatus | undefined;
-  newStatus: OrderStatus | undefined;
-  ghnStatus: string;
-  syncedAt: Date;
-}
-
-// F4 — analytics dashboard aggregates.
-export interface AnalyticsQuery {
-  // null → global scope (admin / shipping console); a number → single seller.
-  sellerId: number | null;
-  from?: string;
-  to?: string;
-  interval?: "day" | "month";
-  topN?: number;
-}
-
-export interface RevenuePoint {
-  period: string;
-  revenue: number;
-  orderCount: number;
-}
-
-export interface TopProduct {
-  productId: number;
-  productName: string;
-  quantitySold: number;
-  revenue: number;
-}
-
-export interface OrderAnalytics {
-  scope: "seller" | "global";
-  from: string;
-  to: string;
-  interval: "day" | "month";
-  summary: {
-    totalRevenue: number;
-    completedOrders: number;
-    totalOrders: number;
-    averageOrderValue: number;
-  };
-  revenueOverTime: RevenuePoint[];
-  statusDistribution: Record<string, number>;
-  topProducts: TopProduct[];
-}
-
-type AdminGhnActionType = "cancel" | "return";
-
-interface AdminGhnActionResult {
-  orderId: number;
-  action: AdminGhnActionType;
-  ghnOrderCode: string;
-  previousStatus: OrderStatus | undefined;
-  newStatus: OrderStatus | undefined;
-  success: boolean;
-  message: string;
-  actionedAt: Date;
-}
-
-interface AdminGhnUpdateCodResult {
-  orderId: number;
-  action: "update_cod";
-  ghnOrderCode: string;
-  previousCodAmount: number;
-  newCodAmount: number;
-  success: boolean;
-  message: string;
-  actionedAt: Date;
-}
-
-interface AdminGhnReceiverUpdateInput {
-  toName?: string;
-  toPhone?: string;
-  toAddress?: string;
-}
-
-interface AdminGhnUpdateReceiverResult {
-  orderId: number;
-  action: "update_receiver";
-  ghnOrderCode: string;
-  shippingAddress: string;
-  updatedFields: string[];
-  success: boolean;
-  message: string;
-  actionedAt: Date;
-}
-
-interface GhnStatusApplyResult {
-  previousStatus: OrderStatus | undefined;
-  newStatus: OrderStatus | undefined;
-  changed: boolean;
-  message: string;
-}
+import {
+  ORDER_MESSAGE,
+  VOUCHER_MESSAGE,
+} from "libs/constant/response-message.constant";
+import {
+  StockReservationItem,
+  AdminGhnOrderListQuery,
+  AdminGhnOrderListItem,
+  AdminGhnOrderDetail,
+  AdminGhnSyncResult,
+  AnalyticsQuery,
+  RevenuePoint,
+  TopProduct,
+  OrderAnalytics,
+  AdminGhnActionType,
+  AdminGhnActionResult,
+  AdminGhnUpdateCodResult,
+  AdminGhnReceiverUpdateInput,
+  AdminGhnUpdateReceiverResult,
+  GhnStatusApplyResult,
+} from "./orders.types";
 
 @Injectable()
 export class OrdersService {
@@ -261,7 +132,7 @@ export class OrdersService {
     // Single-seller path: gateway enriches every item with the same sellerId
     const sellerId = items[0]?.sellerId;
     if (!sellerId) {
-      throw new BadRequestException("Order items are missing sellerId");
+      throw new BadRequestException(ORDER_MESSAGE.ITEMS_MISSING_SELLER_ID);
     }
     // 1. Check stock in inventory for all items
     for (const item of items) {
@@ -282,7 +153,11 @@ export class OrdersService {
       );
       if (!result.available) {
         throw new BadRequestException(
-          `Insufficient stock for product ${item.productId}: requested ${item.quantity}, available ${result.availableStock}`,
+          ORDER_MESSAGE.INSUFFICIENT_STOCK(
+            item.productId,
+            item.quantity,
+            result.availableStock,
+          ),
         );
       }
     }
@@ -367,7 +242,7 @@ export class OrdersService {
       if (order.paymentMethod !== PaymentMethod.COD) {
         await this.cancelOrderAfterPaymentInitializationFailure(order);
         throw new ServiceUnavailableException(
-          "Payment initialization is temporarily unavailable",
+          ORDER_MESSAGE.PAYMENT_INIT_UNAVAILABLE,
         );
       }
       this.logger.warn(
@@ -414,40 +289,38 @@ export class OrdersService {
     const code = this.normalizeVoucherCode(rawCode);
     const voucher = await this.voucherRepository.findOne({ where: { code } });
     if (!voucher || !voucher.isActive) {
-      throw new NotFoundException(`Voucher ${code} not found or inactive`);
+      throw new NotFoundException(VOUCHER_MESSAGE.NOT_FOUND_OR_INACTIVE(code));
     }
     const now = new Date();
     if (voucher.startsAt && now < voucher.startsAt) {
-      throw new BadRequestException(`Voucher ${code} is not active yet`);
+      throw new BadRequestException(VOUCHER_MESSAGE.NOT_ACTIVE_YET(code));
     }
     if (voucher.expiresAt && now > voucher.expiresAt) {
-      throw new BadRequestException(`Voucher ${code} has expired`);
+      throw new BadRequestException(VOUCHER_MESSAGE.EXPIRED(code));
     }
     const minOrder = Number(voucher.minOrderAmount ?? 0);
     if (itemsTotal < minOrder) {
       throw new BadRequestException(
-        `Order subtotal must be at least ${minOrder} to use voucher ${code}`,
+        VOUCHER_MESSAGE.MIN_ORDER_NOT_MET(minOrder, code),
       );
     }
     if (
       voucher.usageLimit !== null &&
       voucher.usedCount >= voucher.usageLimit
     ) {
-      throw new BadRequestException(`Voucher ${code} has been fully redeemed`);
+      throw new BadRequestException(VOUCHER_MESSAGE.FULLY_REDEEMED(code));
     }
     if (voucher.perUserLimit !== null) {
       const usedByUser = await this.voucherRedemptionRepository.count({
         where: { voucherId: voucher.id, userId },
       });
       if (usedByUser >= voucher.perUserLimit) {
-        throw new BadRequestException(
-          `You have already used voucher ${code} the maximum number of times`,
-        );
+        throw new BadRequestException(VOUCHER_MESSAGE.USER_LIMIT_REACHED(code));
       }
     }
     const discountAmount = this.computeDiscount(voucher, itemsTotal);
     if (discountAmount <= 0) {
-      throw new BadRequestException(`Voucher ${code} yields no discount`);
+      throw new BadRequestException(VOUCHER_MESSAGE.NO_DISCOUNT(code));
     }
     return { voucher, discountAmount };
   }
@@ -498,7 +371,7 @@ export class OrdersService {
       .execute();
     if (!result.affected) {
       throw new ConflictException(
-        `Voucher ${voucher.code} has just been fully redeemed`,
+        VOUCHER_MESSAGE.JUST_FULLY_REDEEMED(voucher.code),
       );
     }
     await manager.save(
@@ -556,23 +429,19 @@ export class OrdersService {
     const code = this.normalizeVoucherCode(input.code);
     const existing = await this.voucherRepository.findOne({ where: { code } });
     if (existing) {
-      throw new ConflictException(`Voucher ${code} already exists`);
+      throw new ConflictException(VOUCHER_MESSAGE.ALREADY_EXISTS(code));
     }
     if (
       input.discountType === VoucherDiscountType.PERCENT &&
       (input.discountValue <= 0 || input.discountValue > 100)
     ) {
-      throw new BadRequestException(
-        "Percent discount value must be between 1 and 100",
-      );
+      throw new BadRequestException(VOUCHER_MESSAGE.PERCENT_VALUE_INVALID);
     }
     if (
       input.discountType === VoucherDiscountType.FIXED &&
       input.discountValue <= 0
     ) {
-      throw new BadRequestException(
-        "Fixed discount value must be greater than 0",
-      );
+      throw new BadRequestException(VOUCHER_MESSAGE.FIXED_VALUE_INVALID);
     }
     const voucher = this.voucherRepository.create({
       code,
@@ -608,7 +477,7 @@ export class OrdersService {
   async deactivateVoucher(id: number): Promise<Voucher> {
     const voucher = await this.voucherRepository.findOne({ where: { id } });
     if (!voucher) {
-      throw new NotFoundException(`Voucher ${id} not found`);
+      throw new NotFoundException(VOUCHER_MESSAGE.NOT_FOUND_BY_ID(id));
     }
     voucher.isActive = false;
     return this.voucherRepository.save(voucher);
@@ -650,7 +519,11 @@ export class OrdersService {
       );
       if (!result.available) {
         throw new BadRequestException(
-          `Insufficient stock for product ${item.productId}: requested ${item.quantity}, available ${result.availableStock}`,
+          ORDER_MESSAGE.INSUFFICIENT_STOCK(
+            item.productId,
+            item.quantity,
+            result.availableStock,
+          ),
         );
       }
     }
@@ -825,7 +698,7 @@ export class OrdersService {
         );
         if (!reserved) {
           throw new BadRequestException(
-            `Unable to reserve stock for product ${item.productId}`,
+            ORDER_MESSAGE.RESERVE_STOCK_FAILED(item.productId),
           );
         }
         reservedItems.push(item);
@@ -841,7 +714,9 @@ export class OrdersService {
     extraData: Record<string, unknown> = {},
   ): void {
     if (!this.fanoutChannel) {
-      throw new ServiceUnavailableException("RabbitMQ publisher unavailable");
+      throw new ServiceUnavailableException(
+        ORDER_MESSAGE.RMQ_PUBLISHER_UNAVAILABLE,
+      );
     }
 
     this.fanoutChannel.publish(
@@ -907,7 +782,9 @@ export class OrdersService {
     }
     if (throwOnFailure && failedProductIds.length > 0) {
       throw new ServiceUnavailableException(
-        `Reservation compensation failed for products: ${failedProductIds.join(", ")}`,
+        ORDER_MESSAGE.RESERVATION_COMPENSATION_FAILED(
+          failedProductIds.join(", "),
+        ),
       );
     }
   }
@@ -1175,7 +1052,7 @@ export class OrdersService {
     if (to) {
       toDate = new Date(to);
       if (Number.isNaN(toDate.getTime())) {
-        throw new BadRequestException(`Invalid "to" date: ${to}`);
+        throw new BadRequestException(ORDER_MESSAGE.INVALID_TO_DATE(to));
       }
       toDate.setHours(23, 59, 59, 999);
     } else {
@@ -1186,7 +1063,7 @@ export class OrdersService {
     if (from) {
       fromDate = new Date(from);
       if (Number.isNaN(fromDate.getTime())) {
-        throw new BadRequestException(`Invalid "from" date: ${from}`);
+        throw new BadRequestException(ORDER_MESSAGE.INVALID_FROM_DATE(from));
       }
       fromDate.setHours(0, 0, 0, 0);
     } else {
@@ -1196,7 +1073,7 @@ export class OrdersService {
     }
 
     if (fromDate.getTime() > toDate.getTime()) {
-      throw new BadRequestException(`"from" must be on or before "to"`);
+      throw new BadRequestException(ORDER_MESSAGE.FROM_AFTER_TO);
     }
     return { fromDate, toDate };
   }
@@ -1287,7 +1164,7 @@ export class OrdersService {
       relations: ["items"],
     });
     if (!order) {
-      throw new NotFoundException(`Order ${orderId} not found`);
+      throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
     }
 
     const latestHistory = await this.findLatestShippingHistory([order.id]);
@@ -1374,10 +1251,10 @@ export class OrdersService {
       relations: ["items"],
     });
     if (!order) {
-      throw new NotFoundException(`Order ${orderId} not found`);
+      throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
     }
     if (!order.ghnOrderCode) {
-      throw new BadRequestException(`Order ${orderId} has no GHN order code`);
+      throw new BadRequestException(ORDER_MESSAGE.NO_GHN_ORDER_CODE(orderId));
     }
 
     const previousStatus = order.status ?? OrderStatus.PENDING;
@@ -1401,7 +1278,7 @@ export class OrdersService {
     }
 
     if (!detail.status) {
-      const message = "GHN detail response did not include a status";
+      const message = ORDER_MESSAGE.GHN_DETAIL_STATUS_MISSING;
       const history = await this.recordShippingHistory({
         orderId: order.id,
         type: ShippingHistoryType.MANUAL_SYNC,
@@ -1414,7 +1291,12 @@ export class OrdersService {
         message,
         payloadSummary: { orderCode: order.ghnOrderCode },
       });
-      throw new BadRequestException(`${message}; historyId=${history.id}`);
+      throw new BadRequestException(
+        ORDER_MESSAGE.GHN_DETAIL_STATUS_MISSING_WITH_HISTORY(
+          message,
+          history.id,
+        ),
+      );
     }
 
     const result = await this.applyGhnStatus(order, detail.status);
@@ -1459,7 +1341,7 @@ export class OrdersService {
     ghnStatus: string,
   ): Promise<AdminGhnSyncResult> {
     if (process.env.GHN_DEMO_ENDPOINTS_ENABLED !== "true") {
-      throw new ForbiddenException("GHN demo status endpoint is disabled");
+      throw new ForbiddenException(ORDER_MESSAGE.GHN_DEMO_DISABLED);
     }
 
     const order = await this.orderRepository.findOne({
@@ -1467,7 +1349,7 @@ export class OrdersService {
       relations: ["items"],
     });
     if (!order) {
-      throw new NotFoundException(`Order ${orderId} not found`);
+      throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
     }
 
     const result = await this.applyGhnStatus(order, ghnStatus);
@@ -1530,14 +1412,14 @@ export class OrdersService {
       relations: ["items"],
     });
     if (!order) {
-      throw new NotFoundException(`Order ${orderId} not found`);
+      throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
     }
     if (!order.ghnOrderCode) {
-      throw new BadRequestException(`Order ${orderId} has no GHN order code`);
+      throw new BadRequestException(ORDER_MESSAGE.NO_GHN_ORDER_CODE(orderId));
     }
     if (!this.getAvailableShippingActions(order).includes(action)) {
       throw new BadRequestException(
-        `Action "${action}" is not allowed for order ${orderId} in status "${order.status}"`,
+        ORDER_MESSAGE.GHN_ACTION_NOT_ALLOWED(action, orderId, order.status),
       );
     }
 
@@ -1582,8 +1464,8 @@ export class OrdersService {
     }
 
     const message = changed
-      ? `GHN ${action} accepted; order canceled`
-      : `GHN ${action} accepted; local order already changed concurrently`;
+      ? ORDER_MESSAGE.GHN_ACTION_ACCEPTED_CANCELED(action)
+      : ORDER_MESSAGE.GHN_ACTION_ACCEPTED_CONCURRENT(action);
     const history = await this.recordShippingHistory({
       orderId: order.id,
       type: ShippingHistoryType.ACTION,
@@ -1622,7 +1504,7 @@ export class OrdersService {
     codAmount: number,
   ): Promise<AdminGhnUpdateCodResult> {
     if (!Number.isFinite(codAmount) || codAmount < 0) {
-      throw new BadRequestException("codAmount must be a non-negative number");
+      throw new BadRequestException(ORDER_MESSAGE.COD_AMOUNT_INVALID);
     }
     const order = await this.loadEditableGhnOrder(orderId, "update_cod");
     const ghnOrderCode = order.ghnOrderCode as string;
@@ -1653,7 +1535,10 @@ export class OrdersService {
       { codAmount: newCodAmount },
     );
 
-    const message = `GHN COD updated from ${previousCodAmount} to ${newCodAmount}`;
+    const message = ORDER_MESSAGE.GHN_COD_UPDATED(
+      previousCodAmount,
+      newCodAmount,
+    );
     const history = await this.recordShippingHistory({
       orderId: order.id,
       type: ShippingHistoryType.ACTION,
@@ -1708,9 +1593,7 @@ export class OrdersService {
       updatedFields.push("toAddress");
     }
     if (updatedFields.length === 0) {
-      throw new BadRequestException(
-        "Provide at least one of toName, toPhone, toAddress",
-      );
+      throw new BadRequestException(ORDER_MESSAGE.RECEIVER_FIELDS_REQUIRED);
     }
 
     const order = await this.loadEditableGhnOrder(orderId, "update_receiver");
@@ -1744,7 +1627,9 @@ export class OrdersService {
     order.shippingAddress = shippingAddress;
     await this.orderRepository.update({ id: order.id }, { shippingAddress });
 
-    const message = `GHN receiver updated (${updatedFields.join(", ")})`;
+    const message = ORDER_MESSAGE.GHN_RECEIVER_UPDATED(
+      updatedFields.join(", "),
+    );
     const history = await this.recordShippingHistory({
       orderId: order.id,
       type: ShippingHistoryType.ACTION,
@@ -1784,14 +1669,14 @@ export class OrdersService {
       relations: ["items"],
     });
     if (!order) {
-      throw new NotFoundException(`Order ${orderId} not found`);
+      throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
     }
     if (!order.ghnOrderCode) {
-      throw new BadRequestException(`Order ${orderId} has no GHN order code`);
+      throw new BadRequestException(ORDER_MESSAGE.NO_GHN_ORDER_CODE(orderId));
     }
     if (!this.getAvailableShippingActions(order).includes(action)) {
       throw new BadRequestException(
-        `Action "${action}" is not allowed for order ${orderId} in status "${order.status}"`,
+        ORDER_MESSAGE.GHN_ACTION_NOT_ALLOWED(action, orderId, order.status),
       );
     }
     return order;
@@ -1821,7 +1706,7 @@ export class OrdersService {
   async getAdminGhnHistory(orderId: number): Promise<ShippingHistory[]> {
     const exists = await this.orderRepository.exist({ where: { id: orderId } });
     if (!exists) {
-      throw new NotFoundException(`Order ${orderId} not found`);
+      throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
     }
     return this.shippingHistoryRepository.find({
       where: { orderId },
@@ -1999,7 +1884,7 @@ export class OrdersService {
       this.logger.warn(
         `[ORDERS] payment_completed: order ${orderId} not found`,
       );
-      throw new NotFoundException(`Order ${orderId} not found`);
+      throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
     }
 
     // COD orders: payment_completed is emitted by GHN webhook on delivery,
@@ -2053,7 +1938,7 @@ export class OrdersService {
   ): Promise<Order> {
     const order = await this.getOrderById(orderId);
     if (!order) {
-      throw new NotFoundException(`Order ${orderId} not found`);
+      throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
     }
 
     if (
@@ -2061,13 +1946,11 @@ export class OrdersService {
       order.status !== OrderStatus.CONFIRMED &&
       order.status !== OrderStatus.PROCESSING
     ) {
-      throw new BadRequestException("Order cannot be canceled");
+      throw new BadRequestException(ORDER_MESSAGE.CANNOT_CANCEL);
     }
 
     if (callerRole !== "admin" && Number(order.userId) !== callerId) {
-      throw new ForbiddenException(
-        "You do not have permission to cancel this order",
-      );
+      throw new ForbiddenException(ORDER_MESSAGE.CANCEL_FORBIDDEN);
     }
 
     await this.finalizeCancellation(order);
@@ -2262,7 +2145,7 @@ export class OrdersService {
     const mappedStatus = this.mapGhnStatus(ghnStatus);
     const currentStatus = order.status ?? OrderStatus.PENDING;
     if (!mappedStatus) {
-      const message = `Unhandled GHN status "${ghnStatus}"`;
+      const message = ORDER_MESSAGE.GHN_STATUS_UNHANDLED(ghnStatus);
       this.logger.log(`[GHN] ${message} for order ${order.id} - skipping`);
       return {
         previousStatus: currentStatus,
@@ -2276,7 +2159,11 @@ export class OrdersService {
       currentStatus === OrderStatus.CANCELED ||
       currentStatus === OrderStatus.COMPLETED
     ) {
-      const message = `Ignored GHN status "${ghnStatus}" for terminal order ${order.id} (${currentStatus})`;
+      const message = ORDER_MESSAGE.GHN_STATUS_TERMINAL_IGNORED(
+        ghnStatus,
+        order.id,
+        currentStatus,
+      );
       this.logger.warn(`[GHN] ${message}`);
       return {
         previousStatus: currentStatus,
@@ -2298,7 +2185,11 @@ export class OrdersService {
       [OrderStatus.REFUNDED]: 8,
     };
     if (statusRank[mappedStatus] <= statusRank[currentStatus]) {
-      const message = `Ignored duplicate or stale GHN status "${ghnStatus}" for order ${order.id} (${currentStatus})`;
+      const message = ORDER_MESSAGE.GHN_STATUS_STALE_IGNORED(
+        ghnStatus,
+        order.id,
+        currentStatus,
+      );
       this.logger.log(`[GHN] ${message}`);
       return {
         previousStatus: currentStatus,
@@ -2313,7 +2204,10 @@ export class OrdersService {
       { status: mappedStatus },
     );
     if (updateResult.affected !== 1) {
-      const message = `Order ${order.id} changed concurrently; GHN status "${ghnStatus}" skipped`;
+      const message = ORDER_MESSAGE.GHN_STATUS_CONCURRENT_SKIPPED(
+        order.id,
+        ghnStatus,
+      );
       this.logger.log(`[GHN] ${message}`);
       return {
         previousStatus: currentStatus,
@@ -2337,7 +2231,7 @@ export class OrdersService {
       previousStatus: currentStatus,
       newStatus: mappedStatus,
       changed: true,
-      message: `Order status updated to ${mappedStatus}`,
+      message: ORDER_MESSAGE.STATUS_UPDATED(mappedStatus),
     };
   }
 
@@ -2431,7 +2325,7 @@ export class OrdersService {
       .getOne();
 
     if (!order) {
-      throw new NotFoundException("Product not found in any completed order");
+      throw new NotFoundException(ORDER_MESSAGE.PRODUCT_NOT_PURCHASED);
     }
 
     return { valid: true, orderId: order.id };
@@ -2446,10 +2340,10 @@ export class OrdersService {
       relations: ["items"],
     });
     if (!order) {
-      throw new NotFoundException(`Order ${orderId} not found`);
+      throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
     }
     if (Number(order.userId) !== requestingUserId) {
-      throw new ForbiddenException("You do not have access to this order");
+      throw new ForbiddenException(ORDER_MESSAGE.ACCESS_DENIED);
     }
     const user = await firstValueFrom(
       this.userClient
@@ -2558,19 +2452,17 @@ export class OrdersService {
     const productIds = await this.getSellerProductIds(sellerId);
     const owns = await this.verifySellerOwnsOrder(orderId, productIds);
     if (!owns) {
-      throw new ForbiddenException("You do not have access to this order");
+      throw new ForbiddenException(ORDER_MESSAGE.ACCESS_DENIED);
     }
 
     const order = await this.orderRepository.findOne({
       where: { id: orderId },
     });
     if (!order) {
-      throw new NotFoundException(`Order ${orderId} not found`);
+      throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
     }
     if (order.status !== OrderStatus.PENDING) {
-      throw new BadRequestException(
-        `Order cannot be confirmed — current status: ${order.status}`,
-      );
+      throw new BadRequestException(ORDER_MESSAGE.CANNOT_CONFIRM(order.status));
     }
 
     order.status = OrderStatus.CONFIRMED;
@@ -2581,7 +2473,7 @@ export class OrdersService {
     const productIds = await this.getSellerProductIds(sellerId);
     const owns = await this.verifySellerOwnsOrder(orderId, productIds);
     if (!owns) {
-      throw new ForbiddenException("You do not have access to this order");
+      throw new ForbiddenException(ORDER_MESSAGE.ACCESS_DENIED);
     }
 
     const order = await this.orderRepository.findOne({
@@ -2589,11 +2481,11 @@ export class OrdersService {
       relations: ["items"],
     });
     if (!order) {
-      throw new NotFoundException(`Order ${orderId} not found`);
+      throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
     }
     if (order.status !== OrderStatus.CONFIRMED) {
       throw new BadRequestException(
-        `Order cannot be marked ready-to-ship — current status: ${order.status}`,
+        ORDER_MESSAGE.CANNOT_READY_TO_SHIP(order.status),
       );
     }
 
@@ -2641,7 +2533,7 @@ export class OrdersService {
       relations: ["items"],
     });
     if (!order) {
-      throw new NotFoundException(`Order ${orderId} not found`);
+      throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
     }
     if (!isAdmin) {
       const productIds = await this.getSellerProductIds(sellerId);
@@ -2649,7 +2541,7 @@ export class OrdersService {
         productIds.length > 0 &&
         (await this.verifySellerOwnsOrder(orderId, productIds));
       if (!owns) {
-        throw new ForbiddenException("You do not have access to this order");
+        throw new ForbiddenException(ORDER_MESSAGE.ACCESS_DENIED);
       }
     }
     return order;
@@ -2672,7 +2564,7 @@ export class OrdersService {
       relations: ["items"],
     });
     if (!order) {
-      throw new NotFoundException(`Order ${orderId} not found`);
+      throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
     }
     if (!isAdmin) {
       const productIds = await this.getSellerProductIds(sellerId);
@@ -2680,7 +2572,7 @@ export class OrdersService {
         productIds.length > 0 &&
         (await this.verifySellerOwnsOrder(orderId, productIds));
       if (!owns) {
-        throw new ForbiddenException("You do not have access to this order");
+        throw new ForbiddenException(ORDER_MESSAGE.ACCESS_DENIED);
       }
     }
 
@@ -2688,7 +2580,7 @@ export class OrdersService {
     const expected = OrdersService.SELLER_FORWARD_TRANSITIONS[currentStatus];
     if (expected !== targetStatus) {
       throw new BadRequestException(
-        `Cannot transition order from ${currentStatus} to ${targetStatus}`,
+        ORDER_MESSAGE.INVALID_TRANSITION(currentStatus, targetStatus),
       );
     }
 
@@ -2697,9 +2589,7 @@ export class OrdersService {
       { status: targetStatus },
     );
     if (updateResult.affected !== 1) {
-      throw new ConflictException(
-        `Order ${orderId} was updated concurrently; please retry`,
-      );
+      throw new ConflictException(ORDER_MESSAGE.CONCURRENT_UPDATE(orderId));
     }
     order.status = targetStatus;
     this.logger.log(
@@ -2731,19 +2621,17 @@ export class OrdersService {
       where: { id: orderId },
     });
     if (!order) {
-      throw new NotFoundException(`Order ${orderId} not found`);
+      throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
     }
     if (Number(order.userId) !== userId) {
-      throw new ForbiddenException(
-        "You do not have permission to request a return for this order",
-      );
+      throw new ForbiddenException(ORDER_MESSAGE.RETURN_FORBIDDEN);
     }
     if (
       order.status !== OrderStatus.DELIVERING &&
       order.status !== OrderStatus.COMPLETED
     ) {
       throw new BadRequestException(
-        `Order is not eligible for a return request — current status: ${order.status}`,
+        ORDER_MESSAGE.RETURN_NOT_ELIGIBLE(order.status),
       );
     }
 
@@ -2757,9 +2645,7 @@ export class OrdersService {
       },
     });
     if (existing) {
-      throw new ConflictException(
-        "An active return request already exists for this order",
-      );
+      throw new ConflictException(ORDER_MESSAGE.RETURN_ALREADY_ACTIVE);
     }
 
     const saved = await this.returnRequestRepository.save(
@@ -2797,11 +2683,13 @@ export class OrdersService {
       where: { id: requestId },
     });
     if (!request) {
-      throw new NotFoundException(`Return request ${requestId} not found`);
+      throw new NotFoundException(
+        ORDER_MESSAGE.RETURN_REQUEST_NOT_FOUND(requestId),
+      );
     }
     if (request.status !== ReturnRequestStatus.PENDING_REVIEW) {
       throw new BadRequestException(
-        `Return request ${requestId} has already been reviewed`,
+        ORDER_MESSAGE.RETURN_ALREADY_REVIEWED(requestId),
       );
     }
 
@@ -2810,7 +2698,7 @@ export class OrdersService {
       relations: ["items"],
     });
     if (!order) {
-      throw new NotFoundException(`Order ${request.orderId} not found`);
+      throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(request.orderId));
     }
 
     if (reviewerRole !== "admin") {
@@ -2820,7 +2708,7 @@ export class OrdersService {
         (await this.verifySellerOwnsOrder(request.orderId, productIds));
       if (!owns) {
         throw new ForbiddenException(
-          "You do not have access to this return request",
+          ORDER_MESSAGE.RETURN_REQUEST_ACCESS_DENIED,
         );
       }
     }
@@ -2884,9 +2772,7 @@ export class OrdersService {
     rejectReason?: string,
   ): Promise<OrderReturnRequest> {
     if (!rejectReason || rejectReason.trim().length === 0) {
-      throw new BadRequestException(
-        "A reject reason is required to reject a return request",
-      );
+      throw new BadRequestException(ORDER_MESSAGE.REJECT_REASON_REQUIRED);
     }
     const restoreStatus =
       (request.previousOrderStatus as OrderStatus | null) ??

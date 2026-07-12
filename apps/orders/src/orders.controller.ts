@@ -11,11 +11,8 @@ import {
   Payload,
   RmqContext,
 } from "@nestjs/microservices";
-import {
-  OrdersService,
-  type AnalyticsQuery,
-  type OrderAnalytics,
-} from "./orders.service";
+import { OrdersService } from "./orders.service";
+import type { AnalyticsQuery, OrderAnalytics } from "./orders.types";
 import { EVENT } from "@app/common/constants/event";
 import {
   HttpToRpcExceptionFilter,

@@ -1,6 +1,7 @@
 import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { IsNull, Repository } from "typeorm";
+import { ORDER_MESSAGE } from "libs/constant/response-message.constant";
 import { Cart } from "./entity/cart.entity";
 import { CartItem } from "./entity/cart-item.entity";
 
@@ -80,7 +81,7 @@ export class CartService {
       relations: ["cart"],
     });
     if (!item || item.cart.userId !== userId) {
-      throw new NotFoundException("Cart item not found");
+      throw new NotFoundException(ORDER_MESSAGE.CART_ITEM_NOT_FOUND);
     }
     return item;
   }
