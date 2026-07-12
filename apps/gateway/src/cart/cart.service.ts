@@ -5,17 +5,10 @@ import { firstValueFrom, timeout, catchError } from "rxjs";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { CART_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
+import { PRODUCT_MESSAGE } from "libs/constant/response-message.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
 import { AddToCartDto } from "./dto/cart.dto";
-
-interface ProductResponse {
-  price: number | null;
-}
-
-interface ProductSkuResponse {
-  productId: number;
-  tierIdx: number[] | string;
-}
+import { ProductResponse, ProductSkuResponse } from "./cart.types";
 
 @Injectable()
 export class CartGatewayService {
@@ -50,7 +43,7 @@ export class CartGatewayService {
         MicroserviceErrorHandler.handleError(
           {
             statusCode: 400,
-            message: "SKU does not belong to the specified product",
+            message: PRODUCT_MESSAGE.SKU_NOT_OF_SPECIFIED_PRODUCT,
           },
           "add to cart",
           "Product Service",
@@ -79,7 +72,7 @@ export class CartGatewayService {
         MicroserviceErrorHandler.handleError(
           {
             statusCode: 400,
-            message: "Product has no base price — specify a skuId",
+            message: PRODUCT_MESSAGE.BASE_PRICE_REQUIRES_SKU,
           },
           "add to cart",
           "Product Service",

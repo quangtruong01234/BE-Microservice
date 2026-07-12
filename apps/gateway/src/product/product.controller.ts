@@ -24,8 +24,9 @@ import {
   CreateCategoryDto,
   ReviewCategoryDto,
   WishlistQueryDto,
+  GetProductsWithInventoryDto,
 } from "./dto";
-import { CreateReviewDto } from "./dto/review.dto";
+import { CreateReviewDto, ReviewQueryDto } from "./dto/review.dto";
 import {
   ApiTags,
   ApiOperation,
@@ -162,6 +163,10 @@ export class ProductController {
     status: 400,
     description: "Bad Request - Invalid input data.",
   })
+  @ApiResponse({
+    status: 409,
+    description: "Conflict - brand already exists or is pending review.",
+  })
   async createBrand(@Body() dto: CreateBrandDto, @Req() req: Request) {
     const userId = (req.user as { id: number }).id;
     return await this.productService.createBrand(dto, userId);
@@ -226,6 +231,10 @@ export class ProductController {
   @ApiResponse({
     status: 400,
     description: "Bad Request - Invalid input data.",
+  })
+  @ApiResponse({
+    status: 409,
+    description: "Conflict - category already exists or is pending review.",
   })
   async createCategory(@Body() dto: CreateCategoryDto, @Req() req: Request) {
     const userId = (req.user as { id: number }).id;
@@ -316,10 +325,13 @@ export class ProductController {
   @ApiQuery({ name: "limit", required: false, type: Number })
   async getProductReviews(
     @Param("id", ParseIntPipe) id: number,
-    @Query("page") page = 1,
-    @Query("limit") limit = 10,
+    @Query() query: ReviewQueryDto,
   ) {
-    return this.productService.getProductReviews(id, +page, +limit);
+    return this.productService.getProductReviews(
+      id,
+      query.page ?? 1,
+      query.limit ?? 10,
+    );
   }
 
   @Post(":id/reviews")
@@ -478,19 +490,7 @@ export class ProductController {
   @ApiOperation({
     summary: "Get multiple products with inventory by product IDs",
   })
-  @ApiBody({
-    schema: {
-      type: "object",
-      properties: {
-        productIds: {
-          type: "array",
-          items: { type: "number" },
-          description: "Array of product IDs",
-        },
-      },
-      required: ["productIds"],
-    },
-  })
+  @ApiBody({ type: GetProductsWithInventoryDto })
   @ApiResponse({
     status: 200,
     description: "Products with inventory retrieved successfully.",
@@ -499,8 +499,10 @@ export class ProductController {
     status: 400,
     description: "Bad Request - Invalid product IDs.",
   })
-  async getProductsWithInventory(@Body() body: { productIds: number[] }) {
-    return await this.productService.getProductsWithInventory(body.productIds);
+  async getProductsWithInventory(@Body() body: GetProductsWithInventoryDto) {
+    return await this.productService.getProductsWithInventory([
+      ...new Set(body.productIds),
+    ]);
   }
 
   @Get(":id/stock-check")

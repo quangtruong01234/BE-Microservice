@@ -1,6 +1,7 @@
 import { ForbiddenException } from "@nestjs/common";
 import { ClientProxy } from "@nestjs/microservices";
 import { of } from "rxjs";
+import { INVENTORY_MESSAGE_PATTERNS } from "libs/constant/message-pattern-inventory.constant";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
 import { ProductService } from "./product.service";
 
@@ -110,5 +111,56 @@ describe("ProductService ownership", () => {
       avatar: "avatar.jpg",
     });
     expect(products[0].user).not.toHaveProperty("email");
+  });
+
+  it("uses an explicit product SKU when creating the base inventory row", async () => {
+    productClient.send.mockReturnValue(of({ id: 321, categories: [] }));
+    inventoryClient.send.mockReturnValue(of({ id: 99, productId: 321 }));
+
+    await service.createProduct(
+      {
+        name: "Explicit SKU product",
+        price: 1000,
+        stockQuantity: 4,
+        sku: "SHOP-321",
+        categoryIds: [20],
+      },
+      23,
+    );
+
+    expect(inventoryClient.send).toHaveBeenCalledWith(
+      INVENTORY_MESSAGE_PATTERNS.INVENTORY_CREATE,
+      {
+        productId: 321,
+        sku: "SHOP-321",
+        availableStock: 4,
+        minimumStock: 0,
+      },
+    );
+  });
+
+  it("generates a base inventory SKU when the product SKU is omitted", async () => {
+    productClient.send.mockReturnValue(of({ id: 322, categories: [] }));
+    inventoryClient.send.mockReturnValue(of({ id: 100, productId: 322 }));
+
+    await service.createProduct(
+      {
+        name: "No SKU product",
+        price: 1000,
+        stockQuantity: 4,
+        categoryIds: [20],
+      },
+      23,
+    );
+
+    expect(inventoryClient.send).toHaveBeenCalledWith(
+      INVENTORY_MESSAGE_PATTERNS.INVENTORY_CREATE,
+      {
+        productId: 322,
+        sku: "PROD-322",
+        availableStock: 4,
+        minimumStock: 0,
+      },
+    );
   });
 });

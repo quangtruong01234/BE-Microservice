@@ -4,12 +4,7 @@ import { firstValueFrom, Observable, timeout } from "rxjs";
 import { PAYMENT_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
-
-interface PaymentOption {
-  id: string;
-  name: string;
-  description: string;
-}
+import { PaymentOption } from "./payment-options.types";
 
 @Injectable()
 export class PaymentOptionsService {

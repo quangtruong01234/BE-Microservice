@@ -18,6 +18,7 @@ import {
 } from "@nestjs/swagger";
 import { Type } from "class-transformer";
 import { IsInt, IsNotEmpty, IsOptional, IsString } from "class-validator";
+import { UPLOAD_MESSAGE } from "libs/constant/response-message.constant";
 import { UploadService } from "./upload.service";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
@@ -114,7 +115,9 @@ export class UploadController {
           `Cloudinary destroy request failed for ${sig.public_id}`,
           error instanceof Error ? error.stack : String(error),
         );
-        throw new ServiceUnavailableException("Media service is unavailable");
+        throw new ServiceUnavailableException(
+          UPLOAD_MESSAGE.MEDIA_SERVICE_UNAVAILABLE,
+        );
       }
 
       if (!res.ok) {
@@ -122,7 +125,7 @@ export class UploadController {
         this.logger.error(
           `Cloudinary destroy returned ${res.status} for ${sig.public_id}: ${details}`,
         );
-        throw new BadGatewayException("Failed to delete media");
+        throw new BadGatewayException(UPLOAD_MESSAGE.DELETE_FAILED);
       }
 
       const json = (await res.json()) as { result: string };

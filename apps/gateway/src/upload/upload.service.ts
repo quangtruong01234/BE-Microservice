@@ -4,14 +4,13 @@ import {
   Injectable,
 } from "@nestjs/common";
 import { createHash } from "crypto";
-
-const ALLOWED_UPLOAD_FOLDERS = new Set([
-  "trybuy/products",
-  "trybuy/posts",
-  "avatars",
-]);
-
-const PUBLIC_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+import { UPLOAD_MESSAGE } from "libs/constant/response-message.constant";
+import {
+  ALLOWED_UPLOAD_FOLDERS,
+  ALLOWED_UPLOAD_FORMATS_BY_FOLDER,
+  PUBLIC_ID_PATTERN,
+} from "./upload.constants";
+import { UploadSignatureResponse } from "./upload.types";
 
 function requireEnv(key: string): string {
   const value = process.env[key];
@@ -32,27 +31,21 @@ export class UploadService {
     folder: string,
     userId: number,
     incomingPublicId?: string,
-  ): {
-    signature: string;
-    timestamp: number;
-    api_key: string;
-    cloud_name: string;
-    folder: string;
-    public_id: string;
-  } {
+  ): UploadSignatureResponse {
     const apiSecret = requireEnv("CLOUDINARY_API_SECRET");
     const apiKey = requireEnv("CLOUDINARY_API_KEY");
     const cloudName = requireEnv("CLOUDINARY_CLOUD_NAME");
 
     const timestamp = Math.floor(Date.now() / 1000);
     const normalizedFolder = this.normalizeAllowedFolder(folder);
+    const allowedFormats = ALLOWED_UPLOAD_FORMATS_BY_FOLDER[normalizedFolder];
     const publicId = this.normalizeOwnedUploadPublicId(
       userId,
       incomingPublicId,
     );
 
     // params must be sorted alphabetically for Cloudinary signature
-    const paramsToSign = `folder=${normalizedFolder}&public_id=${publicId}&timestamp=${timestamp}${apiSecret}`;
+    const paramsToSign = `allowed_formats=${allowedFormats}&folder=${normalizedFolder}&public_id=${publicId}&timestamp=${timestamp}${apiSecret}`;
     const signature = createHash("sha1").update(paramsToSign).digest("hex");
 
     return {
@@ -62,6 +55,7 @@ export class UploadService {
       cloud_name: cloudName,
       folder: normalizedFolder,
       public_id: publicId,
+      allowed_formats: allowedFormats,
     };
   }
 
@@ -101,7 +95,7 @@ export class UploadService {
   private normalizeAllowedFolder(folder: string): string {
     const normalizedFolder = folder.trim().replace(/^\/+|\/+$/g, "");
     if (!ALLOWED_UPLOAD_FOLDERS.has(normalizedFolder)) {
-      throw new BadRequestException("Upload folder is not allowed");
+      throw new BadRequestException(UPLOAD_MESSAGE.FOLDER_NOT_ALLOWED);
     }
     return normalizedFolder;
   }
@@ -112,10 +106,10 @@ export class UploadService {
   ): string {
     const publicId = incomingPublicId?.trim() || `${userId}_${nanoid()}`;
     if (publicId.includes("/") || !PUBLIC_ID_PATTERN.test(publicId)) {
-      throw new BadRequestException("Invalid publicId");
+      throw new BadRequestException(UPLOAD_MESSAGE.INVALID_PUBLIC_ID_UPLOAD);
     }
     if (!publicId.startsWith(`${userId}_`)) {
-      throw new ForbiddenException("Cannot sign media for another user");
+      throw new ForbiddenException(UPLOAD_MESSAGE.CANNOT_SIGN_FOR_ANOTHER_USER);
     }
     return publicId;
   }
@@ -131,7 +125,7 @@ export class UploadService {
       lastSlashIndex <= 0 ||
       lastSlashIndex === normalizedPublicId.length - 1
     ) {
-      throw new BadRequestException("Invalid public_id");
+      throw new BadRequestException(UPLOAD_MESSAGE.INVALID_PUBLIC_ID_DELETE);
     }
 
     const folder = normalizedPublicId.slice(0, lastSlashIndex);
@@ -139,11 +133,11 @@ export class UploadService {
     this.normalizeAllowedFolder(folder);
 
     if (!PUBLIC_ID_PATTERN.test(publicIdLeaf)) {
-      throw new BadRequestException("Invalid public_id");
+      throw new BadRequestException(UPLOAD_MESSAGE.INVALID_PUBLIC_ID_DELETE);
     }
 
     if (userRole !== "admin" && !publicIdLeaf.startsWith(`${userId}_`)) {
-      throw new ForbiddenException("Cannot delete media owned by another user");
+      throw new ForbiddenException(UPLOAD_MESSAGE.CANNOT_DELETE_OTHERS_MEDIA);
     }
 
     return `${folder}/${publicIdLeaf}`;

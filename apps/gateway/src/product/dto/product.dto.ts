@@ -1,8 +1,11 @@
 import { PartialType } from "@nestjs/swagger";
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { Type } from "class-transformer";
 import {
+  ArrayMaxSize,
   IsArray,
   IsBoolean,
+  IsInt,
   IsNumber,
   IsOptional,
   IsString,
@@ -18,6 +21,20 @@ export class ProductResponseDto {
   @IsArray()
   @IsNumber({}, { each: true })
   declare categoryIds: number[];
+}
+
+export class GetProductsWithInventoryDto {
+  @ApiProperty({
+    type: [Number],
+    description: "Product IDs to fetch (max 50)",
+    example: [1, 2, 3],
+    maxItems: 50,
+  })
+  @IsArray()
+  @ArrayMaxSize(50)
+  @IsInt({ each: true })
+  @Type(() => Number)
+  declare productIds: number[];
 }
 
 export class CreateSkuGatewayDto {

@@ -3,6 +3,7 @@ import { ClientProxy } from "@nestjs/microservices";
 import { firstValueFrom, timeout, catchError, of } from "rxjs";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
+import { PRODUCT_MESSAGE } from "libs/constant/response-message.constant";
 import { INVENTORY_MESSAGE_PATTERNS } from "libs/constant/message-pattern-inventory.constant";
 import {
   ORDER_MESSAGE_PATTERN,
@@ -22,69 +23,12 @@ import {
   WishlistQueryDto,
 } from "./dto";
 import { PaginatedResponse } from "@app/common";
-
-export interface ProductWithInventory {
-  // Product fields
-  id: number;
-  name: string;
-  description?: string;
-  price: number;
-  stockQuantity: number;
-  sku: string;
-  brandId?: number;
-  userId?: number;
-  isActive: boolean;
-  createdAt: Date;
-  updatedAt: Date;
-  brand?: unknown;
-  categories: unknown[];
-
-  // User information
-  user?: {
-    id: number;
-    name: string;
-    avatar?: string;
-  };
-
-  // Inventory fields
-  inventory?: {
-    id: number;
-    productId: number;
-    sku: string;
-    availableStock: number;
-    reservedStock: number;
-    minimumStock: number;
-    location?: string;
-    isActive: boolean;
-    totalStock: number;
-    isLowStock: boolean;
-  } | null;
-}
-
-type ProductData = {
-  id?: string | number;
-  userId?: string | number;
-  name?: string;
-  items?: ProductData[];
-  data?: ProductData | ProductData[];
-  [key: string]: unknown;
-};
-
-type InventoryData = {
-  productId?: number;
-  availableStock?: number;
-  reservedStock?: number;
-  minimumStock?: number;
-  updatedAt?: unknown;
-  [key: string]: unknown;
-};
-
-type UserData = {
-  id?: number;
-  name?: string;
-  username?: string;
-  avatar?: string;
-};
+import {
+  InventoryData,
+  ProductData,
+  ProductWithInventory,
+  UserData,
+} from "./product.types";
 
 @Injectable()
 export class ProductService {
@@ -138,7 +82,7 @@ export class ProductService {
             this.inventoryClient
               .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_CREATE, {
                 productId: Number(result.id),
-                sku: dto.sku,
+                sku: this.buildInventorySku(result.id, dto.sku),
                 availableStock: dto.stockQuantity ?? 0,
                 minimumStock: 0,
               })
@@ -423,6 +367,13 @@ export class ProductService {
     }
   }
 
+  private buildInventorySku(productId: number | string, sku?: string): string {
+    const normalizedSku = sku?.trim();
+    return normalizedSku && normalizedSku.length > 0
+      ? normalizedSku
+      : `PROD-${String(productId)}`;
+  }
+
   private async cleanupInventoryForProduct(productId: number): Promise<void> {
     try {
       await firstValueFrom(
@@ -477,7 +428,7 @@ export class ProductService {
 
     const product = await this.fetchProductForAccess(productId);
     if (Number(product.userId) !== callerId) {
-      throw new ForbiddenException("You cannot modify another user's product");
+      throw new ForbiddenException(PRODUCT_MESSAGE.CANNOT_MODIFY_ANOTHER_USER);
     }
   }
 
@@ -535,14 +486,22 @@ export class ProductService {
   // ============================================================================
 
   async createBrand(dto: CreateBrandDto, userId: number): Promise<unknown> {
-    return (await firstValueFrom(
-      this.productClient
-        .send(PRODUCT_MESSAGE_PATTERNS.BRAND_CREATE, {
-          ...dto,
-          submittedBy: userId,
-        })
-        .pipe(timeout(10000)),
-    )) as unknown;
+    try {
+      return (await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.BRAND_CREATE, {
+            ...dto,
+            submittedBy: userId,
+          })
+          .pipe(timeout(10000)),
+      )) as unknown;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "create brand",
+        "Product Service",
+      );
+    }
   }
 
   async getAllBrands(): Promise<unknown> {
@@ -597,14 +556,22 @@ export class ProductService {
     dto: CreateCategoryDto,
     userId: number,
   ): Promise<unknown> {
-    return (await firstValueFrom(
-      this.productClient
-        .send(PRODUCT_MESSAGE_PATTERNS.CATEGORY_CREATE, {
-          ...dto,
-          submittedBy: userId,
-        })
-        .pipe(timeout(10000)),
-    )) as unknown;
+    try {
+      return (await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.CATEGORY_CREATE, {
+            ...dto,
+            submittedBy: userId,
+          })
+          .pipe(timeout(10000)),
+      )) as unknown;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "create category",
+        "Product Service",
+      );
+    }
   }
 
   async getAllCategories(): Promise<unknown> {

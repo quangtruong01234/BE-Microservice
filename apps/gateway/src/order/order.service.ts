@@ -17,6 +17,11 @@ import {
 } from "libs/constant/message-pattern.constant";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
+import {
+  ORDER_MESSAGE,
+  PRODUCT_MESSAGE,
+  VOUCHER_MESSAGE,
+} from "libs/constant/response-message.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
 import { PaymentMethod } from "@app/common";
 import { CreateOrderDto } from "./dto/create-order.dto";
@@ -25,47 +30,19 @@ import { SellerOrdersQueryDto } from "./dto/seller-orders-query.dto";
 import { ShippingFeeDto } from "./dto/shipping-fee.dto";
 import { AdminGhnOrdersQueryDto } from "./dto/admin-ghn-orders-query.dto";
 import { AnalyticsQueryDto } from "./dto/analytics-query.dto";
-
-interface OrderResponse {
-  id: number;
-  userId: number;
-  status: string;
-  total: number;
-  items: unknown[];
-  createdAt: string;
-  updatedAt: string;
-}
-
-interface ProductPriceResponse {
-  id: number;
-  userId: number;
-  price: number | null;
-  isActive: boolean;
-  imageUrls?: string[] | null;
-  variations?: { name: string; options: string[] }[] | null;
-}
-
-interface SkuPriceResponse {
-  id: number;
-  productId: number;
-  price: number;
-  stockQuantity: number;
-  isActive: boolean;
-  tierIdx?: number[];
-}
-
-interface EnrichedOrderItem {
-  productId: number;
-  productName: string;
-  quantity: number;
-  weight?: number;
-  price: number;
-  skuId: number | null;
-  tierIdx: number[] | undefined;
-  sellerId: number;
-  productImage: string | null;
-  skuLabel: string | null;
-}
+import {
+  AdminGhnOrderListItem,
+  AdminGhnOrderListResult,
+  BuyerInfo,
+  EnrichedOrderItem,
+  OrderItemDetail,
+  OrderResponse,
+  ProductDetailResponse,
+  ProductPriceResponse,
+  SellerOrderDetailRaw,
+  SkuPriceResponse,
+  UserSummary,
+} from "./order.types";
 
 export abstract class BaseAggregatorService {
   protected logger = new Logger(BaseAggregatorService.name);
@@ -81,71 +58,6 @@ export abstract class BaseAggregatorService {
       serviceName,
     );
   }
-}
-
-interface BuyerInfo {
-  id: number;
-  username: string;
-  email: string;
-  name: string | null;
-  avatar?: string | null;
-  isActive?: boolean;
-}
-
-interface OrderItemDetail {
-  id: number;
-  productId: number;
-  sellerId: number;
-  productName: string;
-  quantity: number;
-  price: number;
-  skuId: number | null;
-  skuTierIdx: string | null;
-  productImage?: string | null;
-  skuLabel?: string | null;
-}
-
-interface SellerOrderDetailRaw extends OrderResponse {
-  items: OrderItemDetail[];
-}
-
-interface ProductDetailResponse {
-  id: number;
-  name: string;
-  imageUrls: string[] | null;
-  variations: { name: string; options: string[] }[] | null;
-}
-
-interface UserSummary {
-  id: number;
-  username: string;
-  email: string;
-  name: string | null;
-  avatar?: string | null;
-}
-
-interface AdminGhnOrderListItem {
-  orderId: number;
-  userId: number;
-  sellerId: number;
-  orderStatus: string;
-  ghnOrderCode: string | null;
-  shippingFee: number | null;
-  codAmount: number | null;
-  paymentMethod: string;
-  lastGhnStatus: string | null;
-  lastSyncedAt: string | Date | null;
-  updatedAt: string | Date;
-  availableActions: string[];
-}
-
-interface AdminGhnOrderListResult {
-  data: AdminGhnOrderListItem[];
-  total: number;
-  page: number;
-  limit: number;
-  totalPages?: number;
-  hasNext?: boolean;
 }
 
 @Injectable()
@@ -205,7 +117,7 @@ export class OrderService {
           return JSON.parse(existing) as unknown;
         }
         throw new ConflictException(
-          "A duplicate order request is already being processed",
+          ORDER_MESSAGE.DUPLICATE_REQUEST_IN_PROGRESS,
         );
       }
     } catch (err) {
@@ -307,16 +219,22 @@ export class OrderService {
             fetchProduct(item.productId),
           ]);
           if (!sku.isActive) {
-            throw new BadRequestException(`SKU ${item.skuId} is not available`);
+            throw new BadRequestException(
+              PRODUCT_MESSAGE.SKU_NOT_AVAILABLE(item.skuId),
+            );
           }
           if (Number(sku.productId) !== item.productId) {
             throw new BadRequestException(
-              `SKU ${item.skuId} does not belong to product ${item.productId}`,
+              PRODUCT_MESSAGE.SKU_NOT_OF_PRODUCT(item.skuId, item.productId),
             );
           }
           if (sku.stockQuantity < item.quantity) {
             throw new BadRequestException(
-              `Insufficient stock for SKU ${item.skuId}: requested ${item.quantity}, available ${sku.stockQuantity}`,
+              PRODUCT_MESSAGE.SKU_INSUFFICIENT_STOCK(
+                item.skuId,
+                item.quantity,
+                sku.stockQuantity,
+              ),
             );
           }
           price = Number(sku.price);
@@ -334,12 +252,12 @@ export class OrderService {
           const product = await fetchProduct(item.productId);
           if (!product.isActive) {
             throw new BadRequestException(
-              `Product ${item.productId} is not available`,
+              PRODUCT_MESSAGE.NOT_AVAILABLE(item.productId),
             );
           }
           if (product.price === null) {
             throw new BadRequestException(
-              `Product ${item.productId} requires a skuId — it has no base price`,
+              PRODUCT_MESSAGE.REQUIRES_SKU(item.productId),
             );
           }
           price = Number(product.price);
@@ -373,9 +291,7 @@ export class OrderService {
     if (isMultiSeller && dto.voucherCode) {
       // Discount-splitting across sellers has no defined semantics yet; keep
       // vouchers to single-seller orders.
-      throw new BadRequestException(
-        "Voucher codes are only supported on single-seller orders",
-      );
+      throw new BadRequestException(VOUCHER_MESSAGE.SINGLE_SELLER_ONLY);
     }
 
     try {
@@ -471,9 +387,7 @@ export class OrderService {
     const enrichedItems = await this.enrichOrderItems(dto.items);
     const uniqueSellerIds = new Set(enrichedItems.map((i) => i.sellerId));
     if (uniqueSellerIds.size > 1) {
-      throw new BadRequestException(
-        "Voucher codes are only supported on single-seller orders",
-      );
+      throw new BadRequestException(VOUCHER_MESSAGE.SINGLE_SELLER_ONLY);
     }
     const itemsTotal = enrichedItems.reduce(
       (sum, item) => sum + item.price * item.quantity,
@@ -584,34 +498,11 @@ export class OrderService {
   }
 
   async getOrderById(
-    orderId: string,
+    orderId: number,
     callerId: number,
     callerRole: string,
   ): Promise<OrderResponse> {
-    const id = Number(orderId);
-    if (isNaN(id)) {
-      MicroserviceErrorHandler.handleError(
-        new Error("Invalid orderId"),
-        "get order by id",
-        "Orders Service",
-      );
-    }
-    const order = (await firstValueFrom(
-      this.ordersClient.send(ORDER_MESSAGE_PATTERN.GET_ORDER_BY_ID, id).pipe(
-        timeout(10000),
-        catchError((err: unknown) => {
-          throw err;
-        }),
-      ),
-    )) as OrderResponse | null;
-
-    if (!order) {
-      throw new NotFoundException(`Order ${id} not found`);
-    }
-
-    if (callerRole !== "admin" && Number(order.userId) !== callerId) {
-      throw new ForbiddenException("You do not have access to this order");
-    }
+    const order = await this.fetchOwnedOrder(orderId, callerId, callerRole);
 
     const items = (order.items ?? []) as OrderItemDetail[];
     const productMap = await this.buildProductMap(
@@ -625,8 +516,37 @@ export class OrderService {
     };
   }
 
+  // Bare order fetch + owner-or-admin check, WITHOUT product enrichment —
+  // use this when only access control is needed (e.g. getPaymentUrl).
+  private async fetchOwnedOrder(
+    orderId: number,
+    callerId: number,
+    callerRole: string,
+  ): Promise<OrderResponse> {
+    const order = (await firstValueFrom(
+      this.ordersClient
+        .send(ORDER_MESSAGE_PATTERN.GET_ORDER_BY_ID, orderId)
+        .pipe(
+          timeout(10000),
+          catchError((err: unknown) => {
+            throw err;
+          }),
+        ),
+    )) as OrderResponse | null;
+
+    if (!order) {
+      throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
+    }
+
+    if (callerRole !== "admin" && Number(order.userId) !== callerId) {
+      throw new ForbiddenException(ORDER_MESSAGE.ACCESS_DENIED);
+    }
+
+    return order;
+  }
+
   async getOrderByUser(
-    userId: string,
+    userId: number,
     page: number,
     limit: number,
     callerId: number,
@@ -637,21 +557,13 @@ export class OrderService {
     page: number;
     limit: number;
   }> {
-    const uid = Number(userId);
-    if (isNaN(uid)) {
-      MicroserviceErrorHandler.handleError(
-        new Error("Invalid userId"),
-        "get orders by user",
-        "Orders Service",
-      );
-    }
-    if (callerRole !== "admin" && uid !== callerId) {
-      throw new ForbiddenException("You cannot access another user's orders");
+    if (callerRole !== "admin" && userId !== callerId) {
+      throw new ForbiddenException(ORDER_MESSAGE.CANNOT_ACCESS_OTHERS_ORDERS);
     }
     const result = (await firstValueFrom(
       this.ordersClient
         .send(ORDER_MESSAGE_PATTERN.GET_ORDERS_BY_USER, {
-          userId: uid,
+          userId,
           page,
           limit,
         })
@@ -691,25 +603,17 @@ export class OrderService {
    * full order history (server-side GROUP BY), not just the loaded page.
    */
   async getOrderStatusCounts(
-    userId: string,
+    userId: number,
     callerId: number,
     callerRole: string,
   ): Promise<Record<string, number>> {
-    const uid = Number(userId);
-    if (isNaN(uid)) {
-      MicroserviceErrorHandler.handleError(
-        new Error("Invalid userId"),
-        "get order status counts",
-        "Orders Service",
-      );
-    }
-    if (callerRole !== "admin" && uid !== callerId) {
-      throw new ForbiddenException("You cannot access another user's orders");
+    if (callerRole !== "admin" && userId !== callerId) {
+      throw new ForbiddenException(ORDER_MESSAGE.CANNOT_ACCESS_OTHERS_ORDERS);
     }
     try {
       return (await firstValueFrom(
         this.ordersClient
-          .send(ORDER_MESSAGE_PATTERN.GET_ORDER_STATUS_COUNTS, uid)
+          .send(ORDER_MESSAGE_PATTERN.GET_ORDER_STATUS_COUNTS, userId)
           .pipe(
             timeout(10000),
             catchError((err: unknown) => {
@@ -791,7 +695,8 @@ export class OrderService {
     callerId: number,
     callerRole: string,
   ): Promise<{ orderUrl: string | null; status: string | null }> {
-    await this.getOrderById(String(orderId), callerId, callerRole);
+    // Ownership check only — skip getOrderById's product enrichment (PERF-11).
+    await this.fetchOwnedOrder(orderId, callerId, callerRole);
     try {
       return (await firstValueFrom(
         this.paymentsClient

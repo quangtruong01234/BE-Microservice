@@ -4,26 +4,7 @@ import { firstValueFrom, Observable, timeout } from "rxjs";
 import { NOTIFICATION_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
-
-interface NotificationItem {
-  id: number;
-  userId: number;
-  type: string;
-  orderId: number | null;
-  postId: number | null;
-  actorId: number | null;
-  preview: string | null;
-  message: string;
-  isRead: boolean;
-  createdAt: string;
-}
-
-interface PaginatedNotifications {
-  data: NotificationItem[];
-  total: number;
-  page: number;
-  limit: number;
-}
+import { PaginatedNotifications } from "./notification.types";
 
 @Injectable()
 export class NotificationGatewayService {

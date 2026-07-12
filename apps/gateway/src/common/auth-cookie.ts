@@ -3,6 +3,9 @@ import { isProduction, parseBooleanEnv } from "./security";
 
 export const AUTH_COOKIE_NAME = "access_token";
 
+export const DEFAULT_AUTH_COOKIE_MAX_AGE_MS = 5 * 60 * 60 * 1000;
+export const REMEMBER_ME_AUTH_COOKIE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
 function resolveCookieSameSite(): CookieOptions["sameSite"] {
   const configuredValue =
     process.env.AUTH_COOKIE_SAME_SITE?.trim().toLowerCase();
@@ -17,7 +20,9 @@ function resolveCookieSameSite(): CookieOptions["sameSite"] {
   return "lax";
 }
 
-export function getAuthCookieOptions(): CookieOptions {
+export function getAuthCookieOptions(
+  maxAgeMs: number = DEFAULT_AUTH_COOKIE_MAX_AGE_MS,
+): CookieOptions {
   const sameSite = resolveCookieSameSite();
   return {
     httpOnly: true,
@@ -26,7 +31,7 @@ export function getAuthCookieOptions(): CookieOptions {
       parseBooleanEnv("AUTH_COOKIE_SECURE", false) ||
       sameSite === "none",
     sameSite,
-    maxAge: 5 * 60 * 60 * 1000,
+    maxAge: maxAgeMs,
     path: "/",
   };
 }

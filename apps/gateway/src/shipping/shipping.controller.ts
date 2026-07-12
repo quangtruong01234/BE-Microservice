@@ -12,7 +12,8 @@ import {
   ApiQuery,
   ApiBearerAuth,
 } from "@nestjs/swagger";
-import { ShippingService, ShippingLocation } from "./shipping.service";
+import { ShippingService } from "./shipping.service";
+import { ShippingLocation } from "./shipping.types";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 
 @ApiTags("Shipping")

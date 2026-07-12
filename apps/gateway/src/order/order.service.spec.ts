@@ -37,7 +37,7 @@ describe("OrderService access control", () => {
 
   it("rejects listing another user's orders", async () => {
     await expect(
-      service.getOrderByUser("17", 1, 10, 18, "user"),
+      service.getOrderByUser(17, 1, 10, 18, "user"),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(ordersClient.send).not.toHaveBeenCalled();
   });
@@ -48,7 +48,7 @@ describe("OrderService access control", () => {
     );
 
     await expect(
-      service.getOrderByUser("17", 1, 10, 21, "admin"),
+      service.getOrderByUser(17, 1, 10, 21, "admin"),
     ).resolves.toEqual({ data: [], total: 0, page: 1, limit: 10 });
   });
 

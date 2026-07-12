@@ -23,6 +23,7 @@ describe("UploadController", () => {
       cloud_name: "cloud-name",
       folder: "trybuy/products",
       public_id: "20_product-image",
+      allowed_formats: "jpg,png,webp",
     });
     generateDeleteSignature = jest.fn().mockReturnValue({
       signature: "signature",

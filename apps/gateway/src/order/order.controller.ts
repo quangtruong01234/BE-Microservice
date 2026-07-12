@@ -381,12 +381,12 @@ export class OrderController {
   @ApiResponse({ status: 403, description: "Forbidden — not the order owner." })
   @ApiResponse({ status: 404, description: "Order not found." })
   async getOrderInvoice(
-    @Param("id") id: string,
+    @Param("id", ParseIntPipe) id: number,
     @Req() req: Request,
     @Res() res: Response,
   ): Promise<void> {
     const userId = req.user?.id ?? 0;
-    const pdfBuffer = await this.orderService.getOrderInvoice(+id, userId);
+    const pdfBuffer = await this.orderService.getOrderInvoice(id, userId);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
@@ -590,7 +590,7 @@ export class OrderController {
   @ApiResponse({ status: 403, description: "Forbidden — not the order owner." })
   @ApiResponse({ status: 404, description: "Order not found." })
   async getOrderById(
-    @Param("id") id: string,
+    @Param("id", ParseIntPipe) id: number,
     @Req() req: Request,
   ): Promise<unknown> {
     const callerId = req.user?.id ?? 0;
@@ -610,7 +610,7 @@ export class OrderController {
   })
   @ApiResponse({ status: 403, description: "Forbidden — not this user." })
   async getOrderStatusCounts(
-    @Param("id") id: string,
+    @Param("id", ParseIntPipe) id: number,
     @Req() req: Request,
   ): Promise<Record<string, number>> {
     const callerId = req.user?.id ?? 0;
@@ -627,7 +627,7 @@ export class OrderController {
   @ApiResponse({ status: 400, description: "Invalid query parameters." })
   @ApiResponse({ status: 403, description: "Forbidden — not this user." })
   async getOrderByUser(
-    @Param("id") id: string,
+    @Param("id", ParseIntPipe) id: number,
     @Query(ValidationPipe) query: GetOrdersByUserQueryDto,
     @Req() req: Request,
   ): Promise<unknown> {
@@ -655,12 +655,12 @@ export class OrderController {
   @ApiResponse({ status: 403, description: "Forbidden — not the order owner." })
   @ApiResponse({ status: 404, description: "Order not found." })
   async cancelOrder(
-    @Param("id") id: string,
+    @Param("id", ParseIntPipe) id: number,
     @Req() req: Request,
   ): Promise<unknown> {
     const callerId = req.user?.id ?? 0;
     const callerRole = req.user?.role ?? "user";
-    return await this.orderService.cancelOrder(+id, callerId, callerRole);
+    return await this.orderService.cancelOrder(id, callerId, callerRole);
   }
 
   @Post(":id/return-request")
@@ -697,12 +697,12 @@ export class OrderController {
   @ApiResponse({ status: 200, description: "Payment URL and status." })
   @ApiResponse({ status: 403, description: "Forbidden — not the order owner." })
   async getPaymentUrl(
-    @Param("id") id: string,
+    @Param("id", ParseIntPipe) id: number,
     @Req() req: Request,
   ): Promise<{ orderUrl: string | null; status: string | null }> {
     const callerId = req.user?.id ?? 0;
     const callerRole = req.user?.role ?? "user";
-    return await this.orderService.getPaymentUrl(+id, callerId, callerRole);
+    return await this.orderService.getPaymentUrl(id, callerId, callerRole);
   }
 
   @Patch(":id/confirm")

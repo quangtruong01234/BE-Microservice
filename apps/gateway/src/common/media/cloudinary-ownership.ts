@@ -1,4 +1,5 @@
 import { ForbiddenException } from "@nestjs/common";
+import { UPLOAD_MESSAGE } from "libs/constant/response-message.constant";
 
 /**
  * Every asset uploaded through this API is signed by `UploadService`, which
@@ -19,9 +20,7 @@ export function assertCloudinaryUrlsOwnedBy(
   for (const url of urls) {
     if (!url) continue;
     if (!isCloudinaryUrlOwnedBy(url, userId)) {
-      throw new ForbiddenException(
-        "Cannot attach media uploaded by another user",
-      );
+      throw new ForbiddenException(UPLOAD_MESSAGE.CANNOT_ATTACH_OTHERS_MEDIA);
     }
   }
 }

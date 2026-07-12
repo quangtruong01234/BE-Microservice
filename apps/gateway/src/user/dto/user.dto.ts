@@ -1,10 +1,13 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { Type } from "class-transformer";
 import {
+  IsBoolean,
   IsEmail,
   IsInt,
   IsOptional,
   IsString,
+  Length,
+  Matches,
   Max,
   Min,
   MinLength,
@@ -33,6 +36,41 @@ export class LoginUserDto {
   @ApiProperty({ example: "password123" })
   @IsString()
   password: string;
+
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      "Remember me — extends the auth session (cookie + JWT) to 7 days instead of the default 5 hours",
+  })
+  @IsOptional()
+  @IsBoolean()
+  rememberMe?: boolean;
+}
+
+export class ForgotPasswordDto {
+  @ApiProperty({ example: "john@example.com" })
+  @IsEmail()
+  declare email: string;
+}
+
+export class ResetPasswordDto {
+  @ApiProperty({ example: "john@example.com" })
+  @IsEmail()
+  declare email: string;
+
+  @ApiProperty({
+    example: "123456",
+    description: "6-digit verification code sent to the registered email",
+  })
+  @IsString()
+  @Length(6, 6)
+  @Matches(/^\d{6}$/, { message: "code must be a 6-digit number" })
+  declare code: string;
+
+  @ApiProperty({ example: "newPassword123", minLength: 6 })
+  @IsString()
+  @MinLength(6)
+  declare newPassword: string;
 }
 
 export class ListUsersQueryDto {

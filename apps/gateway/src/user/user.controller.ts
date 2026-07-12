@@ -18,6 +18,8 @@ import { UserService } from "./user.service";
 import {
   RegisterUserDto,
   LoginUserDto,
+  ForgotPasswordDto,
+  ResetPasswordDto,
   ListUsersQueryDto,
   FeaturedSellersQueryDto,
   UpdateUserGatewayDto,
@@ -41,7 +43,9 @@ import {
   AUTH_COOKIE_NAME,
   getAuthCookieOptions,
   getClearAuthCookieOptions,
+  REMEMBER_ME_AUTH_COOKIE_MAX_AGE_MS,
 } from "../common/auth-cookie";
+import { AUTH_MESSAGE } from "libs/constant/response-message.constant";
 
 @ApiTags("User")
 @ApiBearerAuth("bearer")
@@ -72,10 +76,46 @@ export class UserController {
     @Res({ passthrough: true }) res: Response,
   ): Promise<Record<string, unknown>> {
     const { user, token } = await this.userService.login(dto);
-    res.cookie(AUTH_COOKIE_NAME, token, getAuthCookieOptions());
-    const safeUser: Record<string, unknown> = { ...user };
-    delete safeUser["password"];
-    return safeUser;
+    const cookieOptions =
+      dto.rememberMe === true
+        ? getAuthCookieOptions(REMEMBER_ME_AUTH_COOKIE_MAX_AGE_MS)
+        : getAuthCookieOptions();
+    res.cookie(AUTH_COOKIE_NAME, token, cookieOptions);
+    return user;
+  }
+
+  @Post("forgot-password")
+  @Public()
+  @RateLimit({ limit: 5, ttl: 60 })
+  @ApiOperation({
+    summary:
+      "Request a password-reset verification code (sent to the registered email)",
+  })
+  @ApiBody({ type: ForgotPasswordDto })
+  @ApiResponse({
+    status: 201,
+    description:
+      "Generic acknowledgement (does not reveal whether the email exists).",
+  })
+  @ApiResponse({ status: 400, description: "Bad Request." })
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return await this.userService.forgotPassword(dto);
+  }
+
+  @Post("reset-password")
+  @Public()
+  @RateLimit({ limit: 10, ttl: 60 })
+  @ApiOperation({
+    summary: "Reset the password using the emailed verification code",
+  })
+  @ApiBody({ type: ResetPasswordDto })
+  @ApiResponse({ status: 201, description: "Password updated." })
+  @ApiResponse({
+    status: 400,
+    description: "Invalid or expired verification code.",
+  })
+  async resetPassword(@Body() dto: ResetPasswordDto) {
+    return await this.userService.resetPassword(dto);
   }
 
   @Post("logout")
@@ -84,7 +124,7 @@ export class UserController {
   @ApiResponse({ status: 200, description: "Logged out." })
   logout(@Res({ passthrough: true }) res: Response) {
     res.clearCookie(AUTH_COOKIE_NAME, getClearAuthCookieOptions());
-    return { message: "Logged out successfully" };
+    return { message: AUTH_MESSAGE.LOGOUT_SUCCESS };
   }
 
   @Get()

@@ -5,6 +5,7 @@ import {
   ForbiddenException,
 } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
+import { AUTH_MESSAGE } from "libs/constant/response-message.constant";
 import { IS_PUBLIC_KEY } from "../decorators/public.decorator";
 import {
   CHECK_PERMISSION_KEY,
@@ -12,18 +13,7 @@ import {
 } from "../decorators/check-permission.decorator";
 import { ROLES_KEY } from "../decorators/roles.decorator";
 import { ac } from "../../../../user/src/rbac/grants";
-
-interface RequestUser {
-  id?: number;
-  email?: string;
-  role?: string;
-  grants?: unknown[];
-}
-
-interface RequestWithUser {
-  user?: RequestUser;
-  url?: string;
-}
+import { RequestWithUser } from "./auth-guard.types";
 
 @Injectable()
 export class RoleAuthGuard implements CanActivate {
@@ -48,7 +38,7 @@ export class RoleAuthGuard implements CanActivate {
     const user = request.user;
 
     if (requiredRoles?.length && !requiredRoles.includes(user?.role ?? "")) {
-      throw new ForbiddenException("Insufficient role");
+      throw new ForbiddenException(AUTH_MESSAGE.INSUFFICIENT_ROLE);
     }
 
     const permission = this.reflector.getAllAndOverride<PermissionMeta>(
@@ -62,7 +52,7 @@ export class RoleAuthGuard implements CanActivate {
     }
 
     if (!user) {
-      throw new ForbiddenException("User not authenticated");
+      throw new ForbiddenException(AUTH_MESSAGE.NOT_AUTHENTICATED);
     }
 
     const role = user.role ?? "user";
@@ -77,7 +67,7 @@ export class RoleAuthGuard implements CanActivate {
 
     const query = ac.can(role);
     if (typeof query[methodName] !== "function") {
-      throw new ForbiddenException(`Unknown action: ${action}`);
+      throw new ForbiddenException(AUTH_MESSAGE.UNKNOWN_ACTION(action));
     }
 
     const perm = (
@@ -86,7 +76,7 @@ export class RoleAuthGuard implements CanActivate {
 
     if (!perm.granted) {
       throw new ForbiddenException({
-        message: "Insufficient permissions",
+        message: AUTH_MESSAGE.INSUFFICIENT_PERMISSIONS,
         required: { role, resource, action },
       });
     }

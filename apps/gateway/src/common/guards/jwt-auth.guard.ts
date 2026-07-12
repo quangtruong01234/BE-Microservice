@@ -7,21 +7,9 @@ import {
 import { Reflector } from "@nestjs/core";
 import { JwtService } from "@nestjs/jwt";
 import { Request } from "express";
+import { AUTH_MESSAGE } from "libs/constant/response-message.constant";
 import { IS_PUBLIC_KEY } from "../decorators/public.decorator";
-
-interface RoleGrant {
-  resourceId: number;
-  actions: string[];
-  attributes: string;
-  conditions: string;
-}
-
-interface JwtPayload {
-  userId?: number;
-  email?: string;
-  role?: string;
-  grants?: RoleGrant[];
-}
+import { JwtPayload } from "./auth-guard.types";
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
@@ -48,7 +36,7 @@ export class JwtAuthGuard implements CanActivate {
     const token = this.extractToken(request);
 
     if (!token) {
-      throw new UnauthorizedException("Access token is required");
+      throw new UnauthorizedException(AUTH_MESSAGE.ACCESS_TOKEN_REQUIRED);
     }
 
     try {
@@ -61,7 +49,7 @@ export class JwtAuthGuard implements CanActivate {
       };
       return true;
     } catch {
-      throw new UnauthorizedException("Unauthorized");
+      throw new UnauthorizedException(AUTH_MESSAGE.UNAUTHORIZED);
     }
   }
 

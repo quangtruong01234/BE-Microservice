@@ -2,19 +2,7 @@ import { Controller, Logger } from "@nestjs/common";
 import { EventPattern, Payload } from "@nestjs/microservices";
 import { EVENT } from "@app/common/constants/event";
 import { NotificationWsGateway } from "./notification.ws-gateway";
-
-interface NotificationPayload {
-  id: number;
-  userId: number;
-  type: string;
-  orderId: number | null;
-  postId: number | null;
-  actorId: number | null;
-  preview: string | null;
-  message: string;
-  isRead: boolean;
-  createdAt: Date;
-}
+import { NotificationPayload } from "./notification.types";
 
 @Controller()
 export class NotificationPushController {

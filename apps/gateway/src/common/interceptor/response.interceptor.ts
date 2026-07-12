@@ -5,15 +5,10 @@ import {
   NestInterceptor,
 } from "@nestjs/common";
 import { Response } from "express";
+import { COMMON_MESSAGE } from "libs/constant/response-message.constant";
 import { map, Observable } from "rxjs";
 import { SKIP_RESPONSE_WRAP_KEY } from "../decorators/skip-response-wrap.decorator";
-
-export interface StandardResponse<T> {
-  statusCode: number;
-  message: string;
-  data: T;
-  status: "success";
-}
+import { StandardResponse } from "./response-interceptor.types";
 
 @Injectable()
 export class ResponseInterceptor<T> implements NestInterceptor<
@@ -40,7 +35,7 @@ export class ResponseInterceptor<T> implements NestInterceptor<
       map((data: T) => ({
         statusCode: statusCode,
         status: "success" as const,
-        message: "Request Success",
+        message: COMMON_MESSAGE.REQUEST_SUCCESS,
         timestamp: new Date().toISOString(),
         data,
       })),

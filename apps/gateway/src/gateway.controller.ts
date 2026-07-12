@@ -12,7 +12,12 @@ import { ApiTags } from "@nestjs/swagger";
 import { Public } from "./common/decorators/public.decorator";
 import { PAYMENT_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
+import { PAYMENT_MESSAGE } from "libs/constant/response-message.constant";
 import { MicroserviceErrorHandler } from "./common/exception/microservice-error.handler";
+import {
+  PAYMENT_RESULT_MAX_QUERY_KEYS,
+  PAYMENT_RESULT_MAX_VALUE_LENGTH,
+} from "./gateway.constants";
 
 @ApiTags("Gateway")
 @Controller("gateway")
@@ -30,6 +35,7 @@ export class GatewayController {
     transId: string;
     amount: string;
   }> {
+    this.assertBoundedPaymentQuery(query);
     let gateway: string;
     let transId: string;
     let verifiedZaloPayStatus: "success" | "failed" | null = null;
@@ -44,7 +50,7 @@ export class GatewayController {
       transId = query["vnp_TxnRef"];
       verifiedVNPayStatus = await this.completeVNPayReturn(query);
     } else {
-      throw new BadRequestException("Missing transaction reference");
+      throw new BadRequestException(PAYMENT_MESSAGE.MISSING_TRANSACTION_REF);
     }
 
     let status: string;
@@ -57,6 +63,24 @@ export class GatewayController {
       amount = query["vnp_Amount"];
     }
     return { gateway, status, transId, amount };
+  }
+
+  private assertBoundedPaymentQuery(query: Record<string, string>): void {
+    const queryKeys = Object.keys(query);
+    if (queryKeys.length > PAYMENT_RESULT_MAX_QUERY_KEYS) {
+      throw new BadRequestException(PAYMENT_MESSAGE.TOO_MANY_QUERY_PARAMS);
+    }
+    for (const key of queryKeys) {
+      const value = query[key];
+      if (typeof value !== "string") {
+        throw new BadRequestException(PAYMENT_MESSAGE.INVALID_QUERY_PARAM(key));
+      }
+      if (value.length > PAYMENT_RESULT_MAX_VALUE_LENGTH) {
+        throw new BadRequestException(
+          PAYMENT_MESSAGE.QUERY_PARAM_TOO_LONG(key),
+        );
+      }
+    }
   }
 
   private async completeZaloPayReturn(

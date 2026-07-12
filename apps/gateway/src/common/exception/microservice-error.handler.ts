@@ -1,13 +1,6 @@
 import { HttpException, HttpStatus, Logger } from "@nestjs/common";
-
-type ErrorLike = {
-  response?: unknown;
-  statusCode?: unknown;
-  status?: unknown;
-  name?: unknown;
-  message?: unknown;
-  error?: unknown;
-};
+import { COMMON_MESSAGE } from "libs/constant/response-message.constant";
+import { ErrorLike } from "./microservice-error.types";
 
 export class MicroserviceErrorHandler {
   private static readonly logger = new Logger(MicroserviceErrorHandler.name);
@@ -21,7 +14,10 @@ export class MicroserviceErrorHandler {
       this.logger.error(
         `${serviceName} ${operation} failed: TCP call completed without emitting a value (undefined error)`,
       );
-      throw new HttpException("Service unavailable", HttpStatus.BAD_GATEWAY);
+      throw new HttpException(
+        COMMON_MESSAGE.SERVICE_UNAVAILABLE,
+        HttpStatus.BAD_GATEWAY,
+      );
     }
 
     const errorSummary =
@@ -173,7 +169,7 @@ export class MicroserviceErrorHandler {
       return error.error;
     }
 
-    return "Service unavailable";
+    return COMMON_MESSAGE.SERVICE_UNAVAILABLE;
   }
 
   private static cleanupErrorMessage(message: string): string {

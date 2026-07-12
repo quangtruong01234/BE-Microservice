@@ -9,20 +9,10 @@ import {
   ServiceUnavailableException,
 } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
+import { COMMON_MESSAGE } from "libs/constant/response-message.constant";
 import { RATE_LIMIT_OPTIONS_KEY } from "../decorators/rate-limit.decorator";
-import { Request } from "express";
 import { isProduction, resolvePositiveIntegerEnv } from "../security";
-
-interface RateLimitInfo {
-  limit: number;
-  current: number;
-  remaining: number;
-  resetTime: number;
-}
-
-interface RequestWithRateLimit extends Request {
-  rateLimit?: RateLimitInfo;
-}
+import { RequestWithRateLimit } from "./rate-limit.types";
 
 @Injectable()
 export class CustomRateLimitGuard implements CanActivate {
@@ -71,7 +61,7 @@ export class CustomRateLimitGuard implements CanActivate {
         throw new HttpException(
           {
             statusCode: HttpStatus.TOO_MANY_REQUESTS,
-            message: `Too many requests. Max ${limit} requests per ${ttl} seconds`,
+            message: COMMON_MESSAGE.RATE_LIMIT_EXCEEDED(limit, ttl),
             retryAfter: ttl,
           },
           HttpStatus.TOO_MANY_REQUESTS,
@@ -97,7 +87,7 @@ export class CustomRateLimitGuard implements CanActivate {
           `Rate limit check failed in production; failing closed: ${message}`,
         );
         throw new ServiceUnavailableException(
-          "Rate limit protection is temporarily unavailable",
+          COMMON_MESSAGE.RATE_LIMIT_UNAVAILABLE,
         );
       }
 

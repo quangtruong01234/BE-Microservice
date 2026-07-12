@@ -4,11 +4,7 @@ import { firstValueFrom, timeout, catchError } from "rxjs";
 import { ORDER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
-
-export interface ShippingLocation {
-  id: number | string;
-  name: string;
-}
+import { ShippingLocation } from "./shipping.types";
 
 /**
  * Proxies GHN master-data (province/district/ward) through the orders service so

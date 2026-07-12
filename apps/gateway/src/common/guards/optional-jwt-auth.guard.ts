@@ -1,20 +1,7 @@
 import { CanActivate, ExecutionContext, Injectable } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import { Request } from "express";
-
-interface RoleGrant {
-  resourceId: number;
-  actions: string[];
-  attributes: string;
-  conditions: string;
-}
-
-interface JwtPayload {
-  userId?: number;
-  email?: string;
-  role?: string;
-  grants?: RoleGrant[];
-}
+import { JwtPayload } from "./auth-guard.types";
 
 @Injectable()
 export class OptionalJwtAuthGuard implements CanActivate {

@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException } from "@nestjs/common";
+import { createHash } from "crypto";
 import { UploadService } from "./upload.service";
 
 describe("UploadService", () => {
@@ -16,6 +17,7 @@ describe("UploadService", () => {
 
     expect(signature.folder).toBe("trybuy/products");
     expect(signature.public_id).toMatch(/^20_[A-Za-z0-9_-]+$/);
+    expect(signature.allowed_formats).toBe("jpg,png,webp");
   });
 
   it("allows a caller-owned upload public id", () => {
@@ -27,6 +29,23 @@ describe("UploadService", () => {
 
     expect(signature.folder).toBe("trybuy/posts");
     expect(signature.public_id).toBe("20_post-image");
+    expect(signature.allowed_formats).toBe("jpg,png,webp,mp4");
+  });
+
+  it("signs the upload format constraints", () => {
+    const nowSpy = jest.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const signature = service.generateSignature(
+      "trybuy/products",
+      20,
+      "20_product-image",
+    );
+    const paramsToSign =
+      "allowed_formats=jpg,png,webp&folder=trybuy/products&public_id=20_product-image&timestamp=1700000000cloudinary-secret";
+
+    expect(signature.signature).toBe(
+      createHash("sha1").update(paramsToSign).digest("hex"),
+    );
+    nowSpy.mockRestore();
   });
 
   it("rejects upload signatures for disallowed folders", () => {

@@ -4,26 +4,17 @@ import { firstValueFrom, timeout, catchError } from "rxjs";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { INVENTORY_MESSAGE_PATTERNS } from "libs/constant/message-pattern-inventory.constant";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
+import { INVENTORY_MESSAGE } from "libs/constant/response-message.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
 import { CreateInventoryDto } from "./dto/create-inventory.dto";
 import { UpdateInventoryDto } from "./dto/update-inventory.dto";
-
-type InventoryOwnershipData = {
-  id: number;
-  productId: number;
-};
-
-type ProductOwnershipData = {
-  id: number;
-  userId?: number;
-};
-
-type SkuOwnershipData = {
-  id: number;
-  productId: number;
-};
-
-// DTOs are now in separate files for better Swagger documentation
+import {
+  InventoryOwnershipData,
+  LowStockInventoryRow,
+  ProductNameData,
+  ProductOwnershipData,
+  SkuOwnershipData,
+} from "./inventory.types";
 
 @Injectable()
 export class InventoryService {
@@ -109,14 +100,18 @@ export class InventoryService {
         }
         lowStockPayload = { productIds };
       }
-      return (await firstValueFrom(
+      const lowStockRows = (await firstValueFrom(
         this.inventoryClient
           .send(
             INVENTORY_MESSAGE_PATTERNS.INVENTORY_GET_LOW_STOCK,
             lowStockPayload,
           )
           .pipe(timeout(10000)),
-      )) as unknown;
+      )) as LowStockInventoryRow[];
+      if (!Array.isArray(lowStockRows) || lowStockRows.length === 0) {
+        return [];
+      }
+      return await this.attachProductNames(lowStockRows);
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -124,6 +119,43 @@ export class InventoryService {
         "Inventory Service",
       );
     }
+  }
+
+  // Best-effort enrichment: a product-service failure must not break the
+  // low-stock read, so rows fall back to productName null.
+  private async attachProductNames(
+    rows: LowStockInventoryRow[],
+  ): Promise<LowStockInventoryRow[]> {
+    const productIds = [
+      ...new Set(
+        rows
+          .map((row) => Number(row.productId))
+          .filter((id) => Number.isFinite(id)),
+      ),
+    ];
+    let productNameById = new Map<number, string>();
+    if (productIds.length > 0) {
+      try {
+        const products = (await firstValueFrom(
+          this.productClient
+            .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_IDS, productIds)
+            .pipe(timeout(10000)),
+        )) as ProductNameData[];
+        productNameById = new Map(
+          (Array.isArray(products) ? products : [])
+            .filter((product) => typeof product.name === "string")
+            .map((product) => [Number(product.id), product.name as string]),
+        );
+      } catch {
+        this.logger.warn(
+          "Product name lookup failed — returning low-stock rows without productName",
+        );
+      }
+    }
+    return rows.map((row) => ({
+      ...row,
+      productName: productNameById.get(Number(row.productId)) ?? null,
+    }));
   }
 
   async update(
@@ -180,7 +212,7 @@ export class InventoryService {
     const product = await this.fetchProductForAccess(productId);
     if (Number(product.userId) !== callerId) {
       throw new ForbiddenException(
-        "You cannot modify another user's inventory",
+        INVENTORY_MESSAGE.CANNOT_MODIFY_ANOTHER_USER,
       );
     }
   }
@@ -196,7 +228,7 @@ export class InventoryService {
           .pipe(timeout(10000)),
       )) as SkuOwnershipData;
       if (Number(sku.productId) !== productId) {
-        throw new ForbiddenException("SKU does not belong to this product");
+        throw new ForbiddenException(INVENTORY_MESSAGE.SKU_NOT_OF_PRODUCT);
       }
     } catch (error) {
       if (error instanceof ForbiddenException) {

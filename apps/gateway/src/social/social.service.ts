@@ -8,12 +8,7 @@ import {
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
 import { assertCloudinaryUrlsOwnedBy } from "../common/media/cloudinary-ownership";
-
-interface UserInfo {
-  id: number;
-  username: string;
-  avatar: string | null;
-}
+import { UserInfo } from "./social.types";
 
 @Injectable()
 export class SocialGatewayService {
