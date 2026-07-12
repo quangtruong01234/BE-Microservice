@@ -4,7 +4,8 @@ import { HttpToRpcExceptionFilter } from "@app/common/filters/http-to-rpc-except
 import { CHAT_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { Conversation } from "./entity/conversation.entity";
 import { Message } from "./entity/message.entity";
-import { ChatService, ConversationWithMeta } from "./chat.service";
+import { ChatService } from "./chat.service";
+import { ConversationWithMeta } from "./chat.types";
 
 @UseFilters(new HttpToRpcExceptionFilter())
 @Controller()

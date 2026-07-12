@@ -11,18 +11,8 @@ import { Cron } from "@nestjs/schedule";
 import { Conversation } from "./entity/conversation.entity";
 import { Message } from "./entity/message.entity";
 import { SendMessageDto } from "./dto/send-message.dto";
-
-interface LastMessageMeta {
-  id: number;
-  content: string;
-  senderId: number;
-  createdAt: Date;
-}
-
-export interface ConversationWithMeta extends Conversation {
-  lastMessage: LastMessageMeta | null;
-  unreadCount: number;
-}
+import { CHAT_MESSAGE } from "libs/constant/response-message.constant";
+import { ConversationWithMeta } from "./chat.types";
 
 @Injectable()
 export class ChatService {
@@ -52,7 +42,7 @@ export class ChatService {
     otherUserId: number,
   ): Promise<Conversation> {
     if (userId === otherUserId) {
-      throw new BadRequestException("Cannot chat with yourself");
+      throw new BadRequestException(CHAT_MESSAGE.CANNOT_CHAT_WITH_SELF);
     }
     const user1Id = Math.min(userId, otherUserId);
     const user2Id = Math.max(userId, otherUserId);
@@ -157,7 +147,7 @@ export class ChatService {
       .andWhere("(c.user1_id = :userId OR c.user2_id = :userId)", { userId })
       .getOne();
     if (!conversation) {
-      throw new ForbiddenException("Access denied");
+      throw new ForbiddenException(CHAT_MESSAGE.ACCESS_DENIED);
     }
     const column =
       conversation.user1Id === userId ? "user1LastReadAt" : "user2LastReadAt";
@@ -179,7 +169,7 @@ export class ChatService {
       .andWhere("(c.user1_id = :userId OR c.user2_id = :userId)", { userId })
       .getOne();
     if (!conversation) {
-      throw new ForbiddenException("Access denied");
+      throw new ForbiddenException(CHAT_MESSAGE.ACCESS_DENIED);
     }
     const [data, total] = await this.messageRepo.findAndCount({
       where: { conversationId },
@@ -197,7 +187,7 @@ export class ChatService {
       .andWhere("(c.user1_id = :userId OR c.user2_id = :userId)", { userId })
       .getOne();
     if (!conversation) {
-      throw new ForbiddenException("Access denied");
+      throw new ForbiddenException(CHAT_MESSAGE.ACCESS_DENIED);
     }
     const message = this.messageRepo.create({
       conversationId: dto.conversationId,
