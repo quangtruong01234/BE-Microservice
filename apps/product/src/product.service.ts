@@ -8,11 +8,11 @@ import {
   BadRequestException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { DataSource, In, Repository, SelectQueryBuilder } from "typeorm";
+import { DataSource, In, Raw, Repository, SelectQueryBuilder } from "typeorm";
 import { ClientProxy } from "@nestjs/microservices";
 import { firstValueFrom, timeout } from "rxjs";
 import { Channel } from "amqplib";
-import { PaginatedResponse } from "@app/common";
+import { CloudinaryService, PaginatedResponse } from "@app/common";
 import { EXCHANGE } from "@app/common/constants/exchange";
 import { EVENT } from "@app/common/constants/event";
 import { CachedService } from "@app/cached";
@@ -30,18 +30,18 @@ import { CreateBrandDto } from "./dto/create-brand.dto";
 import { CreateCategoryDto } from "./dto/create-category.dto";
 import { GetProductsQueryDto } from "./dto/get-products-query.dto";
 import { CreateProductSkuDto } from "./dto/create-product-sku.dto";
-
-const SEARCH_CACHE_TTL = 5; // seconds
-
-type WishlistMutationResult = {
-  productId: number;
-  isWishlisted: boolean;
-  createdAt: Date;
-};
-
-type WishlistedProduct = Product & {
-  wishlistedAt: Date;
-};
+import { PRODUCT_MESSAGE } from "libs/constant/response-message.constant";
+import {
+  SEARCH_CACHE_TTL,
+  CATALOG_LOOKUP_CACHE_TTL,
+  CATALOG_LOOKUP_STATUSES,
+  CATALOG_UNIQUE_STATUSES,
+} from "./product.constants";
+import {
+  CatalogLookupStatus,
+  WishlistMutationResult,
+  WishlistedProduct,
+} from "./product.types";
 
 @Injectable()
 export class ProductService {
@@ -62,6 +62,7 @@ export class ProductService {
     private readonly wishlistRepository: Repository<WishlistItem>,
     private readonly dataSource: DataSource,
     private readonly cachedService: CachedService,
+    private readonly cloudinaryService: CloudinaryService,
     @Inject(EXCHANGE.RMQ_PUBLISHER_CHANNEL)
     private readonly fanoutChannel: Channel | null,
     @Inject(NAME_SERVICE_TCP.ORDERS_SERVICE)
@@ -81,6 +82,70 @@ export class ProductService {
       ),
     );
     return `products:search:${stable}`;
+  }
+
+  private buildBrandListCacheKey(status: CatalogLookupStatus): string {
+    return `products:brands:${status}`;
+  }
+
+  private buildCategoryListCacheKey(status: CatalogLookupStatus): string {
+    return `products:categories:${status}`;
+  }
+
+  private async readCachedList<T>(
+    cacheKey: string,
+    label: string,
+  ): Promise<T[] | null> {
+    try {
+      const cached = await this.cachedService.get(cacheKey);
+      if (!cached) {
+        return null;
+      }
+      return JSON.parse(cached) as T[];
+    } catch (err) {
+      this.logger.warn(`${label} cache read failed`, String(err));
+      return null;
+    }
+  }
+
+  private async writeCachedList<T>(
+    cacheKey: string,
+    value: T[],
+    label: string,
+  ): Promise<void> {
+    try {
+      await this.cachedService.set(
+        cacheKey,
+        JSON.stringify(value),
+        CATALOG_LOOKUP_CACHE_TTL,
+      );
+    } catch (err) {
+      this.logger.warn(`${label} cache write failed`, String(err));
+    }
+  }
+
+  private async invalidateBrandListCache(): Promise<void> {
+    try {
+      await Promise.all(
+        CATALOG_LOOKUP_STATUSES.map((status) =>
+          this.cachedService.del(this.buildBrandListCacheKey(status)),
+        ),
+      );
+    } catch (err) {
+      this.logger.warn("Failed to invalidate brand list cache", String(err));
+    }
+  }
+
+  private async invalidateCategoryListCache(): Promise<void> {
+    try {
+      await Promise.all(
+        CATALOG_LOOKUP_STATUSES.map((status) =>
+          this.cachedService.del(this.buildCategoryListCacheKey(status)),
+        ),
+      );
+    } catch (err) {
+      this.logger.warn("Failed to invalidate category list cache", String(err));
+    }
   }
 
   private async invalidateSearchCache(): Promise<void> {
@@ -109,7 +174,7 @@ export class ProductService {
       this.logger.warn(
         `[PRODUCT] Product ${productId} not found for stock update`,
       );
-      throw new NotFoundException(`Product ${productId} not found`);
+      throw new NotFoundException(PRODUCT_MESSAGE.NOT_FOUND_BY_ID(productId));
     }
     this.logger.log(
       `[PRODUCT] Updated stockQuantity for product ${productId} to ${availableStock}`,
@@ -136,19 +201,23 @@ export class ProductService {
         tierIdx = JSON.parse(dto.tierIdx) as number[];
       } catch {
         throw new BadRequestException(
-          `Invalid tierIdx "${dto.tierIdx}" — must be a JSON array string`,
+          PRODUCT_MESSAGE.INVALID_TIER_IDX_JSON_STRING(dto.tierIdx),
         );
       }
 
       if (!Array.isArray(tierIdx)) {
         throw new BadRequestException(
-          `Invalid tierIdx "${dto.tierIdx}" — must be a JSON array`,
+          PRODUCT_MESSAGE.INVALID_TIER_IDX_ARRAY(dto.tierIdx),
         );
       }
 
       if (tierIdx.length !== variationCount) {
         throw new BadRequestException(
-          `SKU tierIdx ${dto.tierIdx} has ${tierIdx.length} tier(s) but the product defines ${variationCount} variation(s); counts must match`,
+          PRODUCT_MESSAGE.TIER_IDX_COUNT_MISMATCH(
+            dto.tierIdx,
+            tierIdx.length,
+            variationCount,
+          ),
         );
       }
 
@@ -156,7 +225,12 @@ export class ProductService {
         const optionCount = axes[axis]?.options?.length ?? 0;
         if (!Number.isInteger(idx) || idx < 0 || idx >= optionCount) {
           throw new BadRequestException(
-            `SKU tierIdx ${dto.tierIdx} index ${idx} is out of range for variation "${axes[axis]?.name ?? axis}" (${optionCount} option(s))`,
+            PRODUCT_MESSAGE.TIER_IDX_OUT_OF_RANGE(
+              dto.tierIdx,
+              idx,
+              axes[axis]?.name ?? axis,
+              optionCount,
+            ),
           );
         }
       });
@@ -220,7 +294,7 @@ export class ProductService {
       select: ["id", "variations"],
     });
     if (!product) {
-      throw new NotFoundException(`Product ${productId} not found`);
+      throw new NotFoundException(PRODUCT_MESSAGE.NOT_FOUND_BY_ID(productId));
     }
     this.validateSkuTiers(product.variations, skuList);
 
@@ -355,7 +429,7 @@ export class ProductService {
   async findSkuById(id: number): Promise<ProductSku> {
     const sku = await this.skuRepository.findOne({ where: { id } });
     if (!sku) {
-      throw new NotFoundException(`SKU ${id} not found`);
+      throw new NotFoundException(PRODUCT_MESSAGE.SKU_NOT_FOUND(id));
     }
     return sku;
   }
@@ -370,7 +444,7 @@ export class ProductService {
         where: { sku: rest.sku },
       });
       if (existingProduct) {
-        throw new ConflictException("Product with this SKU already exists");
+        throw new ConflictException(PRODUCT_MESSAGE.SKU_ALREADY_EXISTS);
       }
     }
 
@@ -378,12 +452,14 @@ export class ProductService {
       id: In(categoryIds),
     });
     if (categories.length !== categoryIds.length) {
-      throw new NotFoundException("One or more categories not found");
+      throw new NotFoundException(PRODUCT_MESSAGE.CATEGORIES_NOT_FOUND);
     }
     const inactiveCategories = categories.filter((c) => c.status !== "active");
     if (inactiveCategories.length > 0) {
       throw new BadRequestException(
-        `Categories not approved: ${inactiveCategories.map((c) => c.id).join(", ")}`,
+        PRODUCT_MESSAGE.CATEGORIES_NOT_APPROVED(
+          inactiveCategories.map((c) => c.id).join(", "),
+        ),
       );
     }
 
@@ -392,10 +468,10 @@ export class ProductService {
         where: { id: rest.brandId },
       });
       if (!brand) {
-        throw new NotFoundException("Brand not found");
+        throw new NotFoundException(PRODUCT_MESSAGE.BRAND_NOT_FOUND);
       }
       if (brand.status !== "active") {
-        throw new BadRequestException("Brand has not been approved");
+        throw new BadRequestException(PRODUCT_MESSAGE.BRAND_NOT_APPROVED);
       }
     }
 
@@ -580,7 +656,7 @@ export class ProductService {
       relations: ["brand", "categories", "skus"],
     });
     if (!product) {
-      throw new NotFoundException("Product not found");
+      throw new NotFoundException(PRODUCT_MESSAGE.NOT_FOUND);
     }
     return product;
   }
@@ -603,9 +679,18 @@ export class ProductService {
       relations: ["brand", "categories"],
     });
     if (!product) {
-      throw new NotFoundException("Product not found");
+      throw new NotFoundException(PRODUCT_MESSAGE.NOT_FOUND);
     }
     return product;
+  }
+
+  // Fire-and-forget post-commit cleanup — destroyAssets never throws, so a
+  // Cloudinary failure can never fail the product mutation that triggered it.
+  private destroyDroppedImages(oldUrls: string[], keptUrls: string[]): void {
+    const keptUrlSet = new Set(keptUrls);
+    const droppedUrls = oldUrls.filter((imageUrl) => !keptUrlSet.has(imageUrl));
+    if (droppedUrls.length === 0) return;
+    void this.cloudinaryService.destroyAssets(droppedUrls);
   }
 
   async updateProduct(
@@ -613,11 +698,11 @@ export class ProductService {
     updateProductDto: UpdateProductDto,
   ): Promise<Product> {
     const product = await this.findProductById(id);
+    // Capture before Object.assign overwrites imageUrls on the same instance.
+    const previousImageUrls = product.imageUrls ?? [];
 
     if (updateProductDto.isActive === true && product.approvalBlocked) {
-      throw new BadRequestException(
-        "Product is blocked pending brand/category approval",
-      );
+      throw new BadRequestException(PRODUCT_MESSAGE.BLOCKED_PENDING_APPROVAL);
     }
 
     if (updateProductDto.sku && updateProductDto.sku !== product.sku) {
@@ -625,7 +710,7 @@ export class ProductService {
         where: { sku: updateProductDto.sku },
       });
       if (existingProduct) {
-        throw new ConflictException("Product with this SKU already exists");
+        throw new ConflictException(PRODUCT_MESSAGE.SKU_ALREADY_EXISTS);
       }
     }
 
@@ -634,10 +719,10 @@ export class ProductService {
         where: { id: updateProductDto.brandId },
       });
       if (!brand) {
-        throw new NotFoundException("Brand not found");
+        throw new NotFoundException(PRODUCT_MESSAGE.BRAND_NOT_FOUND);
       }
       if (brand.status !== "active") {
-        throw new BadRequestException("Brand has not been approved");
+        throw new BadRequestException(PRODUCT_MESSAGE.BRAND_NOT_APPROVED);
       }
     }
 
@@ -649,14 +734,16 @@ export class ProductService {
         id: In(categoryIds),
       });
       if (categories.length !== categoryIds.length) {
-        throw new NotFoundException("One or more categories not found");
+        throw new NotFoundException(PRODUCT_MESSAGE.CATEGORIES_NOT_FOUND);
       }
       const inactiveCategories = categories.filter(
         (c) => c.status !== "active",
       );
       if (inactiveCategories.length > 0) {
         throw new BadRequestException(
-          `Categories not approved: ${inactiveCategories.map((c) => c.id).join(", ")}`,
+          PRODUCT_MESSAGE.CATEGORIES_NOT_APPROVED(
+            inactiveCategories.map((c) => c.id).join(", "),
+          ),
         );
       }
       product.categories = categories;
@@ -669,13 +756,17 @@ export class ProductService {
     }
 
     await this.invalidateSearchCache();
+    // SEC-M7: dropped images are orphaned on Cloudinary once the edit commits.
+    this.destroyDroppedImages(previousImageUrls, updated.imageUrls ?? []);
     return updated;
   }
 
   async deleteProduct(id: number): Promise<{ success: boolean }> {
     const product = await this.findProductById(id);
+    const removedImageUrls = product.imageUrls ?? [];
     await this.productRepository.remove(product);
     await this.invalidateSearchCache();
+    this.destroyDroppedImages(removedImageUrls, []);
     return { success: true };
   }
 
@@ -723,7 +814,7 @@ export class ProductService {
     } catch (err: unknown) {
       const dbErr = err as { code?: string };
       if (dbErr.code === "ER_DUP_ENTRY") {
-        throw new ConflictException("Already reviewed this product");
+        throw new ConflictException(PRODUCT_MESSAGE.ALREADY_REVIEWED);
       }
       throw err;
     }
@@ -737,10 +828,10 @@ export class ProductService {
       where: { id: reviewId },
     });
     if (!review) {
-      throw new NotFoundException("Review not found");
+      throw new NotFoundException(PRODUCT_MESSAGE.REVIEW_NOT_FOUND);
     }
     if (review.userId !== userId) {
-      throw new ForbiddenException("Not your review");
+      throw new ForbiddenException(PRODUCT_MESSAGE.NOT_YOUR_REVIEW);
     }
     await this.reviewRepository.remove(review);
     await this.recalculateProductRating(review.productId);
@@ -765,22 +856,44 @@ export class ProductService {
     createBrandDto: CreateBrandDto,
     submittedBy: number,
   ): Promise<Brand> {
+    const normalizedName = createBrandDto.name.trim();
+    const existingBrand = await this.brandRepository.findOne({
+      where: {
+        name: Raw((alias) => `LOWER(TRIM(${alias})) = LOWER(:name)`, {
+          name: normalizedName,
+        }),
+        status: In([...CATALOG_UNIQUE_STATUSES]),
+      },
+    });
+    if (existingBrand) {
+      throw new ConflictException(PRODUCT_MESSAGE.BRAND_NAME_TAKEN);
+    }
     const brand = this.brandRepository.create({
       ...createBrandDto,
+      name: normalizedName,
       status: "pending",
       isActive: false,
       submittedBy,
     });
-    return this.brandRepository.save(brand);
+    const saved = await this.brandRepository.save(brand);
+    await this.invalidateBrandListCache();
+    return saved;
   }
 
-  async findAllBrands(
-    status?: "pending" | "active" | "rejected",
-  ): Promise<Brand[]> {
-    return this.brandRepository.find({
-      where: { status: status ?? "active" },
+  async findAllBrands(status?: CatalogLookupStatus): Promise<Brand[]> {
+    const resolvedStatus = status ?? "active";
+    const cacheKey = this.buildBrandListCacheKey(resolvedStatus);
+    const cached = await this.readCachedList<Brand>(cacheKey, "Brand list");
+    if (cached) {
+      return cached;
+    }
+
+    const brands = await this.brandRepository.find({
+      where: { status: resolvedStatus },
       order: { name: "ASC" },
     });
+    await this.writeCachedList(cacheKey, brands, "Brand list");
+    return brands;
   }
 
   async findBrandById(id: number): Promise<Brand> {
@@ -788,7 +901,7 @@ export class ProductService {
       where: { id },
     });
     if (!brand) {
-      throw new NotFoundException("Brand not found");
+      throw new NotFoundException(PRODUCT_MESSAGE.BRAND_NOT_FOUND);
     }
     return brand;
   }
@@ -800,7 +913,7 @@ export class ProductService {
   ): Promise<Brand> {
     const brand = await this.brandRepository.findOne({ where: { id } });
     if (!brand) {
-      throw new NotFoundException("Brand not found");
+      throw new NotFoundException(PRODUCT_MESSAGE.BRAND_NOT_FOUND);
     }
     brand.status = action === "approve" ? "active" : "rejected";
     brand.isActive = action === "approve";
@@ -808,6 +921,7 @@ export class ProductService {
       brand.reviewNote = note;
     }
     const saved = await this.brandRepository.save(brand);
+    await this.invalidateBrandListCache();
     if (saved.status === "rejected") {
       const result = await this.productRepository.update(
         { brandId: saved.id },
@@ -864,22 +978,47 @@ export class ProductService {
     createCategoryDto: CreateCategoryDto,
     submittedBy: number,
   ): Promise<Category> {
+    const normalizedName = createCategoryDto.name.trim();
+    const existingCategory = await this.categoryRepository.findOne({
+      where: {
+        name: Raw((alias) => `LOWER(TRIM(${alias})) = LOWER(:name)`, {
+          name: normalizedName,
+        }),
+        status: In([...CATALOG_UNIQUE_STATUSES]),
+      },
+    });
+    if (existingCategory) {
+      throw new ConflictException(PRODUCT_MESSAGE.CATEGORY_NAME_TAKEN);
+    }
     const category = this.categoryRepository.create({
       ...createCategoryDto,
+      name: normalizedName,
       status: "pending",
       isActive: false,
       submittedBy,
     });
-    return this.categoryRepository.save(category);
+    const saved = await this.categoryRepository.save(category);
+    await this.invalidateCategoryListCache();
+    return saved;
   }
 
-  async findAllCategories(
-    status?: "pending" | "active" | "rejected",
-  ): Promise<Category[]> {
-    return this.categoryRepository.find({
-      where: { status: status ?? "active" },
+  async findAllCategories(status?: CatalogLookupStatus): Promise<Category[]> {
+    const resolvedStatus = status ?? "active";
+    const cacheKey = this.buildCategoryListCacheKey(resolvedStatus);
+    const cached = await this.readCachedList<Category>(
+      cacheKey,
+      "Category list",
+    );
+    if (cached) {
+      return cached;
+    }
+
+    const categories = await this.categoryRepository.find({
+      where: { status: resolvedStatus },
       order: { name: "ASC" },
     });
+    await this.writeCachedList(cacheKey, categories, "Category list");
+    return categories;
   }
 
   async findCategoryById(id: number): Promise<Category> {
@@ -887,7 +1026,7 @@ export class ProductService {
       where: { id },
     });
     if (!category) {
-      throw new NotFoundException("Category not found");
+      throw new NotFoundException(PRODUCT_MESSAGE.CATEGORY_NOT_FOUND);
     }
     return category;
   }
@@ -899,7 +1038,7 @@ export class ProductService {
   ): Promise<Category> {
     const category = await this.categoryRepository.findOne({ where: { id } });
     if (!category) {
-      throw new NotFoundException("Category not found");
+      throw new NotFoundException(PRODUCT_MESSAGE.CATEGORY_NOT_FOUND);
     }
     category.status = action === "approve" ? "active" : "rejected";
     category.isActive = action === "approve";
@@ -907,6 +1046,7 @@ export class ProductService {
       category.reviewNote = note;
     }
     const saved = await this.categoryRepository.save(category);
+    await this.invalidateCategoryListCache();
     if (saved.status === "rejected") {
       const affected = await this.productRepository
         .createQueryBuilder("product")
@@ -993,7 +1133,7 @@ export class ProductService {
       where: { id: productId, isActive: true },
     });
     if (!product) {
-      throw new NotFoundException("Product not found");
+      throw new NotFoundException(PRODUCT_MESSAGE.NOT_FOUND);
     }
 
     try {

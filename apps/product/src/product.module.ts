@@ -10,7 +10,7 @@ import { WishlistItem } from "./entity/wishlist-item.entity";
 import { Brand } from "./entity/brand.entity";
 import { Category } from "./entity/category.entity";
 import { DatabaseModule } from "@app/database";
-import { RmqModule, RmqService } from "@app/common";
+import { CloudinaryModule, RmqModule, RmqService } from "@app/common";
 import { CachedModule } from "@app/cached";
 import { ClientsModule, Transport } from "@nestjs/microservices";
 import {
@@ -47,6 +47,7 @@ import {
     RmqModule,
     RmqModule.registerDirectPublisher(),
     CachedModule,
+    CloudinaryModule,
   ],
   controllers: [ProductController],
   providers: [ProductService, RmqService],
