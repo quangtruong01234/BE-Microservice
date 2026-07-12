@@ -14,8 +14,9 @@ import { PaymentMethod as PaymentMethodEnum } from "@app/common";
 import { PaymentGatewayFactory } from "./payment-gateway.factory";
 import { EXCHANGE } from "@app/common/constants/exchange";
 import { EVENT } from "@app/common/constants/event";
-import { ZaloPayReturnQuery } from "./zalopay/zalopay.service";
+import { ZaloPayReturnQuery } from "./zalopay/zalopay.types";
 import { getZaloPayConfig } from "./zalopay/zalopay.config";
+import { PAYMENT_MESSAGE } from "libs/constant/response-message.constant";
 import { generateMac } from "./zalopay/zalopay.helper";
 
 @Injectable()
@@ -86,7 +87,7 @@ export class PaymentsService {
       this.logger.log("[PAYMENTS] payment record updated with appTransId");
       if (updateResult.affected === 0) {
         throw new InternalServerErrorException(
-          "Failed to persist appTransId — payment row not found by orderId",
+          PAYMENT_MESSAGE.PERSIST_APP_TRANS_ID_FAILED,
         );
       }
 
@@ -139,7 +140,7 @@ export class PaymentsService {
       );
       if (updateResult.affected === 0) {
         throw new InternalServerErrorException(
-          "Failed to persist appTransId — multi-order payment row not found",
+          PAYMENT_MESSAGE.PERSIST_APP_TRANS_ID_MULTI_ORDER_FAILED,
         );
       }
 
@@ -205,7 +206,7 @@ export class PaymentsService {
       where: { appTransId },
     });
     if (!payment) {
-      throw new NotFoundException(`Payment ${appTransId} not found`);
+      throw new NotFoundException(PAYMENT_MESSAGE.NOT_FOUND(appTransId));
     }
     if (payment.status === PaymentStatus.COMPLETED) {
       if (payment.transactionId !== transactionId) {
@@ -234,14 +235,14 @@ export class PaymentsService {
         );
         return current;
       }
-      throw new InternalServerErrorException("Payment completion failed");
+      throw new InternalServerErrorException(PAYMENT_MESSAGE.COMPLETION_FAILED);
     }
 
     const updated = await this.paymentRepository.findOne({
       where: { id: payment.id },
     });
     if (!updated) {
-      throw new InternalServerErrorException("Payment update failed");
+      throw new InternalServerErrorException(PAYMENT_MESSAGE.UPDATE_FAILED);
     }
 
     const orderIdList =

@@ -26,7 +26,7 @@ import {
   PaymentMethod,
   RmqService,
 } from "@app/common";
-import { ZaloPayReturnQuery } from "./zalopay/zalopay.service";
+import { ZaloPayReturnQuery } from "./zalopay/zalopay.types";
 
 const Public = () => SetMetadata("isPublic", true);
 

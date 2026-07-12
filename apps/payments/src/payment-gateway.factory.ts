@@ -3,6 +3,7 @@ import { PaymentMethod } from "@app/common";
 import { IPaymentStrategy } from "./payment-strategy.interface";
 import { ZaloPayService } from "./zalopay/zalopay.service";
 import { VNPayStrategy } from "./vnpay/vnpay.service";
+import { PAYMENT_MESSAGE } from "libs/constant/response-message.constant";
 
 @Injectable()
 export class PaymentGatewayFactory {
@@ -15,7 +16,7 @@ export class PaymentGatewayFactory {
     if (method === PaymentMethod.ZALOPAY) return this.zaloPayService;
     if (method === PaymentMethod.VNPAY) return this.vnPayStrategy;
     throw new BadRequestException(
-      `Unsupported payment method: ${String(method)}`,
+      PAYMENT_MESSAGE.UNSUPPORTED_METHOD(String(method)),
     );
   }
 }
