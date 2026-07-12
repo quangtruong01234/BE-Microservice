@@ -14,3 +14,9 @@ export * from "./postgres/postgres.service";
 
 export * from "./mysql/mysql.module";
 export * from "./mysql/mysql.service";
+
+export * from "./mailer/mailer.module";
+export * from "./mailer/mailer.service";
+
+export * from "./cloudinary/cloudinary.module";
+export * from "./cloudinary/cloudinary.service";

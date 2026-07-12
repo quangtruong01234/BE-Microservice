@@ -12,6 +12,8 @@ export const USER_MESSAGE_PATTERN = {
   ADDRESS_UPDATE: "user.address_update",
   ADDRESS_DELETE: "user.address_delete",
   ADDRESS_SET_DEFAULT: "user.address_set_default",
+  FORGOT_PASSWORD: "user.forgot_password",
+  RESET_PASSWORD: "user.reset_password",
 };
 
 export const PRODUCT_MESSAGE_PATTERN = {
