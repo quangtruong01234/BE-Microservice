@@ -11,11 +11,8 @@ import {
   Payload,
   RmqContext,
 } from "@nestjs/microservices";
-import {
-  InventoryService,
-  CreateInventoryDto,
-  UpdateInventoryDto,
-} from "./inventory.service";
+import { InventoryService } from "./inventory.service";
+import { CreateInventoryDto, UpdateInventoryDto } from "./inventory.types";
 import { EVENT } from "@app/common/constants/event";
 import { HttpToRpcExceptionFilter, RmqService } from "@app/common";
 

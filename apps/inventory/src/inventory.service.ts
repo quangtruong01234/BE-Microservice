@@ -15,33 +15,13 @@ import {
 } from "./inventory-reservation.entity";
 import { EXCHANGE } from "@app/common/constants/exchange";
 import { EVENT } from "@app/common/constants/event";
-
-export interface CreateInventoryDto {
-  productId: number;
-  productSkuId?: number;
-  sku: string;
-  availableStock: number;
-  minimumStock?: number;
-  location?: string;
-}
-
-export interface UpdateInventoryDto {
-  availableStock?: number;
-  reservedStock?: number;
-  minimumStock?: number;
-  location?: string;
-  isActive?: boolean;
-}
-
-const LOW_STOCK_MAX_RESULTS = 100;
-
-export interface StockCheckResult {
-  productId: number;
-  sku: string;
-  available: boolean;
-  availableStock: number;
-  requestedQuantity: number;
-}
+import { INVENTORY_MESSAGE } from "libs/constant/response-message.constant";
+import { LOW_STOCK_MAX_RESULTS } from "./inventory.constants";
+import {
+  CreateInventoryDto,
+  StockCheckResult,
+  UpdateInventoryDto,
+} from "./inventory.types";
 
 @Injectable()
 export class InventoryService {
@@ -86,7 +66,7 @@ export class InventoryService {
         // it, hard-delete it and create a fresh row with the new stock values.
         if (existing.isActive) {
           throw new ConflictException(
-            `Inventory for product ID ${data.productId} already exists`,
+            INVENTORY_MESSAGE.ALREADY_EXISTS_FOR_PRODUCT(data.productId),
           );
         }
         this.logger.warn(
@@ -105,7 +85,7 @@ export class InventoryService {
           error.message.includes("duplicate key")
         ) {
           throw new ConflictException(
-            `Inventory for product ID ${data.productId} already exists`,
+            INVENTORY_MESSAGE.ALREADY_EXISTS_FOR_PRODUCT(data.productId),
           );
         }
       }
@@ -133,7 +113,7 @@ export class InventoryService {
       where: { id, isActive: true },
     });
     if (!result)
-      throw new NotFoundException(`Inventory with id ${id} not found`);
+      throw new NotFoundException(INVENTORY_MESSAGE.NOT_FOUND_BY_ID(id));
     return result;
   }
 
@@ -145,7 +125,7 @@ export class InventoryService {
     });
     if (!result)
       throw new NotFoundException(
-        `Inventory for product ${productId} not found`,
+        INVENTORY_MESSAGE.NOT_FOUND_BY_PRODUCT(productId),
       );
     return result;
   }
@@ -181,21 +161,21 @@ export class InventoryService {
       where: { sku, isActive: true },
     });
     if (!result)
-      throw new NotFoundException(`Inventory with sku ${sku} not found`);
+      throw new NotFoundException(INVENTORY_MESSAGE.NOT_FOUND_BY_SKU(sku));
     return result;
   }
 
   async update(id: number, data: UpdateInventoryDto): Promise<Inventory> {
     const inventory = await this.findOne(id);
     if (!inventory) {
-      throw new NotFoundException(`Inventory with id ${id} not found`);
+      throw new NotFoundException(INVENTORY_MESSAGE.NOT_FOUND_BY_ID(id));
     }
 
     await this.inventoryRepository.update(id, data);
     const updatedInventory = await this.findOne(id);
     if (!updatedInventory) {
       throw new NotFoundException(
-        `Inventory with id ${id} not found after update`,
+        INVENTORY_MESSAGE.NOT_FOUND_BY_ID_AFTER_UPDATE(id),
       );
     }
     return updatedInventory;
