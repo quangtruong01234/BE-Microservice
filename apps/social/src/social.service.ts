@@ -11,7 +11,7 @@ import { InjectDataSource, InjectRepository } from "@nestjs/typeorm";
 import { DataSource, In, IsNull, QueryFailedError, Repository } from "typeorm";
 import { Channel } from "amqplib";
 import { CachedService } from "@app/cached";
-import { PaginatedResponse } from "@app/common";
+import { CloudinaryService, PaginatedResponse } from "@app/common";
 import { EXCHANGE } from "@app/common/constants/exchange";
 import { EVENT } from "@app/common/constants/event";
 import { Post } from "./entities/post.entity";
@@ -19,11 +19,12 @@ import { PostLike } from "./entities/post-like.entity";
 import { PostReport } from "./entities/post-report.entity";
 import { Comment } from "./entities/comment.entity";
 import { Follow } from "./entities/follow.entity";
+import { SOCIAL_MESSAGE } from "libs/constant/response-message.constant";
+import { NOTIFICATION_PREVIEW_MAX_LENGTH } from "./social.constants";
 
 @Injectable()
 export class SocialService {
   private readonly logger = new Logger(SocialService.name);
-  private static readonly NOTIFICATION_PREVIEW_MAX_LENGTH = 255;
   private readonly brokenLegacyImageUrlMarkers = [
     "/trybuy/posts/trybuy/posts/",
     "/undefined_",
@@ -43,9 +44,25 @@ export class SocialService {
     @InjectDataSource()
     private readonly dataSource: DataSource,
     private readonly cachedService: CachedService,
+    private readonly cloudinaryService: CloudinaryService,
     @Inject(EXCHANGE.RMQ_PUBLISHER_CHANNEL)
     private readonly fanoutChannel: Channel | null,
   ) {}
+
+  private collectPostMediaUrls(post: Post): string[] {
+    return [...(post.imageUrls ?? []), post.videoUrl].filter(
+      (mediaUrl): mediaUrl is string => Boolean(mediaUrl),
+    );
+  }
+
+  // Fire-and-forget post-commit cleanup — destroyAssets never throws, so a
+  // Cloudinary failure can never fail the post mutation that triggered it.
+  private destroyDroppedMedia(oldUrls: string[], keptUrls: string[]): void {
+    const keptUrlSet = new Set(keptUrls);
+    const droppedUrls = oldUrls.filter((mediaUrl) => !keptUrlSet.has(mediaUrl));
+    if (droppedUrls.length === 0) return;
+    void this.cloudinaryService.destroyAssets(droppedUrls);
+  }
 
   private get treeRepo() {
     return this.dataSource.getTreeRepository(Comment);
@@ -255,17 +272,26 @@ export class SocialService {
       where: { id: payload.postId },
     });
     if (!post) {
-      throw new NotFoundException(`Post ${payload.postId} not found`);
+      throw new NotFoundException(
+        SOCIAL_MESSAGE.POST_NOT_FOUND(payload.postId),
+      );
     }
     if (post.userId !== payload.userId) {
-      throw new ForbiddenException("You can only edit your own posts");
+      throw new ForbiddenException(SOCIAL_MESSAGE.EDIT_OWN_POSTS_ONLY);
     }
+    const previousMediaUrls = this.collectPostMediaUrls(post);
     // Only overwrite fields the caller actually sent — undefined means "leave as-is".
     if (payload.content !== undefined) post.content = payload.content;
     if (payload.imageUrls !== undefined) post.imageUrls = payload.imageUrls;
     if (payload.videoUrl !== undefined) post.videoUrl = payload.videoUrl;
     if (payload.productId !== undefined) post.productId = payload.productId;
-    return this.postRepository.save(post);
+    const savedPost = await this.postRepository.save(post);
+    // SEC-M7: dropped media is orphaned on Cloudinary once the edit commits.
+    this.destroyDroppedMedia(
+      previousMediaUrls,
+      this.collectPostMediaUrls(savedPost),
+    );
+    return savedPost;
   }
 
   async reportPost(payload: {
@@ -277,10 +303,12 @@ export class SocialService {
       where: { id: payload.postId },
     });
     if (!post) {
-      throw new NotFoundException(`Post ${payload.postId} not found`);
+      throw new NotFoundException(
+        SOCIAL_MESSAGE.POST_NOT_FOUND(payload.postId),
+      );
     }
     if (post.userId === payload.reporterId) {
-      throw new BadRequestException("You cannot report your own post");
+      throw new BadRequestException(SOCIAL_MESSAGE.CANNOT_REPORT_OWN_POST);
     }
     try {
       await this.postReportRepository.save(
@@ -296,7 +324,7 @@ export class SocialService {
         ((err.driverError as { code?: string })?.code === "ER_DUP_ENTRY" ||
           (err.driverError as { code?: string })?.code === "23505")
       ) {
-        throw new ConflictException("You have already reported this post");
+        throw new ConflictException(SOCIAL_MESSAGE.ALREADY_REPORTED_POST);
       }
       throw err;
     }
@@ -368,7 +396,7 @@ export class SocialService {
   > {
     const post = await this.postRepository.findOne({ where: { id: postId } });
     if (!post || post.isHidden) {
-      throw new NotFoundException(`Post ${postId} not found`);
+      throw new NotFoundException(SOCIAL_MESSAGE.POST_NOT_FOUND(postId));
     }
     const cacheKey = `post:like_count:${postId}`;
     const cached = await this.cachedService.get(cacheKey);
@@ -410,7 +438,7 @@ export class SocialService {
         ((err.driverError as { code?: string })?.code === "ER_DUP_ENTRY" ||
           (err.driverError as { code?: string })?.code === "23505")
       ) {
-        throw new ConflictException("Already liked");
+        throw new ConflictException(SOCIAL_MESSAGE.ALREADY_LIKED);
       }
       throw err;
     }
@@ -433,7 +461,7 @@ export class SocialService {
       userId: payload.userId,
     });
     if (result.affected === 0) {
-      throw new NotFoundException("Like not found");
+      throw new NotFoundException(SOCIAL_MESSAGE.LIKE_NOT_FOUND);
     }
     const [newCount] = await Promise.all([
       this.cachedService.decr(`post:like_count:${payload.postId}`),
@@ -454,12 +482,16 @@ export class SocialService {
       where: { id: payload.postId },
     });
     if (!post) {
-      throw new NotFoundException(`Post ${payload.postId} not found`);
+      throw new NotFoundException(
+        SOCIAL_MESSAGE.POST_NOT_FOUND(payload.postId),
+      );
     }
     if (post.userId !== payload.userId) {
-      throw new ForbiddenException("You can only delete your own posts");
+      throw new ForbiddenException(SOCIAL_MESSAGE.DELETE_OWN_POSTS_ONLY);
     }
+    const removedMediaUrls = this.collectPostMediaUrls(post);
     await this.postRepository.remove(post);
+    this.destroyDroppedMedia(removedMediaUrls, []);
     return { success: true };
   }
 
@@ -472,7 +504,9 @@ export class SocialService {
       where: { id: payload.postId },
     });
     if (!post) {
-      throw new NotFoundException(`Post ${payload.postId} not found`);
+      throw new NotFoundException(
+        SOCIAL_MESSAGE.POST_NOT_FOUND(payload.postId),
+      );
     }
     const comment = this.commentRepository.create({
       postId: payload.postId,
@@ -494,7 +528,7 @@ export class SocialService {
                 commentId: saved.id,
                 preview: payload.content.slice(
                   0,
-                  SocialService.NOTIFICATION_PREVIEW_MAX_LENGTH,
+                  NOTIFICATION_PREVIEW_MAX_LENGTH,
                 ),
               },
               pattern: EVENT.COMMENT_CREATED_EVENT,
@@ -540,10 +574,12 @@ export class SocialService {
       where: { id: payload.commentId },
     });
     if (!comment) {
-      throw new NotFoundException(`Comment ${payload.commentId} not found`);
+      throw new NotFoundException(
+        SOCIAL_MESSAGE.COMMENT_NOT_FOUND(payload.commentId),
+      );
     }
     if (comment.userId !== payload.userId) {
-      throw new ForbiddenException("You can only delete your own comments");
+      throw new ForbiddenException(SOCIAL_MESSAGE.DELETE_OWN_COMMENTS_ONLY);
     }
     await this.commentRepository.remove(comment);
     return { deleted: true };
@@ -560,7 +596,7 @@ export class SocialService {
     });
     if (!parentComment) {
       throw new NotFoundException(
-        `Comment ${payload.parentCommentId} not found`,
+        SOCIAL_MESSAGE.COMMENT_NOT_FOUND(payload.parentCommentId),
       );
     }
     const saved = await this.treeRepo.save(
@@ -586,7 +622,7 @@ export class SocialService {
                 replyId: saved.id,
                 preview: payload.content.slice(
                   0,
-                  SocialService.NOTIFICATION_PREVIEW_MAX_LENGTH,
+                  NOTIFICATION_PREVIEW_MAX_LENGTH,
                 ),
               },
               pattern: EVENT.REPLY_CREATED_EVENT,
@@ -610,7 +646,9 @@ export class SocialService {
       where: { id: payload.commentId },
     });
     if (!comment) {
-      throw new NotFoundException(`Comment ${payload.commentId} not found`);
+      throw new NotFoundException(
+        SOCIAL_MESSAGE.COMMENT_NOT_FOUND(payload.commentId),
+      );
     }
     return this.treeRepo.findDescendantsTree(comment, {
       depth: payload.depth ?? 5,
@@ -622,7 +660,7 @@ export class SocialService {
     followingId: number;
   }): Promise<{ followed: boolean; followingId: number }> {
     if (payload.followerId === payload.followingId) {
-      throw new BadRequestException("Cannot follow yourself");
+      throw new BadRequestException(SOCIAL_MESSAGE.CANNOT_FOLLOW_SELF);
     }
     try {
       await this.followRepository.save(
@@ -637,7 +675,7 @@ export class SocialService {
         ((err.driverError as { code?: string })?.code === "ER_DUP_ENTRY" ||
           (err.driverError as { code?: string })?.code === "23505")
       ) {
-        throw new ConflictException("Already following");
+        throw new ConflictException(SOCIAL_MESSAGE.ALREADY_FOLLOWING);
       }
       throw err;
     }
@@ -653,7 +691,7 @@ export class SocialService {
       followingId: payload.followingId,
     });
     if (result.affected === 0) {
-      throw new NotFoundException("Follow relationship not found");
+      throw new NotFoundException(SOCIAL_MESSAGE.FOLLOW_NOT_FOUND);
     }
     return { followed: false, followingId: payload.followingId };
   }
@@ -836,7 +874,9 @@ export class SocialService {
       where: { id: payload.postId },
     });
     if (!post) {
-      throw new NotFoundException(`Post ${payload.postId} not found`);
+      throw new NotFoundException(
+        SOCIAL_MESSAGE.POST_NOT_FOUND(payload.postId),
+      );
     }
     post.isHidden = true;
     post.hiddenAt = new Date();
@@ -860,7 +900,9 @@ export class SocialService {
       where: { id: payload.postId },
     });
     if (!post) {
-      throw new NotFoundException(`Post ${payload.postId} not found`);
+      throw new NotFoundException(
+        SOCIAL_MESSAGE.POST_NOT_FOUND(payload.postId),
+      );
     }
     post.isHidden = false;
     post.hiddenAt = null;
@@ -876,7 +918,9 @@ export class SocialService {
       where: { id: payload.postId },
     });
     if (!post) {
-      throw new NotFoundException(`Post ${payload.postId} not found`);
+      throw new NotFoundException(
+        SOCIAL_MESSAGE.POST_NOT_FOUND(payload.postId),
+      );
     }
     const result = await this.postReportRepository.update(
       { postId: payload.postId, status: "pending" },
@@ -896,12 +940,17 @@ export class SocialService {
       where: { id: payload.postId },
     });
     if (!post) {
-      throw new NotFoundException(`Post ${payload.postId} not found`);
+      throw new NotFoundException(
+        SOCIAL_MESSAGE.POST_NOT_FOUND(payload.postId),
+      );
     }
+    const removedMediaUrls = this.collectPostMediaUrls(post);
     await this.dataSource.transaction(async (manager) => {
       await manager.delete(PostReport, { postId: payload.postId });
       await manager.remove(post);
     });
+    // Cleanup only after the delete transaction has committed.
+    this.destroyDroppedMedia(removedMediaUrls, []);
     return { success: true };
   }
 }

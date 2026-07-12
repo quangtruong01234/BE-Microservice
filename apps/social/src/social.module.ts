@@ -3,7 +3,7 @@ import { ConfigModule } from "@nestjs/config";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { ScheduleModule } from "@nestjs/schedule";
 import { CachedModule } from "@app/cached";
-import { RmqModule } from "@app/common";
+import { CloudinaryModule, RmqModule } from "@app/common";
 import { SocialController } from "./social.controller";
 import { SocialService } from "./social.service";
 import { Post } from "./entities/post.entity";
@@ -33,6 +33,7 @@ import { Follow } from "./entities/follow.entity";
     TypeOrmModule.forFeature([Post, PostLike, PostReport, Comment, Follow]),
     ScheduleModule.forRoot(),
     CachedModule,
+    CloudinaryModule,
     RmqModule,
     RmqModule.registerDirectPublisher(),
   ],
