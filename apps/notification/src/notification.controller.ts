@@ -22,13 +22,8 @@ import {
   NOTIFICATION_MESSAGE_PATTERN,
   ORDER_MESSAGE_PATTERN,
 } from "libs/constant/message-pattern.constant";
-
-interface OrderInfo {
-  id: number;
-  userId: number;
-  sellerId: number;
-  total: number;
-}
+import { ORDER_MESSAGE } from "libs/constant/response-message.constant";
+import { OrderInfo } from "./notification.types";
 
 @UseFilters(HttpToRpcExceptionFilter)
 @Controller()
@@ -41,6 +36,46 @@ export class NotificationController {
     @Inject(NAME_SERVICE_TCP.ORDERS_SERVICE)
     private readonly ordersClient: ClientProxy,
   ) {}
+
+  // Best-effort email mirror of an order notification — never throws, so a
+  // mail/TCP failure cannot change the handler's ack/nack outcome.
+  private async sendOrderEmail(userId: number, message: string): Promise<void> {
+    await this.notificationService.emailUser(
+      userId,
+      `TryBuy — ${message}`,
+      `${message}.\n\nXem chi tiết trong mục Đơn hàng của bạn trên TryBuy.`,
+    );
+  }
+
+  @EventPattern(EVENT.ORDER_CREATED_EVENT)
+  async handleOrderCreated(
+    @Payload() data: { id: number; userId: number },
+    @Ctx() context: RmqContext,
+  ): Promise<void> {
+    const { id: orderId, userId } = data;
+    this.logger.log(
+      `[NOTIFICATION] order_created received for order ${orderId}`,
+    );
+    try {
+      const message = `Đơn hàng #${orderId} đã được đặt thành công`;
+      await this.notificationService.saveNotification(
+        userId,
+        "order_created",
+        orderId,
+        message,
+      );
+      await this.sendOrderEmail(userId, message);
+      this.rmqService.ack(context);
+    } catch (err) {
+      this.logger.error(
+        `[NOTIFICATION] handleOrderCreated failed for order ${orderId}: ${err}`,
+      );
+      const channel = context.getChannelRef() as {
+        nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
+      };
+      channel.nack(context.getMessage(), false, true); // requeue: DB error
+    }
+  }
 
   @EventPattern(EVENT.PAYMENT_COMPLETED_EVENT)
   async handlePaymentCompleted(
@@ -58,14 +93,16 @@ export class NotificationController {
           .pipe(timeout(10000)) as Observable<OrderInfo>,
       );
       if (!order) {
-        throw new NotFoundException(`Order ${orderId} not found`);
+        throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
       }
+      const message = `Đơn hàng #${orderId} đã thanh toán thành công`;
       await this.notificationService.saveNotification(
         order.userId,
         "payment_completed",
         orderId,
-        `Đơn hàng #${orderId} đã thanh toán thành công`,
+        message,
       );
+      await this.sendOrderEmail(order.userId, message);
       this.rmqService.ack(context);
     } catch (err) {
       this.logger.error(
@@ -99,14 +136,16 @@ export class NotificationController {
           .pipe(timeout(10000)) as Observable<OrderInfo>,
       );
       if (!order) {
-        throw new NotFoundException(`Order ${orderId} not found`);
+        throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
       }
+      const message = `Đơn hàng #${orderId} đã bị hủy`;
       await this.notificationService.saveNotification(
         order.userId,
         "order_canceled",
         orderId,
-        `Đơn hàng #${orderId} đã bị hủy`,
+        message,
       );
+      await this.sendOrderEmail(order.userId, message);
       this.rmqService.ack(context);
     } catch (err) {
       this.logger.error(
@@ -140,15 +179,17 @@ export class NotificationController {
           .pipe(timeout(10000)) as Observable<OrderInfo>,
       );
       if (!order) {
-        throw new NotFoundException(`Order ${orderId} not found`);
+        throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
       }
       // Notify the seller that a buyer opened a return request to review.
+      const message = `Đơn hàng #${orderId} có yêu cầu trả hàng cần duyệt`;
       await this.notificationService.saveNotification(
         order.sellerId,
         "order_return_requested",
         orderId,
-        `Đơn hàng #${orderId} có yêu cầu trả hàng cần duyệt`,
+        message,
       );
+      await this.sendOrderEmail(order.sellerId, message);
       this.rmqService.ack(context);
     } catch (err) {
       this.logger.error(
@@ -182,15 +223,17 @@ export class NotificationController {
           .pipe(timeout(10000)) as Observable<OrderInfo>,
       );
       if (!order) {
-        throw new NotFoundException(`Order ${orderId} not found`);
+        throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
       }
       // Notify the buyer that their return request was approved and refunded.
+      const message = `Yêu cầu trả hàng cho đơn #${orderId} đã được duyệt và hoàn tiền`;
       await this.notificationService.saveNotification(
         order.userId,
         "order_return_approved",
         orderId,
-        `Yêu cầu trả hàng cho đơn #${orderId} đã được duyệt và hoàn tiền`,
+        message,
       );
+      await this.sendOrderEmail(order.userId, message);
       this.rmqService.ack(context);
     } catch (err) {
       this.logger.error(
@@ -224,15 +267,17 @@ export class NotificationController {
           .pipe(timeout(10000)) as Observable<OrderInfo>,
       );
       if (!order) {
-        throw new NotFoundException(`Order ${orderId} not found`);
+        throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
       }
       // Notify the buyer that their return request was rejected.
+      const message = `Yêu cầu trả hàng cho đơn #${orderId} đã bị từ chối`;
       await this.notificationService.saveNotification(
         order.userId,
         "order_return_rejected",
         orderId,
-        `Yêu cầu trả hàng cho đơn #${orderId} đã bị từ chối`,
+        message,
       );
+      await this.sendOrderEmail(order.userId, message);
       this.rmqService.ack(context);
     } catch (err) {
       this.logger.error(

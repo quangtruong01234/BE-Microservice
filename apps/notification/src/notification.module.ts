@@ -2,7 +2,7 @@ import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { ClientsModule, Transport } from "@nestjs/microservices";
-import { RmqModule } from "@app/common";
+import { MailerModule, RmqModule } from "@app/common";
 import {
   NAME_SERVICE_TCP,
   PORT_TCP,
@@ -39,7 +39,16 @@ import { Notification } from "./entities/notification.entity";
           port: PORT_TCP.ORDERS_TCP_PORT,
         },
       },
+      {
+        name: NAME_SERVICE_TCP.USER_SERVICE,
+        transport: Transport.TCP,
+        options: {
+          host: TCP_HOST,
+          port: PORT_TCP.USER_TCP_PORT,
+        },
+      },
     ]),
+    MailerModule,
     RmqModule,
     RmqModule.registerDirectPublisher(),
   ],

@@ -1,0 +1,1 @@
+export const NOTIFICATION_TEXT_MAX_LENGTH = 255;

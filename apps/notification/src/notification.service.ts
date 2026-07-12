@@ -2,18 +2,16 @@ import { Inject, Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Channel } from "amqplib";
-import { PaginatedResponse } from "@app/common";
+import { ClientProxy } from "@nestjs/microservices";
+import { firstValueFrom, Observable, timeout } from "rxjs";
+import { MailerService, PaginatedResponse } from "@app/common";
 import { EXCHANGE } from "@app/common/constants/exchange";
 import { EVENT } from "@app/common/constants/event";
+import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
+import { USER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { Notification } from "./entities/notification.entity";
-
-interface NotificationMetadata {
-  postId?: number | null;
-  actorId?: number | null;
-  preview?: string | null;
-}
-
-const NOTIFICATION_TEXT_MAX_LENGTH = 255;
+import { NOTIFICATION_TEXT_MAX_LENGTH } from "./notification.constants";
+import { NotificationMetadata, UserEmailInfo } from "./notification.types";
 
 function truncateNotificationText(
   text: string | null | undefined,
@@ -30,7 +28,43 @@ export class NotificationService {
     private readonly notificationRepository: Repository<Notification>,
     @Inject(EXCHANGE.RMQ_PUBLISHER_CHANNEL)
     private readonly fanoutChannel: Channel | null,
+    @Inject(NAME_SERVICE_TCP.USER_SERVICE)
+    private readonly userClient: ClientProxy,
+    private readonly mailerService: MailerService,
   ) {}
+
+  /**
+   * Best-effort email channel: resolves the user's email over TCP and sends a
+   * plain-text mail. Never throws — email failure must not nack the RabbitMQ
+   * message that triggered it (in-app notification + WS push already saved).
+   */
+  async emailUser(
+    userId: number,
+    subject: string,
+    text: string,
+  ): Promise<void> {
+    try {
+      const user = await firstValueFrom(
+        this.userClient
+          .send(
+            { cmd: USER_MESSAGE_PATTERN.GET_USER_INFO },
+            { userId, includeEmail: true },
+          )
+          .pipe(timeout(10000)) as Observable<UserEmailInfo | null>,
+      );
+      if (!user?.email) {
+        this.logger.warn(
+          `[NOTIFICATION] emailUser skipped — no email for user ${userId}`,
+        );
+        return;
+      }
+      await this.mailerService.sendMail(user.email, subject, text);
+    } catch (err) {
+      this.logger.warn(
+        `[NOTIFICATION] emailUser failed for user ${userId}: ${String(err)}`,
+      );
+    }
+  }
 
   async saveNotification(
     userId: number,
