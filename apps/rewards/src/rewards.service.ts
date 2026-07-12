@@ -2,9 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { RewardPoint } from "./entity/reward_point.entity";
-
-// 1 point per 10,000 VND
-const POINTS_PER_VND = 10000;
+import { POINTS_PER_VND } from "./rewards.constants";
 
 @Injectable()
 export class RewardsService {
