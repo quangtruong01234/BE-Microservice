@@ -233,9 +233,14 @@ FE: analytics charts.
 - [x] **F6 — Wishlist / favorites** — DONE and runtime-verified 2026-07-07
       (7/7 endpoint checks). Product-owned `wishlist_items` table + authenticated
       add/remove/list endpoints. See CHANGELOG + Ops/Runtime migration note.
-- [ ] **F7 — Email notifications**. In-app + WS only today → lost when offline. Add an
-      email channel (order confirmed, payment, shipping) off the existing notification
-      RMQ consumers. Notification service + provider config; no migration.
+- [x] **F7 — Email notifications** — DONE and runtime-verified 2026-07-12
+      (order-create + cancel self-tests). Best-effort email channel off the
+      notification RMQ consumers via the shared `MailerService` (`@app/common`);
+      new `order_created` in-app notification type added as part of the same
+      handler. No migration. See CHANGELOG + Ops/Runtime note. FOLLOW-UP (not
+      scheduled): shipping-milestone emails (SHIPPED/DELIVERING/DELIVERED) need
+      new orders-service events — the GHN webhook updates status without
+      emitting per-status events today.
 
 ### 🧠 Product Intelligence Roadmap — AI-01..AI-04 (recorded 2026-07-06, planning only, not implemented)
 
@@ -405,85 +410,89 @@ limit?}` (JwtAuthGuard + `@RateLimit`) → new `PRODUCT_SEARCH_BY_TAGS:
 
 **🟠 High**
 
-- [ ] **SEC-H2 — public POST with unvalidated unbounded body.** `POST
-/api/products/with-inventory/multiple` (gateway `product.controller.ts`, inline
-      `{productIds:number[]}`, no DTO → whitelist never runs). Fix: DTO with
-      `@ArrayMaxSize(50) @IsInt({each:true}) @Type(()=>Number)` + dedupe. Test: 51 ids
-      → 400; non-numeric → 400.
-- [ ] **SEC-H3 — auth endpoints rely on fail-open default rate limit.** `login`/
-      `register` (policy) + all routes (fail-open). `common/guards/rate-limit.guard.ts`
-      catch returns `true` on Redis error and uses banned `console.warn`. Fix: explicit
-      `@RateLimit` on login/register; swap `console.warn`→`Logger.warn`; consider
-      fail-closed for sensitive routes (OQ-4). Test: guard unit test over-limit → 429,
-      Redis-error path asserts Logger.warn.
-- [ ] **SEC-H4 — payment callback duplicate runtime test remains.** Public
-      `POST /zalopay/callback`, `POST|GET /vnpay/callback` now enter through the
-      gateway facade and Nginx proxies them to `127.0.0.1:3000`; payments app
-      `:3007` binds to loopback only. Gateway facade now has explicit 200 responses,
-      raw provider response bodies, minimal runtime body/query shape checks,
-      callback-specific 300/min rate limits, and Nginx `64k` callback body caps.
-      Signature/MAC verification and idempotent completion are preserved in payments
-      service. Remaining test: valid callback applied twice → no second transition /
-      no duplicate `payment_completed` emit.
+- [x] **SEC-H2 — DONE 2026-07-09** (see CHANGELOG): `POST
+/api/products/with-inventory/multiple` now validates via
+      `GetProductsWithInventoryDto` (`@ArrayMaxSize(50)` + `@IsInt({each:true})` +
+      `@Type(()=>Number)`) and dedupes ids before the batch TCP send. Runtime-verified
+      5/5 (51 ids → 400, non-numeric → 400, missing field → 400, duplicates deduped,
+      string-numeric coerced). FE handoff written (50-id cap = contract change).
+- [x] **SEC-H3 — CLOSED 2026-07-09 (stale item, already implemented; now
+      runtime-verified).** `login`/`register` already carry explicit
+      `@RateLimit({limit:10,ttl:60})`; the guard uses `Logger` (no `console.warn`),
+      has a 500ms Redis timeout, and **fails closed in production** (503) while
+      allowing in dev — which also answers OQ-4. Live self-test: 12 rapid logins →
+      10× 401 then 2× 429.
+- [x] **SEC-H4 — DONE 2026-07-10** (see CHANGELOG): callback hardening fully
+      closed. The remaining duplicate-delivery runtime test passed 8/8 (forged
+      valid-MAC ZaloPay callback applied twice on order #117 → second delivery
+      ack'd `return_code:1` but payment row + order status/updatedAt bit-identical;
+      bad MAC rejected with no transition). VNPay shares the same idempotent
+      `completePayment` core, so both providers are covered. No code change needed.
 
 **🟡 Medium**
 
-- [ ] **SEC-M1 — GHN webhook hardening.** `POST /ghn/webhook` + `/api/ghn/webhook`
-      (`ghn-webhook.controller.ts`). Secret accepted via `?token=` (log leakage);
-      body is TS-interface only (no runtime validation); missing fields silently 200;
-      global 20/60s per-IP may throttle GHN bursts. Fix: prefer header token (deprecate
-      query, OQ-2), add validation DTO, `Logger.warn` on missing fields, explicit higher
-      `@RateLimit`. Test: bad/absent token → 401/403; missing `order_code` → 200 + warn log.
-- [ ] **SEC-M2 — unbounded list endpoints** (overlaps PERF-09). Remaining:
-      `GET /api/products/brands|categories` (unbounded AND uncached → cache-aside).
-      Mostly closed 2026-07-06 by the unused-API sweep (see CHANGELOG): `GET
-/api/user/all` removed end-to-end, `GET /api/inventory` (findAll) no longer
-      HTTP-exposed, `/inventory/low-stock` rebuilt gated+capped. Note
-      T[]→PaginatedResponse is FE-breaking (grep `frontend/src`).
-- [ ] **SEC-M4 — bounded DTOs on raw-input routes.** `GET /api/products/:id/reviews`
-      (raw page/limit, no `@Max`), `GET /api/gateway/payment-result` (raw query record).
-      Fix: reuse paginated-query DTO (`@Min(1)@Max(100)`); permissive discriminator DTO
-      for payment-result. Test: `?limit=100000` clamped/400.
-- [ ] **SEC-M5 — no security-header middleware on gateway.** All gateway responses;
-      `apps/gateway/src/main.ts` (zero `helmet`). Fix: `helmet()` early in main.ts
-      (relax CSP only for `/doc` in dev), or own it in nginx (OQ-3). Test: supertest
-      asserts `X-Content-Type-Options`/HSTS/frame-ancestors.
-- [ ] **SEC-M6 — Swagger `/doc` exposed unconditionally.** `main.ts`. Fix: wrap
-      `SwaggerModule.setup` in `NODE_ENV !== "production"` (or nginx allowlist). Test:
-      prod boot → `/doc` 404; dev still serves.
-- [ ] **SEC-M7 — orphaned Cloudinary assets on entity update** (from FE upload
-      audit, backend-handoff 2026-07-07 item b). FE never Cloudinary-deletes media
-      whose URL is already persisted (P0-05: edit may be canceled), and has no
-      `public_id` for persisted URLs. So when a post/product edit commits with an image
-      removed, or an avatar is overwritten, the dropped Cloudinary asset is orphaned
-      forever. Fix: on update, BE diffs old vs new `imageUrls`/`videoUrl`/`avatar`,
-      derives the `public_id` from the URL path, and destroys the dropped assets
-      (best-effort, post-commit, never fail the update) — or a periodic sweep. Spans
-      social + product + user + the gateway Cloudinary-destroy helper (>2 services → needs
-      researcher→planner). Test: edit a post removing one image → old asset destroyed,
-      kept images untouched; canceled edit → nothing destroyed.
-- [ ] **SEC-M8 — signed upload constraints (optional hardening)** (backend-handoff
-      2026-07-07 item c). `POST /api/upload/signature` signs only `folder`/`public_id`/
-      `timestamp`, so client-side size/format limits are bypassable via direct-to-Cloudinary
-      with the signature. Fix: also sign `allowed_formats=jpg,png,webp,mp4` and/or an
-      upload preset with a max size so limits hold server-side. **Contract change** — FE
-      must send the matching signed params in its upload POST, so coordinate before
-      shipping (Cloudinary rejects on signed-param mismatch). Test: signature response
-      includes the constraint params; upload of a disallowed format is rejected by Cloudinary.
+- [x] **SEC-M1 — DONE 2026-07-11** (see CHANGELOG): GHN webhook hardened —
+      `GhnWebhookDto` validated manually inside the handler (raw body kept so the
+      global `forbidNonWhitelisted` pipe doesn't 400 real GHN extra fields; wrong-typed
+      `OrderCode`/`Status` → 400), deprecation `Logger.warn` when auth arrives via
+      `?token=` (header `x-ghn-webhook-token` preferred; query NOT removed — that
+      removal still gated by OQ-2), explicit `@RateLimit({limit:300,ttl:60})`.
+      Runtime-verified 7/7.
+- [x] **SEC-M2 — DONE 2026-07-09** (see CHANGELOG): unbounded list endpoint risk
+      closed without a frontend-breaking response-shape change. Earlier unused-API
+      sweep removed `GET /api/user/all`, removed HTTP `GET /api/inventory`, and
+      rebuilt `/inventory/low-stock` gated+capped. Final remainder
+      `GET /api/products/brands|categories` is now Redis cache-aside by status
+      (`active|pending|rejected`) with invalidation on brand/category create/review.
+- [x] **SEC-M4 — DONE 2026-07-09** (see CHANGELOG): reviews route now uses
+      `ReviewQueryDto` (page ≥1, limit 1–100); payment-result keeps the raw query
+      record (VNPay checksum needs ALL `vnp_*` params — a whitelist DTO would break
+      verification) but manually bounds it (≤40 keys, ≤512 chars/value, string-only).
+      Runtime-verified 8/8.
+- [x] **SEC-M5 — CLOSED 2026-07-10 (stale item, already implemented; now
+      runtime-verified).** `securityHeadersMiddleware` in
+      `apps/gateway/src/common/security.ts` (registered first in `main.ts`) sets
+      nosniff/X-Frame-Options DENY/Referrer-Policy/COOP/CORP/Permissions-Policy on
+      every response + HSTS only in production. Verified live in dev AND on a
+      prod-mode compiled boot (HSTS present). No helmet dep needed; closes
+      independent of nginx (OQ-3 now only informs SCALE-03).
+- [x] **SEC-M6 — CLOSED 2026-07-10 (stale item, already implemented; now
+      runtime-verified).** Swagger setup is gated by `isSwaggerEnabled()`
+      (`SWAGGER_ENABLED` env, default ON in dev / OFF when `NODE_ENV=production`).
+      Verified: dev `/doc` → 200; prod-mode compiled boot → `/doc` 404.
+- [x] **SEC-M7 — DONE 2026-07-11** (see CHANGELOG): orphaned Cloudinary assets
+      now destroyed server-side. New dependency-free `CloudinaryService` in
+      `libs/common/src/cloudinary/` (URL→public_id parse with cloud-name/host/
+      folder-allowlist guards, SHA1-signed destroy via fetch, never throws) wired
+      post-commit fire-and-forget into social updatePost/deletePost/adminDeletePost,
+      product updateProduct/deleteProduct, user updateUser (avatar). Runtime-verified
+      5/5 (post edit-drop, post delete, avatar replace, avatar clear, product delete
+      → dropped delivery URLs 404, kept assets 200). 7 unit tests.
+- [x] **SEC-M8 — DONE 2026-07-11** (see CHANGELOG): upload signatures now include
+      and sign Cloudinary `allowed_formats`. Products/avatars allow `jpg,png,webp`;
+      post uploads allow `jpg,png,webp,mp4`. This is a storefront contract change:
+      FE must include the returned `allowed_formats` field in the direct Cloudinary
+      upload form with the returned signature. Unit tests cover the signed params;
+      live gateway self-test verified `POST /api/upload/signature` returns the new
+      field under the response `data` envelope; direct Cloudinary upload of a `.txt`
+      file with the returned constrained signature was rejected with HTTP 400.
 
 **🟢 Low**
 
-- [ ] **SEC-L1 — missing `ParseIntPipe` on numeric path params.** Remaining:
-      several `GET/PATCH /api/order/:id*` using `+id` coercion. `GET /api/user/:id`
-      FIXED 2026-07-06 (`ParseIntPipe` added; `/api/user/abc` → 400 — it was falling
-      through to an arbitrary user via NaN after `/user/all` was removed). Fix rest:
-      add `ParseIntPipe` uniformly.
-- [ ] **SEC-L2 — ad-hoc login response shaping.** `POST /api/user/login`
-      (`user.controller.ts:74-79` manual `delete safeUser["password"]`). Fix: return a
-      typed `SafeUser` select from the user service so the hash never reaches the gateway.
-- [ ] **SEC-L3 — duplicate brand/category proposal semantics unverified.** `POST
-/api/products/brands|categories`. Fix: verify + add case-insensitive uniqueness
-      (approved+pending) → 409.
+- [x] **SEC-L1 - DONE 2026-07-11** (see CHANGELOG): all gateway order numeric
+      path params now use `ParseIntPipe`; remaining `+id`/string-id coercions in
+      order gateway routes were removed. Runtime malformed-id checks return 400
+      before TCP calls.
+- [x] **SEC-L2 - DONE 2026-07-12** (see CHANGELOG): user service login now
+      returns `SafeUser` so the password hash never leaves the user microservice;
+      gateway login no longer clone/deletes `password`. The user TCP controller
+      also no longer logs the login payload.
+- [x] **SEC-L3 - DONE 2026-07-12** (see CHANGELOG): duplicate brand/category
+      proposals now reject case-insensitive matches against active or pending names.
+      `POST /api/products/brands|categories` trims the submitted name, checks
+      `LOWER(TRIM(name))`, and returns 409 before saving; gateway create-brand/
+      create-category now route TCP errors through `MicroserviceErrorHandler` so
+      the conflict reaches HTTP as 409 instead of 500.
 - [ ] **SEC-L4 — document cookie/CSRF posture.** Cookie is `sameSite:lax`, `secure`
       prod-only, no CSRF token (lax mitigates most cross-site POSTs). Fix: no code change;
       record in `security.md` that mutations must never be GET/HEAD and sameSite must not
@@ -492,10 +501,13 @@ limit?}` (JwtAuthGuard + `@RateLimit`) → new `PRODUCT_SEARCH_BY_TAGS:
 
 **Open questions (gate the above):** OQ-1 RESOLVED 2026-07-06 — SEC-M3 closed by
 the unused-API sweep (HTTP inventory list/reserve/release removed; low-stock gated
-shop/admin + seller-scoped). OQ-2 GHN dashboard header vs `?token=` → blocks part of SEC-M1.
-OQ-3 is nginx guaranteed in front of gateway + :3007 (headers/rate/size owner) →
-blocks SEC-H4/SEC-M5. OQ-4 is fail-open rate limiting an accepted trade-off →
-blocks SEC-H3 final shape. OQ-5 RESOLVED 2026-07-07 — public product/social/user
+shop/admin + seller-scoped). OQ-2 GHN dashboard header vs `?token=` → SEC-M1 shipped 2026-07-11 with header
+preferred + deprecation warn on query use; OQ-2 now only decides whether query
+support can be REMOVED entirely.
+OQ-3 (is nginx guaranteed in front of gateway + :3007) no longer gates any SEC
+item — SEC-H4 + SEC-M5 closed with in-app enforcement; it now only informs
+SCALE-03 nginx tuning. OQ-4 RESOLVED 2026-07-09 by code inspection —
+the guard already fails closed in production (503) and open only in dev; SEC-H3 closed. OQ-5 RESOLVED 2026-07-07 — public product/social/user
 profiles do not need email; order/admin/invoice paths explicitly opt into email.
 OQ-6 target rate-limit numbers for
 login/register/upload/checkout (product decision).
@@ -549,15 +561,12 @@ login/register/upload/checkout (product decision).
       `PRODUCT_FIND_BY_ID`. Same response shape + error semantics. Runtime-verified on
       create-order (base-price 2-line same product 114; SKU 2-line same product 115 →
       labels/tierIdx correct; mismatch still 400).
-- [ ] **PERF-09 unbounded list endpoints** — Remaining: brand/category lists
-      (`apps/gateway/src/product/product.service.ts:654-730`) unbounded AND uncached —
-      ideal `@app/cached` cache-aside candidates (invalidate on brand/category
-      mutation). Closed 2026-07-06 by the unused-API sweep (see CHANGELOG): `GET
-/api/user/all` removed end-to-end (route + gateway/user service methods + TCP
-      handler + `GET_ALL_USERS` constant; paginated `GET /user?page=` is the
-      replacement) and `GET /api/inventory/` route deleted (`findAll` no longer
-      HTTP-reachable). Side-effect: pagination changes response `T[]` →
-      `PaginatedResponse` — **breaking for FE**, grep `frontend/src` callers first.
+- [x] **PERF-09 — DONE 2026-07-09** (see CHANGELOG): unbounded user/inventory HTTP
+      offenders were closed by the unused-API sweep; final brand/category remainder
+      now uses product-service Redis cache-aside (`products:brands:<status>`,
+      `products:categories:<status>`, 300s TTL) with invalidation on create/review.
+      Kept the existing `Brand[]`/`Category[]` response shape, so no FE-breaking
+      pagination contract change.
 - [x] **PERF-10 — DONE 2026-07-03** (see CHANGELOG): product `findAllProducts`
       split-query pagination — count + DISTINCT id-page (raw offset/limit, sort column
       in SELECT for MySQL DISTINCT+ORDER BY), then hydrate brand/categories via
@@ -572,9 +581,9 @@ login/register/upload/checkout (product decision).
 
 **🟢 Minor**
 
-- [ ] PERF-11 `getPaymentUrl` runs full `getOrderById` product enrichment purely for
-      an ownership check (`apps/gateway/src/order/order.service.ts:785-809`) — fetch the
-      bare order instead.
+- [x] PERF-11 — DONE 2026-07-10 (see CHANGELOG): `getPaymentUrl` now uses a bare
+      `fetchOwnedOrder` helper (order fetch + owner-or-admin check, no product
+      enrichment); `getOrderById` reuses the same helper. Runtime-verified 4/4.
 - [x] PERF-12 — MOOT 2026-07-06: the standalone SKU mutation routes and their
       gateway `updateSku`/`deleteSku` methods were removed in the unused-API sweep
       (canonical SKU edit path is `PATCH /api/products/:id` with `skuList`).
@@ -582,13 +591,12 @@ login/register/upload/checkout (product decision).
       filters `isActive`, accepts optional `productIds` seller scoping, orders
       `availableStock ASC`, and caps at 100 rows (`LOW_STOCK_MAX_RESULTS`).
 
-**TOP FIX (next):** PERF-09 remainder (brands/categories cache-aside; pagination
-is FE-breaking, grep `frontend/src` first), then PERF-11. **SUMMARY:** 0 critical,
-1 important, 1 minor remaining
-(PERF-01/02/07 + GAP-01 done 2026-07-02; PERF-03/04/08/10 + GAP-02 done
-2026-07-03 — all 🔴 critical closed; PERF-12/13 closed 2026-07-06 by the
-unused-API sweep, which also removed the PERF-09 user/inventory offenders;
-PERF-05/06 closed 2026-07-07).
+**TOP FIX (next):** none — perf backlog fully closed. **SUMMARY:** 0 critical,
+0 important, 0 minor remaining (PERF-01/02/07 + GAP-01 done 2026-07-02;
+PERF-03/04/08/10 + GAP-02 done 2026-07-03 — all 🔴 critical closed; PERF-12/13
+closed 2026-07-06 by the unused-API sweep, which also removed the PERF-09
+user/inventory offenders; PERF-05/06 closed 2026-07-07; PERF-11 closed
+2026-07-10). Next perf work lives in the Scalability backlog (SCALE-01..06).
 
 ### 📈 Scalability backlog — high-concurrency readiness (recorded 2026-07-07, planning only)
 
@@ -629,12 +637,10 @@ PERF-05/06 closed 2026-07-07).
       (product list/detail, brands, categories) — absorbs most read bursts before
       Node sees them. Nginx owning gzip means no Node `compression` middleware
       needed.
-- [ ] **SCALE-04 — hot public reads still uncached in-app** (= PERF-09
-      remainder, listed here for the concurrency angle): brands/categories
-      unbounded AND uncached; every burst hits MySQL through the 10-conn pool.
-      Fix: `@app/cached` cache-aside (5–15min TTL + DEL on brand/category mutation).
-      Also consider product detail cache-aside (short TTL) if SCALE-03 micro-cache
-      is not adopted.
+- [ ] **SCALE-04 — hot public product detail reads still uncached in-app.**
+      Brand/category lookup caching closed the PERF-09 overlap on 2026-07-09.
+      Remaining concurrency question: consider product detail cache-aside (short TTL)
+      if SCALE-03 micro-cache is not adopted.
 - [ ] **SCALE-05 — overload failure modes untuned.** (a) `timeout(10000)` on
       every TCP call is too long under saturation — one slow service parks
       requests+sockets for 10s and the pileup cascades; drop read paths to 3–5s
@@ -670,7 +676,9 @@ SCALE-06 numbers will prove or disprove.
 
 ## Ops / Runtime Reference
 
-- GHN env (local/nodeA/.env): `GHN_API_URL=https://dev-online-gateway.ghn.vn/shiip/public-api`, `GHN_API_TOKEN`, `GHN_SHOP_ID=200481`; `GHN_WEBHOOK_SECRET` required on the gateway webhook (`x-ghn-webhook-token` or `?token=`).
+- Forgot-password (2026-07-11, NO migration): `POST /api/user/forgot-password` (`@Public`, rate-limit 5/60s, `{email}` → always generic 201) and `POST /api/user/reset-password` (`@Public`, 10/60s, `{email, code, newPassword}` → `{success:true}` or 400 "Invalid or expired verification code"). User service TCP `{cmd: user.forgot_password|user.reset_password}`. Code: 6-digit crypto `randomInt`, stored PLAINTEXT in Redis `user:pwreset:code:<userId>` (TTL 600s — plaintext is deliberate: short TTL + attempt cap, and enables self-testing via `docker exec redis redis-cli GET user:pwreset:code:<id>`); attempts counter `user:pwreset:attempts:<userId>` (max 5, then code invalidated); resend cooldown `user:pwreset:cooldown:<userId>` (60s via setNx). Email via dependency-free `MailerService` (`libs/common/src/mailer/`, implicit-TLS SMTPS only, e.g. Gmail :465 app password; env `SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS/SMTP_FROM` — keys in `local/nodeA/.env.example` only; the real `.env` is write-denied to agents, so the user must add SMTP_* manually for real delivery). SMTP unconfigured → dev fallback: user service logs the code, endpoint still returns the generic 201.
+- Order email notifications (F7, 2026-07-12, NO migration): the notification service mirrors order in-app notifications to email, best-effort. Handlers covered: `order_created` (NEW consumer — notification queue was already bound to the orders fanout; recipient = buyer), `payment_completed` (buyer), `order_canceled` (buyer), `order.return_requested` (seller), `order.return_approved`/`order.return_rejected` (buyer). Flow: after `saveNotification`, `NotificationService.emailUser(userId, subject, text)` resolves the address via user TCP `{cmd: user.get_user_info}` `{userId, includeEmail:true}` then `MailerService.sendMail` (shared `libs/common/src/mailer/`, SMTPS). `emailUser` NEVER throws — any TCP/mail failure logs a warn and the RMQ ack/nack outcome is unchanged. SMTP_* unset (current dev state) → MailerService logs the mail and returns false. Requires `SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS/SMTP_FROM` in the notification service env (`local/nodeA/.env`) for real delivery. Side effect for FE: a new `order_created` notification row/WS push now exists (was previously only `payment_completed`).
+- GHN env (local/nodeA/.env): `GHN_API_URL=https://dev-online-gateway.ghn.vn/shiip/public-api`, `GHN_API_TOKEN`, `GHN_SHOP_ID=200481`; `GHN_WEBHOOK_SECRET` required on the gateway webhook (`x-ghn-webhook-token` preferred; `?token=` still accepted but logs a deprecation warn — SEC-M1 2026-07-11). Webhook body known fields runtime-validated (`GhnWebhookDto`, extra GHN fields tolerated); explicit rate limit 300/60s.
 - GHN webhook is served at BOTH `POST /ghn/webhook` (legacy) AND `POST /api/ghn/webhook` (prefix-consistent) — same handler, both excluded from the global `api` prefix (`main.ts` exclude list + `GhnWebhookController` `@Post(["ghn/webhook","api/ghn/webhook"])`). A GHN dashboard configured with either URL works; no more silent 404 if `/api` is included. Body accepts PascalCase (`OrderCode`/`Status`, real GHN) or snake_case (`order_code`/`status`, manual tests).
 - GHN shipping_address: pipe-delimited `name|phone|addr|ward|district|province`; failure non-fatal (order saved with ghn_order_code=null).
 - GHN address resolution (`apps/orders/src/ghn/ghn.service.ts`): the free-text ward/district/province are resolved to GHN numeric `to_district_id` + string `to_ward_code` at waybill-create time via master-data (`GET /master-data/province|district|ward`, 24h TTL cache) using `normalizeAddressPart` (NFD diacritic strip, đ→d, drops VN admin prefixes, alnum-only) + `rankMasterDataMatches` (exact-normalized first, then containment by closest length). The resolver walks ALL ranked province→district→ward candidates and falls through stub entries — required because the GHN dev sandbox has polluted duplicate provinces (e.g. "Hà Nội 02" ProvinceID 2002 with 0 districts shares the "hanoi" alias with the real Hà Nội 201). Unresolvable address → `BadRequestException` (400).
@@ -683,9 +691,9 @@ SCALE-06 numbers will prove or disprove.
 - GHN demo-status endpoint (DEMO ONLY): `POST /api/order/admin/ghn/orders/:id/demo-status` (`@CheckPermission("shipping","update:any")`, TCP `order.admin_ghn_demo_status`) simulates a GHN status WITHOUT calling real GHN and drives the local lifecycle through the same `mapGhnStatus`/`applyGhnStatus` path as real sync (writes a MANUAL_SYNC `shipping_history` row with `action:"demo_status"`, returns the sync shape `{orderId,previousStatus,newStatus,ghnStatus,syncedAt}`). Body `{ghnStatus}` ∈ `ready_to_pick|picking|delivering|delivered|delivery_fail|waiting_to_return|returned|cancelled`. **Gated behind env `GHN_DEMO_ENDPOINTS_ENABLED`** — unless set to `"true"` it returns `403 "GHN demo status endpoint is disabled"` (inert in prod; must be ABSENT/false in production). No migration. Lets the GHN console demo `picking→delivering→delivered` on a sandbox order GHN never advances. **Detail override (fixed 2026-06-30):** when demo mode is ON and the latest `shipping_history` row is a `demo_status`, `GET /api/order/admin/ghn/orders/:id` surfaces that demo status as `ghnDetail.status` (overlaying the still-fetched live detail so receiver/COD fields stay real, or synthesizing a minimal detail if the live fetch failed) — so the console GHN badge advances exactly as a real webhook would, instead of staying stuck at the sandbox's `ready_to_pick`. Outside demo mode, live GHN `getOrderDetail.status` wins unchanged.
 - Stale-reservation sweeper (orders): hourly `@Cron` cancels orders in PENDING/CONFIRMED/PROCESSING with `ghn_order_code` null older than `ORDER_STALE_RESERVATION_TTL_HOURS` (default 24h, set in `local/nodeA/.env`), reusing the idempotent cancel flow to release stock. Orders with a GHN code are never swept (driven by the delivery webhook).
 - payment_methods table: `is_active` controls active options; `PAYMENT_GATEWAY` env is fully unused (strategy chosen per-request from `paymentMethod`).
-- Low-stock endpoint (unused-API sweep, 2026-07-06): `GET /api/inventory/low-stock` — `@Roles("shop","admin")`. Admin → all low-stock rows; shop → auto-scoped server-side (gateway first fetches the seller's productIds via `PRODUCT_MESSAGE_PATTERNS.GET_PRODUCT_IDS_BY_SELLER`, empty → `[]` without hitting inventory). Returns `Inventory[]` (max 100, `availableStock ASC`, `isActive` only; bigint ids serialize as strings). Remaining HTTP inventory surface: `POST /api/inventory`, `GET /api/inventory/product/:productId` (`@Public`), `PUT /api/inventory/:id` — list/sku/by-id/delete/check-stock/reserve/release HTTP routes were removed (internal TCP paths unchanged).
+- Low-stock endpoint (unused-API sweep, 2026-07-06): `GET /api/inventory/low-stock` — `@Roles("shop","admin")`. Admin → all low-stock rows; shop → auto-scoped server-side (gateway first fetches the seller's productIds via `PRODUCT_MESSAGE_PATTERNS.GET_PRODUCT_IDS_BY_SELLER`, empty → `[]` without hitting inventory). Returns `Inventory[]` (max 100, `availableStock ASC`, `isActive` only; bigint ids serialize as strings). Since 2026-07-10 each row also carries a denormalized `productName: string | null` (gateway batch `PRODUCT_FIND_BY_IDS` enrichment, best-effort — null for deleted products or on product-service failure). Remaining HTTP inventory surface: `POST /api/inventory`, `GET /api/inventory/product/:productId` (`@Public`), `PUT /api/inventory/:id` — list/sku/by-id/delete/check-stock/reserve/release HTTP routes were removed (internal TCP paths unchanged).
 - CORS: one shared gateway delegate `apps/gateway/src/common/cors.ts` (`gatewayCorsOptions`) used by HTTP (`main.ts` `enableCors`) + both WS gateways (`/chat`, `/notifications`). Allows: no-Origin requests, any origin in `FRONTEND_URL` (comma-split), and — only when `NODE_ENV !== "production"` — any `localhost`/`127.0.0.1` origin on any port. Prod is strict (localhost bypass off) → every allowed web origin MUST be in `FRONTEND_URL`. Sockets live on the gateway origin/port (3000), namespaces `/chat`+`/notifications`, connect `withCredentials:true`.
-- Cloudinary: client uploads direct; server signs via `POST /api/upload/signature`; allowed folders are `trybuy/products`, `trybuy/posts`, and existing storefront avatar folder `avatars`. Upload `publicId` must be a basename matching `${userId}_...` (server generates one if omitted); delete `public_id` must be full `<allowed-folder>/${userId}_...` unless caller role is admin. Invalid folder/path → 400; foreign prefix → 403 before Cloudinary is called. Delete ownership enforcement runtime-verified 2026-07-08 (user 17 deleting a `18_` leaf → 403; disallowed folder → 400; no-folder public_id → 400; unauth → 401; all reject inside `generateDeleteSignature` before any Cloudinary destroy). Remaining FE-handoff follow-ups: orphan cleanup of dropped media on entity update + optional signed upload-constraint hardening — see SEC-M7/M8.
+- Cloudinary: client uploads direct; server signs via `POST /api/upload/signature`; allowed folders are `trybuy/products`, `trybuy/posts`, and existing storefront avatar folder `avatars`. Upload `publicId` must be a basename matching `${userId}_...` (server generates one if omitted); delete `public_id` must be full `<allowed-folder>/${userId}_...` unless caller role is admin. Invalid folder/path → 400; foreign prefix → 403 before Cloudinary is called. Delete ownership enforcement runtime-verified 2026-07-08 (user 17 deleting a `18_` leaf → 403; disallowed folder → 400; no-folder public_id → 400; unauth → 401; all reject inside `generateDeleteSignature` before any Cloudinary destroy). Orphan cleanup of dropped media on entity update is now server-side (SEC-M7, 2026-07-11 — `CloudinaryService.destroyAssets` in `libs/common/src/cloudinary/`, wired into social/product/user mutations post-commit; needs `CLOUDINARY_CLOUD_NAME/API_KEY/API_SECRET` in the service env or it logs a warn and no-ops). Upload signatures now sign `allowed_formats` (SEC-M8): products/avatars `jpg,png,webp`, posts `jpg,png,webp,mp4`; FE must forward that returned field to Cloudinary with the signature.
 - Deploy runtime: host PM2 runs compiled NestJS apps from `ecosystem.config.js`; Docker Compose runs Redis/RabbitMQ only (`docker compose up -d redis rabbitmq`); MySQL/PostgreSQL are external Aiven services; internal TCP/payments callback listeners bind to `127.0.0.1`; production Nginx exposes the gateway on `127.0.0.1:3000` only (including `/zalopay/callback` and `/vnpay/callback` facades); VPS firewall/security group must expose only 80/443 publicly; set the real domain in `nginx/trybuy.conf`.
 - CI: `.github/workflows/ci.yml` validates PRs and pushes to `main` only; it runs npm install/lint/typecheck/Jest/build/PM2 syntax/Compose config/whitespace checks with safe dummy env values. It does not deploy, publish Docker images, connect to Aiven, run migrations, or require repository secrets.
 - Applied migrations (P1-03, social DB, `synchronize:false`): `database/add_product_id_to_posts.sql` (`posts.product_id INT NULL`) and `database/create_post_reports_table.sql` (`post_reports` table) — both applied to Aiven on 2026-06-25. Re-run on any fresh DB before the post-edit / report endpoints work.
