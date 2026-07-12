@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -17,15 +18,16 @@ import {
   CreateUserAddressDto,
   UpdateUserAddressDto,
 } from "./dto/user-address.dto";
-import { PaginatedResponse } from "@app/common";
+import {
+  CloudinaryService,
+  MailerService,
+  PaginatedResponse,
+} from "@app/common";
+import { CachedService } from "@app/cached";
 import * as bcrypt from "bcryptjs";
-
-type SafeUser = Omit<User, "password">;
-type PublicUserProfile = Pick<
-  User,
-  "id" | "username" | "name" | "avatar" | "isActive"
->;
-type UserProfile = PublicUserProfile & Partial<Pick<User, "email">>;
+import { randomInt } from "crypto";
+import { USER_MESSAGE } from "libs/constant/response-message.constant";
+import { SafeUser, UserProfile } from "./user.types";
 
 @Injectable()
 export class UserService {
@@ -39,7 +41,14 @@ export class UserService {
     @InjectRepository(UserAddress)
     private readonly addressRepository: Repository<UserAddress>,
     private readonly dataSource: DataSource,
+    private readonly cachedService: CachedService,
+    private readonly mailerService: MailerService,
+    private readonly cloudinaryService: CloudinaryService,
   ) {}
+
+  private static readonly PASSWORD_RESET_CODE_TTL_SECONDS = 600;
+  private static readonly PASSWORD_RESET_MAX_ATTEMPTS = 5;
+  private static readonly PASSWORD_RESET_RESEND_COOLDOWN_SECONDS = 60;
 
   async getUsersPaginated(
     page: number,
@@ -76,7 +85,7 @@ export class UserService {
     });
     if (!defaultRole) {
       throw new InternalServerErrorException(
-        "Default role not found, please run seed",
+        USER_MESSAGE.DEFAULT_ROLE_NOT_FOUND,
       );
     }
     const hashedPassword = await bcrypt.hash(dto.password, 10);
@@ -90,19 +99,120 @@ export class UserService {
     return this.toSafeUser(saved);
   }
 
-  async login(dto: LoginUserDto): Promise<User> {
+  async login(dto: LoginUserDto): Promise<SafeUser> {
     this.logger.log(`Login user: ${dto.username}`);
     const user = await this.userRepository.findOne({
       where: { username: dto.username },
     });
     if (!user) {
-      throw new UnauthorizedException("Invalid username or password");
+      throw new UnauthorizedException(USER_MESSAGE.INVALID_CREDENTIALS);
     }
     const isMatch = await bcrypt.compare(dto.password, user.password);
     if (!isMatch) {
-      throw new UnauthorizedException("Invalid username or password");
+      throw new UnauthorizedException(USER_MESSAGE.INVALID_CREDENTIALS);
     }
-    return user;
+    return this.toSafeUser(user);
+  }
+
+  /**
+   * Starts the forgot-password flow: generates a 6-digit code, stores it in
+   * Redis (10 min TTL) and emails it to the registered address. Always
+   * returns the same generic message so callers cannot probe which emails
+   * are registered. A 60s per-user cooldown throttles resends.
+   */
+  async forgotPassword(email: string): Promise<{ message: string }> {
+    const genericResponse = {
+      message:
+        "If this email is registered, a verification code has been sent to it",
+    };
+    const user = await this.userRepository.findOne({ where: { email } });
+    if (!user) {
+      this.logger.warn(`forgotPassword: no account for email ${email}`);
+      return genericResponse;
+    }
+    const cooldownClaimed = await this.cachedService.setNx(
+      `user:pwreset:cooldown:${user.id}`,
+      "1",
+      UserService.PASSWORD_RESET_RESEND_COOLDOWN_SECONDS,
+    );
+    if (!cooldownClaimed) {
+      this.logger.warn(
+        `forgotPassword: resend cooldown active for user ${user.id}`,
+      );
+      return genericResponse;
+    }
+    const code = randomInt(0, 1_000_000).toString().padStart(6, "0");
+    await this.cachedService.set(
+      `user:pwreset:code:${user.id}`,
+      code,
+      UserService.PASSWORD_RESET_CODE_TTL_SECONDS,
+    );
+    await this.cachedService.del(`user:pwreset:attempts:${user.id}`);
+    try {
+      await this.mailerService.sendMail(
+        user.email,
+        "TryBuy - Ma xac nhan dat lai mat khau",
+        `Ma xac nhan dat lai mat khau cua ban la: ${code}\n` +
+          `Ma co hieu luc trong 10 phut. Neu ban khong yeu cau, hay bo qua email nay.`,
+      );
+    } catch (error) {
+      // Code stays valid in Redis; the user can retry the request after the
+      // cooldown. Never reveal the transport failure to the caller.
+      this.logger.error(
+        `forgotPassword: failed to send email to user ${user.id}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+    return genericResponse;
+  }
+
+  /**
+   * Completes the forgot-password flow: verifies the emailed code (max 5
+   * attempts, then the code is invalidated) and sets the new password.
+   */
+  async resetPassword(
+    email: string,
+    code: string,
+    newPassword: string,
+  ): Promise<{ success: true }> {
+    const invalidCodeError = new BadRequestException(
+      USER_MESSAGE.INVALID_OR_EXPIRED_VERIFICATION_CODE,
+    );
+    const user = await this.userRepository.findOne({ where: { email } });
+    if (!user) {
+      throw invalidCodeError;
+    }
+    const codeKey = `user:pwreset:code:${user.id}`;
+    const attemptsKey = `user:pwreset:attempts:${user.id}`;
+    const storedCode = await this.cachedService.get(codeKey);
+    if (!storedCode) {
+      throw invalidCodeError;
+    }
+    const attempts = await this.cachedService.incr(attemptsKey);
+    if (attempts === 1) {
+      await this.cachedService.expire(
+        attemptsKey,
+        UserService.PASSWORD_RESET_CODE_TTL_SECONDS,
+      );
+    }
+    if (attempts > UserService.PASSWORD_RESET_MAX_ATTEMPTS) {
+      await this.cachedService.del(codeKey);
+      await this.cachedService.del(attemptsKey);
+      this.logger.warn(
+        `resetPassword: attempt limit exceeded for user ${user.id} — code invalidated`,
+      );
+      throw invalidCodeError;
+    }
+    if (storedCode !== code) {
+      throw invalidCodeError;
+    }
+    user.password = await bcrypt.hash(newPassword, 10);
+    await this.userRepository.save(user);
+    await this.cachedService.del(codeKey);
+    await this.cachedService.del(attemptsKey);
+    await this.cachedService.del(`user:pwreset:cooldown:${user.id}`);
+    this.logger.log(`resetPassword: password updated for user ${user.id}`);
+    return { success: true };
   }
 
   async getInfo(
@@ -170,7 +280,7 @@ export class UserService {
     // and fails. Strip the password instead of column-selecting.
     const user = await this.userRepository.findOne({ where: { id: userId } });
     if (!user) {
-      throw new NotFoundException("User not found");
+      throw new NotFoundException(USER_MESSAGE.NOT_FOUND);
     }
     return this.toSafeUser(user);
   }
@@ -179,10 +289,17 @@ export class UserService {
     this.logger.log(`updateUser called with userId: ${userId}`);
     const user = await this.userRepository.findOne({ where: { id: userId } });
     if (!user) {
-      throw new NotFoundException("User not found");
+      throw new NotFoundException(USER_MESSAGE.NOT_FOUND);
     }
+    // Capture before Object.assign overwrites avatar on the same instance.
+    const previousAvatar = user.avatar;
     Object.assign(user, dto);
     const saved = await this.userRepository.save(user);
+    // SEC-M7: a replaced avatar is orphaned on Cloudinary once the update
+    // commits. Fire-and-forget — destroyAssets never throws.
+    if (previousAvatar && previousAvatar !== saved.avatar) {
+      void this.cloudinaryService.destroyAssets([previousAvatar]);
+    }
     delete (saved as Partial<User>).password;
     return saved;
   }
@@ -229,7 +346,7 @@ export class UserService {
         where: { id: addressId, userId },
       });
       if (!address) {
-        throw new NotFoundException("Address not found");
+        throw new NotFoundException(USER_MESSAGE.ADDRESS_NOT_FOUND);
       }
       // Promoting this address to default demotes every other one.
       if (dto.isDefault === true && !address.isDefault) {
@@ -250,7 +367,7 @@ export class UserService {
         where: { id: addressId, userId },
       });
       if (!address) {
-        throw new NotFoundException("Address not found");
+        throw new NotFoundException(USER_MESSAGE.ADDRESS_NOT_FOUND);
       }
       const wasDefault = address.isDefault;
       await manager.remove(address);
@@ -279,7 +396,7 @@ export class UserService {
         where: { id: addressId, userId },
       });
       if (!address) {
-        throw new NotFoundException("Address not found");
+        throw new NotFoundException(USER_MESSAGE.ADDRESS_NOT_FOUND);
       }
       await manager.update(UserAddress, { userId }, { isDefault: false });
       address.isDefault = true;

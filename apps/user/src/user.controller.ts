@@ -59,10 +59,25 @@ export class UserController {
   }
 
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.LOGIN_USER })
-  async login(@Payload() payload: LoginUserDto) {
-    this.logger.log(`[USER-TCP] Login user`);
-    this.logger.log(`[USER-TCP] Payload received:`, payload);
+  async login(@Payload() payload: LoginUserDto): Promise<unknown> {
+    this.logger.log(`[USER-TCP] Login user: ${payload.username}`);
     return await this.userService.login(payload);
+  }
+
+  @MessagePattern({ cmd: USER_MESSAGE_PATTERN.FORGOT_PASSWORD })
+  async forgotPassword(@Payload() payload: { email: string }) {
+    return await this.userService.forgotPassword(payload.email);
+  }
+
+  @MessagePattern({ cmd: USER_MESSAGE_PATTERN.RESET_PASSWORD })
+  async resetPassword(
+    @Payload() payload: { email: string; code: string; newPassword: string },
+  ) {
+    return await this.userService.resetPassword(
+      payload.email,
+      payload.code,
+      payload.newPassword,
+    );
   }
 
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.GET_ME })

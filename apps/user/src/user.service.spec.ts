@@ -1,6 +1,9 @@
 import { getRepositoryToken } from "@nestjs/typeorm";
 import { Test, TestingModule } from "@nestjs/testing";
+import { CachedService } from "@app/cached";
+import { CloudinaryService, MailerService } from "@app/common";
 import { DataSource } from "typeorm";
+import * as bcrypt from "bcryptjs";
 import { Role, RoleName, RoleStatus } from "./entity/role.entity";
 import { UserAddress } from "./entity/user-address.entity";
 import { User } from "./entity/user.entity";
@@ -41,6 +44,9 @@ describe("UserService", () => {
   const dataSource = {
     transaction: jest.fn(),
   };
+  const cachedService = {};
+  const mailerService = {};
+  const cloudinaryService = {};
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -62,6 +68,18 @@ describe("UserService", () => {
         {
           provide: DataSource,
           useValue: dataSource,
+        },
+        {
+          provide: CachedService,
+          useValue: cachedService,
+        },
+        {
+          provide: MailerService,
+          useValue: mailerService,
+        },
+        {
+          provide: CloudinaryService,
+          useValue: cloudinaryService,
         },
       ],
     }).compile();
@@ -103,6 +121,27 @@ describe("UserService", () => {
     });
 
     expect(user).not.toHaveProperty("password");
+  });
+
+  it("does not return the password hash after login", async () => {
+    const passwordHash = await bcrypt.hash("password123", 4);
+    userRepository.findOne.mockResolvedValue({
+      ...persistedUser,
+      password: passwordHash,
+    });
+
+    const user = await service.login({
+      username: "test-user",
+      password: "password123",
+    });
+
+    expect(user).not.toHaveProperty("password");
+    expect(user).toMatchObject({
+      id: persistedUser.id,
+      username: persistedUser.username,
+      email: persistedUser.email,
+      role,
+    });
   });
 
   it("does not select email for public user info", async () => {

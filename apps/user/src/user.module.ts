@@ -7,6 +7,8 @@ import { Resource } from "./entity/resource.entity";
 import { Role } from "./entity/role.entity";
 import { UserAddress } from "./entity/user-address.entity";
 import { DatabaseModule } from "@app/database";
+import { CachedModule } from "@app/cached";
+import { CloudinaryModule, MailerModule } from "@app/common";
 
 @Module({
   imports: [
@@ -25,6 +27,9 @@ import { DatabaseModule } from "@app/database";
     //   synchronize: true,
     // }),
     DatabaseModule,
+    CachedModule,
+    CloudinaryModule,
+    MailerModule,
     TypeOrmModule.forFeature([User, Resource, Role, UserAddress]),
   ],
   controllers: [UserController],
