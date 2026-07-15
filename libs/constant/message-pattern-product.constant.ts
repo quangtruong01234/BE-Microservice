@@ -14,6 +14,9 @@ export const PRODUCT_MESSAGE_PATTERNS = {
   PRODUCT_FIND_BY_CATEGORY: "product.findByCategory",
   PRODUCT_FIND_BY_BRAND: "product.findByBrand",
   PRODUCT_SEARCH: "product.search",
+  PRODUCT_PRICE_SUGGESTION: "product.price_suggestion",
+  PRODUCT_ADMIN_RISK_LIST: "product.admin_risk_list",
+  PRODUCT_ADMIN_RISK_RESCORE: "product.admin_risk_rescore",
 
   // Brand patterns
   BRAND_CREATE: "brand.create",
