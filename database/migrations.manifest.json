@@ -64,6 +64,18 @@
       "notes": "Idempotent CREATE TABLE IF NOT EXISTS."
     },
     {
+      "id": "nodeA-20260713-001-add-product-risk-columns",
+      "target": "nodeA",
+      "dialect": "mysql",
+      "file": "database/add_risk_columns_to_products.sql",
+      "description": "Add advisory image hashes and catalog risk scoring fields.",
+      "category": "schema",
+      "destructive": false,
+      "manualOnly": false,
+      "enabled": true,
+      "notes": "Idempotent INFORMATION_SCHEMA-guarded additive columns and index."
+    },
+    {
       "id": "nodeA-20250625-001-create-post-reports",
       "target": "nodeA",
       "dialect": "mysql",
