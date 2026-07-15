@@ -23,6 +23,9 @@ import { ChatController } from "./chat.controller";
       entities: [Conversation, Message],
       synchronize: false,
       timezone: "Z",
+      extra: {
+        connectionLimit: Number(process.env.MYSQL_POOL_SIZE) || 10,
+      },
     }),
     TypeOrmModule.forFeature([Conversation, Message]),
     ScheduleModule.forRoot(),
