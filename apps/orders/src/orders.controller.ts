@@ -266,11 +266,17 @@ export class OrdersController {
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.GET_ORDER_INVOICE)
   async getOrderInvoice(
-    @Payload() data: { orderId: number; requestingUserId: number },
+    @Payload()
+    data: {
+      orderId: number;
+      requestingUserId: number;
+      requestingUserRole?: string;
+    },
   ): Promise<Buffer> {
     return await this.ordersService.generateInvoice(
       data.orderId,
       data.requestingUserId,
+      data.requestingUserRole ?? "user",
     );
   }
 

@@ -29,7 +29,6 @@ import { GhnModule } from "./ghn/ghn.module";
 
 @Module({
   imports: [
-    // MysqlModule,
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: "./local/nodeA/.env",
@@ -90,6 +89,9 @@ import { GhnModule } from "./ghn/ghn.module";
       ],
       synchronize: resolveTypeOrmSynchronize(),
       timezone: "Z",
+      extra: {
+        connectionLimit: Number(process.env.MYSQL_POOL_SIZE) || 10,
+      },
     }),
     TypeOrmModule.forFeature([
       Order,

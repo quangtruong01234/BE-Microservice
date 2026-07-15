@@ -61,7 +61,8 @@
       "entryFile": "main",
       "sourceRoot": "apps/orders/src",
       "compilerOptions": {
-        "tsConfigPath": "apps/orders/tsconfig.app.json"
+        "tsConfigPath": "apps/orders/tsconfig.app.json",
+        "assets": [{ "include": "invoice/fonts/*.ttf" }]
       }
     },
     "payments": {

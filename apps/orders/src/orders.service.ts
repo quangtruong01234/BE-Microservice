@@ -31,7 +31,7 @@ import { INVENTORY_MESSAGE_PATTERNS } from "libs/constant/message-pattern-invent
 import { USER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
-import { generateInvoicePdf } from "./invoice/invoice.generator";
+import { generateInvoicePdf, InvoiceParty } from "./invoice/invoice.generator";
 import { GhnService } from "./ghn/ghn.service";
 import {
   GhnOrderDetail,
@@ -2334,6 +2334,7 @@ export class OrdersService {
   async generateInvoice(
     orderId: number,
     requestingUserId: number,
+    requestingUserRole = "user",
   ): Promise<Buffer> {
     const order = await this.orderRepository.findOne({
       where: { id: orderId },
@@ -2342,26 +2343,73 @@ export class OrdersService {
     if (!order) {
       throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
     }
-    if (Number(order.userId) !== requestingUserId) {
+    // Buyer (owner), the order's seller, or an admin may download the invoice.
+    const isOwner = Number(order.userId) === requestingUserId;
+    const isSeller = Number(order.sellerId) === requestingUserId;
+    const isAdmin = requestingUserRole === "admin";
+    if (!isOwner && !isSeller && !isAdmin) {
       throw new ForbiddenException(ORDER_MESSAGE.ACCESS_DENIED);
     }
-    const user = await firstValueFrom(
+    const buyerProfile = await this.fetchInvoiceParty(Number(order.userId));
+    const seller = await this.fetchInvoiceParty(Number(order.sellerId));
+    const buyer: InvoiceParty = buyerProfile ?? {
+      name: null,
+      username: `#${order.userId}`,
+      email: null,
+    };
+    return generateInvoicePdf({
+      order: {
+        id: order.id,
+        status: order.status,
+        total: order.total,
+        shippingFee: order.shippingFee,
+        discountAmount: order.discountAmount,
+        voucherCode: order.voucherCode,
+        codAmount: order.codAmount,
+        paymentMethod: order.paymentMethod,
+        shippingAddress: order.shippingAddress,
+        createdAt: order.createdAt,
+        items: order.items.map((item) => ({
+          productId: Number(item.productId),
+          productName: item.productName,
+          skuLabel: item.skuLabel,
+          quantity: item.quantity,
+          price: item.price,
+        })),
+      },
+      buyer,
+      seller,
+    });
+  }
+
+  /** Fetch a user profile for the invoice; null if the account is missing. */
+  private async fetchInvoiceParty(
+    userId: number,
+  ): Promise<InvoiceParty | null> {
+    const profile = await firstValueFrom(
       this.userClient
         .send<{
           id: number;
           username: string;
-          email: string;
+          email: string | null;
           name: string | null;
-        }>(
+        } | null>(
           { cmd: USER_MESSAGE_PATTERN.GET_USER_INFO },
-          { userId: Number(order.userId), includeEmail: true },
+          { userId, includeEmail: true },
         )
         .pipe(
           timeout(10000),
           catchError((e: unknown) => throwError(() => e)),
         ),
     );
-    return generateInvoicePdf(order, user);
+    if (!profile) {
+      return null;
+    }
+    return {
+      name: profile.name,
+      username: profile.username,
+      email: profile.email,
+    };
   }
 
   private async getSellerProductIds(sellerId: number): Promise<number[]> {
