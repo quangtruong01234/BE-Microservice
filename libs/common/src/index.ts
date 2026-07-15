@@ -9,12 +9,6 @@ export * from "./filters/http-to-rpc-exception.filter";
 export * from "./rmq/rmq.module";
 export * from "./rmq/rmq.service";
 
-export * from "./postgres/postgres.module";
-export * from "./postgres/postgres.service";
-
-export * from "./mysql/mysql.module";
-export * from "./mysql/mysql.service";
-
 export * from "./mailer/mailer.module";
 export * from "./mailer/mailer.service";
 

@@ -26,7 +26,7 @@ import { resolveTypeOrmSynchronize } from "./typeorm-synchronize";
           ? { rejectUnauthorized: false }
           : false,
         extra: {
-          connectionLimit: 10,
+          connectionLimit: Number(config.get<string>("MYSQL_POOL_SIZE")) || 10,
           connectTimeout: 10000,
           // keep connections alive to prevent ECONNRESET on Aiven
           enableKeepAlive: true,
