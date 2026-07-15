@@ -29,6 +29,9 @@ import { Follow } from "./entities/follow.entity";
       entities: [Post, PostLike, PostReport, Like, Comment, Follow],
       synchronize: false,
       timezone: "Z",
+      extra: {
+        connectionLimit: Number(process.env.MYSQL_POOL_SIZE) || 10,
+      },
     }),
     TypeOrmModule.forFeature([Post, PostLike, PostReport, Comment, Follow]),
     ScheduleModule.forRoot(),
