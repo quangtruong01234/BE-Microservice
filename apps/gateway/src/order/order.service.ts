@@ -350,7 +350,7 @@ export class OrderService {
         return { orders, paymentUrl };
       }
 
-      return (await firstValueFrom(
+      const createdOrder = (await firstValueFrom(
         this.ordersClient
           .send(ORDER_MESSAGE_PATTERN.CREATE_ORDER, {
             userId,
@@ -365,7 +365,16 @@ export class OrderService {
               throw err;
             }),
           ),
-      )) as unknown;
+      )) as Omit<OrderResponse, "items"> & { items?: OrderItemDetail[] };
+
+      // Surface the same explicit price breakdown the read paths expose so the
+      // FE checkout confirmation can render subtotal/shipping/discount/total
+      // without deriving the shipping fee client-side.
+      return {
+        ...createdOrder,
+        shippingFee: Number(createdOrder.shippingFee ?? 0),
+        subtotal: this.computeSubtotal(createdOrder.items ?? []),
+      };
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -512,6 +521,8 @@ export class OrderService {
     );
     return {
       ...order,
+      shippingFee: Number(order.shippingFee ?? 0),
+      subtotal: this.computeSubtotal(items),
       items: items.map((item) => this.decorateItem(item, productMap)),
     };
   }
@@ -590,6 +601,8 @@ export class OrderService {
     );
     const data = result.data.map((order) => ({
       ...order,
+      shippingFee: Number(order.shippingFee ?? 0),
+      subtotal: this.computeSubtotal(order.items ?? []),
       items: (order.items ?? []).map((item) =>
         this.decorateItem(item, productMap),
       ),
@@ -662,6 +675,7 @@ export class OrderService {
   async getOrderInvoice(
     orderId: number,
     requestingUserId: number,
+    requestingUserRole = "user",
   ): Promise<Buffer> {
     try {
       const result = await firstValueFrom(
@@ -672,6 +686,7 @@ export class OrderService {
           }>(ORDER_MESSAGE_PATTERN.GET_ORDER_INVOICE, {
             orderId,
             requestingUserId,
+            requestingUserRole,
           })
           .pipe(
             timeout(10000),
@@ -1233,7 +1248,12 @@ export class OrderService {
       this.decorateItem(item, productMap),
     );
 
-    return { ...order, items: enrichedItems };
+    return {
+      ...order,
+      shippingFee: Number(order.shippingFee ?? 0),
+      subtotal: this.computeSubtotal(items),
+      items: enrichedItems,
+    };
   }
 
   /**
@@ -1253,6 +1273,21 @@ export class OrderService {
       !!item.skuTierIdx &&
       (item.skuLabel === undefined || item.skuLabel === null);
     return !hasImageSnapshot || needsLabel;
+  }
+
+  /**
+   * Goods subtotal (line prices × quantities) for the order price breakdown.
+   * `OrderItem.price` has no DECIMAL transformer so mysql2 serializes it as a
+   * string over TCP — coerce every factor with Number() before summing. The
+   * order money identity is: total = subtotal - discountAmount + shippingFee.
+   */
+  private computeSubtotal(
+    items: { price: number | string; quantity: number | string }[],
+  ): number {
+    return items.reduce(
+      (sum, item) => sum + Number(item.price ?? 0) * Number(item.quantity ?? 0),
+      0,
+    );
   }
 
   /**

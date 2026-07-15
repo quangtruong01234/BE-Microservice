@@ -3,6 +3,13 @@ export interface OrderResponse {
   userId: number;
   status: string;
   total: number;
+  // Money breakdown persisted on the order (nullable for legacy orders / no
+  // voucher). The gateway normalizes shippingFee to a number and adds an
+  // explicit goods `subtotal` on read paths so the FE can render the price
+  // breakdown without client-side derivation.
+  shippingFee?: number | null;
+  discountAmount?: number | null;
+  subtotal?: number;
   items: unknown[];
   createdAt: string;
   updatedAt: string;

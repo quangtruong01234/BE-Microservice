@@ -376,9 +376,14 @@ export class OrderController {
 
   @Get(":id/invoice")
   @UseGuards(JwtAuthGuard)
-  @ApiOperation({ summary: "Download PDF invoice for an order (owner only)" })
+  @ApiOperation({
+    summary: "Download PDF invoice for an order (buyer, seller, or admin)",
+  })
   @ApiResponse({ status: 200, description: "PDF invoice file." })
-  @ApiResponse({ status: 403, description: "Forbidden — not the order owner." })
+  @ApiResponse({
+    status: 403,
+    description: "Forbidden — not the buyer, seller, or an admin.",
+  })
   @ApiResponse({ status: 404, description: "Order not found." })
   async getOrderInvoice(
     @Param("id", ParseIntPipe) id: number,
@@ -386,7 +391,12 @@ export class OrderController {
     @Res() res: Response,
   ): Promise<void> {
     const userId = req.user?.id ?? 0;
-    const pdfBuffer = await this.orderService.getOrderInvoice(id, userId);
+    const userRole = req.user?.role ?? "user";
+    const pdfBuffer = await this.orderService.getOrderInvoice(
+      id,
+      userId,
+      userRole,
+    );
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
