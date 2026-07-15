@@ -6,6 +6,154 @@
 
 ## Completed Milestones
 
+- PDF invoice production-readiness rewrite (2026-07-15, backend-handoff): the
+  `GET /api/order/:id/invoice` PDF was unusable in production — Helvetica has zero
+  Vietnamese glyph coverage (every diacritic rendered blank/□), it showed only a
+  raw total with no money breakdown, no seller block, no ship-to address, no
+  invoice number, English/UTC dates, and no SKU labels; access was buyer-only so
+  sellers/admin/support could not pull a customer's invoice. Fixed 9 of the 10
+  audited gaps (VAT/tax #5 intentionally skipped — shops self-handle VAT or bake
+  it into the product price). `apps/orders/src/invoice/invoice.generator.ts`
+  rewritten: signature now `generateInvoicePdf(data: InvoiceData)` where
+  `InvoiceData = {order, buyer, seller}` (typed `InvoiceParty`/`InvoiceLineItem`/
+  `InvoiceOrder` interfaces). Embeds **Roboto** (Apache-2.0, `Roboto-Regular.ttf` +
+  `Roboto-Bold.ttf` under `apps/orders/src/invoice/fonts/`) via `doc.registerFont`
+  for full Vietnamese coverage; `resolveFontPath` probes dev-src, dist, and
+  `process.cwd()` candidates so it works under both `nest --watch` and compiled
+  prod. `nest-cli.json` orders project gained `"assets":[{"include":
+"invoice/fonts/*.ttf"}]` so webpack copies the TTFs to
+  `dist/apps/orders/invoice/fonts/`. Renders: header + invoice number
+  (`buildInvoiceNumber` → `INV-YYYYMM-000108`), vi-VN date in `Asia/Ho_Chi_Minh`
+  (`Intl.DateTimeFormat`), two-column Người bán / Khách hàng (name + email),
+  Giao đến ship-to parsed from the pipe-delimited `shippingAddress`
+  (`name|phone|addr|ward|district|province`), order info + `PAYMENT_METHOD_LABELS`
+  (cod/vnpay/zalopay), a Chi tiết sản phẩm table with per-item SKU sub-line and a
+  page-break guard, then a Tạm tính / Phí vận chuyển / Giảm giá(code) / Tổng cộng /
+  Thu hộ(COD) breakdown (`formatVnd` = `Intl.NumberFormat("vi-VN")`,
+  discount/COD lines omitted when absent). A4 page size + `bufferPages` page
+  numbers (`Trang n/m`) — fixed a phantom blank page caused by default Letter
+  height. Backend plumbing: `orders.service.generateInvoice` now fetches buyer +
+  seller parties (`fetchInvoiceParty` via `GET_USER_INFO` with `includeEmail`) and
+  enforces `isOwner || isSeller || isAdmin` (else `ForbiddenException`);
+  `requestingUserRole` threaded through the orders controller, gateway
+  `getOrderInvoice`, and the gateway route (`req.user?.role`). Validation:
+  Prettier/ESLint clean, `tsc --noEmit` zero errors on orders + gateway,
+  `nest build orders` green, fonts confirmed in dist. Self-test 4/4 against the
+  live stack: admin (non-owner) → 200 `application/pdf`; non-owner user → 403;
+  Vietnamese + full breakdown rendered on both a synthetic order and live order
+  #119; single page. No migration.
+
+- Order response explicit `shippingFee` + `subtotal` (2026-07-14, /sweep,
+  backend-handoff): the FE OrderDetailPage price-breakdown footer ("Tạm tính /
+  Phí vận chuyển / Giảm giá / Tổng cộng") could not be rendered exactly because
+  order responses carried only the net `total` (shipping folded in) + nullable
+  `discountAmount` — no explicit `shippingFee` guaranteed as a number and no line
+  `subtotal`; the FE was deriving `shippingFee = max(0, total − subtotal +
+  discount)`, which misattributes rounding drift. Gateway-only fix (single
+  service, no migration, no TCP contract change): added a `computeSubtotal(items)`
+  helper in `apps/gateway/src/order/order.service.ts` that sums
+  `Number(item.price) * Number(item.quantity)` — the `Number()` coercion is
+  required because `OrderItem.price` has no DECIMAL transformer and serializes as
+  a string (`"99.00"`) over TCP. Wired `subtotal` + a normalized numeric
+  `shippingFee: Number(order.shippingFee ?? 0)` (legacy null-fee orders now return
+  `0`, never `null`) onto all four order response paths: `getOrderById`
+  (`GET /api/order/:id`), `getOrderByUser` (order list, per row), `getSellerOrderDetail`
+  (`GET /api/order/seller/:id`), and the single-seller `createOrderInternal`
+  branch (`POST /api/order`). Extended the `OrderResponse` interface in
+  `order.types.ts` with `shippingFee?: number | null`, `discountAmount?: number |
+  null`, `subtotal?: number`. The money identity `total = subtotal −
+  discountAmount + shippingFee` now holds explicitly in the payload so the FE can
+  drop its derivation. Validation: Prettier/ESLint clean, `tsc --noEmit -p
+  apps/gateway/tsconfig.app.json` zero errors. Self-test (3/3 read paths, gateway
+  live): `GET /api/order/user/17` → orders 118/117 `subtotal` 99/299,
+  `shippingFee` 0 (number); `GET /api/order/118` → `subtotal:99`,
+  `shippingFee:0`, both `typeof "number"`; `GET /api/order/seller/118` (admin) →
+  same, both numeric. Create path shares the identical helper wiring. FE impact:
+  storefront handoff entry written; backend-handoff item moved Open→Done.
+
+- AI-02F6 image-processing resource bounds (2026-07-14, /sweep): hardened
+  `apps/product/src/product-image-hash.service.ts` so the risk-scoring image
+  pipeline cannot spike memory/CPU. (1) Streaming byte cutoff — `downloadImage`
+  no longer reads the whole `arrayBuffer()` before checking size; the new
+  `readBodyWithCap` reads the response body chunk-by-chunk, throws the moment
+  cumulative bytes exceed `MAX_IMAGE_BYTES` (10 MB), and `reader.cancel()`s to
+  release the socket, so a missing/lying `Content-Length` can no longer force an
+  oversized payload fully into memory (the up-front declared-length fast-reject
+  is kept; a no-stream response falls back to a bounded full read). (2)
+  Concurrency cap — `hashImageUrls` now runs its download+decode+hash work
+  through a new order-preserving `mapWithConcurrency` worker pool capped at
+  `MAX_CONCURRENT_HASHES=3` instead of an unbounded `Promise.all`, so a seller's
+  10-image listing (or several products scored at once) bounds peak sharp decode
+  count/RSS. No public API change, no migration, no response/route/status change
+  (pure server-side side-effect path behind the fire-and-forget `rescoreProduct`).
+  Added 2 unit tests: a concurrency counter asserting ≤3 fetches in flight over 6
+  URLs, and an 11 MB no-`Content-Length` `ReadableStream` asserted skipped rather
+  than buffered. Validation: Prettier/ESLint clean, `npx tsc --noEmit` zero
+  errors, product Jest 17/17. No endpoint touched → endpoint self-test N/A; no FE
+  impact → no handoff entry. Remaining AI-02 follow-ups: F1 (durable scoring
+  state, blocked on the planned outbox path), F2–F5.
+
+- AI-02 non-null risk response follow-up (2026-07-13, /sweep): fixed `GET
+  /api/products/admin/risk` so clean, legacy, and not-yet-scored products always
+  follow the documented response contract. The product service now normalizes
+  nullable stored values at the read boundary to `riskScore:0` and
+  `riskFlags:[]`; scoring, persistence, filtering, sorting, pagination, and
+  authorization remain unchanged, and no migration was needed. Added a
+  regression test covering a fully null legacy row. Validation: targeted
+  Prettier/ESLint clean, product-risk Jest 3/3, and `npx.cmd tsc --noEmit` zero
+  errors. Live admin self-test: login `201`, risk list `200`, 20 rows, zero
+  null/invalid risk fields, sample clean row `{riskScore:0,riskFlags:[]}`. The
+  FE can restore non-null types and remove its temporary `normalizeRiskFields`
+  workaround; this was reported in `frontend-handoff.md`.
+
+- AI-02 advisory product risk / duplicate detection (2026-07-13, /sweep):
+  product create and risk-relevant updates now schedule post-commit,
+  fire-and-forget scoring that can never fail the seller mutation. The product
+  service downloads only images from the configured Cloudinary cloud (HTTPS,
+  10 MB cap, 8s timeout), normalizes them with `sharp`, and stores 64-bit
+  `blockhash-core` perceptual hashes. Three cross-seller signals contribute to
+  the capped 0-100 score: image Hamming distance <=6 (60), price below 40% of
+  the conservative AI-01 category median (25), and normalized trigram name
+  similarity >=0.8 in a shared category (15). New admin-only endpoints:
+  `GET /api/products/admin/risk?minScore=&page=&limit=` (`product read:any`)
+  returns the paginated queue sorted by score; `POST
+  /api/products/admin/risk/:id/rescore` (`product update:any`) recomputes one
+  item. Scores are advisory only--no auto-unlist--and internal hashes are
+  `select:false`/not exposed by HTTP. Added `products.image_phashes`,
+  `risk_score` (indexed), and `risk_flags` through guarded migration
+  `database/add_risk_columns_to_products.sql` plus manifest entry
+  `nodeA-20260713-001-add-product-risk-columns`; added `sharp` and
+  `blockhash-core`. Validation: targeted Prettier/ESLint clean, `npx.cmd tsc
+  --noEmit` zero errors, product Jest 14/14, Node A migration dry-run includes
+  the candidate, and the full 10-service `npm.cmd run build` passed. Runtime
+  HTTP self-test: login 201, unauthenticated queue 401,
+  invalid `minScore=101` 400, admin queue 200, rescore product 38 returned 200
+  with `{riskScore:0,riskFlags:[]}`; test Node A process tree stopped cleanly.
+
+- AI-01 catalog price suggestion (2026-07-13, /sweep): added authenticated
+  `GET /api/products/price-suggestion?categoryId=&brandId=&condition=` backed by
+  TCP `product.price_suggestion`. The product service runs one MySQL 8
+  window-function query over active, approval-eligible products and active SKU
+  prices (`COALESCE(sku.price, product.price)`), returning integer-VND
+  `{sufficientData,sampleSize,median,p25,p75,min,max}`. Samples below three
+  return `sufficientData:false` with null price statistics. No migration or
+  external API. Validation: targeted Prettier/ESLint clean, `npx.cmd tsc
+  --noEmit` zero errors, product Jest 10/10. Runtime self-test: unauthenticated
+  `401`; category 16 `200` with sample size 3 and numeric stats; category 18
+  `200` with sample size 2 and suppressed stats; empty category `200` with
+  sample size 0; missing category and invalid condition `400`.
+
+- SEC-L4 cookie/CSRF posture documentation (2026-07-13, /sweep): recorded the
+  current browser-auth posture in `ai-docs/agent-context/security.md`: sessions
+  use an HttpOnly `access_token` cookie, default `sameSite:lax`, production
+  `secure=true`, and no standalone CSRF token today. The guidance now explicitly
+  requires state-changing operations to stay on non-safe methods (`POST`,
+  `PUT`, `PATCH`, `DELETE`), bans mutations behind `GET`/`HEAD`, and says not to
+  set `AUTH_COOKIE_SAME_SITE=none` without a CSRF-token strategy. `$review`
+  checklist now includes a security rule to flag new `@Get()` / `@Head()` routes
+  that call mutating service methods. Docs-only; no runtime or FE contract
+  change.
+
 - F7 email notifications for order lifecycle (2026-07-12, /sweep): the
   notification service now mirrors order in-app notifications to email,
   best-effort, reusing the shared dependency-free `MailerService`

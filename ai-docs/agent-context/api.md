@@ -26,6 +26,7 @@ Auth: HttpOnly cookie set on login. Protected routes require the cookie (sent au
 
 **Cookie required (authenticated user):**
 - POST /api/products/, PATCH /api/products/:id, DELETE /api/products/:id
+- GET /api/products/price-suggestion
 - GET /api/products/wishlist, POST /api/products/wishlist/:productId, DELETE /api/products/wishlist/:productId
 - POST /api/products/:id/skus, PATCH /api/products/:id/skus/:skuId, DELETE /api/products/:id/skus/:skuId
 - POST /api/order/, POST /api/order/shipping-fee, GET /api/order/:id, GET /api/order/user/:id, PATCH /api/order/:id/cancel, GET /api/order/:id/invoice
@@ -45,6 +46,8 @@ Auth: HttpOnly cookie set on login. Protected routes require the cookie (sent au
 - GET /api/user/me, PATCH /api/user/:id
 
 **Role: admin only:**
+- GET /api/products/admin/risk
+- POST /api/products/admin/risk/:id/rescore
 - GET /api/user/all
 - GET /api/order/admin/orders
 - GET /api/order/admin/ghn/orders
@@ -102,6 +105,9 @@ views, and invoices.
 |---|---|---|---|
 | GET | `/api/products/` | — | All products (filter/paginate) |
 | POST | `/api/products/` | Cookie | Create product |
+| GET | `/api/products/price-suggestion` | Cookie | Suggest a catalog price range by category, brand, and condition |
+| GET | `/api/products/admin/risk` | Role: admin | Paginated advisory product-risk queue |
+| POST | `/api/products/admin/risk/:id/rescore` | Role: admin | Recompute one product's advisory risk score |
 | GET | `/api/products/wishlist` | Cookie | Current user's wishlist products (paginated) |
 | POST | `/api/products/wishlist/:productId` | Cookie | Add product to current user's wishlist |
 | DELETE | `/api/products/wishlist/:productId` | Cookie | Remove product from current user's wishlist (204) |
@@ -153,6 +159,15 @@ Product seller enrichment uses the same public-profile projection as
 ```typescript
 { data: Array<Product & { categoryIds: number[]; wishlistedAt: string }>, total: number, page: number, limit: number, totalPages: number, hasNext: boolean }
 ```
+
+### Product risk response (admin only)
+
+`GET /api/products/admin/risk?minScore=&page=&limit=` returns the standard
+paginated product shape with additive `riskScore` and `riskFlags` fields. Flag
+types are `duplicate_image`, `price_anomaly`, and `similar_name`; internal image
+hashes are never exposed. `POST /api/products/admin/risk/:id/rescore` returns
+`{ productId, riskScore, riskFlags }`. Scoring is advisory and never
+automatically deactivates a product.
 
 ### Create/Update SKU DTO (`CreateSkuGatewayDto`)
 ```typescript

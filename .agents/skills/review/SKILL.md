@@ -42,6 +42,7 @@ $review <file-or-folder>   # reviews a specific path
 - [ ] No JWT in `localStorage` / `sessionStorage` / `Authorization` header
 - [ ] All frontend fetch calls use `credentials: 'include'`
 - [ ] Auth guards present on protected gateway endpoints
+- [ ] No new `@Get()` / `@Head()` route calls a mutating service method
 - [ ] No secrets or credentials hardcoded
 
 ### General

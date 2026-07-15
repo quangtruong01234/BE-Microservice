@@ -45,3 +45,11 @@ These rules apply at all times, not only during a dedicated review command or sk
 - Auth cookies are HttpOnly. Production sets `secure=true`; `AUTH_COOKIE_SAME_SITE` controls same-site behavior and defaults to `lax`.
 - Gateway request body limits are controlled by `JSON_BODY_LIMIT` and `URLENCODED_BODY_LIMIT`.
 - `/live`, `/ready`, and `/health` remain public, unprefixed operational endpoints.
+
+## Cookie and CSRF Posture
+
+- TryBuy authenticates browser sessions with an HttpOnly `access_token` cookie.
+- The default cookie posture is `sameSite:lax`; production also sets `secure=true`.
+- There is no separate CSRF token today. `sameSite:lax` mitigates most cross-site POST-style attacks, so state-changing operations must stay on non-safe HTTP methods (`POST`, `PUT`, `PATCH`, or `DELETE`).
+- Never implement a mutation behind `GET` or `HEAD`, including "quick action" endpoints that cancel, sync, approve, delete, mark-read, emit, resend, or otherwise change server state.
+- Do not set `AUTH_COOKIE_SAME_SITE=none` unless a CSRF-token strategy is implemented and required by the frontend deployment model.

@@ -150,13 +150,25 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-Create the PM2 app env files:
+Create the PM2 app env files. Prefer the production templates, which are
+pre-set with production-safe defaults (`NODE_ENV=production`,
+`TYPEORM_SYNCHRONIZE=false`, `AUTH_COOKIE_SECURE=true`, `SWAGGER_ENABLED=false`,
+`GHN_DEMO_ENDPOINTS_ENABLED=false`) and mark every value
+that differs from local with a `# <-- PROD` comment. Fill each `CHANGE_ME_*`
+placeholder with the real value:
 
 ```bash
-cp local/nodeA/.env.example local/nodeA/.env
-cp local/nodeB/.env.example local/nodeB/.env
+cp local/nodeA/.env.production.example local/nodeA/.env
+cp local/nodeB/.env.production.example local/nodeB/.env
 chmod 600 local/nodeA/.env local/nodeB/.env
 ```
+
+Note: `local/nodeB/.env.production.example` includes `NODE_ENV=production`,
+which the plain `local/nodeB/.env.example` omits — without it the PostgreSQL
+services (inventory/payments/rewards) keep TypeORM `synchronize` enabled in
+production. The plain `local/nodeA/.env.example` / `local/nodeB/.env.example`
+files remain the full variable reference; the `.env.production.example`
+templates are the ready-to-copy production starting point.
 
 Checklist for `.env`, `local/nodeA/.env`, and `local/nodeB/.env`:
 
@@ -372,10 +384,8 @@ secrets. Do not add Actions or GHCR in this runbook.
 - `FRONTEND_URL`
 - `AUTH_COOKIE_SAME_SITE`
 - `AUTH_COOKIE_SECURE`
-- `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`,
-  `MYSQL_PASSWORD`, `MYSQL_SSL`, `MYSQL_SSL_REJECT_UNAUTHORIZED`
-- `PG_HOST`, `PG_PORT`, `PG_DATABASE`, `PG_USERNAME`, `PG_PASSWORD`, `PG_SSL`,
-  `PG_SSL_REJECT_UNAUTHORIZED`
+- `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`
+- `PG_HOST`, `PG_PORT`, `PG_DATABASE`, `PG_USERNAME`, `PG_PASSWORD`
 - `REDIS_PASSWORD` if Redis auth is enabled
 - `RABBITMQ_USER`, `RABBITMQ_PASS`, `RABBITMQ_VHOST`, `RMQ_URL`
 - `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`
