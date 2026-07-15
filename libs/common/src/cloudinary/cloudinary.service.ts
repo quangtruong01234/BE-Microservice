@@ -1,7 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { createHash } from "crypto";
 import {
-  ALLOWED_UPLOAD_FOLDERS,
+  getAllowedUploadFolders,
   CLOUDINARY_DELIVERY_HOST,
   CLOUDINARY_DESTROY_TIMEOUT_MS,
   CLOUDINARY_RESOURCE_TYPES,
@@ -120,7 +120,7 @@ export class CloudinaryService {
 
     const leafWithExt = rest[rest.length - 1];
     const folder = rest.slice(0, -1).join("/");
-    if (!ALLOWED_UPLOAD_FOLDERS.has(folder)) {
+    if (!getAllowedUploadFolders().has(folder)) {
       return null;
     }
     const dotIndex = leafWithExt.lastIndexOf(".");
