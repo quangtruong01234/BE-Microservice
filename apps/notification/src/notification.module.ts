@@ -28,6 +28,9 @@ import { Notification } from "./entities/notification.entity";
       entities: [Notification],
       synchronize: false,
       timezone: "Z",
+      extra: {
+        connectionLimit: Number(process.env.MYSQL_POOL_SIZE) || 10,
+      },
     }),
     TypeOrmModule.forFeature([Notification]),
     ClientsModule.register([
