@@ -11,6 +11,7 @@ import { Category } from "./entity/category.entity";
 import { ProductReview } from "./entity/product-review.entity";
 import { ProductSku } from "./entity/product-sku.entity";
 import { WishlistItem } from "./entity/wishlist-item.entity";
+import { ProductImageHashService } from "./product-image-hash.service";
 
 type SkuRow = Pick<
   ProductSku,
@@ -74,6 +75,7 @@ describe("ProductService.upsertSkus diff (P0-05)", () => {
       dataSource as unknown as DataSource,
       {} as unknown as CachedService,
       {} as unknown as CloudinaryService,
+      {} as unknown as ProductImageHashService,
       null,
       ordersClient as unknown as ClientProxy,
     );
@@ -174,6 +176,7 @@ describe("ProductService catalog lookup cache", () => {
       {} as unknown as DataSource,
       cachedService as unknown as CachedService,
       {} as unknown as CloudinaryService,
+      {} as unknown as ProductImageHashService,
       null,
       ordersClient as unknown as ClientProxy,
     );
@@ -250,5 +253,87 @@ describe("ProductService catalog lookup cache", () => {
 
     expect(categoryRepository.save).not.toHaveBeenCalled();
     expect(cachedService.del).not.toHaveBeenCalled();
+  });
+});
+
+describe("ProductService.getPriceSuggestion", () => {
+  const productRepository = { query: jest.fn() };
+  const ordersClient = { send: jest.fn(), connect: jest.fn() };
+  let service: ProductService;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = new ProductService(
+      productRepository as unknown as Repository<Product>,
+      {} as unknown as Repository<Brand>,
+      {} as unknown as Repository<Category>,
+      {} as unknown as Repository<ProductReview>,
+      {} as unknown as Repository<ProductSku>,
+      {} as unknown as Repository<WishlistItem>,
+      {} as unknown as DataSource,
+      {} as unknown as CachedService,
+      {} as unknown as CloudinaryService,
+      {} as unknown as ProductImageHashService,
+      null,
+      ordersClient as unknown as ClientProxy,
+    );
+  });
+
+  it("returns rounded catalog percentiles for a sufficient sample", async () => {
+    productRepository.query.mockResolvedValue([
+      {
+        sampleSize: "4",
+        median: "150000.50",
+        p25: "100000.00",
+        p75: "200000.00",
+        min: "90000.00",
+        max: "300000.00",
+      },
+    ]);
+
+    await expect(
+      service.getPriceSuggestion({
+        categoryId: 18,
+        brandId: 4,
+        condition: "used",
+      }),
+    ).resolves.toEqual({
+      sufficientData: true,
+      sampleSize: 4,
+      median: 150001,
+      p25: 100000,
+      p75: 200000,
+      min: 90000,
+      max: 300000,
+    });
+    expect(productRepository.query).toHaveBeenCalledWith(
+      expect.stringContaining("LEFT JOIN product_skus"),
+      [18, 4, "used"],
+    );
+  });
+
+  it("suppresses price values when fewer than three samples exist", async () => {
+    productRepository.query.mockResolvedValue([
+      {
+        sampleSize: 2,
+        median: 150000,
+        p25: 100000,
+        p75: 200000,
+        min: 100000,
+        max: 200000,
+      },
+    ]);
+
+    await expect(
+      service.getPriceSuggestion({ categoryId: 18 }),
+    ).resolves.toEqual({
+      sufficientData: false,
+      sampleSize: 2,
+      median: null,
+      p25: null,
+      p75: null,
+      min: null,
+      max: null,
+    });
   });
 });

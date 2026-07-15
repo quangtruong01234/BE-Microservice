@@ -25,6 +25,9 @@ import { CreateBrandDto } from "./dto/create-brand.dto";
 import { CreateCategoryDto } from "./dto/create-category.dto";
 import { GetProductsQueryDto } from "./dto/get-products-query.dto";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
+import { PriceSuggestion, PriceSuggestionQuery } from "./product.types";
+import { ProductRiskQuery, ProductRiskSummary } from "./product-risk.types";
+import { Product } from "./entity/product.entity";
 
 @UseFilters(HttpToRpcExceptionFilter)
 @Controller()
@@ -104,6 +107,27 @@ export class ProductController {
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_SEARCH)
   async searchProducts(@Payload() query: GetProductsQueryDto) {
     return this.productService.findAllProducts(query);
+  }
+
+  @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_PRICE_SUGGESTION)
+  async getPriceSuggestion(
+    @Payload() query: PriceSuggestionQuery,
+  ): Promise<PriceSuggestion> {
+    return this.productService.getPriceSuggestion(query);
+  }
+
+  @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_ADMIN_RISK_LIST)
+  async findProductRisks(
+    @Payload() query: ProductRiskQuery,
+  ): Promise<PaginatedResponse<Product>> {
+    return this.productService.findProductRisks(query);
+  }
+
+  @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_ADMIN_RISK_RESCORE)
+  async rescoreProduct(
+    @Payload() productId: number,
+  ): Promise<ProductRiskSummary> {
+    return this.productService.rescoreProduct(productId);
   }
 
   // ============================================================================

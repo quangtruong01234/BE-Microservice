@@ -3,6 +3,7 @@ import { ConfigModule } from "@nestjs/config";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { ProductService } from "./product.service";
 import { ProductController } from "./product.controller";
+import { ProductImageHashService } from "./product-image-hash.service";
 import { Product } from "./entity/product.entity";
 import { ProductReview } from "./entity/product-review.entity";
 import { ProductSku } from "./entity/product-sku.entity";
@@ -50,7 +51,7 @@ import {
     CloudinaryModule,
   ],
   controllers: [ProductController],
-  providers: [ProductService, RmqService],
+  providers: [ProductService, ProductImageHashService, RmqService],
   exports: [ProductService],
 })
 export class ProductModule {}

@@ -15,6 +15,7 @@ import { decimalToNumber } from "@app/common/transformers/decimal-to-number.tran
 import { Brand } from "./brand.entity";
 import { Category } from "./category.entity";
 import { ProductSku } from "./product-sku.entity";
+import { ProductRiskFlag } from "../product-risk.types";
 
 @Entity("products")
 export class Product {
@@ -127,6 +128,28 @@ export class Product {
 
   @Column({ type: "json", nullable: true, default: null, name: "variations" })
   variations!: { name: string; options: string[] }[] | null;
+
+  @Column({
+    type: "json",
+    nullable: true,
+    default: null,
+    name: "image_phashes",
+    select: false,
+  })
+  imagePhashes!: string[] | null;
+
+  @Index("idx_products_risk_score")
+  @Column({ type: "int", default: 0, name: "risk_score", select: false })
+  riskScore!: number;
+
+  @Column({
+    type: "json",
+    nullable: true,
+    default: null,
+    name: "risk_flags",
+    select: false,
+  })
+  riskFlags!: ProductRiskFlag[] | null;
 
   @CreateDateColumn({ type: "timestamp", name: "created_at" })
   createdAt!: Date;

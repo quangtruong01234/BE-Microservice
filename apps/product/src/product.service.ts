@@ -24,6 +24,7 @@ import { ProductSku } from "./entity/product-sku.entity";
 import { WishlistItem } from "./entity/wishlist-item.entity";
 import { Brand } from "./entity/brand.entity";
 import { Category } from "./entity/category.entity";
+import { ProductImageHashService } from "./product-image-hash.service";
 import { CreateProductDto } from "./dto/create-product.dto";
 import { UpdateProductDto } from "./dto/update-product.dto";
 import { CreateBrandDto } from "./dto/create-brand.dto";
@@ -41,7 +42,16 @@ import {
   CatalogLookupStatus,
   WishlistMutationResult,
   WishlistedProduct,
+  PriceSuggestion,
+  PriceSuggestionQuery,
+  PriceSuggestionRawRow,
 } from "./product.types";
+import {
+  PRODUCT_RISK_WEIGHTS,
+  ProductRiskFlag,
+  ProductRiskQuery,
+  ProductRiskSummary,
+} from "./product-risk.types";
 
 @Injectable()
 export class ProductService {
@@ -63,6 +73,7 @@ export class ProductService {
     private readonly dataSource: DataSource,
     private readonly cachedService: CachedService,
     private readonly cloudinaryService: CloudinaryService,
+    private readonly productImageHashService: ProductImageHashService,
     @Inject(EXCHANGE.RMQ_PUBLISHER_CHANNEL)
     private readonly fanoutChannel: Channel | null,
     @Inject(NAME_SERVICE_TCP.ORDERS_SERVICE)
@@ -179,6 +190,388 @@ export class ProductService {
     this.logger.log(
       `[PRODUCT] Updated stockQuantity for product ${productId} to ${availableStock}`,
     );
+  }
+
+  async getPriceSuggestion(
+    query: PriceSuggestionQuery,
+  ): Promise<PriceSuggestion> {
+    const filters = [
+      "pc.category_id = ?",
+      "product.is_active = TRUE",
+      "product.approval_blocked = FALSE",
+      "COALESCE(sku.price, product.price) IS NOT NULL",
+    ];
+    const parameters: Array<number | string> = [query.categoryId];
+
+    if (query.brandId !== undefined) {
+      filters.push("product.brand_id = ?");
+      parameters.push(query.brandId);
+    }
+    if (query.condition !== undefined) {
+      filters.push("product.condition = ?");
+      parameters.push(query.condition);
+    }
+
+    const rows = await this.productRepository.query<PriceSuggestionRawRow[]>(
+      `
+        WITH priced AS (
+          SELECT
+            COALESCE(sku.price, product.price) AS price,
+            ROW_NUMBER() OVER (
+              ORDER BY COALESCE(sku.price, product.price)
+            ) AS rowNumber,
+            COUNT(*) OVER () AS sampleSize
+          FROM products product
+          INNER JOIN product_categories pc ON pc.product_id = product.id
+          LEFT JOIN product_skus sku
+            ON sku.product_id = product.id AND sku.is_active = TRUE
+          WHERE ${filters.join(" AND ")}
+        )
+        SELECT
+          COUNT(*) AS sampleSize,
+          ROUND(AVG(CASE
+            WHEN rowNumber IN (
+              FLOOR((sampleSize + 1) / 2),
+              CEIL((sampleSize + 1) / 2)
+            ) THEN price
+          END)) AS median,
+          ROUND(MAX(CASE
+            WHEN rowNumber = CEIL(sampleSize * 0.25) THEN price
+          END)) AS p25,
+          ROUND(MAX(CASE
+            WHEN rowNumber = CEIL(sampleSize * 0.75) THEN price
+          END)) AS p75,
+          ROUND(MIN(price)) AS min,
+          ROUND(MAX(price)) AS max
+        FROM priced
+      `,
+      parameters,
+    );
+    const stats = rows[0];
+    const sampleSize = Number(stats?.sampleSize ?? 0);
+
+    if (sampleSize < 3) {
+      return {
+        sufficientData: false,
+        sampleSize,
+        median: null,
+        p25: null,
+        p75: null,
+        min: null,
+        max: null,
+      };
+    }
+
+    return {
+      sufficientData: true,
+      sampleSize,
+      median: this.toRoundedNumber(stats?.median),
+      p25: this.toRoundedNumber(stats?.p25),
+      p75: this.toRoundedNumber(stats?.p75),
+      min: this.toRoundedNumber(stats?.min),
+      max: this.toRoundedNumber(stats?.max),
+    };
+  }
+
+  private toRoundedNumber(
+    value: string | number | null | undefined,
+  ): number | null {
+    if (value === null || value === undefined) {
+      return null;
+    }
+    return Math.round(Number(value));
+  }
+
+  async findProductRisks(
+    query: ProductRiskQuery,
+  ): Promise<PaginatedResponse<Product>> {
+    const page = Math.max(1, Math.trunc(query.page ?? 1));
+    const limit = Math.min(100, Math.max(1, Math.trunc(query.limit ?? 20)));
+    const minScore = Math.min(
+      100,
+      Math.max(0, Math.trunc(query.minScore ?? 1)),
+    );
+
+    const [products, total] = await this.productRepository
+      .createQueryBuilder("product")
+      .addSelect("product.riskScore")
+      .addSelect("product.riskFlags")
+      .leftJoinAndSelect("product.brand", "brand")
+      .leftJoinAndSelect("product.categories", "category")
+      .where("product.riskScore >= :minScore", { minScore })
+      .orderBy("product.riskScore", "DESC")
+      .addOrderBy("product.updatedAt", "DESC")
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
+
+    const normalizedProducts = products.map((product) => ({
+      ...product,
+      riskScore: product.riskScore ?? 0,
+      riskFlags: product.riskFlags ?? [],
+    }));
+
+    return PaginatedResponse.of(normalizedProducts, total, page, limit);
+  }
+
+  async rescoreProduct(productId: number): Promise<ProductRiskSummary> {
+    const product = await this.productRepository
+      .createQueryBuilder("product")
+      .addSelect("product.imagePhashes")
+      .addSelect("product.riskScore")
+      .addSelect("product.riskFlags")
+      .leftJoinAndSelect("product.categories", "category")
+      .leftJoinAndSelect("product.skus", "sku")
+      .where("product.id = :productId", { productId })
+      .getOne();
+    if (!product) {
+      throw new NotFoundException(PRODUCT_MESSAGE.NOT_FOUND);
+    }
+
+    const imagePhashes = await this.productImageHashService.hashImageUrls(
+      product.imageUrls ?? [],
+    );
+    const candidates = await this.productRepository
+      .createQueryBuilder("candidate")
+      .addSelect("candidate.imagePhashes")
+      .leftJoinAndSelect("candidate.categories", "candidateCategory")
+      .where("candidate.id != :productId", { productId })
+      .andWhere("candidate.isActive = TRUE")
+      .getMany();
+
+    const riskFlags: ProductRiskFlag[] = [];
+    const duplicateImageFlag = this.findDuplicateImageRisk(
+      product,
+      imagePhashes,
+      candidates,
+    );
+    if (duplicateImageFlag) {
+      riskFlags.push(duplicateImageFlag);
+    }
+
+    const priceAnomalyFlag = await this.findPriceAnomalyRisk(product);
+    if (priceAnomalyFlag) {
+      riskFlags.push(priceAnomalyFlag);
+    }
+
+    const similarNameFlag = this.findSimilarNameRisk(product, candidates);
+    if (similarNameFlag) {
+      riskFlags.push(similarNameFlag);
+    }
+
+    const riskScore = Math.min(
+      100,
+      riskFlags.reduce((score, flag) => score + flag.weight, 0),
+    );
+    await this.productRepository.update(productId, {
+      imagePhashes: imagePhashes.length > 0 ? imagePhashes : null,
+      riskScore,
+      riskFlags: riskFlags.length > 0 ? riskFlags : null,
+    });
+
+    return { productId, riskScore, riskFlags };
+  }
+
+  private findDuplicateImageRisk(
+    product: Product,
+    imagePhashes: string[],
+    candidates: Product[],
+  ): ProductRiskFlag | null {
+    if (imagePhashes.length === 0) {
+      return null;
+    }
+
+    let closestMatch:
+      | { matchedProductId: number; hammingDistance: number }
+      | undefined;
+    for (const candidate of candidates) {
+      if (!this.isDifferentSeller(product, candidate)) {
+        continue;
+      }
+      for (const imagePhash of imagePhashes) {
+        for (const candidatePhash of candidate.imagePhashes ?? []) {
+          const hammingDistance = this.calculateHammingDistance(
+            imagePhash,
+            candidatePhash,
+          );
+          if (
+            hammingDistance <= 6 &&
+            (!closestMatch || hammingDistance < closestMatch.hammingDistance)
+          ) {
+            closestMatch = {
+              matchedProductId: Number(candidate.id),
+              hammingDistance,
+            };
+          }
+        }
+      }
+    }
+
+    return closestMatch
+      ? {
+          type: "duplicate_image",
+          weight: PRODUCT_RISK_WEIGHTS.duplicateImage,
+          ...closestMatch,
+        }
+      : null;
+  }
+
+  private async findPriceAnomalyRisk(
+    product: Product,
+  ): Promise<ProductRiskFlag | null> {
+    const productPrice = this.getEffectiveProductPrice(product);
+    if (productPrice === null || product.categories.length === 0) {
+      return null;
+    }
+
+    const suggestions = await Promise.all(
+      product.categories.map((category) =>
+        this.getPriceSuggestion({
+          categoryId: category.id,
+        }),
+      ),
+    );
+    const medians = suggestions
+      .map((suggestion) => suggestion.median)
+      .filter((median): median is number => median !== null && median > 0);
+    if (medians.length === 0) {
+      return null;
+    }
+
+    const categoryMedian = Math.min(...medians);
+    const ratio = productPrice / categoryMedian;
+    return ratio < 0.4
+      ? {
+          type: "price_anomaly",
+          weight: PRODUCT_RISK_WEIGHTS.priceAnomaly,
+          productPrice,
+          categoryMedian,
+          ratio: Number(ratio.toFixed(3)),
+        }
+      : null;
+  }
+
+  private findSimilarNameRisk(
+    product: Product,
+    candidates: Product[],
+  ): ProductRiskFlag | null {
+    const categoryIds = new Set(
+      product.categories.map((category) => category.id),
+    );
+    let closestMatch:
+      | { matchedProductId: number; similarity: number }
+      | undefined;
+
+    for (const candidate of candidates) {
+      const sharesCategory = candidate.categories.some((category) =>
+        categoryIds.has(category.id),
+      );
+      if (!sharesCategory || !this.isDifferentSeller(product, candidate)) {
+        continue;
+      }
+
+      const similarity = this.calculateTrigramSimilarity(
+        product.name,
+        candidate.name,
+      );
+      if (
+        similarity >= 0.8 &&
+        (!closestMatch || similarity > closestMatch.similarity)
+      ) {
+        closestMatch = {
+          matchedProductId: Number(candidate.id),
+          similarity: Number(similarity.toFixed(3)),
+        };
+      }
+    }
+
+    return closestMatch
+      ? {
+          type: "similar_name",
+          weight: PRODUCT_RISK_WEIGHTS.similarName,
+          ...closestMatch,
+        }
+      : null;
+  }
+
+  private getEffectiveProductPrice(product: Product): number | null {
+    const prices = [
+      product.price,
+      ...(product.skus ?? [])
+        .filter((sku) => sku.isActive)
+        .map((sku) => Number(sku.price)),
+    ].filter((price): price is number => price !== null && price !== undefined);
+    return prices.length > 0 ? Math.min(...prices) : null;
+  }
+
+  private isDifferentSeller(product: Product, candidate: Product): boolean {
+    return (
+      product.userId !== undefined &&
+      candidate.userId !== undefined &&
+      Number(product.userId) !== Number(candidate.userId)
+    );
+  }
+
+  private calculateHammingDistance(
+    firstHash: string,
+    secondHash: string,
+  ): number {
+    if (firstHash.length !== secondHash.length) {
+      return Number.POSITIVE_INFINITY;
+    }
+
+    let distance = 0;
+    for (let index = 0; index < firstHash.length; index += 1) {
+      const xor =
+        Number.parseInt(firstHash[index], 16) ^
+        Number.parseInt(secondHash[index], 16);
+      distance += xor.toString(2).replaceAll("0", "").length;
+    }
+    return distance;
+  }
+
+  private calculateTrigramSimilarity(
+    firstName: string,
+    secondName: string,
+  ): number {
+    const firstTrigrams = this.toTrigrams(firstName);
+    const secondTrigrams = this.toTrigrams(secondName);
+    if (firstTrigrams.size === 0 || secondTrigrams.size === 0) {
+      return 0;
+    }
+
+    const intersectionSize = [...firstTrigrams].filter((trigram) =>
+      secondTrigrams.has(trigram),
+    ).length;
+    const unionSize = new Set([...firstTrigrams, ...secondTrigrams]).size;
+    return intersectionSize / unionSize;
+  }
+
+  private toTrigrams(name: string): Set<string> {
+    const normalizedName = name
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim()
+      .replace(/\s+/g, " ");
+    if (normalizedName.length < 3) {
+      return normalizedName ? new Set([normalizedName]) : new Set();
+    }
+
+    return new Set(
+      Array.from({ length: normalizedName.length - 2 }, (_, index) =>
+        normalizedName.slice(index, index + 3),
+      ),
+    );
+  }
+
+  private scheduleRiskRescore(productId: number): void {
+    void this.rescoreProduct(productId).catch((error: unknown) => {
+      this.logger.warn(
+        `Risk scoring failed for product ${productId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
   }
 
   /**
@@ -493,6 +886,7 @@ export class ProductService {
     }
 
     await this.invalidateSearchCache();
+    this.scheduleRiskRescore(saved.id);
     return saved;
   }
 
@@ -758,6 +1152,17 @@ export class ProductService {
     await this.invalidateSearchCache();
     // SEC-M7: dropped images are orphaned on Cloudinary once the edit commits.
     this.destroyDroppedImages(previousImageUrls, updated.imageUrls ?? []);
+    if (
+      updateProductDto.imageUrls !== undefined ||
+      updateProductDto.name !== undefined ||
+      updateProductDto.price !== undefined ||
+      updateProductDto.categoryIds !== undefined ||
+      updateProductDto.brandId !== undefined ||
+      updateProductDto.condition !== undefined ||
+      updateProductDto.skuList !== undefined
+    ) {
+      this.scheduleRiskRescore(updated.id);
+    }
     return updated;
   }
 
