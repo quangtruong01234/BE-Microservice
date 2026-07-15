@@ -25,6 +25,8 @@ import {
   ReviewCategoryDto,
   WishlistQueryDto,
   GetProductsWithInventoryDto,
+  PriceSuggestionQueryDto,
+  ProductRiskQueryDto,
 } from "./dto";
 import { CreateReviewDto, ReviewQueryDto } from "./dto/review.dto";
 import {
@@ -37,6 +39,7 @@ import {
 } from "@nestjs/swagger";
 import { CheckPermission } from "../common/decorators/check-permission.decorator";
 import { Public } from "../common/decorators/public.decorator";
+import { PriceSuggestion, ProductRiskSummary } from "./product.types";
 
 @ApiTags("Products")
 @Controller("products")
@@ -72,6 +75,43 @@ export class ProductController {
   })
   async getAllProducts(@Query(ValidationPipe) query: GetProductsQueryDto) {
     return await this.productService.getAllProducts(query);
+  }
+
+  @Get("price-suggestion")
+  @ApiOperation({ summary: "Suggest a product price from catalog data" })
+  @ApiResponse({ status: 200, description: "Price suggestion calculated." })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  async getPriceSuggestion(
+    @Query(ValidationPipe) query: PriceSuggestionQueryDto,
+  ): Promise<PriceSuggestion> {
+    return await this.productService.getPriceSuggestion(query);
+  }
+
+  @Get("admin/risk")
+  @CheckPermission("product", "read:any")
+  @ApiOperation({
+    summary: "List products by advisory risk score (admin only)",
+  })
+  @ApiResponse({ status: 200, description: "Product risk queue retrieved." })
+  @ApiResponse({ status: 403, description: "Forbidden." })
+  async getProductRisks(
+    @Query(ValidationPipe) query: ProductRiskQueryDto,
+  ): Promise<unknown> {
+    return await this.productService.getProductRisks(query);
+  }
+
+  @Post("admin/risk/:id/rescore")
+  @CheckPermission("product", "update:any")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Recompute one product risk score (admin only)" })
+  @ApiParam({ name: "id", description: "Product ID", type: Number })
+  @ApiResponse({ status: 200, description: "Product risk score recomputed." })
+  @ApiResponse({ status: 403, description: "Forbidden." })
+  @ApiResponse({ status: 404, description: "Product not found." })
+  async rescoreProductRisk(
+    @Param("id", ParseIntPipe) id: number,
+  ): Promise<ProductRiskSummary> {
+    return await this.productService.rescoreProductRisk(id);
   }
 
   @Get("search")

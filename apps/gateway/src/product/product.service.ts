@@ -21,6 +21,8 @@ import {
   CreateCategoryDto,
   ReviewCategoryDto,
   WishlistQueryDto,
+  PriceSuggestionQueryDto,
+  ProductRiskQueryDto,
 } from "./dto";
 import { PaginatedResponse } from "@app/common";
 import {
@@ -28,6 +30,8 @@ import {
   ProductData,
   ProductWithInventory,
   UserData,
+  PriceSuggestion,
+  ProductRiskSummary,
 } from "./product.types";
 
 @Injectable()
@@ -47,6 +51,56 @@ export class ProductService {
   // ============================================================================
   // PRODUCT OPERATIONS
   // ============================================================================
+
+  async getPriceSuggestion(
+    query: PriceSuggestionQueryDto,
+  ): Promise<PriceSuggestion> {
+    try {
+      return (await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_PRICE_SUGGESTION, query)
+          .pipe(timeout(10000)),
+      )) as PriceSuggestion;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "get price suggestion",
+        "Product Service",
+      );
+    }
+  }
+
+  async getProductRisks(query: ProductRiskQueryDto): Promise<unknown> {
+    try {
+      return await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_ADMIN_RISK_LIST, query)
+          .pipe(timeout(10000)),
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "get product risk queue",
+        "Product Service",
+      );
+    }
+  }
+
+  async rescoreProductRisk(productId: number): Promise<ProductRiskSummary> {
+    try {
+      return (await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_ADMIN_RISK_RESCORE, productId)
+          .pipe(timeout(10000)),
+      )) as ProductRiskSummary;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        `rescore product risk ID: ${productId}`,
+        "Product Service",
+      );
+    }
+  }
 
   async createProduct(dto: CreateProductDto, userId: number): Promise<unknown> {
     if (dto.imageUrls?.length) {

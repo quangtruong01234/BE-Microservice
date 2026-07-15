@@ -60,3 +60,30 @@ export type UserData = {
   username?: string;
   avatar?: string;
 };
+
+export type PriceSuggestion = {
+  sufficientData: boolean;
+  sampleSize: number;
+  median: number | null;
+  p25: number | null;
+  p75: number | null;
+  min: number | null;
+  max: number | null;
+};
+
+export type ProductRiskFlag = {
+  type: "duplicate_image" | "price_anomaly" | "similar_name";
+  weight: number;
+  matchedProductId?: number;
+  hammingDistance?: number;
+  productPrice?: number;
+  categoryMedian?: number;
+  ratio?: number;
+  similarity?: number;
+};
+
+export type ProductRiskSummary = {
+  productId: number;
+  riskScore: number;
+  riskFlags: ProductRiskFlag[];
+};
