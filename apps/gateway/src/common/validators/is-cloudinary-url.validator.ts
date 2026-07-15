@@ -5,6 +5,7 @@ import {
   ValidatorConstraint,
   ValidatorConstraintInterface,
 } from "class-validator";
+import { resolvePhysicalUploadFolder } from "@app/common/cloudinary/cloudinary.constants";
 
 const CLOUDINARY_HOST = "res.cloudinary.com";
 
@@ -58,7 +59,12 @@ class IsCloudinaryUrlConstraint implements ValidatorConstraintInterface {
 
     const [options] = args.constraints as [CloudinaryUrlOptions | undefined];
     const folder = options?.folder;
-    if (folder && !url.pathname.includes(`/${folder}/`)) return false;
+    if (folder) {
+      // The DTO passes a stable logical folder ("trybuy/products"); the delivery
+      // URL carries the physical folder, which is env-driven in prod.
+      const physicalFolder = resolvePhysicalUploadFolder(folder) ?? folder;
+      if (!url.pathname.includes(`/${physicalFolder}/`)) return false;
+    }
 
     const allowedExtensions = allowedExtensionsFor(options?.media ?? "image");
     if (allowedExtensions) {

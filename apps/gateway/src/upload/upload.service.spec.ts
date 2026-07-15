@@ -101,4 +101,50 @@ describe("UploadService", () => {
       service.generateDeleteSignature("trybuy/posts/21_image", 20, "user"),
     ).toThrow(ForbiddenException);
   });
+
+  describe("with NODE_ENV=production", () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+
+    beforeEach(() => {
+      process.env.NODE_ENV = "production";
+    });
+
+    afterEach(() => {
+      process.env.NODE_ENV = previousNodeEnv;
+    });
+
+    it("signs the logical folder into the prod physical folder", () => {
+      const signature = service.generateSignature(
+        "trybuy/products",
+        20,
+        "20_image",
+      );
+
+      expect(signature.folder).toBe("trybuy-prod/products");
+      expect(signature.public_id).toBe("20_image");
+      expect(signature.allowed_formats).toBe("jpg,png,webp");
+    });
+
+    it("accepts an already-physical prod folder", () => {
+      const signature = service.generateSignature(
+        "trybuy-prod/posts",
+        20,
+        "20_clip",
+      );
+
+      expect(signature.folder).toBe("trybuy-prod/posts");
+    });
+
+    it("still keeps avatars in the shared folder", () => {
+      const signature = service.generateSignature("avatars", 20, "20_avatar");
+
+      expect(signature.folder).toBe("avatars");
+    });
+
+    it("still rejects a folder that is neither logical nor physical", () => {
+      expect(() =>
+        service.generateSignature("some-other-prefix/products", 20, "20_image"),
+      ).toThrow(BadRequestException);
+    });
+  });
 });

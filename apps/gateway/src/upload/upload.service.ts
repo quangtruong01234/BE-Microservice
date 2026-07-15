@@ -6,9 +6,9 @@ import {
 import { createHash } from "crypto";
 import { UPLOAD_MESSAGE } from "libs/constant/response-message.constant";
 import {
-  ALLOWED_UPLOAD_FOLDERS,
-  ALLOWED_UPLOAD_FORMATS_BY_FOLDER,
+  getAllowedUploadFormatsByFolder,
   PUBLIC_ID_PATTERN,
+  resolvePhysicalUploadFolder,
 } from "./upload.constants";
 import { UploadSignatureResponse } from "./upload.types";
 
@@ -38,7 +38,7 @@ export class UploadService {
 
     const timestamp = Math.floor(Date.now() / 1000);
     const normalizedFolder = this.normalizeAllowedFolder(folder);
-    const allowedFormats = ALLOWED_UPLOAD_FORMATS_BY_FOLDER[normalizedFolder];
+    const allowedFormats = getAllowedUploadFormatsByFolder()[normalizedFolder];
     const publicId = this.normalizeOwnedUploadPublicId(
       userId,
       incomingPublicId,
@@ -93,11 +93,13 @@ export class UploadService {
   }
 
   private normalizeAllowedFolder(folder: string): string {
-    const normalizedFolder = folder.trim().replace(/^\/+|\/+$/g, "");
-    if (!ALLOWED_UPLOAD_FOLDERS.has(normalizedFolder)) {
+    // Accepts a stable logical folder ("trybuy/products") or an already-physical
+    // folder, and resolves it to the physical folder for the current env.
+    const physicalFolder = resolvePhysicalUploadFolder(folder);
+    if (!physicalFolder) {
       throw new BadRequestException(UPLOAD_MESSAGE.FOLDER_NOT_ALLOWED);
     }
-    return normalizedFolder;
+    return physicalFolder;
   }
 
   private normalizeOwnedUploadPublicId(
