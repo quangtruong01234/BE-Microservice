@@ -121,6 +121,9 @@ function resolveManifestPath(options) {
 
 function readManifest(manifestPath) {
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  if (!Array.isArray(manifest.baselines)) {
+    throw new Error("Migration manifest must contain a baselines array.");
+  }
   if (!Array.isArray(manifest.migrations)) {
     throw new Error("Migration manifest must contain a migrations array.");
   }
@@ -130,6 +133,46 @@ function readManifest(manifestPath) {
 function validateManifest(manifest) {
   const seenIds = new Set();
   const errors = [];
+
+  for (const baseline of manifest.baselines) {
+    if (!baseline.id || typeof baseline.id !== "string") {
+      errors.push("Baseline entry is missing string id.");
+    }
+    if (seenIds.has(baseline.id)) {
+      errors.push(`Duplicate baseline/migration id: ${baseline.id}`);
+    }
+    seenIds.add(baseline.id);
+    if (!["nodeA", "nodeB"].includes(baseline.target)) {
+      errors.push(`${baseline.id}: target must be nodeA or nodeB.`);
+    }
+    if (!["mysql", "postgres"].includes(baseline.dialect)) {
+      errors.push(`${baseline.id}: dialect must be mysql or postgres.`);
+    }
+    if (
+      baseline.target &&
+      TARGET_CONFIG[baseline.target]?.dialect !== baseline.dialect
+    ) {
+      errors.push(
+        `${baseline.id}: target ${baseline.target} must use ${TARGET_CONFIG[baseline.target]?.dialect}.`,
+      );
+    }
+    if (!baseline.file || typeof baseline.file !== "string") {
+      errors.push(`${baseline.id}: file is required.`);
+    } else {
+      const baselinePath = path.resolve(PROJECT_ROOT, baseline.file);
+      if (!existsSync(baselinePath)) {
+        errors.push(`${baseline.id}: file does not exist: ${baseline.file}`);
+      } else if (
+        typeof baseline.checksum !== "string" ||
+        checksumFile(baselinePath) !== baseline.checksum
+      ) {
+        errors.push(`${baseline.id}: baseline checksum mismatch.`);
+      }
+    }
+    if (!Array.isArray(baseline.absorbedMigrationIds)) {
+      errors.push(`${baseline.id}: absorbedMigrationIds must be an array.`);
+    }
+  }
 
   for (const migration of manifest.migrations) {
     if (!migration.id || typeof migration.id !== "string") {
@@ -177,6 +220,12 @@ function validateManifest(manifest) {
 function filterMigrations(manifest, target) {
   return manifest.migrations.filter(
     (migration) => !target || migration.target === target,
+  );
+}
+
+function filterBaselines(manifest, target) {
+  return manifest.baselines.filter(
+    (baseline) => !target || baseline.target === target,
   );
 }
 
@@ -409,13 +458,19 @@ function printIncrementalOnlyWarning(mode) {
   }
 }
 
-function printDryRun(target, migrations) {
+function printDryRun(target, baselines, migrations) {
   const { runnable, blocked } = summarizeMigrations(migrations);
   printIncrementalOnlyWarning("dry-run");
   console.log(`[dry-run] target=${target ?? "all"}`);
   console.log(
     `[dry-run] runnable=${runnable.length} blocked=${blocked.length}`,
   );
+
+  for (const baseline of baselines) {
+    console.log(
+      `[baseline] ${baseline.id} ${baseline.target}/${baseline.dialect} ${baseline.file} absorbed=${baseline.absorbedMigrationIds.length} sha256=${baseline.checksum}`,
+    );
+  }
 
   for (const migration of runnable) {
     const checksum = checksumFile(path.resolve(PROJECT_ROOT, migration.file));
@@ -439,12 +494,15 @@ function printDryRun(target, migrations) {
   }
 }
 
-async function printStatus(target, migrations) {
+async function printStatus(target, baselines, migrations) {
   printIncrementalOnlyWarning("status");
   const client = await connectTarget(target);
   try {
     await ensureSchemaMigrationsTable(client);
     const appliedMigrations = await loadAppliedMigrations(client);
+    const absorbedMigrationIds = new Set(
+      baselines.flatMap((baseline) => baseline.absorbedMigrationIds),
+    );
 
     console.log(`[status] target=${target}`);
     for (const migration of migrations) {
@@ -462,7 +520,10 @@ async function printStatus(target, migrations) {
 
     for (const appliedId of appliedMigrations.keys()) {
       if (!migrations.some((migration) => migration.id === appliedId)) {
-        console.log(`[orphaned] ${appliedId} is applied but not in manifest`);
+        const state = absorbedMigrationIds.has(appliedId)
+          ? "baseline-absorbed"
+          : "orphaned";
+        console.log(`[${state}] ${appliedId}`);
       }
     }
   } finally {
@@ -540,14 +601,15 @@ async function main() {
 
   const targets = target ? [target] : Object.keys(TARGET_CONFIG);
   for (const currentTarget of targets) {
+    const baselines = filterBaselines(manifest, currentTarget);
     const migrations = filterOnlyMigrations(
       filterMigrations(manifest, currentTarget),
       options.only,
     );
     if (mode === "dry-run") {
-      printDryRun(currentTarget, migrations);
+      printDryRun(currentTarget, baselines, migrations);
     } else if (mode === "status") {
-      await printStatus(currentTarget, migrations);
+      await printStatus(currentTarget, baselines, migrations);
     } else {
       await applyMigrations(currentTarget, migrations, confirmProduction);
     }

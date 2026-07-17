@@ -1,2 +1,0 @@
-ALTER TABLE payments ADD COLUMN order_url VARCHAR(500) NULL;
-ALTER TABLE payments ADD COLUMN zp_trans_token VARCHAR(255) NULL;

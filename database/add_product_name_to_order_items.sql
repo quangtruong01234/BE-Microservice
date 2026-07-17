@@ -1,1 +1,0 @@
-ALTER TABLE order_items ADD COLUMN product_name VARCHAR(255) NOT NULL DEFAULT '' AFTER product_id;

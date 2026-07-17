@@ -1,2 +1,0 @@
-ALTER TABLE products
-ADD COLUMN approval_blocked BOOLEAN NOT NULL DEFAULT FALSE;
