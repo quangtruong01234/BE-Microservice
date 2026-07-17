@@ -1,8 +1,22 @@
 import { io } from "socket.io-client";
 
 const BASE_URL = "http://localhost:3000";
-const WS_URL = "http://localhost:3011";
-const CONVERSATION_ID = 1;
+const WS_URL = "http://localhost:3000";
+// PUBID-03: conversations are addressed by opaque public id (conv_...).
+const CONVERSATION_ID = process.argv[2] ?? "conv_36a6838b81c611f1";
+const USER_A_USERNAME = process.env.CHAT_USER_A_USERNAME;
+const USER_A_PASSWORD = process.env.CHAT_USER_A_PASSWORD;
+const USER_B_USERNAME = process.env.CHAT_USER_B_USERNAME;
+const USER_B_PASSWORD = process.env.CHAT_USER_B_PASSWORD;
+
+if (
+  !USER_A_USERNAME ||
+  !USER_A_PASSWORD ||
+  !USER_B_USERNAME ||
+  !USER_B_PASSWORD
+) {
+  throw new Error("Chat test account environment variables are required");
+}
 
 async function login(username, password) {
   const res = await fetch(`${BASE_URL}/api/user/login`, {
@@ -10,7 +24,7 @@ async function login(username, password) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, password }),
   });
-  const body = await res.json();
+  await res.json();
   // Extract JWT from Set-Cookie header
   const setCookie = res.headers.get("set-cookie") ?? "";
   const match = setCookie.match(/access_token=([^;]+)/);
@@ -66,14 +80,14 @@ async function run() {
   // Step 1: Login both users
   let token17, token18;
   try {
-    token17 = await login("canceltest1779978329", "Test@1234");
+    token17 = await login(USER_A_USERNAME, USER_A_PASSWORD);
     check("Login user 17", true, "token acquired");
   } catch (e) {
     check("Login user 17", false, e.message);
     process.exit(1);
   }
   try {
-    token18 = await login("testuser_403", "Test@1234");
+    token18 = await login(USER_B_USERNAME, USER_B_PASSWORD);
     check("Login user 18", true, "token acquired");
   } catch (e) {
     check("Login user 18", false, e.message);
@@ -115,11 +129,21 @@ async function run() {
       msg.content === "Hello from WS test",
       `content="${msg.content}"`,
     );
-    check("Message senderId is 17", msg.senderId === 17, `senderId=${msg.senderId}`);
+    check(
+      "Message senderId is an opaque usr_ public id",
+      typeof msg.senderId === "string" &&
+        /^usr_[0-9A-Za-z]{16}$/.test(msg.senderId),
+      `senderId=${msg.senderId}`,
+    );
     check(
       "Message conversationId correct",
       msg.conversationId === CONVERSATION_ID,
       `conversationId=${msg.conversationId}`,
+    );
+    check(
+      "Message id is an opaque msg_ public id",
+      typeof msg.id === "string" && /^msg_[0-9A-Za-z]{16}$/.test(msg.id),
+      `id=${msg.id}`,
     );
   } catch (e) {
     check("Client 18 receives new_message", false, e.message);

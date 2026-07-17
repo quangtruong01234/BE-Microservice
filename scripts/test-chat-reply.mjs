@@ -1,8 +1,22 @@
 import { io } from "socket.io-client";
 
 const BASE_URL = "http://localhost:3000";
-const WS_URL = "http://localhost:3011";
-const CONVERSATION_ID = 1;
+const WS_URL = "http://localhost:3000";
+// PUBID-03: conversations are addressed by opaque public id (conv_...).
+const CONVERSATION_ID = process.argv[2] ?? "conv_36a6838b81c611f1";
+const USER_A_USERNAME = process.env.CHAT_USER_A_USERNAME;
+const USER_A_PASSWORD = process.env.CHAT_USER_A_PASSWORD;
+const USER_B_USERNAME = process.env.CHAT_USER_B_USERNAME;
+const USER_B_PASSWORD = process.env.CHAT_USER_B_PASSWORD;
+
+if (
+  !USER_A_USERNAME ||
+  !USER_A_PASSWORD ||
+  !USER_B_USERNAME ||
+  !USER_B_PASSWORD
+) {
+  throw new Error("Chat test account environment variables are required");
+}
 
 async function login(username, password) {
   const res = await fetch(`${BASE_URL}/api/user/login`, {
@@ -64,14 +78,14 @@ async function run() {
   // Step 1: Login
   let token17, token18;
   try {
-    token17 = await login("canceltest1779978329", "Test@1234");
+    token17 = await login(USER_A_USERNAME, USER_A_PASSWORD);
     check("Login user 17", true, "token acquired");
   } catch (e) {
     check("Login user 17", false, e.message);
     process.exit(1);
   }
   try {
-    token18 = await login("testuser_403", "Test@1234");
+    token18 = await login(USER_B_USERNAME, USER_B_PASSWORD);
     check("Login user 18", true, "token acquired");
   } catch (e) {
     check("Login user 18", false, e.message);
@@ -118,8 +132,9 @@ async function run() {
       `parentMessageId=${msg.parentMessageId}`,
     );
     check(
-      "Original messageId captured",
-      originalMessageId != null,
+      "Original messageId is an opaque msg_ public id",
+      typeof originalMessageId === "string" &&
+        /^msg_[0-9A-Za-z]{16}$/.test(originalMessageId),
       `messageId=${originalMessageId}`,
     );
   } catch (e) {
@@ -144,21 +159,42 @@ async function run() {
       reply.content === "Reply to original",
       `content="${reply.content}"`,
     );
-    // parentMessageId may come back as string (bigint column) or number
-    const parentId = Number(reply.parentMessageId);
-    const expectedId = Number(originalMessageId);
+    // PUBID-03: parentMessageId is the parent's opaque msg_ public id
     check(
       "Reply parentMessageId matches original messageId",
-      parentId === expectedId && parentId !== 0,
+      reply.parentMessageId === originalMessageId,
       `parentMessageId=${reply.parentMessageId} (expected ${originalMessageId})`,
     );
     check(
-      "Reply senderId is 17",
-      reply.senderId === 17,
+      "Reply senderId is an opaque usr_ public id",
+      typeof reply.senderId === "string" &&
+        /^usr_[0-9A-Za-z]{16}$/.test(reply.senderId),
       `senderId=${reply.senderId}`,
     );
   } catch (e) {
     check("Reply received by client 18", false, e.message);
+  }
+
+  // Step 4b: invalid parent (unknown msg_ id) must be rejected with an error
+  const invalidParentPromise = waitForEvent(client17, "error", 5000);
+  client17.emit("send_message", {
+    conversationId: CONVERSATION_ID,
+    content: "Reply to nonexistent parent",
+    parentMessageId: "msg_0000000000000000",
+  });
+  try {
+    const errMsg = await invalidParentPromise;
+    check(
+      "Invalid parentMessageId rejected with error event",
+      typeof errMsg === "string" && errMsg.length > 0,
+      `error="${errMsg}"`,
+    );
+  } catch (e) {
+    check(
+      "Invalid parentMessageId rejected with error event",
+      false,
+      e.message,
+    );
   }
 
   client17.disconnect();
@@ -196,9 +232,10 @@ async function run() {
     );
     if (reply && original) {
       check(
-        "Reply.parentMessageId === original.id",
-        Number(reply.parentMessageId) === Number(original.id),
-        `${reply.parentMessageId} === ${original.id}`,
+        "Reply.parentMessageId is an existing message's msg_ id",
+        typeof reply.parentMessageId === "string" &&
+          messages.some((m) => m.id === reply.parentMessageId),
+        `parentMessageId=${reply.parentMessageId}`,
       );
     }
     console.log("\n  Message dump:");
