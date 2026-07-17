@@ -97,6 +97,7 @@ describe("UserService", () => {
       expect.objectContaining({
         select: {
           id: true,
+          publicId: true,
           username: true,
           email: true,
           name: true,
@@ -160,6 +161,7 @@ describe("UserService", () => {
       where: { id: 1 },
       select: {
         id: true,
+        publicId: true,
         username: true,
         name: true,
         avatar: true,
@@ -186,6 +188,7 @@ describe("UserService", () => {
       expect.objectContaining({
         select: {
           id: true,
+          publicId: true,
           username: true,
           name: true,
           avatar: true,
@@ -204,6 +207,7 @@ describe("UserService", () => {
       where: { id: 1 },
       select: {
         id: true,
+        publicId: true,
         username: true,
         name: true,
         avatar: true,
@@ -222,6 +226,7 @@ describe("UserService", () => {
       expect.objectContaining({
         select: {
           id: true,
+          publicId: true,
           username: true,
           name: true,
           avatar: true,

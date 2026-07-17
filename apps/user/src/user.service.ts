@@ -22,12 +22,20 @@ import {
   CloudinaryService,
   MailerService,
   PaginatedResponse,
+  generatePublicId,
+  isPublicId,
 } from "@app/common";
+import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 import { CachedService } from "@app/cached";
 import * as bcrypt from "bcryptjs";
 import { randomInt } from "crypto";
 import { USER_MESSAGE } from "libs/constant/response-message.constant";
-import { SafeUser, UserProfile } from "./user.types";
+import {
+  SafeUser,
+  UserProfile,
+  UserProfileWithProvince,
+  UserProvince,
+} from "./user.types";
 
 @Injectable()
 export class UserService {
@@ -58,6 +66,7 @@ export class UserService {
     const [users, total] = await this.userRepository.findAndCount({
       select: {
         id: true,
+        publicId: true,
         username: true,
         email: true,
         name: true,
@@ -90,6 +99,7 @@ export class UserService {
     }
     const hashedPassword = await bcrypt.hash(dto.password, 10);
     const user = this.userRepository.create({
+      publicId: generatePublicId(PUBLIC_ID_PREFIXES.USER),
       username: dto.username,
       email: dto.email,
       password: hashedPassword,
@@ -222,6 +232,7 @@ export class UserService {
     this.logger.log(`Get info for userId: ${userId}`);
     const select: FindOptionsSelect<User> = {
       id: true,
+      publicId: true,
       username: true,
       name: true,
       avatar: true,
@@ -236,10 +247,12 @@ export class UserService {
   async getUsersByIds(
     userIds: number[],
     includeEmail = false,
-  ): Promise<UserProfile[]> {
+    includeProvince = false,
+  ): Promise<UserProfileWithProvince[]> {
     if (userIds.length === 0) return [];
     const select: FindOptionsSelect<User> = {
       id: true,
+      publicId: true,
       username: true,
       name: true,
       avatar: true,
@@ -248,12 +261,43 @@ export class UserService {
     if (includeEmail) {
       select.email = true;
     }
-    return this.userRepository.find({ where: { id: In(userIds) }, select });
+    const users = await this.userRepository.find({
+      where: { id: In(userIds) },
+      select,
+    });
+    if (!includeProvince) return users;
+    // The default address defines where the seller ships from — that province
+    // is what the storefront shows/filters on product rows.
+    const defaultAddresses = await this.addressRepository.find({
+      where: { userId: In(userIds), isDefault: true },
+      select: { userId: true, provinceId: true, provinceName: true },
+    });
+    const provinceByUserId = new Map<number, UserProvince>(
+      defaultAddresses.map((address) => [
+        address.userId,
+        { id: address.provinceId, name: address.provinceName },
+      ]),
+    );
+    return users.map((user) => ({
+      ...user,
+      province: provinceByUserId.get(user.id) ?? null,
+    }));
+  }
+
+  async getUserIdsByProvince(provinceIds: number[]): Promise<number[]> {
+    if (provinceIds.length === 0) return [];
+    const rows = await this.addressRepository
+      .createQueryBuilder("address")
+      .select("DISTINCT address.user_id", "userId")
+      .where("address.province_id IN (:...provinceIds)", { provinceIds })
+      .andWhere("address.is_default = :isDefault", { isDefault: true })
+      .getRawMany<{ userId: number | string }>();
+    return rows.map((row) => Number(row.userId));
   }
 
   async getFeaturedSellers(
     limit: number,
-  ): Promise<Pick<User, "id" | "username" | "name" | "avatar">[]> {
+  ): Promise<Pick<User, "id" | "publicId" | "username" | "name" | "avatar">[]> {
     // Query builder skips the eager `role` relation, so the join below is the
     // only one (a partial `select` via find() double-joins eager relations on
     // MySQL — see getMe). "Featured" = newest active shop accounts. `limit()`
@@ -268,8 +312,36 @@ export class UserService {
       .where("user.isActive = :isActive", { isActive: true })
       .orderBy("user.createdAt", "DESC")
       .limit(limit)
-      .select(["user.id", "user.username", "user.name", "user.avatar"])
+      .select([
+        "user.id",
+        "user.publicId",
+        "user.username",
+        "user.name",
+        "user.avatar",
+      ])
       .getMany();
+  }
+
+  /**
+   * PUBID-02: maps an external opaque id (`usr_...`) to the internal numeric
+   * PK. Numeric ids pass through untouched so internal TCP callers (orders
+   * invoice, notification email) keep working with the number they store.
+   */
+  async resolveUserId(userId: number | string): Promise<number> {
+    if (typeof userId === "number") {
+      return userId;
+    }
+    if (!isPublicId(PUBLIC_ID_PREFIXES.USER, userId)) {
+      throw new NotFoundException(USER_MESSAGE.NOT_FOUND);
+    }
+    const user = await this.userRepository.findOne({
+      where: { publicId: userId },
+      select: { id: true },
+    });
+    if (!user) {
+      throw new NotFoundException(USER_MESSAGE.NOT_FOUND);
+    }
+    return user.id;
   }
 
   async getMe(userId: number): Promise<SafeUser> {
@@ -329,6 +401,7 @@ export class UserService {
       const address = manager.create(UserAddress, {
         ...dto,
         userId,
+        publicId: generatePublicId(PUBLIC_ID_PREFIXES.ADDRESS),
         isDefault: shouldBeDefault,
       });
       return manager.save(address);
@@ -337,13 +410,16 @@ export class UserService {
 
   async updateAddress(
     userId: number,
-    addressId: number,
+    addressId: number | string,
     dto: UpdateUserAddressDto,
   ): Promise<UserAddress> {
     this.logger.log(`updateAddress ${addressId} for userId: ${userId}`);
     return this.dataSource.transaction(async (manager) => {
       const address = await manager.findOne(UserAddress, {
-        where: { id: addressId, userId },
+        where:
+          typeof addressId === "number"
+            ? { id: addressId, userId }
+            : { publicId: addressId, userId },
       });
       if (!address) {
         throw new NotFoundException(USER_MESSAGE.ADDRESS_NOT_FOUND);
@@ -359,12 +435,15 @@ export class UserService {
 
   async deleteAddress(
     userId: number,
-    addressId: number,
+    addressId: number | string,
   ): Promise<{ success: true }> {
     this.logger.log(`deleteAddress ${addressId} for userId: ${userId}`);
     return this.dataSource.transaction(async (manager) => {
       const address = await manager.findOne(UserAddress, {
-        where: { id: addressId, userId },
+        where:
+          typeof addressId === "number"
+            ? { id: addressId, userId }
+            : { publicId: addressId, userId },
       });
       if (!address) {
         throw new NotFoundException(USER_MESSAGE.ADDRESS_NOT_FOUND);
@@ -388,12 +467,15 @@ export class UserService {
 
   async setDefaultAddress(
     userId: number,
-    addressId: number,
+    addressId: number | string,
   ): Promise<UserAddress> {
     this.logger.log(`setDefaultAddress ${addressId} for userId: ${userId}`);
     return this.dataSource.transaction(async (manager) => {
       const address = await manager.findOne(UserAddress, {
-        where: { id: addressId, userId },
+        where:
+          typeof addressId === "number"
+            ? { id: addressId, userId }
+            : { publicId: addressId, userId },
       });
       if (!address) {
         throw new NotFoundException(USER_MESSAGE.ADDRESS_NOT_FOUND);

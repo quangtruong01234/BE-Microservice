@@ -14,6 +14,16 @@ export class User {
   @PrimaryGeneratedColumn()
   id!: number;
 
+  @Column({
+    name: "public_id",
+    type: "varchar",
+    length: 32,
+    unique: true,
+    nullable: true,
+    default: null,
+  })
+  publicId!: string | null;
+
   @Column({ unique: true })
   username!: string;
 

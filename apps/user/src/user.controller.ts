@@ -1,4 +1,4 @@
-import { Controller, Logger } from "@nestjs/common";
+import { Controller, ForbiddenException, Logger } from "@nestjs/common";
 import { UserService } from "./user.service";
 import { MessagePattern, Payload } from "@nestjs/microservices";
 import { RegisterUserDto } from "./dto/register-user.dto";
@@ -9,6 +9,7 @@ import {
   UpdateUserAddressDto,
 } from "./dto/user-address.dto";
 import { USER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
+import { USER_MESSAGE } from "libs/constant/response-message.constant";
 
 @Controller()
 export class UserController {
@@ -16,15 +17,19 @@ export class UserController {
   constructor(private readonly userService: UserService) {}
 
   // Get information about the user service
+  // PUBID-02: userId may be the internal number (orders invoice, notification
+  // email) or the opaque `usr_...` public id (gateway HTTP profile route).
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO })
-  getUserInfo(
-    @Payload() payload: number | { userId: number; includeEmail?: boolean },
-  ) {
+  async getUserInfo(
+    @Payload()
+    payload: number | { userId: number | string; includeEmail?: boolean },
+  ): Promise<unknown> {
     const userId = typeof payload === "number" ? payload : payload.userId;
     const includeEmail =
       typeof payload === "number" ? false : payload.includeEmail === true;
     this.logger.log(`getUserInfo called with userId: ${userId}`);
-    return this.userService.getInfo(userId, includeEmail);
+    const internalId = await this.userService.resolveUserId(userId);
+    return this.userService.getInfo(internalId, includeEmail);
   }
 
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.REGISTER_USER })
@@ -42,13 +47,36 @@ export class UserController {
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS })
   async getUsersByIds(
     @Payload()
-    payload: number[] | { userIds: number[]; includeEmail?: boolean },
+    payload:
+      | number[]
+      | {
+          userIds: number[];
+          includeEmail?: boolean;
+          includeProvince?: boolean;
+        },
   ): Promise<unknown> {
     const userIds = Array.isArray(payload) ? payload : payload.userIds;
     const includeEmail = Array.isArray(payload)
       ? false
       : payload.includeEmail === true;
-    return this.userService.getUsersByIds(userIds, includeEmail);
+    const includeProvince = Array.isArray(payload)
+      ? false
+      : payload.includeProvince === true;
+    return this.userService.getUsersByIds(
+      userIds,
+      includeEmail,
+      includeProvince,
+    );
+  }
+
+  @MessagePattern({ cmd: USER_MESSAGE_PATTERN.GET_USER_IDS_BY_PROVINCE })
+  async getUserIdsByProvince(
+    @Payload() payload: { provinceIds: number[] },
+  ): Promise<number[]> {
+    const provinceIds = Array.isArray(payload.provinceIds)
+      ? payload.provinceIds.map(Number).filter((id) => !isNaN(id))
+      : [];
+    return this.userService.getUserIdsByProvince(provinceIds);
   }
 
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.GET_FEATURED_SELLERS })
@@ -85,8 +113,26 @@ export class UserController {
     return this.userService.getMe(data.userId);
   }
 
+  // PUBID-02: the gateway sends the route's `usr_...` target separately from
+  // the requester's numeric JWT id; ownership is checked here where the
+  // public id can be resolved. Omitted targetId = self-update (getMe-style).
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.UPDATE_USER })
-  async updateUser(@Payload() data: { userId: number; dto: UpdateUserDto }) {
+  async updateUser(
+    @Payload()
+    data: {
+      userId: number;
+      targetId?: number | string;
+      dto: UpdateUserDto;
+    },
+  ) {
+    if (data.targetId !== undefined) {
+      const resolvedTargetId = await this.userService.resolveUserId(
+        data.targetId,
+      );
+      if (resolvedTargetId !== data.userId) {
+        throw new ForbiddenException(USER_MESSAGE.CANNOT_UPDATE_ANOTHER_USER);
+      }
+    }
     return this.userService.updateUser(data.userId, data.dto);
   }
 
@@ -107,7 +153,7 @@ export class UserController {
     @Payload()
     data: {
       userId: number;
-      addressId: number;
+      addressId: number | string;
       dto: UpdateUserAddressDto;
     },
   ) {
@@ -119,13 +165,15 @@ export class UserController {
   }
 
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.ADDRESS_DELETE })
-  async deleteAddress(@Payload() data: { userId: number; addressId: number }) {
+  async deleteAddress(
+    @Payload() data: { userId: number; addressId: number | string },
+  ) {
     return this.userService.deleteAddress(data.userId, data.addressId);
   }
 
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.ADDRESS_SET_DEFAULT })
   async setDefaultAddress(
-    @Payload() data: { userId: number; addressId: number },
+    @Payload() data: { userId: number; addressId: number | string },
   ) {
     return this.userService.setDefaultAddress(data.userId, data.addressId);
   }
