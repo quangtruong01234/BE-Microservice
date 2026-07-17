@@ -14,3 +14,5 @@ export * from "./mailer/mailer.service";
 
 export * from "./cloudinary/cloudinary.module";
 export * from "./cloudinary/cloudinary.service";
+
+export * from "./public-id/public-id.util";

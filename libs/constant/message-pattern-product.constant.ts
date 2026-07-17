@@ -17,6 +17,9 @@ export const PRODUCT_MESSAGE_PATTERNS = {
   PRODUCT_PRICE_SUGGESTION: "product.price_suggestion",
   PRODUCT_ADMIN_RISK_LIST: "product.admin_risk_list",
   PRODUCT_ADMIN_RISK_RESCORE: "product.admin_risk_rescore",
+  PRODUCT_ADMIN_RISK_BACKFILL: "product.admin_risk_backfill",
+  PRODUCT_DUPLICATE_IMAGE_CHECK: "product.duplicate_image_check",
+  PRODUCT_ADMIN_RISK_FEEDBACK: "product.admin_risk_feedback",
 
   // Brand patterns
   BRAND_CREATE: "brand.create",

@@ -296,4 +296,5 @@ export const PAYMENT_MESSAGE = {
 export const CHAT_MESSAGE = {
   CANNOT_CHAT_WITH_SELF: "Cannot chat with yourself",
   ACCESS_DENIED: "Access denied",
+  INVALID_PARENT_MESSAGE: "Parent message not found in this conversation",
 } as const;
