@@ -36,15 +36,12 @@ async function bootstrap() {
   // Enable global RPC exception filter for microservices
   app.useGlobalFilters(new AllRpcExceptionFilter());
 
-  // Start all microservices (RMQ + TCP)
+  // Start all microservices (RMQ + TCP). No HTTP listener: inventory is
+  // TCP/RMQ-only, and app.listen on the same port caused EADDRINUSE on Linux.
   await app.startAllMicroservices();
-
-  // Start HTTP server
-  const httpPort = PORT_TCP.INVENTORY_TCP_PORT;
-  await app.listen(httpPort);
+  await app.init();
 
   console.log("✅ Inventory service is running:");
-  console.log(`   📡 HTTP API Server: http://localhost:${httpPort}`);
   console.log(
     `   🔌 TCP Microservice: localhost:${PORT_TCP.INVENTORY_TCP_PORT}`,
   );

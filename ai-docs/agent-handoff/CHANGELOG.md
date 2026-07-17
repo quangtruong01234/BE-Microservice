@@ -6,6 +6,18 @@
 
 ## Completed Milestones
 
+- Inventory double-bind on port 3002 fixed (2026-07-18): `apps/inventory/src/main.ts`
+  bound port 3002 twice in the same process — the TCP microservice on
+  `TCP_HOST:3002` and then an HTTP `app.listen(3002)`. Windows dev tolerated the
+  specific+wildcard coexistence, but on the Linux PM2 deploy the HTTP bind hit
+  EADDRINUSE while PM2 still showed the service online. Inventory has zero HTTP
+  routes (controller is `@MessagePattern`/`@EventPattern` only), so the fix
+  removes the HTTP listener entirely (`startAllMicroservices()` + `app.init()`,
+  same pattern as rewards) instead of moving it to another port. tsc/eslint
+  clean; runtime-verified locally: netstat shows a single `127.0.0.1:3002`
+  listener, and gateway → TCP inventory reads return 200/404 correctly. No FE
+  impact, no migration.
+
 - UP-08 upload-signature PUBID compatibility (2026-07-17, sweep): the deprecated
   `userId` query param on `POST /api/upload/signature` no longer requires an
   integer — it is now an optional free-form string (still ignored; the JWT user
