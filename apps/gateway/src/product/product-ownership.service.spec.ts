@@ -33,10 +33,13 @@ describe("ProductService ownership", () => {
 
   it("allows an admin to update a product", async () => {
     productClient.send.mockReturnValue(of({ id: 16, userId: 20 }));
+    userClient.send.mockReturnValue(
+      of([{ id: 20, publicId: "usr_1111111111111111" }]),
+    );
 
     await expect(service.updateProduct(16, {}, 21, "admin")).resolves.toEqual({
       id: 16,
-      userId: 20,
+      userId: "usr_1111111111111111",
     });
     expect(productClient.send).toHaveBeenCalledWith(
       PRODUCT_MESSAGE_PATTERNS.PRODUCT_UPDATE,
@@ -57,22 +60,25 @@ describe("ProductService ownership", () => {
     productClient.send.mockReturnValue(
       of({ id: 16, userId: 20, categories: [] }),
     );
-    userClient.send.mockReturnValue(
-      of({
-        id: 20,
-        username: "seller20",
-        name: "Seller 20",
-        avatar: "avatar.jpg",
-        email: "seller20@example.test",
-      }),
-    );
+    userClient.send
+      .mockReturnValueOnce(
+        of({
+          id: 20,
+          publicId: "usr_1111111111111111",
+          username: "seller20",
+          name: "Seller 20",
+          avatar: "avatar.jpg",
+          email: "seller20@example.test",
+        }),
+      )
+      .mockReturnValueOnce(of([{ id: 20, publicId: "usr_1111111111111111" }]));
 
     const product = (await service.getProductById(16)) as {
       user: Record<string, unknown> | null;
     };
 
     expect(product.user).toEqual({
-      id: 20,
+      id: "usr_1111111111111111",
       name: "seller20",
       avatar: "avatar.jpg",
     });
@@ -90,6 +96,7 @@ describe("ProductService ownership", () => {
       of([
         {
           id: 20,
+          publicId: "usr_1111111111111111",
           username: "seller20",
           name: "Seller 20",
           avatar: "avatar.jpg",
@@ -106,7 +113,7 @@ describe("ProductService ownership", () => {
     }>;
 
     expect(products[0].user).toEqual({
-      id: 20,
+      id: "usr_1111111111111111",
       name: "Seller 20",
       avatar: "avatar.jpg",
     });

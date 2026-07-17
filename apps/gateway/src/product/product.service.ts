@@ -23,6 +23,7 @@ import {
   WishlistQueryDto,
   PriceSuggestionQueryDto,
   ProductRiskQueryDto,
+  ProductRiskBackfillDto,
 } from "./dto";
 import { PaginatedResponse } from "@app/common";
 import {
@@ -32,6 +33,9 @@ import {
   UserData,
   PriceSuggestion,
   ProductRiskSummary,
+  ProductRiskBackfillResult,
+  ProductDuplicateAdvisory,
+  ProductRiskFeedbackResult,
 } from "./product.types";
 
 @Injectable()
@@ -47,6 +51,159 @@ export class ProductService {
     @Inject(NAME_SERVICE_TCP.ORDERS_SERVICE)
     private readonly ordersClient: ClientProxy,
   ) {}
+
+  private exposeProductPayload(value: unknown): unknown {
+    if (Array.isArray(value)) {
+      return value.map((item) => this.exposeProductPayload(item));
+    }
+    if (!value || typeof value !== "object") {
+      return value;
+    }
+    const raw = value as Record<string, unknown>;
+    const exposed: Record<string, unknown> = {};
+    for (const [key, nestedValue] of Object.entries(raw)) {
+      if (key !== "publicId") {
+        exposed[key] = this.exposeProductPayload(nestedValue);
+      }
+    }
+    if (typeof raw.publicId === "string" && raw.id !== undefined) {
+      exposed.id = raw.publicId;
+    }
+    return exposed;
+  }
+
+  private async exposeUserReferences(value: unknown): Promise<unknown> {
+    const userReferenceKeys = new Set([
+      "userId",
+      "sellerId",
+      "submittedBy",
+      "reviewerId",
+      "resolvedBy",
+    ]);
+    const userIds = new Set<number>();
+    const collect = (nested: unknown): void => {
+      if (Array.isArray(nested)) {
+        nested.forEach(collect);
+        return;
+      }
+      if (!nested || typeof nested !== "object") return;
+      for (const [key, nestedValue] of Object.entries(
+        nested as Record<string, unknown>,
+      )) {
+        if (
+          userReferenceKeys.has(key) &&
+          nestedValue !== null &&
+          Number.isFinite(Number(nestedValue))
+        ) {
+          userIds.add(Number(nestedValue));
+        }
+        collect(nestedValue);
+      }
+    };
+    collect(value);
+    if (userIds.size === 0) return value;
+    const users = (await firstValueFrom(
+      this.userClient
+        .send(
+          { cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS },
+          { userIds: [...userIds] },
+        )
+        .pipe(timeout(10000)),
+    )) as Array<{ id: number; publicId?: string | null }>;
+    const publicIdById = new Map(
+      users.map((user) => [Number(user.id), user.publicId ?? null]),
+    );
+    const expose = (nested: unknown): unknown => {
+      if (Array.isArray(nested)) return nested.map(expose);
+      if (!nested || typeof nested !== "object") return nested;
+      return Object.fromEntries(
+        Object.entries(nested as Record<string, unknown>).map(
+          ([key, nestedValue]) => [
+            key,
+            userReferenceKeys.has(key) && nestedValue !== null
+              ? (publicIdById.get(Number(nestedValue)) ?? null)
+              : expose(nestedValue),
+          ],
+        ),
+      );
+    };
+    return expose(value);
+  }
+
+  private async exposeProductReferences(value: unknown): Promise<unknown> {
+    const productIds = new Set<number>();
+    const collect = (nested: unknown): void => {
+      if (Array.isArray(nested)) {
+        nested.forEach(collect);
+        return;
+      }
+      if (!nested || typeof nested !== "object") return;
+      for (const [key, nestedValue] of Object.entries(
+        nested as Record<string, unknown>,
+      )) {
+        if (
+          (key === "productId" || key === "matchedProductId") &&
+          (typeof nestedValue === "number" ||
+            typeof nestedValue === "string") &&
+          Number.isFinite(Number(nestedValue))
+        ) {
+          productIds.add(Number(nestedValue));
+        }
+        collect(nestedValue);
+      }
+    };
+    collect(value);
+    if (productIds.size === 0) {
+      return this.exposeUserReferences(this.exposeProductPayload(value));
+    }
+    const products = await firstValueFrom(
+      this.productClient
+        .send<
+          ProductData[]
+        >(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_IDS, [...productIds])
+        .pipe(timeout(10000)),
+    );
+    const publicIdById = new Map(
+      products.map((product) => [Number(product.id), product.publicId ?? null]),
+    );
+    const expose = (nested: unknown): unknown => {
+      if (Array.isArray(nested)) return nested.map(expose);
+      if (!nested || typeof nested !== "object") return nested;
+      const raw = nested as Record<string, unknown>;
+      const exposed: Record<string, unknown> = {};
+      for (const [key, nestedValue] of Object.entries(raw)) {
+        if (key === "publicId") continue;
+        if (
+          (key === "productId" || key === "matchedProductId") &&
+          Number.isFinite(Number(nestedValue))
+        ) {
+          exposed[key] = publicIdById.get(Number(nestedValue)) ?? null;
+        } else {
+          exposed[key] = expose(nestedValue);
+        }
+      }
+      if (typeof raw.publicId === "string" && raw.id !== undefined) {
+        exposed.id = raw.publicId;
+      }
+      return exposed;
+    };
+    return this.exposeUserReferences(expose(value));
+  }
+
+  private async resolveProductQuery(
+    query: GetProductsQueryDto,
+  ): Promise<Omit<GetProductsQueryDto, "userId"> & { userId?: number }> {
+    const { userId, ...queryWithoutUserId } = query;
+    if (!userId) return queryWithoutUserId;
+    const user = await firstValueFrom(
+      this.userClient
+        .send<{
+          id: number;
+        }>({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, { userId })
+        .pipe(timeout(10000)),
+    );
+    return { ...queryWithoutUserId, userId: Number(user.id) };
+  }
 
   // ============================================================================
   // PRODUCT OPERATIONS
@@ -72,10 +229,12 @@ export class ProductService {
 
   async getProductRisks(query: ProductRiskQueryDto): Promise<unknown> {
     try {
-      return await firstValueFrom(
-        this.productClient
-          .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_ADMIN_RISK_LIST, query)
-          .pipe(timeout(10000)),
+      return this.exposeProductReferences(
+        await firstValueFrom(
+          this.productClient
+            .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_ADMIN_RISK_LIST, query)
+            .pipe(timeout(10000)),
+        ),
       );
     } catch (error) {
       MicroserviceErrorHandler.handleError(
@@ -86,17 +245,95 @@ export class ProductService {
     }
   }
 
-  async rescoreProductRisk(productId: number): Promise<ProductRiskSummary> {
+  async rescoreProductRisk(productId: string): Promise<ProductRiskSummary> {
     try {
-      return (await firstValueFrom(
+      const summary = (await firstValueFrom(
         this.productClient
           .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_ADMIN_RISK_RESCORE, productId)
           .pipe(timeout(10000)),
-      )) as ProductRiskSummary;
+      )) as unknown as ProductRiskSummary;
+      return (await this.exposeProductReferences({
+        ...summary,
+        productId,
+      })) as ProductRiskSummary;
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
         `rescore product risk ID: ${productId}`,
+        "Product Service",
+      );
+    }
+  }
+
+  async enqueueProductRiskBackfill(
+    request: ProductRiskBackfillDto,
+  ): Promise<ProductRiskBackfillResult> {
+    try {
+      return (await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_ADMIN_RISK_BACKFILL, request)
+          .pipe(timeout(10000)),
+      )) as ProductRiskBackfillResult;
+    } catch (error: unknown) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "enqueue product risk backfill",
+        "Product Service",
+      );
+    }
+  }
+
+  async checkDuplicateImage(
+    sellerId: number,
+    imageUrl: string,
+  ): Promise<ProductDuplicateAdvisory> {
+    assertCloudinaryUrlsOwnedBy([imageUrl], sellerId);
+    try {
+      const advisory = (await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_DUPLICATE_IMAGE_CHECK, {
+            sellerId,
+            imageUrl,
+          })
+          .pipe(timeout(10000)),
+      )) as unknown as ProductDuplicateAdvisory;
+      return (await this.exposeProductReferences(
+        advisory,
+      )) as ProductDuplicateAdvisory;
+    } catch (error: unknown) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "check duplicate product image",
+        "Product Service",
+      );
+    }
+  }
+
+  async recordProductRiskFeedback(
+    productId: string,
+    moderatorId: number,
+    decision: "confirmed_duplicate" | "dismissed",
+    note?: string,
+  ): Promise<ProductRiskFeedbackResult> {
+    try {
+      const feedback = (await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_ADMIN_RISK_FEEDBACK, {
+            productId,
+            moderatorId,
+            decision,
+            note,
+          })
+          .pipe(timeout(10000)),
+      )) as unknown as ProductRiskFeedbackResult;
+      return (await this.exposeProductReferences({
+        ...feedback,
+        productId,
+      })) as ProductRiskFeedbackResult;
+    } catch (error: unknown) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "record product risk feedback",
         "Product Service",
       );
     }
@@ -159,7 +396,7 @@ export class ProductService {
         }
       }
 
-      return result;
+      return await this.exposeProductReferences(this.attachCategoryIds(result));
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -225,9 +462,37 @@ export class ProductService {
     page: number;
     limit: number;
   }> {
+    const resolvedQuery = await this.resolveProductQuery(query);
+    const { provinceId: provinceIds, ...productQuery } = resolvedQuery;
+    const page = Number(query.page ?? 1);
+    const limit = Number(query.limit ?? 10);
+
+    // Province filter: resolve seller ids whose DEFAULT address is in the
+    // requested provinces, then filter products by those sellers. A resolution
+    // failure must throw — silently returning unfiltered rows would be wrong.
+    let sellerIdsInProvinces: number[] | undefined;
+    if (provinceIds && provinceIds.length > 0) {
+      sellerIdsInProvinces = (await firstValueFrom(
+        this.userClient
+          .send(
+            { cmd: USER_MESSAGE_PATTERN.GET_USER_IDS_BY_PROVINCE },
+            { provinceIds },
+          )
+          .pipe(timeout(10000)),
+      )) as number[];
+      if (!sellerIdsInProvinces || sellerIdsInProvinces.length === 0) {
+        return { items: [], total: 0, page, limit };
+      }
+    }
+
     const response = (await firstValueFrom(
       this.productClient
-        .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_ALL, query)
+        .send(
+          PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_ALL,
+          sellerIdsInProvinces
+            ? { ...productQuery, userIds: sellerIdsInProvinces }
+            : productQuery,
+        )
         .pipe(
           timeout(10000),
           catchError((err: unknown) => {
@@ -249,8 +514,6 @@ export class ProductService {
       await this.enrichProductsWithUserInfo(productsArr)
     ).map((product) => this.attachCategoryIds(product));
 
-    const page = Number(query.page ?? 1);
-    const limit = Number(query.limit ?? 10);
     const total =
       typeof response?.total === "number"
         ? response.total
@@ -268,7 +531,7 @@ export class ProductService {
       const { items } = await this.fetchProductsPage(query);
 
       this.logger.log(`Found ${items.length} products with user info`);
-      return items;
+      return await this.exposeProductReferences(items);
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -278,7 +541,7 @@ export class ProductService {
     }
   }
 
-  async getProductById(id: number): Promise<unknown> {
+  async getProductById(id: number | string): Promise<unknown> {
     try {
       this.logger.log(`Fetching product by ID: ${id}`);
       const response = (await firstValueFrom(
@@ -304,7 +567,9 @@ export class ProductService {
 
       // Enrich with user information, then expose a flat categoryIds[] (P1-04)
       const enriched = await this.enrichProductWithUserInfo(product);
-      return this.attachCategoryIds(enriched);
+      return await this.exposeProductReferences(
+        this.attachCategoryIds(enriched),
+      );
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -326,7 +591,7 @@ export class ProductService {
             }),
           ),
       )) as unknown;
-      return this.withCategoryIds(response);
+      return await this.exposeProductReferences(this.withCategoryIds(response));
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -337,7 +602,7 @@ export class ProductService {
   }
 
   async updateProduct(
-    id: number,
+    id: number | string,
     dto: UpdateProductDto,
     callerId: number,
     callerRole: string,
@@ -349,19 +614,21 @@ export class ProductService {
       assertCloudinaryUrlsOwnedBy(dto.imageUrls, callerId);
     }
     try {
-      return (await firstValueFrom(
-        this.productClient
-          .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_UPDATE, {
-            id,
-            updateProductDto: dto,
-          })
-          .pipe(
-            timeout(10000),
-            catchError((err: unknown) => {
-              throw err;
-            }),
-          ),
-      )) as unknown;
+      return await this.exposeProductReferences(
+        await firstValueFrom(
+          this.productClient
+            .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_UPDATE, {
+              id,
+              updateProductDto: dto,
+            })
+            .pipe(
+              timeout(10000),
+              catchError((err: unknown) => {
+                throw err;
+              }),
+            ),
+        ),
+      );
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -372,11 +639,15 @@ export class ProductService {
   }
 
   async deleteProduct(
-    id: number,
+    id: number | string,
     callerId: number,
     callerRole: string,
   ): Promise<unknown> {
-    await this.assertProductMutationAccess(id, callerId, callerRole);
+    const internalProductId = await this.assertProductMutationAccess(
+      id,
+      callerId,
+      callerRole,
+    );
     let result: unknown;
     try {
       result = (await firstValueFrom(
@@ -397,7 +668,7 @@ export class ProductService {
     // cascade). Hard-deleting here prevents stale rows from re-attaching to a
     // future product that reuses this ID. Best-effort: the product is already
     // gone, so a failure is logged rather than surfaced.
-    await this.cleanupInventoryForProduct(id);
+    await this.cleanupInventoryForProduct(internalProductId);
 
     return result;
   }
@@ -450,7 +721,7 @@ export class ProductService {
   // SKU OPERATIONS
   // ============================================================================
 
-  async getSkusByProduct(productId: number): Promise<unknown> {
+  async getSkusByProduct(productId: string): Promise<unknown> {
     try {
       return (await firstValueFrom(
         this.productClient
@@ -472,21 +743,20 @@ export class ProductService {
   }
 
   private async assertProductMutationAccess(
-    productId: number,
+    productId: number | string,
     callerId: number,
     callerRole: string,
-  ): Promise<void> {
-    if (callerRole === "admin") {
-      return;
-    }
-
+  ): Promise<number> {
     const product = await this.fetchProductForAccess(productId);
-    if (Number(product.userId) !== callerId) {
+    if (callerRole !== "admin" && Number(product.userId) !== callerId) {
       throw new ForbiddenException(PRODUCT_MESSAGE.CANNOT_MODIFY_ANOTHER_USER);
     }
+    return Number(product.id);
   }
 
-  private async fetchProductForAccess(productId: number): Promise<ProductData> {
+  private async fetchProductForAccess(
+    productId: number | string,
+  ): Promise<ProductData> {
     try {
       return (await firstValueFrom(
         this.productClient
@@ -506,33 +776,42 @@ export class ProductService {
     categoryId: number,
     query: GetProductsQueryDto,
   ): Promise<unknown> {
+    const resolvedQuery = await this.resolveProductQuery(query);
     const response = (await firstValueFrom(
-      this.productClient.send(
-        PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_CATEGORY,
-        { categoryId, query },
-      ),
+      this.productClient
+        .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_CATEGORY, {
+          categoryId,
+          query: resolvedQuery,
+        })
+        .pipe(timeout(10000)),
     )) as unknown;
-    return this.withCategoryIds(response);
+    return this.exposeProductReferences(this.withCategoryIds(response));
   }
 
   async getProductsByBrand(
     brandId: number,
     query: GetProductsQueryDto,
   ): Promise<unknown> {
+    const resolvedQuery = await this.resolveProductQuery(query);
     const response = (await firstValueFrom(
-      this.productClient.send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_BRAND, {
-        brandId,
-        query,
-      }),
+      this.productClient
+        .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_BRAND, {
+          brandId,
+          query: resolvedQuery,
+        })
+        .pipe(timeout(10000)),
     )) as unknown;
-    return this.withCategoryIds(response);
+    return this.exposeProductReferences(this.withCategoryIds(response));
   }
 
   async searchProducts(query: GetProductsQueryDto): Promise<unknown> {
+    const resolvedQuery = await this.resolveProductQuery(query);
     const response = (await firstValueFrom(
-      this.productClient.send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_SEARCH, query),
+      this.productClient
+        .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_SEARCH, resolvedQuery)
+        .pipe(timeout(10000)),
     )) as unknown;
-    return this.withCategoryIds(response);
+    return this.exposeProductReferences(this.withCategoryIds(response));
   }
 
   // ============================================================================
@@ -685,31 +964,24 @@ export class ProductService {
   // ============================================================================
 
   async getProductWithInventoryById(
-    productId: number,
+    productId: string,
   ): Promise<ProductWithInventory | null> {
     try {
       this.logger.debug(`Aggregating data for product ID: ${productId}`);
 
-      // Fetch product and inventory data in parallel (Aggregator Pattern)
-      const [product, inventory] = (await Promise.all([
-        this.getProductById(productId).catch((err: unknown) => {
-          this.logger.warn(
-            `Product service error for ID ${productId}: ${err instanceof Error ? err.message : String(err)}`,
-          );
-          return null;
-        }),
-        firstValueFrom(
-          this.inventoryClient.send(
-            INVENTORY_MESSAGE_PATTERNS.INVENTORY_FIND_BY_PRODUCT_ID,
-            productId,
-          ),
-        ).catch((err: unknown) => {
-          this.logger.warn(
-            `Inventory service error for product ID ${productId}: ${err instanceof Error ? err.message : String(err)}`,
-          );
-          return null;
-        }),
-      ])) as [unknown, unknown];
+      const product = await this.fetchProductForAccess(productId);
+      const internalProductId = Number(product.id);
+      const inventory = await firstValueFrom(
+        this.inventoryClient.send<unknown>(
+          INVENTORY_MESSAGE_PATTERNS.INVENTORY_FIND_BY_PRODUCT_ID,
+          internalProductId,
+        ),
+      ).catch((err: unknown) => {
+        this.logger.warn(
+          `Inventory service error for product ID ${productId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return null;
+      });
 
       // If product doesn't exist, return null
       if (!product) {
@@ -718,9 +990,7 @@ export class ProductService {
       }
 
       // Enrich product with user information
-      const enrichedProduct = await this.enrichProductWithUserInfo(
-        product as ProductData,
-      );
+      const enrichedProduct = await this.enrichProductWithUserInfo(product);
 
       // Data aggregation and enrichment (with flat categoryIds[] — P1-04)
       const result: ProductWithInventory = {
@@ -737,7 +1007,9 @@ export class ProductService {
       this.logger.debug(
         `Successfully aggregated data for product ID: ${productId}`,
       );
-      return result;
+      return (await this.exposeProductReferences(
+        result,
+      )) as ProductWithInventory;
     } catch (error) {
       this.logger.error(
         `Aggregation failed for product ID ${productId}:`,
@@ -828,7 +1100,7 @@ export class ProductService {
   }
 
   async getProductsWithInventory(
-    productIds: number[],
+    productIds: string[],
   ): Promise<ProductWithInventory[]> {
     try {
       if (!productIds || productIds.length === 0) {
@@ -840,32 +1112,32 @@ export class ProductService {
       // inventory service is unavailable we degrade to `inventory: null`
       // instead of failing the whole request with a raw 500. Missing product
       // ids are skipped by the batch handler (treated as deleted).
-      const [products, inventoryItems] = (await Promise.all([
-        firstValueFrom(
-          this.productClient
-            .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_IDS, productIds)
-            .pipe(timeout(10000)),
-        ).catch((err: unknown) => {
-          this.logger.warn(
-            `Product service error for IDs [${productIds.join(", ")}]: ${err instanceof Error ? err.message : String(err)}`,
-          );
-          return [] as ProductData[];
-        }),
-        firstValueFrom(
-          this.inventoryClient
-            .send(
-              INVENTORY_MESSAGE_PATTERNS.INVENTORY_GET_BY_PRODUCT_IDS,
-              productIds,
-            )
-            .pipe(timeout(10000)),
-        ).catch((err: unknown) => {
-          this.logger.warn(
-            `Inventory service error for product IDs [${productIds.join(", ")}]: ${err instanceof Error ? err.message : String(err)}`,
-          );
-          return [] as InventoryData[];
-        }),
-      ])) as [unknown[], unknown];
-      const typedInventoryItems = inventoryItems as InventoryData[];
+      const products = await firstValueFrom(
+        this.productClient
+          .send<
+            ProductData[]
+          >(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_IDS, productIds)
+          .pipe(timeout(10000)),
+      ).catch((err: unknown) => {
+        this.logger.warn(
+          `Product service error for IDs [${productIds.join(", ")}]: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return [] as ProductData[];
+      });
+      const internalProductIds = products.map((product) => Number(product.id));
+      const inventoryItems = await firstValueFrom(
+        this.inventoryClient
+          .send<
+            InventoryData[]
+          >(INVENTORY_MESSAGE_PATTERNS.INVENTORY_GET_BY_PRODUCT_IDS, internalProductIds)
+          .pipe(timeout(10000)),
+      ).catch((err: unknown) => {
+        this.logger.warn(
+          `Inventory service error for product IDs [${productIds.join(", ")}]: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return [] as InventoryData[];
+      });
+      const typedInventoryItems = inventoryItems;
 
       // Create inventory map for quick lookup
       const inventoryMap = new Map<number, InventoryData>();
@@ -888,9 +1160,9 @@ export class ProductService {
       // Enrich products with user information (single pass — PERF-02: was
       // double-enriched via getProductById + a second whole-list pass), then
       // expose a flat categoryIds[] (P1-04) to match the per-id read shape.
-      const validProducts = (
-        Array.isArray(products) ? products.filter((p) => p !== null) : []
-      ) as ProductData[];
+      const validProducts = Array.isArray(products)
+        ? products.filter((p) => p !== null)
+        : [];
       const enrichedProducts =
         await this.enrichProductsWithUserInfo(validProducts);
 
@@ -905,7 +1177,9 @@ export class ProductService {
           ) as unknown as ProductWithInventory["inventory"]) ?? null,
       })) as ProductWithInventory[];
 
-      return results;
+      return (await this.exposeProductReferences(
+        results,
+      )) as ProductWithInventory[];
     } catch (error) {
       this.logger.error(`Error fetching products with inventory:`, error);
       throw error;
@@ -969,7 +1243,12 @@ export class ProductService {
           ) as unknown as ProductWithInventory["inventory"]) ?? null,
       })) as ProductWithInventory[];
 
-      return PaginatedResponse.of(results, total, page, limit);
+      return PaginatedResponse.of(
+        (await this.exposeProductReferences(results)) as ProductWithInventory[],
+        total,
+        page,
+        limit,
+      );
     } catch (error) {
       this.logger.error(`Error fetching all products with inventory:`, error);
       throw error;
@@ -977,14 +1256,15 @@ export class ProductService {
   }
 
   async checkProductStock(
-    productId: number,
+    productId: string,
     quantity: number,
   ): Promise<unknown> {
     try {
+      const product = await this.fetchProductForAccess(productId);
       return (await firstValueFrom(
         this.inventoryClient.send(
           INVENTORY_MESSAGE_PATTERNS.INVENTORY_CHECK_STOCK,
-          { productId, quantity },
+          { productId: Number(product.id), quantity },
         ),
       )) as unknown;
     } catch (error) {
@@ -996,13 +1276,14 @@ export class ProductService {
     }
   }
 
-  async addWishlistItem(productId: number, userId: number): Promise<unknown> {
+  async addWishlistItem(productId: string, userId: number): Promise<unknown> {
     try {
-      return (await firstValueFrom(
+      const result = (await firstValueFrom(
         this.productClient
           .send(PRODUCT_MESSAGE_PATTERNS.WISHLIST_ADD, { productId, userId })
           .pipe(timeout(10000)),
-      )) as unknown;
+      )) as Record<string, unknown>;
+      return { ...result, productId };
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -1012,7 +1293,7 @@ export class ProductService {
     }
   }
 
-  async removeWishlistItem(productId: number, userId: number): Promise<void> {
+  async removeWishlistItem(productId: string, userId: number): Promise<void> {
     try {
       await firstValueFrom(
         this.productClient
@@ -1053,7 +1334,7 @@ export class ProductService {
         };
       }
 
-      return withCategoryIds;
+      return this.exposeProductReferences(withCategoryIds);
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -1068,20 +1349,22 @@ export class ProductService {
   // ============================================================================
 
   async createProductReview(
-    productId: number,
+    productId: string,
     userId: number,
     dto: CreateReviewDto,
   ): Promise<unknown> {
     try {
+      const product = await this.fetchProductForAccess(productId);
+      const internalProductId = Number(product.id);
       await firstValueFrom(
         this.ordersClient
           .send(ORDER_MESSAGE_PATTERN.VERIFY_PRODUCT_PURCHASED, {
             userId,
-            productId,
+            productId: internalProductId,
           })
           .pipe(timeout(10000)),
       );
-      return (await firstValueFrom(
+      const review = (await firstValueFrom(
         this.productClient
           .send(PRODUCT_MESSAGE_PATTERNS.REVIEW_CREATE, {
             userId,
@@ -1090,7 +1373,8 @@ export class ProductService {
             comment: dto.comment,
           })
           .pipe(timeout(10000)),
-      )) as unknown;
+      )) as Record<string, unknown>;
+      return { ...review, productId };
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -1117,20 +1401,21 @@ export class ProductService {
   }
 
   async getProductReviews(
-    productId: number,
+    productId: string,
     page: number,
     limit: number,
   ): Promise<unknown> {
     try {
-      return (await firstValueFrom(
+      const reviews = await firstValueFrom(
         this.productClient
-          .send(PRODUCT_MESSAGE_PATTERNS.REVIEW_FIND_BY_PRODUCT, {
+          .send<unknown>(PRODUCT_MESSAGE_PATTERNS.REVIEW_FIND_BY_PRODUCT, {
             productId,
             page,
             limit,
           })
           .pipe(timeout(10000)),
-      )) as unknown;
+      );
+      return this.exposeProductReferences(reviews);
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -1184,9 +1469,10 @@ export class ProductService {
 
       return {
         ...product,
+        // PUBID-02: seller embeds expose the opaque public id, never the PK.
         user: user
           ? {
-              id: user.id,
+              id: user.publicId ?? String(user.id),
               name: user.username,
               avatar: user.avatar,
             }
@@ -1230,7 +1516,10 @@ export class ProductService {
       );
       const users = (await firstValueFrom(
         this.userClient
-          .send({ cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS }, userIds)
+          .send(
+            { cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS },
+            { userIds, includeProvince: true },
+          )
           .pipe(
             timeout(10000),
             catchError((err: unknown) => {
@@ -1244,24 +1533,34 @@ export class ProductService {
       )) as UserData[];
 
       // Create user map for quick lookup
+      // Map keys stay the internal numeric id (matches product.userId); the
+      // stored `id` is the exposed opaque public id (PUBID-02).
       const userMap = new Map<number, UserData>();
       users.forEach((user) => {
         if (user && typeof user.id === "number") {
           userMap.set(user.id, {
-            id: user.id,
+            id: user.publicId ?? String(user.id),
             name: user.name,
             avatar: user.avatar,
+            province: user.province ?? null,
           });
         }
       });
 
-      // Enrich products with user information
-      return products.map((product) => ({
-        ...product,
-        user: product.userId
+      // Enrich products with user information; sellerProvince is exposed at
+      // row level (from the seller's default GHN address) for the FE filter
+      return products.map((product) => {
+        const user = product.userId
           ? (userMap.get(parseInt(String(product.userId))) ?? null)
-          : null,
-      }));
+          : null;
+        return {
+          ...product,
+          user: user
+            ? { id: user.id, name: user.name, avatar: user.avatar }
+            : null,
+          sellerProvince: user?.province ?? null,
+        };
+      });
     } catch (error) {
       this.logger.error("Error enriching products with user info:", error);
       // Return original products if enrichment fails

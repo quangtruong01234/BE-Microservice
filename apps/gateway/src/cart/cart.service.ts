@@ -3,7 +3,10 @@ import { ClientProxy } from "@nestjs/microservices";
 import { Inject } from "@nestjs/common";
 import { firstValueFrom, timeout, catchError } from "rxjs";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
-import { CART_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
+import {
+  CART_MESSAGE_PATTERN,
+  USER_MESSAGE_PATTERN,
+} from "libs/constant/message-pattern.constant";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
 import { PRODUCT_MESSAGE } from "libs/constant/response-message.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
@@ -19,10 +22,122 @@ export class CartGatewayService {
     private readonly ordersClient: ClientProxy,
     @Inject(NAME_SERVICE_TCP.PRODUCT_SERVICE)
     private readonly productClient: ClientProxy,
+    @Inject(NAME_SERVICE_TCP.USER_SERVICE)
+    private readonly userClient: ClientProxy,
   ) {}
+
+  private async exposeUserIds(value: unknown): Promise<unknown> {
+    const userIds = new Set<number>();
+    const collect = (nested: unknown): void => {
+      if (Array.isArray(nested)) {
+        nested.forEach(collect);
+        return;
+      }
+      if (!nested || typeof nested !== "object") return;
+      for (const [key, nestedValue] of Object.entries(
+        nested as Record<string, unknown>,
+      )) {
+        if (
+          key === "userId" &&
+          nestedValue !== null &&
+          Number.isFinite(Number(nestedValue))
+        ) {
+          userIds.add(Number(nestedValue));
+        }
+        collect(nestedValue);
+      }
+    };
+    collect(value);
+    if (userIds.size === 0) return value;
+    const users = await firstValueFrom(
+      this.userClient
+        .send<
+          Array<{ id: number; publicId?: string | null }>
+        >({ cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS }, { userIds: [...userIds] })
+        .pipe(timeout(10000)),
+    );
+    const publicIdById = new Map(
+      users.map((user) => [Number(user.id), user.publicId ?? null]),
+    );
+    const expose = (nested: unknown): unknown => {
+      if (Array.isArray(nested)) return nested.map(expose);
+      if (!nested || typeof nested !== "object") return nested;
+      return Object.fromEntries(
+        Object.entries(nested as Record<string, unknown>).map(
+          ([key, nestedValue]) => [
+            key,
+            key === "userId" && nestedValue !== null
+              ? (publicIdById.get(Number(nestedValue)) ?? null)
+              : expose(nestedValue),
+          ],
+        ),
+      );
+    };
+    return expose(value);
+  }
+
+  private async exposeProductIds(value: unknown): Promise<unknown> {
+    const productIds = new Set<number>();
+    const collect = (nested: unknown): void => {
+      if (Array.isArray(nested)) {
+        nested.forEach(collect);
+        return;
+      }
+      if (!nested || typeof nested !== "object") return;
+      for (const [key, nestedValue] of Object.entries(
+        nested as Record<string, unknown>,
+      )) {
+        if (key === "productId" && nestedValue !== null) {
+          productIds.add(Number(nestedValue));
+        }
+        collect(nestedValue);
+      }
+    };
+    collect(value);
+    if (productIds.size === 0) return this.exposeUserIds(value);
+    const products = await firstValueFrom(
+      this.productClient
+        .send<
+          { id: number; publicId: string | null }[]
+        >(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_IDS, [...productIds])
+        .pipe(timeout(10000)),
+    );
+    const publicIdById = new Map(
+      products.map((product) => [Number(product.id), product.publicId]),
+    );
+    const expose = (nested: unknown): unknown => {
+      if (Array.isArray(nested)) return nested.map(expose);
+      if (!nested || typeof nested !== "object") return nested;
+      return Object.fromEntries(
+        Object.entries(nested as Record<string, unknown>).map(
+          ([key, nestedValue]) => [
+            key,
+            key === "productId" && nestedValue !== null
+              ? (publicIdById.get(Number(nestedValue)) ?? null)
+              : expose(nestedValue),
+          ],
+        ),
+      );
+    };
+    return this.exposeUserIds(expose(value));
+  }
 
   async addItem(userId: number, dto: AddToCartDto): Promise<unknown> {
     let skuTierIdx: string | null = null;
+    const product = await firstValueFrom(
+      this.productClient
+        .send<ProductResponse>(
+          PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_ID,
+          dto.productId,
+        )
+        .pipe(
+          timeout(10000),
+          catchError((err: unknown) => {
+            throw err;
+          }),
+        ),
+    );
+    const internalProductId = Number(product.id);
 
     if (dto.skuId) {
       const sku = await firstValueFrom(
@@ -39,7 +154,7 @@ export class CartGatewayService {
           ),
       );
 
-      if (Number(sku.productId) !== dto.productId) {
+      if (Number(sku.productId) !== internalProductId) {
         MicroserviceErrorHandler.handleError(
           {
             statusCode: 400,
@@ -54,20 +169,6 @@ export class CartGatewayService {
         ? JSON.stringify(sku.tierIdx)
         : sku.tierIdx;
     } else {
-      const product = await firstValueFrom(
-        this.productClient
-          .send<ProductResponse>(
-            PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_ID,
-            dto.productId,
-          )
-          .pipe(
-            timeout(10000),
-            catchError((err: unknown) => {
-              throw err;
-            }),
-          ),
-      );
-
       if (product.price === null) {
         MicroserviceErrorHandler.handleError(
           {
@@ -81,11 +182,11 @@ export class CartGatewayService {
     }
 
     try {
-      return await firstValueFrom(
+      const cart = await firstValueFrom(
         this.ordersClient
-          .send(CART_MESSAGE_PATTERN.CART_ADD_ITEM, {
+          .send<unknown>(CART_MESSAGE_PATTERN.CART_ADD_ITEM, {
             userId,
-            productId: dto.productId,
+            productId: internalProductId,
             skuId: dto.skuId ?? null,
             skuTierIdx,
             quantity: dto.quantity,
@@ -97,6 +198,7 @@ export class CartGatewayService {
             }),
           ),
       );
+      return this.exposeProductIds(cart);
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -108,14 +210,17 @@ export class CartGatewayService {
 
   async getCart(userId: number): Promise<unknown> {
     try {
-      return await firstValueFrom(
-        this.ordersClient.send(CART_MESSAGE_PATTERN.CART_GET, { userId }).pipe(
-          timeout(10000),
-          catchError((err: unknown) => {
-            throw err;
-          }),
-        ),
+      const cart = await firstValueFrom(
+        this.ordersClient
+          .send<unknown>(CART_MESSAGE_PATTERN.CART_GET, { userId })
+          .pipe(
+            timeout(10000),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
       );
+      return this.exposeProductIds(cart);
     } catch (error) {
       MicroserviceErrorHandler.handleError(error, "get cart", "Orders Service");
     }

@@ -19,5 +19,6 @@ export type LowStockInventoryRow = Record<string, unknown> & {
 
 export type ProductNameData = {
   id: number | string;
+  publicId?: string | null;
   name?: string;
 };

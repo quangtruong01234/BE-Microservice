@@ -8,6 +8,8 @@ import {
 } from "class-validator";
 import { Type, Transform } from "class-transformer";
 import { ApiPropertyOptional } from "@nestjs/swagger";
+import { IsPublicId } from "../../common/validators/is-public-id.validator";
+import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 
 export class GetProductsQueryDto {
   @ApiPropertyOptional({
@@ -166,13 +168,14 @@ export class GetProductsQueryDto {
   maxRating?: number;
 
   @ApiPropertyOptional({
-    description: "Filter by creator user ID",
-    example: 5,
+    description: "Filter by creator user public ID",
+    example: "usr_8fK2mQ9xL3pT7vWb",
+    type: String,
   })
   @IsOptional()
-  @IsNumber()
-  @Type(() => Number)
-  userId?: number;
+  @IsString()
+  @IsPublicId(PUBLIC_ID_PREFIXES.USER)
+  userId?: string;
 
   @ApiPropertyOptional({
     description: "Search by SKU value across product variants",
@@ -181,4 +184,20 @@ export class GetProductsQueryDto {
   @IsOptional()
   @IsString()
   skuSearch?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "Filter by seller province IDs (GHN ProvinceID of the seller's default address, multi-select)",
+    example: [201],
+    type: [Number],
+  })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    value === undefined || value === null
+      ? value
+      : (Array.isArray(value) ? value : [value]).map(Number),
+  )
+  @IsArray()
+  @IsNumber({}, { each: true })
+  provinceId?: number[];
 }

@@ -23,7 +23,8 @@ import {
   VOUCHER_MESSAGE,
 } from "libs/constant/response-message.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
-import { PaymentMethod } from "@app/common";
+import { isPublicId, PaymentMethod } from "@app/common";
+import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 import { CreateOrderDto } from "./dto/create-order.dto";
 import { CreateVoucherDto, ValidateVoucherDto } from "./dto/voucher.dto";
 import { SellerOrdersQueryDto } from "./dto/seller-orders-query.dto";
@@ -97,7 +98,9 @@ export class OrderService {
   ): Promise<unknown> {
     const key = idempotencyKey?.trim();
     if (!key) {
-      return this.createOrderInternal(userId, dto);
+      return this.exposeUserReferences(
+        await this.createOrderInternal(userId, dto),
+      );
     }
 
     const cacheKey = `idem:order:${userId}:${key}`;
@@ -114,7 +117,7 @@ export class OrderService {
           this.logger.log(
             `Idempotent replay for key ${key} (user ${userId}) — returning cached order response`,
           );
-          return JSON.parse(existing) as unknown;
+          return this.exposeUserReferences(JSON.parse(existing) as unknown);
         }
         throw new ConflictException(
           ORDER_MESSAGE.DUPLICATE_REQUEST_IN_PROGRESS,
@@ -128,11 +131,15 @@ export class OrderService {
       this.logger.warn(
         `Idempotency cache unavailable for key ${key}; proceeding without it: ${String(err)}`,
       );
-      return this.createOrderInternal(userId, dto);
+      return this.exposeUserReferences(
+        await this.createOrderInternal(userId, dto),
+      );
     }
 
     try {
-      const result = await this.createOrderInternal(userId, dto);
+      const result = await this.exposeUserReferences(
+        await this.createOrderInternal(userId, dto),
+      );
       try {
         await this.cached.set(
           cacheKey,
@@ -162,8 +169,8 @@ export class OrderService {
   ): Promise<EnrichedOrderItem[]> {
     // Dedupe product fetches: repeated productIds across items share one
     // in-flight request instead of re-fetching per line (PERF-08).
-    const productPromiseById = new Map<number, Promise<ProductPriceResponse>>();
-    const fetchProduct = (productId: number): Promise<ProductPriceResponse> => {
+    const productPromiseById = new Map<string, Promise<ProductPriceResponse>>();
+    const fetchProduct = (productId: string): Promise<ProductPriceResponse> => {
       const inFlight = productPromiseById.get(productId);
       if (inFlight) {
         return inFlight;
@@ -189,6 +196,7 @@ export class OrderService {
     return Promise.all(
       items.map(async (item) => {
         let price: number;
+        let internalProductId: number;
         let tierIdx: number[] | undefined;
         let sellerId: number;
         // Purchase-time snapshot (P2-02): resolved from the authoritative product
@@ -223,7 +231,7 @@ export class OrderService {
               PRODUCT_MESSAGE.SKU_NOT_AVAILABLE(item.skuId),
             );
           }
-          if (Number(sku.productId) !== item.productId) {
+          if (Number(sku.productId) !== Number(product.id)) {
             throw new BadRequestException(
               PRODUCT_MESSAGE.SKU_NOT_OF_PRODUCT(item.skuId, item.productId),
             );
@@ -238,6 +246,7 @@ export class OrderService {
             );
           }
           price = Number(sku.price);
+          internalProductId = Number(product.id);
           tierIdx = Array.isArray(sku.tierIdx) ? sku.tierIdx : undefined;
 
           sellerId = Number(product.userId);
@@ -261,12 +270,15 @@ export class OrderService {
             );
           }
           price = Number(product.price);
+          internalProductId = Number(product.id);
           sellerId = Number(product.userId);
           productImage = product.imageUrls?.[0] ?? null;
         }
 
         return {
           ...item,
+          productId: internalProductId,
+          productPublicId: item.productId,
           price,
           skuId: item.skuId ?? null,
           tierIdx,
@@ -286,6 +298,12 @@ export class OrderService {
     const enrichedItems = await this.enrichOrderItems(dto.items);
 
     const uniqueSellerIds = new Set(enrichedItems.map((i) => i.sellerId));
+    const publicProductIdByInternalId = new Map(
+      enrichedItems.map((item, index) => [
+        item.productId,
+        dto.items[index].productId,
+      ]),
+    );
     const isMultiSeller = uniqueSellerIds.size > 1;
 
     if (isMultiSeller && dto.voucherCode) {
@@ -313,7 +331,15 @@ export class OrderService {
         )) as OrderResponse[];
 
         if (dto.paymentMethod === PaymentMethod.COD) {
-          return { orders, paymentUrl: null };
+          return {
+            orders: orders.map((order) =>
+              this.exposeOrderWithProductIdMap(
+                order,
+                publicProductIdByInternalId,
+              ),
+            ),
+            paymentUrl: null,
+          };
         }
 
         const orderIds = orders.map((o) => o.id);
@@ -347,7 +373,15 @@ export class OrderService {
           throw error;
         }
 
-        return { orders, paymentUrl };
+        return {
+          orders: orders.map((order) =>
+            this.exposeOrderWithProductIdMap(
+              order,
+              publicProductIdByInternalId,
+            ),
+          ),
+          paymentUrl,
+        };
       }
 
       const createdOrder = (await firstValueFrom(
@@ -370,11 +404,14 @@ export class OrderService {
       // Surface the same explicit price breakdown the read paths expose so the
       // FE checkout confirmation can render subtotal/shipping/discount/total
       // without deriving the shipping fee client-side.
-      return {
-        ...createdOrder,
-        shippingFee: Number(createdOrder.shippingFee ?? 0),
-        subtotal: this.computeSubtotal(createdOrder.items ?? []),
-      };
+      return this.exposeOrderWithProductIdMap(
+        {
+          ...createdOrder,
+          shippingFee: Number(createdOrder.shippingFee ?? 0),
+          subtotal: this.computeSubtotal(createdOrder.items ?? []),
+        },
+        publicProductIdByInternalId,
+      );
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -507,30 +544,30 @@ export class OrderService {
   }
 
   async getOrderById(
-    orderId: number,
+    orderId: string,
     callerId: number,
     callerRole: string,
-  ): Promise<OrderResponse> {
+  ): Promise<Record<string, unknown>> {
     const order = await this.fetchOwnedOrder(orderId, callerId, callerRole);
 
     const items = (order.items ?? []) as OrderItemDetail[];
     const productMap = await this.buildProductMap(
-      items
-        .filter((i) => this.itemNeedsLiveProduct(i))
-        .map((i) => Number(i.productId)),
+      items.map((i) => Number(i.productId)),
     );
-    return {
-      ...order,
-      shippingFee: Number(order.shippingFee ?? 0),
-      subtotal: this.computeSubtotal(items),
-      items: items.map((item) => this.decorateItem(item, productMap)),
-    };
+    return (await this.exposeUserReferences(
+      this.exposeOrder({
+        ...order,
+        shippingFee: Number(order.shippingFee ?? 0),
+        subtotal: this.computeSubtotal(items),
+        items: items.map((item) => this.decorateItem(item, productMap)),
+      }),
+    )) as Record<string, unknown>;
   }
 
   // Bare order fetch + owner-or-admin check, WITHOUT product enrichment —
   // use this when only access control is needed (e.g. getPaymentUrl).
   private async fetchOwnedOrder(
-    orderId: number,
+    orderId: string,
     callerId: number,
     callerRole: string,
   ): Promise<OrderResponse> {
@@ -556,8 +593,177 @@ export class OrderService {
     return order;
   }
 
+  /**
+   * PUBID-01: the HTTP boundary exposes ONLY the opaque public id (`ord_...`).
+   * Replaces the numeric `id` with `publicId` (stringified PK fallback for rows
+   * predating the backfill) and drops the internal copies — the `publicId`
+   * field itself and each item's numeric `orderId` FK.
+   */
+  /**
+   * PUBID-02: user embeds (buyer/seller) expose the opaque `usr_...` id and
+   * drop the internal copies, mirroring exposeOrder.
+   */
+  private exposeUserSummary<
+    T extends { id: number | string; publicId?: string | null },
+  >(user: T): T {
+    const exposed = { ...user, id: user.publicId ?? String(user.id) };
+    delete (exposed as { publicId?: string | null }).publicId;
+    return exposed;
+  }
+
+  private async resolveUserId(userId: number | string): Promise<number> {
+    if (typeof userId === "number") return userId;
+    const user = await firstValueFrom(
+      this.userClient
+        .send<{
+          id: number;
+        }>({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, { userId })
+        .pipe(timeout(10000)),
+    );
+    return Number(user.id);
+  }
+
+  private async exposeUserReferences(value: unknown): Promise<unknown> {
+    const userReferenceKeys = new Set([
+      "userId",
+      "sellerId",
+      "reviewerId",
+      "requestedBy",
+      "resolvedBy",
+      "actorId",
+    ]);
+    const userIds = new Set<number>();
+    const collect = (nested: unknown): void => {
+      if (Array.isArray(nested)) {
+        nested.forEach(collect);
+        return;
+      }
+      if (!nested || typeof nested !== "object") return;
+      for (const [key, nestedValue] of Object.entries(
+        nested as Record<string, unknown>,
+      )) {
+        if (
+          userReferenceKeys.has(key) &&
+          nestedValue !== null &&
+          Number.isFinite(Number(nestedValue))
+        ) {
+          userIds.add(Number(nestedValue));
+        }
+        collect(nestedValue);
+      }
+    };
+    collect(value);
+    const users = await this.getUserSummaryMap([...userIds]);
+    const expose = (nested: unknown): unknown => {
+      if (Array.isArray(nested)) return nested.map(expose);
+      if (!nested || typeof nested !== "object") return nested;
+      return Object.fromEntries(
+        Object.entries(nested as Record<string, unknown>).map(
+          ([key, nestedValue]) => [
+            key,
+            userReferenceKeys.has(key) && nestedValue !== null
+              ? (users.get(Number(nestedValue))?.id ?? null)
+              : expose(nestedValue),
+          ],
+        ),
+      );
+    };
+    return expose(value);
+  }
+
+  private exposeOrder(
+    order: Partial<OrderResponse> & { id: number },
+  ): Record<string, unknown> {
+    const exposed: Record<string, unknown> = {
+      ...order,
+      id: order.publicId ?? String(order.id),
+    };
+    delete exposed.publicId;
+    if (Array.isArray(order.items)) {
+      exposed.items = order.items.map((item) => {
+        if (!item || typeof item !== "object") {
+          return item;
+        }
+        const cleaned: Record<string, unknown> = {
+          ...(item as Record<string, unknown>),
+        };
+        cleaned.productId = isPublicId(
+          PUBLIC_ID_PREFIXES.PRODUCT,
+          cleaned.productId,
+        )
+          ? cleaned.productId
+          : null;
+        delete cleaned.productPublicId;
+        delete cleaned.orderId;
+        return cleaned;
+      });
+    }
+    return exposed;
+  }
+
+  private exposeOrderWithProductIdMap(
+    order: Partial<OrderResponse> & { id: number },
+    publicIdByInternalId: Map<number, string>,
+  ): Record<string, unknown> {
+    return this.exposeOrder({
+      ...order,
+      items: Array.isArray(order.items)
+        ? order.items.map((item) => {
+            if (!item || typeof item !== "object") return item;
+            const row = item as { productId?: number | string } & Record<
+              string,
+              unknown
+            >;
+            return {
+              ...row,
+              productId:
+                row.productId === undefined
+                  ? null
+                  : (publicIdByInternalId.get(Number(row.productId)) ?? null),
+            };
+          })
+        : order.items,
+    });
+  }
+
+  private async exposeOrderWithProducts(
+    order: OrderResponse,
+  ): Promise<Record<string, unknown>> {
+    const items = (order.items ?? []) as OrderItemDetail[];
+    const productMap = await this.buildProductMap(
+      items.map((item) => Number(item.productId)),
+    );
+    return (await this.exposeUserReferences(
+      this.exposeOrder({
+        ...order,
+        items: items.map((item) => this.decorateItem(item, productMap)),
+      }),
+    )) as Record<string, unknown>;
+  }
+
+  /**
+   * PUBID-01: return-request rows expose the parent order's public id as
+   * `orderId` (the orders service attaches `orderPublicId` for this purpose).
+   * PUBID-04 also replaces the request's own numeric id with `rr_...`.
+   */
+  private exposeReturnRequest(
+    request: Record<string, unknown> & {
+      orderId?: number | string;
+      orderPublicId?: string | null;
+    },
+  ): Record<string, unknown> {
+    const exposed: Record<string, unknown> = {
+      ...request,
+      id: request.publicId ?? String(request.id),
+      orderId: request.orderPublicId ?? String(request.orderId),
+    };
+    delete exposed.publicId;
+    delete exposed.orderPublicId;
+    return exposed;
+  }
+
   async getOrderByUser(
-    userId: number,
+    userId: number | string,
     page: number,
     limit: number,
     callerId: number,
@@ -568,13 +774,14 @@ export class OrderService {
     page: number;
     limit: number;
   }> {
-    if (callerRole !== "admin" && userId !== callerId) {
+    const internalUserId = await this.resolveUserId(userId);
+    if (callerRole !== "admin" && internalUserId !== callerId) {
       throw new ForbiddenException(ORDER_MESSAGE.CANNOT_ACCESS_OTHERS_ORDERS);
     }
     const result = (await firstValueFrom(
       this.ordersClient
         .send(ORDER_MESSAGE_PATTERN.GET_ORDERS_BY_USER, {
-          userId,
+          userId: internalUserId,
           page,
           limit,
         })
@@ -594,21 +801,26 @@ export class OrderService {
     // Enrich every item across the page in one batched product fetch (P1-02)
     const productMap = await this.buildProductMap(
       result.data.flatMap((o) =>
-        (o.items ?? [])
-          .filter((i) => this.itemNeedsLiveProduct(i))
-          .map((i) => Number(i.productId)),
+        (o.items ?? []).map((i) => Number(i.productId)),
       ),
     );
-    const data = result.data.map((order) => ({
-      ...order,
-      shippingFee: Number(order.shippingFee ?? 0),
-      subtotal: this.computeSubtotal(order.items ?? []),
-      items: (order.items ?? []).map((item) =>
-        this.decorateItem(item, productMap),
-      ),
-    }));
+    const data = result.data.map((order) =>
+      this.exposeOrder({
+        ...order,
+        shippingFee: Number(order.shippingFee ?? 0),
+        subtotal: this.computeSubtotal(order.items ?? []),
+        items: (order.items ?? []).map((item) =>
+          this.decorateItem(item, productMap),
+        ),
+      }),
+    );
 
-    return { ...result, data };
+    return (await this.exposeUserReferences({ ...result, data })) as {
+      data: unknown[];
+      total: number;
+      page: number;
+      limit: number;
+    };
   }
 
   /**
@@ -616,17 +828,18 @@ export class OrderService {
    * full order history (server-side GROUP BY), not just the loaded page.
    */
   async getOrderStatusCounts(
-    userId: number,
+    userId: number | string,
     callerId: number,
     callerRole: string,
   ): Promise<Record<string, number>> {
-    if (callerRole !== "admin" && userId !== callerId) {
+    const internalUserId = await this.resolveUserId(userId);
+    if (callerRole !== "admin" && internalUserId !== callerId) {
       throw new ForbiddenException(ORDER_MESSAGE.CANNOT_ACCESS_OTHERS_ORDERS);
     }
     try {
       return (await firstValueFrom(
         this.ordersClient
-          .send(ORDER_MESSAGE_PATTERN.GET_ORDER_STATUS_COUNTS, userId)
+          .send(ORDER_MESSAGE_PATTERN.GET_ORDER_STATUS_COUNTS, internalUserId)
           .pipe(
             timeout(10000),
             catchError((err: unknown) => {
@@ -644,12 +857,12 @@ export class OrderService {
   }
 
   async cancelOrder(
-    orderId: number,
+    orderId: string,
     callerId: number,
     callerRole: string,
-  ): Promise<OrderResponse> {
+  ): Promise<Record<string, unknown>> {
     try {
-      return (await firstValueFrom(
+      const canceled = (await firstValueFrom(
         this.ordersClient
           .send(ORDER_MESSAGE_PATTERN.CANCEL_ORDER, {
             orderId,
@@ -663,6 +876,7 @@ export class OrderService {
             }),
           ),
       )) as OrderResponse;
+      return this.exposeOrderWithProducts(canceled);
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -673,7 +887,7 @@ export class OrderService {
   }
 
   async getOrderInvoice(
-    orderId: number,
+    orderId: string,
     requestingUserId: number,
     requestingUserRole = "user",
   ): Promise<Buffer> {
@@ -706,16 +920,17 @@ export class OrderService {
   }
 
   async getPaymentUrl(
-    orderId: number,
+    orderId: string,
     callerId: number,
     callerRole: string,
   ): Promise<{ orderUrl: string | null; status: string | null }> {
     // Ownership check only — skip getOrderById's product enrichment (PERF-11).
-    await this.fetchOwnedOrder(orderId, callerId, callerRole);
+    // The payments TCP contract stays numeric (PUBID-01) — send the resolved PK.
+    const order = await this.fetchOwnedOrder(orderId, callerId, callerRole);
     try {
       return (await firstValueFrom(
         this.paymentsClient
-          .send(PAYMENT_MESSAGE_PATTERN.GET_PAYMENT_URL, { orderId })
+          .send(PAYMENT_MESSAGE_PATTERN.GET_PAYMENT_URL, { orderId: order.id })
           .pipe(
             timeout(10000),
             catchError((err: unknown) => {
@@ -736,7 +951,7 @@ export class OrderService {
     page: number,
     limit: number,
   ): Promise<{
-    data: (OrderResponse & { buyer: BuyerInfo | null })[];
+    data: Record<string, unknown>[];
     total: number;
     page: number;
     limit: number;
@@ -779,18 +994,39 @@ export class OrderService {
       }
     }
 
-    const buyerMap = new Map<number, BuyerInfo>(buyers.map((b) => [b.id, b]));
+    // Map keys stay the internal numeric id (matches order.userId); the
+    // embedded buyer `id` is the exposed opaque public id (PUBID-02).
+    const buyerMap = new Map<number, BuyerInfo>(
+      buyers.map((buyer) => [Number(buyer.id), this.exposeUserSummary(buyer)]),
+    );
+    const productMap = await this.buildProductMap(
+      result.data.flatMap((order) =>
+        (order.items ?? []).map((item) =>
+          Number((item as { productId: number | string }).productId),
+        ),
+      ),
+    );
 
     const data = result.data.map((order) => ({
-      ...order,
+      ...this.exposeOrder({
+        ...order,
+        items: (order.items ?? []).map((item) =>
+          this.decorateItem(item as { productId: number | string }, productMap),
+        ),
+      }),
       buyer: buyerMap.get(Number(order.userId)) ?? null,
     }));
 
-    return {
+    return (await this.exposeUserReferences({
       data,
       total: result.total,
       page: result.page,
       limit: result.limit,
+    })) as {
+      data: Record<string, unknown>[];
+      total: number;
+      page: number;
+      limit: number;
     };
   }
 
@@ -834,17 +1070,22 @@ export class OrderService {
     const users = await this.getUserSummaryMap(
       result.data.flatMap((order) => [order.userId, order.sellerId]),
     );
-    return {
+    return (await this.exposeUserReferences({
       ...result,
       data: result.data.map((order) => ({
         ...order,
         buyer: users.get(Number(order.userId)) ?? null,
         seller: users.get(Number(order.sellerId)) ?? null,
       })),
+    })) as Omit<AdminGhnOrderListResult, "data"> & {
+      data: (AdminGhnOrderListItem & {
+        buyer: UserSummary | null;
+        seller: UserSummary | null;
+      })[];
     };
   }
 
-  async getAdminGhnOrderDetail(orderId: number): Promise<unknown> {
+  async getAdminGhnOrderDetail(orderId: string): Promise<unknown> {
     try {
       const detail = (await firstValueFrom(
         this.ordersClient
@@ -856,15 +1097,29 @@ export class OrderService {
             }),
           ),
       )) as {
-        localOrder?: { userId?: number; sellerId?: number };
+        localOrder?: {
+          userId?: number;
+          sellerId?: number;
+          items?: OrderItemDetail[];
+        };
       };
+      const items = detail.localOrder?.items ?? [];
+      const productMap = await this.buildProductMap(
+        items.map((item) => Number(item.productId)),
+      );
       const userIds = [
         detail.localOrder?.userId,
         detail.localOrder?.sellerId,
       ].filter((id): id is number => typeof id === "number");
       const users = await this.getUserSummaryMap(userIds);
-      return {
+      return this.exposeUserReferences({
         ...detail,
+        localOrder: detail.localOrder
+          ? {
+              ...detail.localOrder,
+              items: items.map((item) => this.decorateItem(item, productMap)),
+            }
+          : detail.localOrder,
         buyer:
           detail.localOrder?.userId === undefined
             ? null
@@ -873,7 +1128,7 @@ export class OrderService {
           detail.localOrder?.sellerId === undefined
             ? null
             : (users.get(detail.localOrder.sellerId) ?? null),
-      };
+      });
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -884,7 +1139,7 @@ export class OrderService {
   }
 
   async syncAdminGhnOrder(
-    orderId: number,
+    orderId: string,
     actorId: number | null,
   ): Promise<unknown> {
     try {
@@ -907,11 +1162,15 @@ export class OrderService {
     }
   }
 
-  async getAdminGhnHistory(orderId: number): Promise<unknown> {
+  async getAdminGhnHistory(
+    orderId: string,
+  ): Promise<Record<string, unknown>[]> {
     try {
-      return await firstValueFrom(
+      const history = await firstValueFrom(
         this.ordersClient
-          .send(ORDER_MESSAGE_PATTERN.ADMIN_GHN_HISTORY, { orderId })
+          .send<
+            Record<string, unknown>[]
+          >(ORDER_MESSAGE_PATTERN.ADMIN_GHN_HISTORY, { orderId })
           .pipe(
             timeout(10000),
             catchError((err: unknown) => {
@@ -919,6 +1178,7 @@ export class OrderService {
             }),
           ),
       );
+      return history.map((row) => ({ ...row, orderId }));
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -929,7 +1189,7 @@ export class OrderService {
   }
 
   async cancelAdminGhnOrder(
-    orderId: number,
+    orderId: string,
     actorId: number | null,
   ): Promise<unknown> {
     try {
@@ -953,7 +1213,7 @@ export class OrderService {
   }
 
   async returnAdminGhnOrder(
-    orderId: number,
+    orderId: string,
     actorId: number | null,
   ): Promise<unknown> {
     try {
@@ -977,7 +1237,7 @@ export class OrderService {
   }
 
   async updateAdminGhnCod(
-    orderId: number,
+    orderId: string,
     actorId: number | null,
     codAmount: number,
   ): Promise<unknown> {
@@ -1006,7 +1266,7 @@ export class OrderService {
   }
 
   async updateAdminGhnReceiver(
-    orderId: number,
+    orderId: string,
     actorId: number | null,
     receiver: { toName?: string; toPhone?: string; toAddress?: string },
   ): Promise<unknown> {
@@ -1035,7 +1295,7 @@ export class OrderService {
   }
 
   async setDemoGhnStatus(
-    orderId: number,
+    orderId: string,
     actorId: number | null,
     ghnStatus: string,
   ): Promise<unknown> {
@@ -1084,7 +1344,11 @@ export class OrderService {
             }),
           ),
       )) as UserSummary[];
-      return new Map(users.map((user) => [Number(user.id), user]));
+      // Keys stay numeric (matched against order.userId/sellerId); values are
+      // exposed with the opaque public id as `id` (PUBID-02).
+      return new Map(
+        users.map((user) => [Number(user.id), this.exposeUserSummary(user)]),
+      );
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -1099,7 +1363,7 @@ export class OrderService {
     query: SellerOrdersQueryDto,
   ): Promise<unknown> {
     try {
-      return await firstValueFrom(
+      const result = (await firstValueFrom(
         this.ordersClient
           .send(ORDER_MESSAGE_PATTERN.GET_ORDERS_BY_SELLER, {
             sellerId,
@@ -1113,7 +1377,28 @@ export class OrderService {
               throw err;
             }),
           ),
+      )) as { data: OrderResponse[] } & Record<string, unknown>;
+      const productMap = await this.buildProductMap(
+        result.data.flatMap((order) =>
+          (order.items ?? []).map((item) =>
+            Number((item as { productId: number | string }).productId),
+          ),
+        ),
       );
+      return this.exposeUserReferences({
+        ...result,
+        data: result.data.map((order) =>
+          this.exposeOrder({
+            ...order,
+            items: (order.items ?? []).map((item) =>
+              this.decorateItem(
+                item as { productId: number | string },
+                productMap,
+              ),
+            ),
+          }),
+        ),
+      });
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -1161,9 +1446,9 @@ export class OrderService {
     }
   }
 
-  async confirmOrder(orderId: number, sellerId: number): Promise<unknown> {
+  async confirmOrder(orderId: string, sellerId: number): Promise<unknown> {
     try {
-      return await firstValueFrom(
+      const order = (await firstValueFrom(
         this.ordersClient
           .send(ORDER_MESSAGE_PATTERN.CONFIRM_ORDER, { orderId, sellerId })
           .pipe(
@@ -1172,7 +1457,8 @@ export class OrderService {
               throw err;
             }),
           ),
-      );
+      )) as OrderResponse;
+      return this.exposeOrderWithProducts(order);
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -1182,9 +1468,9 @@ export class OrderService {
     }
   }
 
-  async readyToShip(orderId: number, sellerId: number): Promise<unknown> {
+  async readyToShip(orderId: string, sellerId: number): Promise<unknown> {
     try {
-      return await firstValueFrom(
+      const order = (await firstValueFrom(
         this.ordersClient
           .send(ORDER_MESSAGE_PATTERN.READY_TO_SHIP, { orderId, sellerId })
           .pipe(
@@ -1193,7 +1479,8 @@ export class OrderService {
               throw err;
             }),
           ),
-      );
+      )) as OrderResponse;
+      return this.exposeOrderWithProducts(order);
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -1210,7 +1497,7 @@ export class OrderService {
    * built from the product variations + the per-item tier index (P1-01).
    */
   async getSellerOrderDetail(
-    orderId: number,
+    orderId: string,
     sellerId: number,
     isAdmin: boolean,
   ): Promise<unknown> {
@@ -1240,39 +1527,20 @@ export class OrderService {
 
     const items = order.items ?? [];
     const productMap = await this.buildProductMap(
-      items
-        .filter((i) => this.itemNeedsLiveProduct(i))
-        .map((i) => Number(i.productId)),
+      items.map((i) => Number(i.productId)),
     );
     const enrichedItems = items.map((item) =>
       this.decorateItem(item, productMap),
     );
 
-    return {
-      ...order,
-      shippingFee: Number(order.shippingFee ?? 0),
-      subtotal: this.computeSubtotal(items),
-      items: enrichedItems,
-    };
-  }
-
-  /**
-   * A read-path item only needs a live product fetch when it predates the
-   * purchase-time snapshot (P2-02): no stored image, or a SKU selection with no
-   * stored label. New orders carry their own snapshot and skip the fetch
-   * entirely, so a deleted/edited product no longer breaks historical orders.
-   */
-  private itemNeedsLiveProduct(item: {
-    productImage?: string | null;
-    skuTierIdx?: string | null;
-    skuLabel?: string | null;
-  }): boolean {
-    const hasImageSnapshot =
-      item.productImage !== undefined && item.productImage !== null;
-    const needsLabel =
-      !!item.skuTierIdx &&
-      (item.skuLabel === undefined || item.skuLabel === null);
-    return !hasImageSnapshot || needsLabel;
+    return this.exposeUserReferences(
+      this.exposeOrder({
+        ...order,
+        shippingFee: Number(order.shippingFee ?? 0),
+        subtotal: this.computeSubtotal(items),
+        items: enrichedItems,
+      }),
+    );
   }
 
   /**
@@ -1335,6 +1603,7 @@ export class OrderService {
   private decorateItem(
     item: {
       productId: number | string;
+      productPublicId?: string | null;
       skuTierIdx?: string | null;
       productImage?: string | null;
       skuLabel?: string | null;
@@ -1347,6 +1616,7 @@ export class OrderService {
     // legacy orders created before the snapshot columns existed.
     return {
       ...item,
+      productId: item.productPublicId ?? product?.publicId ?? null,
       image: item.productImage ?? product?.imageUrls?.[0] ?? null,
       skuLabel:
         item.skuLabel ??
@@ -1389,13 +1659,13 @@ export class OrderService {
   }
 
   async advanceOrderStatus(
-    orderId: number,
+    orderId: string,
     sellerId: number,
     isAdmin: boolean,
     targetStatus: string,
   ): Promise<unknown> {
     try {
-      return await firstValueFrom(
+      const order = (await firstValueFrom(
         this.ordersClient
           .send(ORDER_MESSAGE_PATTERN.ADVANCE_ORDER_STATUS, {
             orderId,
@@ -1409,7 +1679,8 @@ export class OrderService {
               throw err;
             }),
           ),
-      );
+      )) as OrderResponse;
+      return this.exposeOrderWithProducts(order);
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -1424,12 +1695,12 @@ export class OrderService {
   // ----------------------------------------------------------------------------
 
   async requestReturn(
-    orderId: number,
+    orderId: string,
     userId: number,
     reason: string,
   ): Promise<unknown> {
     try {
-      return await firstValueFrom(
+      const request = (await firstValueFrom(
         this.ordersClient
           .send(ORDER_MESSAGE_PATTERN.RETURN_REQUEST_CREATE, {
             orderId,
@@ -1442,7 +1713,11 @@ export class OrderService {
               throw err;
             }),
           ),
-      );
+      )) as Record<string, unknown> & {
+        orderId?: number | string;
+        orderPublicId?: string | null;
+      };
+      return this.exposeUserReferences(this.exposeReturnRequest(request));
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -1458,7 +1733,7 @@ export class OrderService {
     limit: number,
   ): Promise<unknown> {
     try {
-      return await firstValueFrom(
+      const result = (await firstValueFrom(
         this.ordersClient
           .send(ORDER_MESSAGE_PATTERN.RETURN_REQUEST_LIST_USER, {
             userId,
@@ -1471,7 +1746,16 @@ export class OrderService {
               throw err;
             }),
           ),
-      );
+      )) as {
+        data: (Record<string, unknown> & {
+          orderId?: number | string;
+          orderPublicId?: string | null;
+        })[];
+      } & Record<string, unknown>;
+      return this.exposeUserReferences({
+        ...result,
+        data: result.data.map((row) => this.exposeReturnRequest(row)),
+      });
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -1489,7 +1773,7 @@ export class OrderService {
     status?: string,
   ): Promise<unknown> {
     try {
-      return await firstValueFrom(
+      const result = (await firstValueFrom(
         this.ordersClient
           .send(ORDER_MESSAGE_PATTERN.RETURN_REQUEST_LIST_MANAGED, {
             sellerId,
@@ -1504,7 +1788,16 @@ export class OrderService {
               throw err;
             }),
           ),
-      );
+      )) as {
+        data: (Record<string, unknown> & {
+          orderId?: number | string;
+          orderPublicId?: string | null;
+        })[];
+      } & Record<string, unknown>;
+      return this.exposeUserReferences({
+        ...result,
+        data: result.data.map((row) => this.exposeReturnRequest(row)),
+      });
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -1515,14 +1808,14 @@ export class OrderService {
   }
 
   async reviewReturnRequest(
-    requestId: number,
+    requestId: string,
     reviewerId: number,
     reviewerRole: string,
     decision: "approve" | "reject",
     rejectReason?: string,
   ): Promise<unknown> {
     try {
-      return await firstValueFrom(
+      const request = (await firstValueFrom(
         this.ordersClient
           .send(ORDER_MESSAGE_PATTERN.RETURN_REQUEST_REVIEW, {
             requestId,
@@ -1537,7 +1830,11 @@ export class OrderService {
               throw err;
             }),
           ),
-      );
+      )) as Record<string, unknown> & {
+        orderId?: number | string;
+        orderPublicId?: string | null;
+      };
+      return this.exposeUserReferences(this.exposeReturnRequest(request));
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,

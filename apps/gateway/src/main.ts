@@ -123,7 +123,7 @@ async function bootstrap() {
       options: {
         urls: [rmqUrl],
         queue: QUEUES.NOTIFICATION_GATEWAY_PUSH_QUEUE,
-        noAck: true,
+        noAck: false,
         persistent: true,
         queueOptions: { durable: true },
         exchange: EXCHANGE.NOTIFICATION_PUSH_EXCHANGE,

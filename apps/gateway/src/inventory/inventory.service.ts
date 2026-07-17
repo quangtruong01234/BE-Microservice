@@ -27,31 +27,105 @@ export class InventoryService {
     private readonly productClient: ClientProxy,
   ) {}
 
+  private async resolveProductId(productId: number | string): Promise<number> {
+    if (typeof productId === "number") return productId;
+    const product = await firstValueFrom(
+      this.productClient
+        .send<ProductOwnershipData>(
+          PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_ID,
+          productId,
+        )
+        .pipe(timeout(10000)),
+    );
+    return Number(product.id);
+  }
+
+  private async exposeProductReferences(value: unknown): Promise<unknown> {
+    const productIds = new Set<number>();
+    const collect = (nested: unknown): void => {
+      if (Array.isArray(nested)) {
+        nested.forEach(collect);
+        return;
+      }
+      if (!nested || typeof nested !== "object") return;
+      for (const [key, nestedValue] of Object.entries(
+        nested as Record<string, unknown>,
+      )) {
+        if (
+          key === "productId" &&
+          nestedValue !== null &&
+          Number.isFinite(Number(nestedValue))
+        ) {
+          productIds.add(Number(nestedValue));
+        }
+        collect(nestedValue);
+      }
+    };
+    collect(value);
+    if (productIds.size === 0) return value;
+    const products = await firstValueFrom(
+      this.productClient
+        .send<
+          ProductNameData[]
+        >(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_IDS, [...productIds])
+        .pipe(timeout(10000)),
+    );
+    const publicIdById = new Map(
+      products.map((product) => [Number(product.id), product.publicId ?? null]),
+    );
+    const expose = (nested: unknown): unknown => {
+      if (Array.isArray(nested)) return nested.map(expose);
+      if (!nested || typeof nested !== "object") return nested;
+      return Object.fromEntries(
+        Object.entries(nested as Record<string, unknown>).map(
+          ([key, nestedValue]) => [
+            key,
+            key === "productId" && nestedValue !== null
+              ? (publicIdById.get(Number(nestedValue)) ?? null)
+              : expose(nestedValue),
+          ],
+        ),
+      );
+    };
+    return expose(value);
+  }
+
   async create(
-    data: CreateInventoryDto,
+    data: Omit<CreateInventoryDto, "productId"> & {
+      productId: number | string;
+    },
     callerId: number,
     callerRole: string,
   ): Promise<unknown> {
+    const internalProductId = await this.resolveProductId(data.productId);
     await this.assertProductMutationAccess(
-      data.productId,
+      internalProductId,
       callerId,
       callerRole,
     );
     if (data.productSkuId !== undefined) {
-      await this.assertSkuBelongsToProduct(data.productSkuId, data.productId);
+      await this.assertSkuBelongsToProduct(
+        data.productSkuId,
+        internalProductId,
+      );
     }
     try {
       this.logger.log(`Creating inventory: ${JSON.stringify(data)}`);
-      return (await firstValueFrom(
-        this.inventoryClient
-          .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_CREATE, data)
-          .pipe(
-            timeout(10000),
-            catchError((err: unknown) => {
-              throw err;
-            }),
-          ),
-      )) as unknown;
+      return this.exposeProductReferences(
+        await firstValueFrom(
+          this.inventoryClient
+            .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_CREATE, {
+              ...data,
+              productId: internalProductId,
+            })
+            .pipe(
+              timeout(10000),
+              catchError((err: unknown) => {
+                throw err;
+              }),
+            ),
+        ),
+      );
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -61,21 +135,24 @@ export class InventoryService {
     }
   }
 
-  async findByProductId(productId: number): Promise<unknown> {
+  async findByProductId(productId: string): Promise<unknown> {
     try {
-      return (await firstValueFrom(
-        this.inventoryClient
-          .send(
-            INVENTORY_MESSAGE_PATTERNS.INVENTORY_FIND_BY_PRODUCT_ID,
-            productId,
-          )
-          .pipe(
-            timeout(10000),
-            catchError((err: unknown) => {
-              throw err;
-            }),
-          ),
-      )) as unknown;
+      const internalProductId = await this.resolveProductId(productId);
+      return this.exposeProductReferences(
+        await firstValueFrom(
+          this.inventoryClient
+            .send(
+              INVENTORY_MESSAGE_PATTERNS.INVENTORY_FIND_BY_PRODUCT_ID,
+              internalProductId,
+            )
+            .pipe(
+              timeout(10000),
+              catchError((err: unknown) => {
+                throw err;
+              }),
+            ),
+        ),
+      );
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -111,7 +188,9 @@ export class InventoryService {
       if (!Array.isArray(lowStockRows) || lowStockRows.length === 0) {
         return [];
       }
-      return await this.attachProductNames(lowStockRows);
+      return this.exposeProductReferences(
+        await this.attachProductNames(lowStockRows),
+      );
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -166,16 +245,18 @@ export class InventoryService {
   ): Promise<unknown> {
     await this.assertInventoryMutationAccess(id, callerId, callerRole);
     try {
-      return (await firstValueFrom(
-        this.inventoryClient
-          .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_UPDATE, { id, update })
-          .pipe(
-            timeout(10000),
-            catchError((err: unknown) => {
-              throw err;
-            }),
-          ),
-      )) as unknown;
+      return this.exposeProductReferences(
+        await firstValueFrom(
+          this.inventoryClient
+            .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_UPDATE, { id, update })
+            .pipe(
+              timeout(10000),
+              catchError((err: unknown) => {
+                throw err;
+              }),
+            ),
+        ),
+      );
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,

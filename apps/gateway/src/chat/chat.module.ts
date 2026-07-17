@@ -20,6 +20,14 @@ import { ChatWsGateway } from "./chat.ws-gateway";
           port: PORT_TCP.CHAT_SERVICE_PORT,
         },
       },
+      {
+        name: NAME_SERVICE_TCP.USER_SERVICE,
+        transport: Transport.TCP,
+        options: {
+          host: TCP_HOST,
+          port: PORT_TCP.USER_TCP_PORT,
+        },
+      },
     ]),
   ],
   controllers: [ChatController],

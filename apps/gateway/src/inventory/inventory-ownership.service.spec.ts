@@ -30,7 +30,9 @@ describe("InventoryService ownership", () => {
   });
 
   it("allows an owner to create inventory", async () => {
-    productClient.send.mockReturnValue(of({ id: 16, userId: 20 }));
+    productClient.send
+      .mockReturnValueOnce(of({ id: 16, userId: 20 }))
+      .mockReturnValueOnce(of([{ id: 16, publicId: "prod_1111111111111111" }]));
     inventoryClient.send.mockReturnValue(of({ id: 8, productId: 16 }));
 
     await expect(
@@ -39,7 +41,10 @@ describe("InventoryService ownership", () => {
         20,
         "shop",
       ),
-    ).resolves.toEqual({ id: 8, productId: 16 });
+    ).resolves.toEqual({
+      id: 8,
+      productId: "prod_1111111111111111",
+    });
   });
 
   it("rejects updating another user's inventory", async () => {

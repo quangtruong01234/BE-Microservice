@@ -6,7 +6,6 @@ import {
   Get,
   Param,
   Patch,
-  ParseIntPipe,
   Query,
   Request,
   Res,
@@ -46,6 +45,8 @@ import {
   REMEMBER_ME_AUTH_COOKIE_MAX_AGE_MS,
 } from "../common/auth-cookie";
 import { AUTH_MESSAGE } from "libs/constant/response-message.constant";
+import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
+import { ParsePublicIdPipe } from "../common/pipes/parse-public-id.pipe";
 
 @ApiTags("User")
 @ApiBearerAuth("bearer")
@@ -195,7 +196,8 @@ export class UserController {
   @ApiResponse({ status: 401, description: "Unauthorized." })
   @ApiResponse({ status: 404, description: "Address not found." })
   async updateAddress(
-    @Param("addressId", ParseIntPipe) addressId: number,
+    @Param("addressId", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.ADDRESS))
+    addressId: string,
     @Body() dto: UpdateUserAddressDto,
     @Request() req: { user: { id: number } },
   ) {
@@ -211,7 +213,8 @@ export class UserController {
   @ApiResponse({ status: 401, description: "Unauthorized." })
   @ApiResponse({ status: 404, description: "Address not found." })
   async setDefaultAddress(
-    @Param("addressId", ParseIntPipe) addressId: number,
+    @Param("addressId", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.ADDRESS))
+    addressId: string,
     @Request() req: { user: { id: number } },
   ) {
     return this.userService.setDefaultAddress(req.user.id, addressId);
@@ -224,17 +227,21 @@ export class UserController {
   @ApiResponse({ status: 401, description: "Unauthorized." })
   @ApiResponse({ status: 404, description: "Address not found." })
   async deleteAddress(
-    @Param("addressId", ParseIntPipe) addressId: number,
+    @Param("addressId", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.ADDRESS))
+    addressId: string,
     @Request() req: { user: { id: number } },
   ) {
     return this.userService.deleteAddress(req.user.id, addressId);
   }
 
   @Get(":id")
-  @ApiOperation({ summary: "Get user info by id" })
+  @ApiOperation({ summary: "Get user info by public id (usr_...)" })
   @ApiResponse({ status: 200, description: "User info." })
+  @ApiResponse({ status: 400, description: "Invalid user id format." })
   @ApiResponse({ status: 404, description: "User not found." })
-  async getUserInfo(@Param("id", ParseIntPipe) id: number) {
+  async getUserInfo(
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.USER)) id: string,
+  ) {
     return await this.userService.getUserInfo(id);
   }
 
@@ -243,10 +250,11 @@ export class UserController {
   @ApiOperation({ summary: "Update user profile (own account only)" })
   @ApiBody({ type: UpdateUserGatewayDto })
   @ApiResponse({ status: 200, description: "Updated user profile." })
+  @ApiResponse({ status: 400, description: "Invalid user id format." })
   @ApiResponse({ status: 403, description: "Forbidden." })
   @ApiResponse({ status: 404, description: "User not found." })
   async updateUser(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.USER)) id: string,
     @Body() dto: UpdateUserGatewayDto,
     @Request() req: { user: { id: number } },
   ) {

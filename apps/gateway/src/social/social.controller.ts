@@ -4,7 +4,6 @@ import {
   Delete,
   Get,
   Param,
-  ParseIntPipe,
   Patch,
   Post,
   Query,
@@ -29,6 +28,8 @@ import { UpdatePostDto } from "./dto/update-post.dto";
 import { ReportPostDto } from "./dto/report-post.dto";
 import { CreateCommentDto } from "./dto/create-comment.dto";
 import { GetPostsQueryDto } from "./dto/get-posts-query.dto";
+import { ParsePublicIdPipe } from "../common/pipes/parse-public-id.pipe";
+import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 
 @ApiTags("Social")
 @Controller("social/posts")
@@ -63,7 +64,7 @@ export class SocialController {
   @ApiResponse({ status: 403, description: "Forbidden." })
   @ApiResponse({ status: 404, description: "Post not found." })
   async updatePost(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.POST)) id: string,
     @Req() req: Request,
     @Body() body: UpdatePostDto,
   ): Promise<unknown> {
@@ -81,7 +82,7 @@ export class SocialController {
   @ApiResponse({ status: 404, description: "Post not found." })
   @ApiResponse({ status: 409, description: "Already reported." })
   async reportPost(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.POST)) id: string,
     @Req() req: Request,
     @Body() body: ReportPostDto,
   ): Promise<unknown> {
@@ -113,7 +114,8 @@ export class SocialController {
   @ApiResponse({ status: 200, description: "Paginated post list for user." })
   async getPostsByUser(
     @Req() req: Request,
-    @Param("userId", ParseIntPipe) userId: number,
+    @Param("userId", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.USER))
+    userId: string,
     @Query(ValidationPipe) query: GetPostsQueryDto,
   ): Promise<unknown> {
     const viewerUserId = req.user?.id ?? null;
@@ -133,7 +135,7 @@ export class SocialController {
   @ApiResponse({ status: 404, description: "Post not found." })
   async getPostById(
     @Req() req: Request,
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.POST)) id: string,
   ): Promise<unknown> {
     const viewerUserId = req.user?.id ?? null;
     return this.socialService.getPostById(id, viewerUserId);
@@ -147,7 +149,7 @@ export class SocialController {
   @ApiResponse({ status: 404, description: "Post not found." })
   @ApiResponse({ status: 409, description: "Already liked." })
   async likePost(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.POST)) id: string,
     @Req() req: Request,
   ): Promise<unknown> {
     const userId = req.user?.id ?? 0;
@@ -161,7 +163,7 @@ export class SocialController {
   @ApiResponse({ status: 200, description: "Post unliked." })
   @ApiResponse({ status: 404, description: "Like not found." })
   async unlikePost(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.POST)) id: string,
     @Req() req: Request,
   ): Promise<unknown> {
     const userId = req.user?.id ?? 0;
@@ -176,7 +178,7 @@ export class SocialController {
   @ApiResponse({ status: 403, description: "Forbidden." })
   @ApiResponse({ status: 404, description: "Post not found." })
   async deletePost(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.POST)) id: string,
     @Req() req: Request,
   ): Promise<unknown> {
     const userId = req.user?.id ?? 0;
@@ -192,7 +194,7 @@ export class SocialController {
   @ApiResponse({ status: 401, description: "Unauthorized." })
   @ApiResponse({ status: 404, description: "Post not found." })
   async createComment(
-    @Param("id", ParseIntPipe) postId: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.POST)) postId: string,
     @Req() req: Request,
     @Body() body: CreateCommentDto,
   ): Promise<unknown> {
@@ -205,7 +207,7 @@ export class SocialController {
   @ApiOperation({ summary: "Get paginated comments for a post" })
   @ApiResponse({ status: 200, description: "Paginated comment list." })
   async getComments(
-    @Param("id", ParseIntPipe) postId: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.POST)) postId: string,
     @Query(ValidationPipe) query: GetPostsQueryDto,
   ): Promise<unknown> {
     return this.socialService.getComments(

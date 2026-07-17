@@ -4,7 +4,6 @@ import {
   Delete,
   Get,
   Param,
-  ParseIntPipe,
   Post,
   Query,
   Req,
@@ -26,6 +25,8 @@ import { Public } from "../common/decorators/public.decorator";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
 import { SocialGatewayService } from "./social.service";
 import { CreateReplyDto } from "./dto/create-reply.dto";
+import { ParsePublicIdPipe } from "../common/pipes/parse-public-id.pipe";
+import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 
 class GetRepliesQueryDto {
   @IsOptional()
@@ -49,7 +50,8 @@ export class SocialCommentController {
   @ApiResponse({ status: 403, description: "Forbidden." })
   @ApiResponse({ status: 404, description: "Comment not found." })
   async deleteComment(
-    @Param("id", ParseIntPipe) commentId: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.COMMENT))
+    commentId: string,
     @Req() req: Request,
   ): Promise<unknown> {
     const userId = req.user?.id ?? 0;
@@ -65,7 +67,8 @@ export class SocialCommentController {
   @ApiResponse({ status: 401, description: "Unauthorized." })
   @ApiResponse({ status: 404, description: "Parent comment not found." })
   async createReply(
-    @Param("id", ParseIntPipe) parentCommentId: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.COMMENT))
+    parentCommentId: string,
     @Req() req: Request,
     @Body() body: CreateReplyDto,
   ): Promise<unknown> {
@@ -85,7 +88,8 @@ export class SocialCommentController {
   @ApiResponse({ status: 200, description: "Descendant tree returned." })
   @ApiResponse({ status: 404, description: "Comment not found." })
   async getReplies(
-    @Param("id", ParseIntPipe) commentId: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.COMMENT))
+    commentId: string,
     @Query(ValidationPipe) query: GetRepliesQueryDto,
   ): Promise<unknown> {
     return this.socialService.getReplies(commentId, query.depth);

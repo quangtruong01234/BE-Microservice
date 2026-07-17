@@ -15,6 +15,8 @@ import {
 } from "@nestjs/common";
 import { Request } from "express";
 import { ProductService } from "./product.service";
+import { ParsePublicIdPipe } from "../common/pipes/parse-public-id.pipe";
+import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 import {
   CreateProductDto,
   UpdateProductDto,
@@ -27,6 +29,9 @@ import {
   GetProductsWithInventoryDto,
   PriceSuggestionQueryDto,
   ProductRiskQueryDto,
+  ProductRiskBackfillDto,
+  ProductDuplicateImageCheckDto,
+  ProductRiskFeedbackDto,
 } from "./dto";
 import { CreateReviewDto, ReviewQueryDto } from "./dto/review.dto";
 import {
@@ -39,7 +44,14 @@ import {
 } from "@nestjs/swagger";
 import { CheckPermission } from "../common/decorators/check-permission.decorator";
 import { Public } from "../common/decorators/public.decorator";
-import { PriceSuggestion, ProductRiskSummary } from "./product.types";
+import {
+  PriceSuggestion,
+  ProductDuplicateAdvisory,
+  ProductRiskBackfillResult,
+  ProductRiskFeedbackResult,
+  ProductRiskSummary,
+} from "./product.types";
+import { RateLimit } from "../common/decorators/rate-limit.decorator";
 
 @ApiTags("Products")
 @Controller("products")
@@ -109,9 +121,61 @@ export class ProductController {
   @ApiResponse({ status: 403, description: "Forbidden." })
   @ApiResponse({ status: 404, description: "Product not found." })
   async rescoreProductRisk(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.PRODUCT)) id: string,
   ): Promise<ProductRiskSummary> {
     return await this.productService.rescoreProductRisk(id);
+  }
+
+  @Post("admin/risk/backfill")
+  @CheckPermission("product", "update:any")
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({ summary: "Enqueue a resumable product risk backfill batch" })
+  @ApiResponse({ status: 202, description: "Risk batch enqueued." })
+  async enqueueProductRiskBackfill(
+    @Body() request: ProductRiskBackfillDto,
+  ): Promise<ProductRiskBackfillResult> {
+    return await this.productService.enqueueProductRiskBackfill(request);
+  }
+
+  @Post("risk/duplicate-check")
+  @CheckPermission("product", "create:own")
+  @RateLimit({ limit: 10, ttl: 60 })
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: "Check an owned upload for likely catalog duplicates",
+  })
+  @ApiResponse({ status: 200, description: "Advisory duplicate result." })
+  async checkDuplicateImage(
+    @Body() dto: ProductDuplicateImageCheckDto,
+    @Req() req: Request,
+  ): Promise<ProductDuplicateAdvisory> {
+    const sellerId = (req.user as { id: number }).id;
+    return await this.productService.checkDuplicateImage(
+      sellerId,
+      dto.imageUrl,
+    );
+  }
+
+  @Post("admin/risk/:id/feedback")
+  @CheckPermission("product", "update:any")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: "Record moderator feedback for a product risk result",
+  })
+  @ApiParam({ name: "id", description: "Product ID", type: Number })
+  @ApiResponse({ status: 200, description: "Risk feedback recorded." })
+  async recordProductRiskFeedback(
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.PRODUCT)) id: string,
+    @Body() dto: ProductRiskFeedbackDto,
+    @Req() req: Request,
+  ): Promise<ProductRiskFeedbackResult> {
+    const moderatorId = (req.user as { id: number }).id;
+    return await this.productService.recordProductRiskFeedback(
+      id,
+      moderatorId,
+      dto.decision,
+      dto.note,
+    );
   }
 
   @Get("search")
@@ -327,11 +391,16 @@ export class ProductController {
 
   @Post("wishlist/:productId")
   @ApiOperation({ summary: "Add a product to the current user's wishlist" })
-  @ApiParam({ name: "productId", description: "Product ID", type: Number })
+  @ApiParam({
+    name: "productId",
+    description: "Product public ID",
+    type: String,
+  })
   @ApiResponse({ status: 201, description: "Product added to wishlist." })
   @ApiResponse({ status: 404, description: "Product not found." })
   async addWishlistItem(
-    @Param("productId", ParseIntPipe) productId: number,
+    @Param("productId", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.PRODUCT))
+    productId: string,
     @Req() req: Request,
   ): Promise<unknown> {
     const userId = (req.user as { id: number }).id;
@@ -343,10 +412,15 @@ export class ProductController {
   @ApiOperation({
     summary: "Remove a product from the current user's wishlist",
   })
-  @ApiParam({ name: "productId", description: "Product ID", type: Number })
+  @ApiParam({
+    name: "productId",
+    description: "Product public ID",
+    type: String,
+  })
   @ApiResponse({ status: 204, description: "Product removed from wishlist." })
   async removeWishlistItem(
-    @Param("productId", ParseIntPipe) productId: number,
+    @Param("productId", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.PRODUCT))
+    productId: string,
     @Req() req: Request,
   ): Promise<void> {
     const userId = (req.user as { id: number }).id;
@@ -364,7 +438,7 @@ export class ProductController {
   @ApiQuery({ name: "page", required: false, type: Number })
   @ApiQuery({ name: "limit", required: false, type: Number })
   async getProductReviews(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.PRODUCT)) id: string,
     @Query() query: ReviewQueryDto,
   ) {
     return this.productService.getProductReviews(
@@ -385,7 +459,7 @@ export class ProductController {
   })
   @ApiResponse({ status: 409, description: "Conflict - already reviewed." })
   async createProductReview(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.PRODUCT)) id: string,
     @Body() dto: CreateReviewDto,
     @Req() req: Request,
   ) {
@@ -418,7 +492,9 @@ export class ProductController {
   @ApiParam({ name: "id", description: "Product ID", type: Number })
   @ApiResponse({ status: 200, description: "SKUs retrieved successfully." })
   @ApiResponse({ status: 404, description: "Product not found." })
-  async getSkusByProduct(@Param("id", ParseIntPipe) id: number) {
+  async getSkusByProduct(
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.PRODUCT)) id: string,
+  ) {
     return await this.productService.getSkusByProduct(id);
   }
 
@@ -428,7 +504,9 @@ export class ProductController {
   @ApiParam({ name: "id", description: "Product ID", type: Number })
   @ApiResponse({ status: 200, description: "Product retrieved successfully." })
   @ApiResponse({ status: 404, description: "Product not found." })
-  async getProductById(@Param("id", ParseIntPipe) id: number) {
+  async getProductById(
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.PRODUCT)) id: string,
+  ) {
     return await this.productService.getProductById(id);
   }
 
@@ -448,7 +526,7 @@ export class ProductController {
     description: "Forbidden - not the product owner.",
   })
   async updateProduct(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.PRODUCT)) id: string,
     @Body() dto: UpdateProductDto,
     @Req() req: Request,
   ) {
@@ -471,7 +549,7 @@ export class ProductController {
     description: "Forbidden - not the product owner.",
   })
   async deleteProduct(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.PRODUCT)) id: string,
     @Req() req: Request,
   ) {
     return await this.productService.deleteProduct(
@@ -521,7 +599,9 @@ export class ProductController {
     description: "Product with inventory retrieved successfully.",
   })
   @ApiResponse({ status: 404, description: "Product not found." })
-  async getProductWithInventoryById(@Param("id", ParseIntPipe) id: number) {
+  async getProductWithInventoryById(
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.PRODUCT)) id: string,
+  ) {
     return await this.productService.getProductWithInventoryById(id);
   }
 
@@ -560,7 +640,7 @@ export class ProductController {
   })
   @ApiResponse({ status: 404, description: "Product not found." })
   async checkProductStock(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.PRODUCT)) id: string,
     @Query("quantity", ParseIntPipe) quantity: number,
   ) {
     return await this.productService.checkProductStock(id, quantity);

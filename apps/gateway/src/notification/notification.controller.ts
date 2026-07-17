@@ -2,7 +2,6 @@ import {
   Controller,
   Get,
   Param,
-  ParseIntPipe,
   Patch,
   Query,
   Req,
@@ -19,6 +18,8 @@ import {
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { NotificationGatewayService } from "./notification.service";
 import { GetNotificationsQueryDto } from "./dto/get-notifications-query.dto";
+import { ParsePublicIdPipe } from "../common/pipes/parse-public-id.pipe";
+import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 
 @ApiTags("Notifications")
 @ApiBearerAuth("bearer")
@@ -61,7 +62,8 @@ export class NotificationController {
   @ApiResponse({ status: 200, description: "Notification marked as read." })
   @ApiResponse({ status: 401, description: "Unauthorized." })
   async markNotificationRead(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.NOTIFICATION))
+    id: string,
     @Req() req: Request,
   ): Promise<{ success: boolean }> {
     const userId = req.user?.id ?? 0;

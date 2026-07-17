@@ -16,6 +16,8 @@ import { CreateInventoryDto } from "./dto/create-inventory.dto";
 import { UpdateInventoryDto } from "./dto/update-inventory.dto";
 import { Public } from "../common/decorators/public.decorator";
 import { Roles } from "../common/decorators/roles.decorator";
+import { ParsePublicIdPipe } from "../common/pipes/parse-public-id.pipe";
+import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 
 @ApiTags("Inventory")
 @Controller("inventory")
@@ -70,7 +72,11 @@ export class InventoryController {
   @Get("product/:productId")
   @Public()
   @ApiOperation({ summary: "Get inventory by product ID" })
-  @ApiParam({ name: "productId", description: "Product ID", type: Number })
+  @ApiParam({
+    name: "productId",
+    description: "Product public ID",
+    type: String,
+  })
   @ApiResponse({
     status: 200,
     description: "Inventory retrieved successfully.",
@@ -79,7 +85,10 @@ export class InventoryController {
     status: 404,
     description: "Inventory not found for this product.",
   })
-  async findByProductId(@Param("productId", ParseIntPipe) productId: number) {
+  async findByProductId(
+    @Param("productId", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.PRODUCT))
+    productId: string,
+  ) {
     return this.inventoryService.findByProductId(productId);
   }
 

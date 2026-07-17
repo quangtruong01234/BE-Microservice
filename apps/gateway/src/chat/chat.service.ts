@@ -1,30 +1,89 @@
 import { Inject, Injectable } from "@nestjs/common";
 import { ClientProxy } from "@nestjs/microservices";
 import { firstValueFrom, Observable, timeout } from "rxjs";
-import { CHAT_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
+import {
+  CHAT_MESSAGE_PATTERN,
+  USER_MESSAGE_PATTERN,
+} from "libs/constant/message-pattern.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
+import {
+  ChatConversationTcp,
+  ChatMessageTcp,
+  ChatPaginatedTcp,
+  ExposedChatConversation,
+  ExposedChatMessage,
+  exposeChatConversation,
+  exposeChatMessage,
+} from "./chat.types";
 
 @Injectable()
 export class ChatGatewayService {
   constructor(
     @Inject(NAME_SERVICE_TCP.CHAT_SERVICE)
     private readonly chatClient: ClientProxy,
+    @Inject(NAME_SERVICE_TCP.USER_SERVICE)
+    private readonly userClient: ClientProxy,
   ) {}
+
+  private async resolveUserId(userId: string): Promise<number> {
+    const user = await firstValueFrom(
+      this.userClient
+        .send<{
+          id: number;
+        }>({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, { userId })
+        .pipe(timeout(10000)),
+    );
+    return Number(user.id);
+  }
+
+  private async getUserPublicIdMap(
+    userIds: number[],
+  ): Promise<Map<number, string>> {
+    const uniqueUserIds = [...new Set(userIds.map(Number).filter(Boolean))];
+    if (uniqueUserIds.length === 0) return new Map();
+    const users = await firstValueFrom(
+      this.userClient
+        .send<
+          Array<{ id: number; publicId?: string | null }>
+        >({ cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS }, { userIds: uniqueUserIds })
+        .pipe(timeout(10000)),
+    );
+    return new Map(
+      users
+        .filter((user) => typeof user.publicId === "string")
+        .map((user) => [Number(user.id), user.publicId as string]),
+    );
+  }
+
+  async exposeMessage(
+    message: ChatMessageTcp,
+    conversationId: string,
+  ): Promise<ExposedChatMessage> {
+    const users = await this.getUserPublicIdMap([message.senderId]);
+    return exposeChatMessage(message, conversationId, users);
+  }
 
   async createOrGetConversation(
     userId: number,
-    otherUserId: number,
-  ): Promise<unknown> {
+    otherUserId: string,
+  ): Promise<ExposedChatConversation | undefined> {
     try {
-      return await firstValueFrom(
+      const internalOtherUserId = await this.resolveUserId(otherUserId);
+      const conversation = await firstValueFrom(
         this.chatClient
           .send(CHAT_MESSAGE_PATTERN.CHAT_CREATE_OR_GET_CONVERSATION, {
             userId,
-            otherUserId,
+            otherUserId: internalOtherUserId,
           })
-          .pipe(timeout(10000)) as Observable<unknown>,
+          .pipe(timeout(10000)) as Observable<ChatConversationTcp>,
       );
+      const users = await this.getUserPublicIdMap([
+        conversation.user1Id,
+        conversation.user2Id,
+        conversation.lastMessage?.senderId ?? 0,
+      ]);
+      return exposeChatConversation(conversation, users);
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -34,12 +93,24 @@ export class ChatGatewayService {
     }
   }
 
-  async getConversations(userId: number): Promise<unknown> {
+  async getConversations(
+    userId: number,
+  ): Promise<ExposedChatConversation[] | undefined> {
     try {
-      return await firstValueFrom(
+      const conversations = await firstValueFrom(
         this.chatClient
           .send(CHAT_MESSAGE_PATTERN.CHAT_GET_CONVERSATIONS, { userId })
-          .pipe(timeout(10000)) as Observable<unknown>,
+          .pipe(timeout(10000)) as Observable<ChatConversationTcp[]>,
+      );
+      const users = await this.getUserPublicIdMap(
+        conversations.flatMap((conversation) => [
+          conversation.user1Id,
+          conversation.user2Id,
+          conversation.lastMessage?.senderId ?? 0,
+        ]),
+      );
+      return conversations.map((conversation) =>
+        exposeChatConversation(conversation, users),
       );
     } catch (error) {
       MicroserviceErrorHandler.handleError(
@@ -52,12 +123,15 @@ export class ChatGatewayService {
 
   async getMessages(
     userId: number,
-    conversationId: number,
+    conversationId: string,
     page: number,
     limit: number,
-  ): Promise<unknown> {
+  ): Promise<
+    | (Omit<ChatPaginatedTcp, "data"> & { data: ExposedChatMessage[] })
+    | undefined
+  > {
     try {
-      return await firstValueFrom(
+      const messagesPage = await firstValueFrom(
         this.chatClient
           .send(CHAT_MESSAGE_PATTERN.CHAT_GET_MESSAGES, {
             userId,
@@ -65,8 +139,17 @@ export class ChatGatewayService {
             page,
             limit,
           })
-          .pipe(timeout(10000)) as Observable<unknown>,
+          .pipe(timeout(10000)) as Observable<ChatPaginatedTcp>,
       );
+      const users = await this.getUserPublicIdMap(
+        messagesPage.data.map((message) => message.senderId),
+      );
+      return {
+        ...messagesPage,
+        data: messagesPage.data.map((message) =>
+          exposeChatMessage(message, conversationId, users),
+        ),
+      };
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -76,7 +159,7 @@ export class ChatGatewayService {
     }
   }
 
-  async markRead(userId: number, conversationId: number): Promise<unknown> {
+  async markRead(userId: number, conversationId: string): Promise<unknown> {
     try {
       return await firstValueFrom(
         this.chatClient

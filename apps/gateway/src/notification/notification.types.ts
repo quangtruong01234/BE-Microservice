@@ -1,10 +1,10 @@
 export interface NotificationItem {
-  id: number;
-  userId: number;
+  id: string;
+  userId: string | null;
   type: string;
-  orderId: number | null;
-  postId: number | null;
-  actorId: number | null;
+  orderId: string | null;
+  postId: string | null;
+  actorId: string | null;
   preview: string | null;
   message: string;
   isRead: boolean;
@@ -19,12 +19,12 @@ export interface PaginatedNotifications {
 }
 
 export interface NotificationPayload {
-  id: number;
-  userId: number;
+  id: string;
+  userId: string | null;
   type: string;
-  orderId: number | null;
-  postId: number | null;
-  actorId: number | null;
+  orderId: string | null;
+  postId: string | null;
+  actorId: string | null;
   preview: string | null;
   message: string;
   isRead: boolean;

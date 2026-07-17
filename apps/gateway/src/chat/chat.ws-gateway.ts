@@ -13,6 +13,8 @@ import { Server, Socket } from "socket.io";
 import { CHAT_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { gatewayCorsOptions } from "../common/cors";
+import { ChatMessageTcp } from "./chat.types";
+import { ChatGatewayService } from "./chat.service";
 
 @Injectable()
 @WebSocketGateway({
@@ -29,6 +31,7 @@ export class ChatWsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly jwtService: JwtService,
     @Inject(NAME_SERVICE_TCP.CHAT_SERVICE)
     private readonly chatClient: ClientProxy,
+    private readonly chatService: ChatGatewayService,
   ) {}
 
   private parseTokenFromCookie(
@@ -70,7 +73,7 @@ export class ChatWsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @SubscribeMessage("join")
   async handleJoin(
     client: Socket,
-    payload: { conversationId: number },
+    payload: { conversationId: string },
   ): Promise<void> {
     const userId = (client.data as Record<string, unknown>).userId as
       | number
@@ -102,9 +105,9 @@ export class ChatWsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   async handleSendMessage(
     client: Socket,
     payload: {
-      conversationId: number;
+      conversationId: string;
       content: string;
-      parentMessageId?: number;
+      parentMessageId?: string;
     },
   ): Promise<void> {
     const userId = (client.data as Record<string, unknown>).userId as
@@ -117,7 +120,7 @@ export class ChatWsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     try {
       const saved = await firstValueFrom(
         this.chatClient
-          .send<unknown>(CHAT_MESSAGE_PATTERN.CHAT_SEND_MESSAGE, {
+          .send<ChatMessageTcp>(CHAT_MESSAGE_PATTERN.CHAT_SEND_MESSAGE, {
             userId,
             dto: {
               conversationId: payload.conversationId,
@@ -127,9 +130,15 @@ export class ChatWsGateway implements OnGatewayConnection, OnGatewayDisconnect {
           })
           .pipe(timeout(10000)),
       );
+      // Emit the same exposed shape as REST — only opaque public ids leave
+      // the gateway (room keys reuse the client-supplied conv_ id).
+      const exposed = await this.chatService.exposeMessage(
+        saved,
+        String(payload.conversationId),
+      );
       this.server
         .to(`conv:${payload.conversationId}`)
-        .emit("new_message", saved);
+        .emit("new_message", exposed);
     } catch (error) {
       client.emit("error", "Failed to send message");
       this.logger.error("send_message failed", error);

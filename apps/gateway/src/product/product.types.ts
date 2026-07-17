@@ -1,13 +1,13 @@
 export interface ProductWithInventory {
   // Product fields
-  id: number;
+  id: string;
   name: string;
   description?: string;
   price: number;
   stockQuantity: number;
   sku: string;
   brandId?: number;
-  userId?: number;
+  userId?: string | null;
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -16,7 +16,7 @@ export interface ProductWithInventory {
 
   // User information
   user?: {
-    id: number;
+    id: string;
     name: string;
     avatar?: string;
   };
@@ -24,7 +24,7 @@ export interface ProductWithInventory {
   // Inventory fields
   inventory?: {
     id: number;
-    productId: number;
+    productId: string;
     sku: string;
     availableStock: number;
     reservedStock: number;
@@ -38,6 +38,7 @@ export interface ProductWithInventory {
 
 export type ProductData = {
   id?: string | number;
+  publicId?: string | null;
   userId?: string | number;
   name?: string;
   items?: ProductData[];
@@ -55,10 +56,12 @@ export type InventoryData = {
 };
 
 export type UserData = {
-  id?: number;
+  id?: number | string;
+  publicId?: string | null;
   name?: string;
   username?: string;
   avatar?: string;
+  province?: { id: number; name: string } | null;
 };
 
 export type PriceSuggestion = {
@@ -74,8 +77,9 @@ export type PriceSuggestion = {
 export type ProductRiskFlag = {
   type: "duplicate_image" | "price_anomaly" | "similar_name";
   weight: number;
-  matchedProductId?: number;
+  matchedProductId?: string;
   hammingDistance?: number;
+  evidenceCount?: number;
   productPrice?: number;
   categoryMedian?: number;
   ratio?: number;
@@ -83,7 +87,34 @@ export type ProductRiskFlag = {
 };
 
 export type ProductRiskSummary = {
-  productId: number;
+  productId: string;
   riskScore: number;
   riskFlags: ProductRiskFlag[];
+  riskScoringStatus: "ready";
+  riskScoredAt: string | Date;
+};
+
+export type ProductRiskBackfillResult = {
+  enqueued: number;
+  nextCursor: number | null;
+  hasMore: boolean;
+};
+
+export type ProductDuplicateAdvisory = {
+  duplicateLikely: boolean;
+  match: {
+    productId: string;
+    name: string;
+    imageUrl: string | null;
+    hammingDistance: number;
+    evidenceCount: number;
+  } | null;
+};
+
+export type ProductRiskFeedbackResult = {
+  productId: string;
+  moderatorId: number;
+  decision: "confirmed_duplicate" | "dismissed";
+  note: string | null;
+  updatedAt: string | Date;
 };

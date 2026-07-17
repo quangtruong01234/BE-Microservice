@@ -3,7 +3,6 @@ import {
   Delete,
   Get,
   Param,
-  ParseIntPipe,
   Post,
   Query,
   Req,
@@ -21,6 +20,8 @@ import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { CheckPermission } from "../common/decorators/check-permission.decorator";
 import { SocialGatewayService } from "./social.service";
 import { ReportedPostsQueryDto } from "./dto/reported-posts-query.dto";
+import { ParsePublicIdPipe } from "../common/pipes/parse-public-id.pipe";
+import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 
 @ApiTags("Social Moderation")
 @ApiBearerAuth("bearer")
@@ -57,7 +58,7 @@ export class SocialAdminController {
   @ApiResponse({ status: 403, description: "Forbidden." })
   @ApiResponse({ status: 404, description: "Post not found." })
   async hidePost(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.POST)) id: string,
     @Req() req: Request,
   ): Promise<unknown> {
     const adminId = req.user?.id ?? 0;
@@ -71,7 +72,9 @@ export class SocialAdminController {
   @ApiResponse({ status: 201, description: "Post unhidden." })
   @ApiResponse({ status: 403, description: "Forbidden." })
   @ApiResponse({ status: 404, description: "Post not found." })
-  async unhidePost(@Param("id", ParseIntPipe) id: number): Promise<unknown> {
+  async unhidePost(
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.POST)) id: string,
+  ): Promise<unknown> {
     return this.socialService.unhidePost(id);
   }
 
@@ -85,7 +88,7 @@ export class SocialAdminController {
   @ApiResponse({ status: 403, description: "Forbidden." })
   @ApiResponse({ status: 404, description: "Post not found." })
   async dismissReports(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.POST)) id: string,
     @Req() req: Request,
   ): Promise<unknown> {
     const adminId = req.user?.id ?? 0;
@@ -102,7 +105,7 @@ export class SocialAdminController {
   @ApiResponse({ status: 403, description: "Forbidden." })
   @ApiResponse({ status: 404, description: "Post not found." })
   async adminDeletePost(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.POST)) id: string,
   ): Promise<unknown> {
     return this.socialService.adminDeletePost(id);
   }

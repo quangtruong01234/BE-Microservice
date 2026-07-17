@@ -21,6 +21,16 @@ import { NotificationPushController } from "./notification.push.controller";
           port: PORT_TCP.NOTIFICATION_TCP_PORT,
         },
       },
+      {
+        name: NAME_SERVICE_TCP.SOCIAL_SERVICE,
+        transport: Transport.TCP,
+        options: { host: TCP_HOST, port: PORT_TCP.SOCIAL_TCP_PORT },
+      },
+      {
+        name: NAME_SERVICE_TCP.USER_SERVICE,
+        transport: Transport.TCP,
+        options: { host: TCP_HOST, port: PORT_TCP.USER_TCP_PORT },
+      },
     ]),
   ],
   controllers: [NotificationController, NotificationPushController],

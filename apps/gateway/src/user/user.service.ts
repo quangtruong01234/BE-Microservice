@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, Inject, Logger } from "@nestjs/common";
+import { Injectable, Inject, Logger } from "@nestjs/common";
 import { ClientProxy } from "@nestjs/microservices";
 import {
   RegisterUserDto,
@@ -14,7 +14,6 @@ import {
 import { firstValueFrom, timeout, catchError } from "rxjs";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { USER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
-import { USER_MESSAGE } from "libs/constant/response-message.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
 import { assertCloudinaryUrlsOwnedBy } from "../common/media/cloudinary-ownership";
 import { JwtService } from "@nestjs/jwt";
@@ -30,19 +29,65 @@ export class UserService {
     private readonly jwtService: JwtService,
   ) {}
 
+  /**
+   * PUBID-02: the HTTP boundary exposes ONLY the opaque public id (`usr_...`).
+   * Replaces the numeric `id` with `publicId` (stringified PK fallback for
+   * rows predating the backfill) and drops the internal `publicId` copy.
+   */
+  private exposeUser(user: unknown): unknown {
+    if (!user || typeof user !== "object") {
+      return user;
+    }
+    const raw = user as { id?: unknown; publicId?: string | null };
+    const exposed: Record<string, unknown> = {
+      ...(user as Record<string, unknown>),
+      id: raw.publicId ?? String(raw.id),
+    };
+    delete exposed.publicId;
+    return exposed;
+  }
+
+  private exposeAddress(
+    address: unknown,
+    userPublicId: string | null,
+  ): unknown {
+    if (!address || typeof address !== "object") {
+      return address;
+    }
+    const raw = address as { id?: unknown; publicId?: string | null };
+    const exposed: Record<string, unknown> = {
+      ...(address as Record<string, unknown>),
+      id: raw.publicId ?? String(raw.id),
+      userId: userPublicId,
+    };
+    delete exposed.publicId;
+    return exposed;
+  }
+
+  private async getUserPublicId(userId: number): Promise<string | null> {
+    const user = (await firstValueFrom(
+      this.userClient
+        .send({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, { userId })
+        .pipe(timeout(10000)),
+    )) as { publicId?: string | null };
+    return user.publicId ?? null;
+  }
+
   async register(dto: RegisterUserDto): Promise<unknown> {
     try {
       this.logger.log(`Registering user: ${dto.email}`);
-      return (await firstValueFrom(
-        this.userClient
-          .send({ cmd: USER_MESSAGE_PATTERN.REGISTER_USER }, dto)
-          .pipe(
-            timeout(10000),
-            catchError((err: unknown) => {
-              throw err;
-            }),
-          ),
-      )) as unknown;
+      return this.exposeUser(
+        await firstValueFrom(
+          this.userClient
+            .send({ cmd: USER_MESSAGE_PATTERN.REGISTER_USER }, dto)
+            .pipe(
+              timeout(10000),
+              catchError((err: unknown) => {
+                throw err;
+              }),
+            ),
+        ),
+      );
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -65,8 +110,10 @@ export class UserService {
             }),
           ),
       )) as UserData;
+      // JWT stays keyed on the internal numeric id; only the exposed user
+      // object carries the opaque public id.
       const token = this.generateJwtToken(userFound, dto.rememberMe === true);
-      return { user: userFound, token };
+      return { user: this.exposeUser(userFound) as UserData, token };
     } catch (error) {
       MicroserviceErrorHandler.handleError(error, "login user", "User Service");
     }
@@ -128,18 +175,20 @@ export class UserService {
       : this.jwtService.sign(payload);
   }
 
-  async getUserInfo(userId: number): Promise<unknown> {
+  async getUserInfo(userId: string): Promise<unknown> {
     try {
-      return (await firstValueFrom(
-        this.userClient
-          .send({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, userId)
-          .pipe(
-            timeout(10000),
-            catchError((err: unknown) => {
-              throw err;
-            }),
-          ),
-      )) as unknown;
+      return this.exposeUser(
+        await firstValueFrom(
+          this.userClient
+            .send({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, { userId })
+            .pipe(
+              timeout(10000),
+              catchError((err: unknown) => {
+                throw err;
+              }),
+            ),
+        ),
+      );
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -151,7 +200,7 @@ export class UserService {
 
   async getUsersPaginated(page: number, limit: number): Promise<unknown> {
     try {
-      return (await firstValueFrom(
+      const paginated = (await firstValueFrom(
         this.userClient
           .send(
             { cmd: USER_MESSAGE_PATTERN.GET_USERS_PAGINATED },
@@ -163,7 +212,11 @@ export class UserService {
               throw err;
             }),
           ),
-      )) as unknown;
+      )) as { data?: unknown[] };
+      if (Array.isArray(paginated?.data)) {
+        paginated.data = paginated.data.map((user) => this.exposeUser(user));
+      }
+      return paginated;
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -175,7 +228,7 @@ export class UserService {
 
   async getFeaturedSellers(limit: number): Promise<unknown> {
     try {
-      return (await firstValueFrom(
+      const sellers = (await firstValueFrom(
         this.userClient
           .send({ cmd: USER_MESSAGE_PATTERN.GET_FEATURED_SELLERS }, { limit })
           .pipe(
@@ -185,6 +238,9 @@ export class UserService {
             }),
           ),
       )) as unknown;
+      return Array.isArray(sellers)
+        ? sellers.map((seller) => this.exposeUser(seller))
+        : sellers;
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -196,16 +252,18 @@ export class UserService {
 
   async getMe(userId: number): Promise<unknown> {
     try {
-      return (await firstValueFrom(
-        this.userClient
-          .send({ cmd: USER_MESSAGE_PATTERN.GET_ME }, { userId })
-          .pipe(
-            timeout(10000),
-            catchError((err: unknown) => {
-              throw err;
-            }),
-          ),
-      )) as unknown;
+      return this.exposeUser(
+        await firstValueFrom(
+          this.userClient
+            .send({ cmd: USER_MESSAGE_PATTERN.GET_ME }, { userId })
+            .pipe(
+              timeout(10000),
+              catchError((err: unknown) => {
+                throw err;
+              }),
+            ),
+        ),
+      );
     } catch (error) {
       MicroserviceErrorHandler.handleError(error, "get me", "User Service");
     }
@@ -213,29 +271,31 @@ export class UserService {
 
   async updateUser(
     requesterId: number,
-    targetId: number,
+    targetId: string,
     dto: UpdateUserGatewayDto,
   ): Promise<unknown> {
-    if (requesterId !== targetId) {
-      throw new ForbiddenException(USER_MESSAGE.CANNOT_UPDATE_ANOTHER_USER);
-    }
+    // PUBID-02: the route param is the opaque `usr_...` id while the JWT holds
+    // the numeric requester id — the user service resolves the target and
+    // enforces ownership (403 on mismatch).
     if (dto.avatar) {
       assertCloudinaryUrlsOwnedBy([dto.avatar], requesterId);
     }
     try {
-      return (await firstValueFrom(
-        this.userClient
-          .send(
-            { cmd: USER_MESSAGE_PATTERN.UPDATE_USER },
-            { userId: targetId, dto },
-          )
-          .pipe(
-            timeout(10000),
-            catchError((err: unknown) => {
-              throw err;
-            }),
-          ),
-      )) as unknown;
+      return this.exposeUser(
+        await firstValueFrom(
+          this.userClient
+            .send(
+              { cmd: USER_MESSAGE_PATTERN.UPDATE_USER },
+              { userId: requesterId, targetId, dto },
+            )
+            .pipe(
+              timeout(10000),
+              catchError((err: unknown) => {
+                throw err;
+              }),
+            ),
+        ),
+      );
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -247,7 +307,7 @@ export class UserService {
 
   async listAddresses(userId: number): Promise<unknown> {
     try {
-      return (await firstValueFrom(
+      const addresses = (await firstValueFrom(
         this.userClient
           .send({ cmd: USER_MESSAGE_PATTERN.ADDRESS_LIST }, { userId })
           .pipe(
@@ -257,6 +317,10 @@ export class UserService {
             }),
           ),
       )) as unknown;
+      const userPublicId = await this.getUserPublicId(userId);
+      return Array.isArray(addresses)
+        ? addresses.map((address) => this.exposeAddress(address, userPublicId))
+        : addresses;
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -271,16 +335,20 @@ export class UserService {
     dto: CreateUserAddressDto,
   ): Promise<unknown> {
     try {
-      return (await firstValueFrom(
-        this.userClient
-          .send({ cmd: USER_MESSAGE_PATTERN.ADDRESS_CREATE }, { userId, dto })
-          .pipe(
-            timeout(10000),
-            catchError((err: unknown) => {
-              throw err;
-            }),
-          ),
-      )) as unknown;
+      const userPublicId = await this.getUserPublicId(userId);
+      return this.exposeAddress(
+        await firstValueFrom(
+          this.userClient
+            .send({ cmd: USER_MESSAGE_PATTERN.ADDRESS_CREATE }, { userId, dto })
+            .pipe(
+              timeout(10000),
+              catchError((err: unknown) => {
+                throw err;
+              }),
+            ),
+        ),
+        userPublicId,
+      );
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -292,23 +360,27 @@ export class UserService {
 
   async updateAddress(
     userId: number,
-    addressId: number,
+    addressId: string,
     dto: UpdateUserAddressDto,
   ): Promise<unknown> {
     try {
-      return (await firstValueFrom(
-        this.userClient
-          .send(
-            { cmd: USER_MESSAGE_PATTERN.ADDRESS_UPDATE },
-            { userId, addressId, dto },
-          )
-          .pipe(
-            timeout(10000),
-            catchError((err: unknown) => {
-              throw err;
-            }),
-          ),
-      )) as unknown;
+      const userPublicId = await this.getUserPublicId(userId);
+      return this.exposeAddress(
+        await firstValueFrom(
+          this.userClient
+            .send(
+              { cmd: USER_MESSAGE_PATTERN.ADDRESS_UPDATE },
+              { userId, addressId, dto },
+            )
+            .pipe(
+              timeout(10000),
+              catchError((err: unknown) => {
+                throw err;
+              }),
+            ),
+        ),
+        userPublicId,
+      );
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -318,7 +390,7 @@ export class UserService {
     }
   }
 
-  async deleteAddress(userId: number, addressId: number): Promise<unknown> {
+  async deleteAddress(userId: number, addressId: string): Promise<unknown> {
     try {
       return (await firstValueFrom(
         this.userClient
@@ -342,21 +414,25 @@ export class UserService {
     }
   }
 
-  async setDefaultAddress(userId: number, addressId: number): Promise<unknown> {
+  async setDefaultAddress(userId: number, addressId: string): Promise<unknown> {
     try {
-      return (await firstValueFrom(
-        this.userClient
-          .send(
-            { cmd: USER_MESSAGE_PATTERN.ADDRESS_SET_DEFAULT },
-            { userId, addressId },
-          )
-          .pipe(
-            timeout(10000),
-            catchError((err: unknown) => {
-              throw err;
-            }),
-          ),
-      )) as unknown;
+      const userPublicId = await this.getUserPublicId(userId);
+      return this.exposeAddress(
+        await firstValueFrom(
+          this.userClient
+            .send(
+              { cmd: USER_MESSAGE_PATTERN.ADDRESS_SET_DEFAULT },
+              { userId, addressId },
+            )
+            .pipe(
+              timeout(10000),
+              catchError((err: unknown) => {
+                throw err;
+              }),
+            ),
+        ),
+        userPublicId,
+      );
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,

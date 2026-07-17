@@ -46,6 +46,8 @@ import {
 } from "./dto/voucher.dto";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { CheckPermission } from "../common/decorators/check-permission.decorator";
+import { ParsePublicIdPipe } from "../common/pipes/parse-public-id.pipe";
+import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 
 @ApiTags("Order")
 @ApiBearerAuth("bearer")
@@ -94,7 +96,7 @@ export class OrderController {
   @ApiResponse({ status: 403, description: "Forbidden." })
   @ApiResponse({ status: 404, description: "Order not found." })
   async getAdminGhnHistory(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.ORDER)) id: string,
   ): Promise<unknown> {
     return this.orderService.getAdminGhnHistory(id);
   }
@@ -110,7 +112,7 @@ export class OrderController {
   @ApiResponse({ status: 403, description: "Forbidden." })
   @ApiResponse({ status: 404, description: "Order not found." })
   async getAdminGhnOrderDetail(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.ORDER)) id: string,
   ): Promise<unknown> {
     return this.orderService.getAdminGhnOrderDetail(id);
   }
@@ -127,7 +129,7 @@ export class OrderController {
   @ApiResponse({ status: 403, description: "Forbidden." })
   @ApiResponse({ status: 404, description: "Order not found." })
   async syncAdminGhnOrder(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.ORDER)) id: string,
     @Req() req: Request,
   ): Promise<unknown> {
     return this.orderService.syncAdminGhnOrder(id, req.user?.id ?? null);
@@ -149,7 +151,7 @@ export class OrderController {
   @ApiResponse({ status: 404, description: "Order not found." })
   @ApiResponse({ status: 500, description: "GHN rejected the cancel." })
   async cancelAdminGhnOrder(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.ORDER)) id: string,
     @Req() req: Request,
   ): Promise<unknown> {
     return this.orderService.cancelAdminGhnOrder(id, req.user?.id ?? null);
@@ -172,7 +174,7 @@ export class OrderController {
   @ApiResponse({ status: 404, description: "Order not found." })
   @ApiResponse({ status: 500, description: "GHN rejected the return." })
   async returnAdminGhnOrder(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.ORDER)) id: string,
     @Req() req: Request,
   ): Promise<unknown> {
     return this.orderService.returnAdminGhnOrder(id, req.user?.id ?? null);
@@ -194,7 +196,7 @@ export class OrderController {
   @ApiResponse({ status: 404, description: "Order not found." })
   @ApiResponse({ status: 500, description: "GHN rejected the COD update." })
   async updateAdminGhnCod(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.ORDER)) id: string,
     @Body(ValidationPipe) body: UpdateGhnCodDto,
     @Req() req: Request,
   ): Promise<unknown> {
@@ -225,7 +227,7 @@ export class OrderController {
     description: "GHN rejected the receiver update.",
   })
   async updateAdminGhnReceiver(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.ORDER)) id: string,
     @Body(ValidationPipe) body: UpdateGhnReceiverDto,
     @Req() req: Request,
   ): Promise<unknown> {
@@ -252,7 +254,7 @@ export class OrderController {
   })
   @ApiResponse({ status: 404, description: "Order not found." })
   async setDemoGhnStatus(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.ORDER)) id: string,
     @Body(ValidationPipe) body: SetGhnDemoStatusDto,
     @Req() req: Request,
   ): Promise<unknown> {
@@ -386,7 +388,7 @@ export class OrderController {
   })
   @ApiResponse({ status: 404, description: "Order not found." })
   async getOrderInvoice(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.ORDER)) id: string,
     @Req() req: Request,
     @Res() res: Response,
   ): Promise<void> {
@@ -473,7 +475,7 @@ export class OrderController {
   @ApiResponse({ status: 403, description: "Forbidden — not the seller." })
   @ApiResponse({ status: 404, description: "Order not found." })
   async getSellerOrderDetail(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.ORDER)) id: string,
     @Req() req: Request,
   ): Promise<unknown> {
     const sellerId = req.user?.id ?? 0;
@@ -545,7 +547,8 @@ export class OrderController {
   })
   @ApiResponse({ status: 404, description: "Return request not found." })
   async approveReturnRequest(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.RETURN_REQUEST))
+    id: string,
     @Req() req: Request,
   ): Promise<unknown> {
     const reviewerId = req.user?.id ?? 0;
@@ -577,7 +580,8 @@ export class OrderController {
   })
   @ApiResponse({ status: 404, description: "Return request not found." })
   async rejectReturnRequest(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.RETURN_REQUEST))
+    id: string,
     @Body(ValidationPipe) body: RejectReturnRequestDto,
     @Req() req: Request,
   ): Promise<unknown> {
@@ -600,7 +604,7 @@ export class OrderController {
   @ApiResponse({ status: 403, description: "Forbidden — not the order owner." })
   @ApiResponse({ status: 404, description: "Order not found." })
   async getOrderById(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.ORDER)) id: string,
     @Req() req: Request,
   ): Promise<unknown> {
     const callerId = req.user?.id ?? 0;
@@ -620,7 +624,7 @@ export class OrderController {
   })
   @ApiResponse({ status: 403, description: "Forbidden — not this user." })
   async getOrderStatusCounts(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.USER)) id: string,
     @Req() req: Request,
   ): Promise<Record<string, number>> {
     const callerId = req.user?.id ?? 0;
@@ -637,7 +641,7 @@ export class OrderController {
   @ApiResponse({ status: 400, description: "Invalid query parameters." })
   @ApiResponse({ status: 403, description: "Forbidden — not this user." })
   async getOrderByUser(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.USER)) id: string,
     @Query(ValidationPipe) query: GetOrdersByUserQueryDto,
     @Req() req: Request,
   ): Promise<unknown> {
@@ -665,7 +669,7 @@ export class OrderController {
   @ApiResponse({ status: 403, description: "Forbidden — not the order owner." })
   @ApiResponse({ status: 404, description: "Order not found." })
   async cancelOrder(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.ORDER)) id: string,
     @Req() req: Request,
   ): Promise<unknown> {
     const callerId = req.user?.id ?? 0;
@@ -693,7 +697,7 @@ export class OrderController {
     description: "An active return request already exists for this order.",
   })
   async requestReturn(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.ORDER)) id: string,
     @Body(ValidationPipe) body: CreateReturnRequestDto,
     @Req() req: Request,
   ): Promise<unknown> {
@@ -707,7 +711,7 @@ export class OrderController {
   @ApiResponse({ status: 200, description: "Payment URL and status." })
   @ApiResponse({ status: 403, description: "Forbidden — not the order owner." })
   async getPaymentUrl(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.ORDER)) id: string,
     @Req() req: Request,
   ): Promise<{ orderUrl: string | null; status: string | null }> {
     const callerId = req.user?.id ?? 0;
@@ -724,7 +728,7 @@ export class OrderController {
   @ApiResponse({ status: 403, description: "Forbidden — not the seller." })
   @ApiResponse({ status: 404, description: "Order not found." })
   async confirmOrder(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.ORDER)) id: string,
     @Req() req: Request,
   ): Promise<unknown> {
     const sellerId = req.user?.id ?? 0;
@@ -746,7 +750,7 @@ export class OrderController {
   @ApiResponse({ status: 403, description: "Forbidden — not the seller." })
   @ApiResponse({ status: 404, description: "Order not found." })
   async readyToShip(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.ORDER)) id: string,
     @Req() req: Request,
   ): Promise<unknown> {
     const sellerId = req.user?.id ?? 0;
@@ -768,7 +772,7 @@ export class OrderController {
   @ApiResponse({ status: 404, description: "Order not found." })
   @ApiResponse({ status: 409, description: "Order was updated concurrently." })
   async shipOrder(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.ORDER)) id: string,
     @Req() req: Request,
   ): Promise<unknown> {
     const sellerId = req.user?.id ?? 0;
@@ -794,7 +798,7 @@ export class OrderController {
   @ApiResponse({ status: 404, description: "Order not found." })
   @ApiResponse({ status: 409, description: "Order was updated concurrently." })
   async deliverOrder(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.ORDER)) id: string,
     @Req() req: Request,
   ): Promise<unknown> {
     const sellerId = req.user?.id ?? 0;
@@ -823,7 +827,7 @@ export class OrderController {
   @ApiResponse({ status: 404, description: "Order not found." })
   @ApiResponse({ status: 409, description: "Order was updated concurrently." })
   async completeOrder(
-    @Param("id", ParseIntPipe) id: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.ORDER)) id: string,
     @Req() req: Request,
   ): Promise<unknown> {
     const sellerId = req.user?.id ?? 0;

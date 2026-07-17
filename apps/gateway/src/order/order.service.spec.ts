@@ -65,9 +65,9 @@ describe("OrderService access control", () => {
       }),
     );
 
-    await expect(service.getPaymentUrl(97, 18, "user")).rejects.toBeInstanceOf(
-      ForbiddenException,
-    );
+    await expect(
+      service.getPaymentUrl("ord_test000000000097", 18, "user"),
+    ).rejects.toBeInstanceOf(ForbiddenException);
     expect(paymentsClient.send).not.toHaveBeenCalled();
   });
 
@@ -87,19 +87,97 @@ describe("OrderService access control", () => {
       of({ orderUrl: "https://payment.example/97", status: "pending" }),
     );
 
-    await expect(service.getPaymentUrl(97, 17, "user")).resolves.toEqual({
+    await expect(
+      service.getPaymentUrl("ord_test000000000097", 17, "user"),
+    ).resolves.toEqual({
       orderUrl: "https://payment.example/97",
       status: "pending",
     });
   });
 
+  it("keeps the snapshotted product public id when the product was deleted", async () => {
+    ordersClient.send.mockReturnValue(
+      of({
+        id: 97,
+        publicId: "ord_1111111111111111",
+        userId: 17,
+        sellerId: 20,
+        status: "canceled",
+        total: 100,
+        items: [
+          {
+            id: 1,
+            productId: 16,
+            productPublicId: "prod_1111111111111111",
+            sellerId: 20,
+            productName: "Deleted product snapshot",
+            quantity: 1,
+            price: 100,
+            skuId: null,
+            skuTierIdx: null,
+          },
+        ],
+        createdAt: "2026-06-20T00:00:00.000Z",
+        updatedAt: "2026-06-20T00:00:00.000Z",
+      }),
+    );
+    productClient.send.mockReturnValue(of([]));
+    userClient.send.mockReturnValue(
+      of([
+        { id: 17, publicId: "usr_1111111111111111" },
+        { id: 20, publicId: "usr_2222222222222222" },
+      ]),
+    );
+
+    const order = await service.getOrderById(
+      "ord_1111111111111111",
+      17,
+      "user",
+    );
+    const items = order.items as Record<string, unknown>[];
+
+    expect(items[0].productId).toBe("prod_1111111111111111");
+    expect(items[0]).not.toHaveProperty("productPublicId");
+  });
+
+  it("projects the public order id onto GHN shipping history rows", async () => {
+    ordersClient.send.mockReturnValue(
+      of([
+        {
+          id: "30",
+          orderId: "120",
+          type: "manual_sync",
+          action: "sync_detail",
+          actorId: null,
+        },
+      ]),
+    );
+
+    await expect(
+      service.getAdminGhnHistory("ord_1111111111111111"),
+    ).resolves.toEqual([
+      {
+        id: "30",
+        orderId: "ord_1111111111111111",
+        type: "manual_sync",
+        action: "sync_detail",
+        actorId: null,
+      },
+    ]);
+    expect(ordersClient.send).toHaveBeenCalledWith(
+      ORDER_MESSAGE_PATTERN.ADMIN_GHN_HISTORY,
+      { orderId: "ord_1111111111111111" },
+    );
+  });
+
   it("cancels multi-seller child orders when payment initialization fails", async () => {
     productClient.send.mockImplementation(
-      (pattern: string, productId: number) => {
+      (pattern: string, productId: string) => {
         if (pattern === PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_ID) {
+          const internalProductId = productId.endsWith("2") ? 2 : 1;
           return of({
-            id: productId,
-            userId: productId === 1 ? 20 : 21,
+            id: internalProductId,
+            userId: internalProductId === 1 ? 20 : 21,
             price: 100,
             isActive: true,
           });
@@ -147,8 +225,16 @@ describe("OrderService access control", () => {
         paymentMethod: PaymentMethod.VNPAY,
         shippingAddress: "address",
         items: [
-          { productId: 1, productName: "Product 1", quantity: 1 },
-          { productId: 2, productName: "Product 2", quantity: 1 },
+          {
+            productId: "prod_1111111111111111",
+            productName: "Product 1",
+            quantity: 1,
+          },
+          {
+            productId: "prod_2222222222222222",
+            productName: "Product 2",
+            quantity: 1,
+          },
         ],
       }),
     ).rejects.toThrow();
@@ -167,7 +253,13 @@ describe("OrderService access control", () => {
     const baseDto = {
       paymentMethod: PaymentMethod.COD,
       shippingAddress: "address",
-      items: [{ productId: 1, productName: "Product 1", quantity: 1 }],
+      items: [
+        {
+          productId: "prod_1111111111111111",
+          productName: "Product 1",
+          quantity: 1,
+        },
+      ],
     };
 
     it("replays the cached response when the key was already completed", async () => {

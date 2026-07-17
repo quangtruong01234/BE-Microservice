@@ -1,4 +1,5 @@
 export interface ProductResponse {
+  id: number;
   price: number | null;
 }
 

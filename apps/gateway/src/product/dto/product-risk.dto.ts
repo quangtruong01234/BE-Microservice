@@ -1,6 +1,15 @@
 import { Type } from "class-transformer";
-import { IsInt, IsOptional, Max, Min } from "class-validator";
-import { ApiPropertyOptional } from "@nestjs/swagger";
+import {
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  IsUrl,
+  Max,
+  MaxLength,
+  Min,
+} from "class-validator";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 
 export class ProductRiskQueryDto {
   @ApiPropertyOptional({
@@ -30,4 +39,41 @@ export class ProductRiskQueryDto {
   @Min(1)
   @Max(100)
   limit?: number = 20;
+}
+
+export class ProductRiskBackfillDto {
+  @ApiPropertyOptional({ minimum: 0, default: 0 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  cursor?: number = 0;
+
+  @ApiPropertyOptional({ minimum: 1, maximum: 100, default: 50 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit?: number = 50;
+}
+
+export class ProductDuplicateImageCheckDto {
+  @ApiProperty({
+    description: "An already-uploaded Cloudinary URL owned by the seller",
+  })
+  @IsUrl({ require_protocol: true })
+  declare imageUrl: string;
+}
+
+export class ProductRiskFeedbackDto {
+  @ApiProperty({ enum: ["confirmed_duplicate", "dismissed"] })
+  @IsIn(["confirmed_duplicate", "dismissed"])
+  declare decision: "confirmed_duplicate" | "dismissed";
+
+  @ApiPropertyOptional({ maxLength: 500 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  note?: string;
 }

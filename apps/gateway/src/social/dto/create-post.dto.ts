@@ -2,14 +2,14 @@ import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
   ArrayMaxSize,
   IsArray,
-  IsInt,
   IsNotEmpty,
   IsOptional,
   IsString,
   MaxLength,
-  Min,
 } from "class-validator";
 import { IsCloudinaryUrl } from "../../common/validators/is-cloudinary-url.validator";
+import { IsPublicId } from "../../common/validators/is-public-id.validator";
+import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 
 export class CreatePostDto {
   @ApiProperty({ description: "Post content" })
@@ -32,7 +32,7 @@ export class CreatePostDto {
 
   @ApiPropertyOptional({ description: "Optional attached product ID" })
   @IsOptional()
-  @IsInt()
-  @Min(1)
-  productId?: number;
+  @IsString()
+  @IsPublicId(PUBLIC_ID_PREFIXES.PRODUCT)
+  productId?: string;
 }

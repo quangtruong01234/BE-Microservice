@@ -13,11 +13,17 @@ import {
 } from "class-validator";
 import { Type } from "class-transformer";
 import { PaymentMethod } from "@app/common";
+import { IsPublicId } from "../../common/validators/is-public-id.validator";
+import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 
 export class OrderItemDto {
-  @ApiProperty({ description: "Product ID", example: 1 })
-  @IsInt()
-  declare productId: number;
+  @ApiProperty({
+    description: "Product public ID",
+    example: "prod_8fK2mQ9xL3pT7vWb",
+  })
+  @IsString()
+  @IsPublicId(PUBLIC_ID_PREFIXES.PRODUCT)
+  declare productId: string;
 
   @ApiPropertyOptional({
     description: "SKU ID for variation products — omit for base-price products",

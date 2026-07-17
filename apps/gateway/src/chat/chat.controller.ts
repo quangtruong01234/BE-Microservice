@@ -3,7 +3,6 @@ import {
   Controller,
   Get,
   Param,
-  ParseIntPipe,
   Post,
   Query,
   Req,
@@ -12,8 +11,10 @@ import {
 } from "@nestjs/common";
 import { Request } from "express";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
+import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
+import { ParsePublicIdPipe } from "../common/pipes/parse-public-id.pipe";
 import { ChatGatewayService } from "./chat.service";
 import { CreateConversationDto, GetMessagesQueryDto } from "./dto/chat.dto";
 
@@ -43,7 +44,8 @@ export class ChatController {
   @RateLimit({ limit: 50 })
   async getMessages(
     @Req() req: Request,
-    @Param("id", ParseIntPipe) conversationId: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.CONVERSATION))
+    conversationId: string,
     @Query(ValidationPipe) query: GetMessagesQueryDto,
   ): Promise<unknown> {
     const userId = req.user?.id ?? 0;
@@ -58,7 +60,8 @@ export class ChatController {
   @Post("conversations/:id/read")
   async markRead(
     @Req() req: Request,
-    @Param("id", ParseIntPipe) conversationId: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.CONVERSATION))
+    conversationId: string,
   ): Promise<unknown> {
     const userId = req.user?.id ?? 0;
     return this.chatService.markRead(userId, conversationId);

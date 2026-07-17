@@ -17,6 +17,7 @@ export type UserRole = {
 
 export type UserData = {
   id?: string | number;
+  publicId?: string | null;
   username?: string;
   email?: string;
   role?: UserRole | null;

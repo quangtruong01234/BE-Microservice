@@ -1,21 +1,21 @@
 import { PartialType } from "@nestjs/swagger";
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { Type } from "class-transformer";
 import {
   ArrayMaxSize,
   IsArray,
   IsBoolean,
-  IsInt,
   IsNumber,
   IsOptional,
   IsString,
   Matches,
   Min,
 } from "class-validator";
+import { IsPublicId } from "../../common/validators/is-public-id.validator";
+import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 
 export class ProductResponseDto {
   @ApiProperty({
-    type: [Number],
+    type: [String],
     description: "IDs of categories this product belongs to",
   })
   @IsArray()
@@ -25,16 +25,16 @@ export class ProductResponseDto {
 
 export class GetProductsWithInventoryDto {
   @ApiProperty({
-    type: [Number],
+    type: [String],
     description: "Product IDs to fetch (max 50)",
-    example: [1, 2, 3],
+    example: ["prod_8fK2mQ9xL3pT7vWb"],
     maxItems: 50,
   })
   @IsArray()
   @ArrayMaxSize(50)
-  @IsInt({ each: true })
-  @Type(() => Number)
-  declare productIds: number[];
+  @IsString({ each: true })
+  @IsPublicId(PUBLIC_ID_PREFIXES.PRODUCT, { each: true })
+  declare productIds: string[];
 }
 
 export class CreateSkuGatewayDto {

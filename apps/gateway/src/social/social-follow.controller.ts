@@ -3,7 +3,6 @@ import {
   Delete,
   Get,
   Param,
-  ParseIntPipe,
   Post,
   Query,
   Req,
@@ -22,6 +21,8 @@ import { SocialGatewayService } from "./social.service";
 import { GetPostsQueryDto } from "./dto/get-posts-query.dto";
 import { OptionalJwtAuthGuard } from "../common/guards/optional-jwt-auth.guard";
 import { Public } from "../common/decorators/public.decorator";
+import { ParsePublicIdPipe } from "../common/pipes/parse-public-id.pipe";
+import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 
 @ApiTags("Social")
 @Controller("social/users")
@@ -36,7 +37,8 @@ export class SocialFollowController {
   @ApiResponse({ status: 400, description: "Cannot follow yourself." })
   @ApiResponse({ status: 409, description: "Already following." })
   async followUser(
-    @Param("id", ParseIntPipe) followingId: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.USER))
+    followingId: string,
     @Req() req: Request,
   ): Promise<unknown> {
     const followerId = req.user?.id ?? 0;
@@ -50,7 +52,8 @@ export class SocialFollowController {
   @ApiResponse({ status: 200, description: "Unfollowed." })
   @ApiResponse({ status: 404, description: "Follow relationship not found." })
   async unfollowUser(
-    @Param("id", ParseIntPipe) followingId: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.USER))
+    followingId: string,
     @Req() req: Request,
   ): Promise<unknown> {
     const followerId = req.user?.id ?? 0;
@@ -62,7 +65,7 @@ export class SocialFollowController {
   @ApiOperation({ summary: "Get followers of a user" })
   @ApiResponse({ status: 200, description: "Paginated follower list." })
   async getFollowers(
-    @Param("id", ParseIntPipe) userId: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.USER)) userId: string,
     @Query(ValidationPipe) query: GetPostsQueryDto,
   ): Promise<unknown> {
     return this.socialService.getFollowers(
@@ -77,7 +80,7 @@ export class SocialFollowController {
   @ApiOperation({ summary: "Get users that a user is following" })
   @ApiResponse({ status: 200, description: "Paginated following list." })
   async getFollowing(
-    @Param("id", ParseIntPipe) userId: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.USER)) userId: string,
     @Query(ValidationPipe) query: GetPostsQueryDto,
   ): Promise<unknown> {
     return this.socialService.getFollowing(
@@ -93,7 +96,7 @@ export class SocialFollowController {
   @ApiOperation({ summary: "Get feed of posts from users that a user follows" })
   @ApiResponse({ status: 200, description: "Paginated following feed." })
   async getFollowingFeed(
-    @Param("id", ParseIntPipe) userId: number,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.USER)) userId: string,
     @Req() req: Request,
     @Query(ValidationPipe) query: GetPostsQueryDto,
   ): Promise<unknown> {

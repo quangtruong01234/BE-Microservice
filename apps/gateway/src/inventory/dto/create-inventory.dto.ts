@@ -1,15 +1,18 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { IsInt, IsOptional, IsString, Min, IsNotEmpty } from "class-validator";
+import { IsPublicId } from "../../common/validators/is-public-id.validator";
+import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 
 export class CreateInventoryDto {
   @ApiProperty({
     description: "Product ID to create inventory for",
-    example: 1,
-    type: "integer",
+    example: "prod_8fK2mQ9xL3pT7vWb",
+    type: "string",
   })
-  @IsInt()
+  @IsString()
   @IsNotEmpty()
-  productId: number;
+  @IsPublicId(PUBLIC_ID_PREFIXES.PRODUCT)
+  declare productId: string;
 
   @ApiPropertyOptional({
     description:
@@ -29,7 +32,7 @@ export class CreateInventoryDto {
   })
   @IsString()
   @IsNotEmpty()
-  sku: string;
+  declare sku: string;
 
   @ApiProperty({
     description: "Available stock quantity",
@@ -39,7 +42,7 @@ export class CreateInventoryDto {
   })
   @IsInt()
   @Min(0)
-  availableStock: number;
+  declare availableStock: number;
 
   @ApiProperty({
     description: "Minimum stock threshold for low stock alerts",
