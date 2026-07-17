@@ -34,6 +34,20 @@ export class Order {
   @PrimaryGeneratedColumn("increment")
   id!: number;
 
+  // Opaque external id (`ord_<16 base62>`, PUBID-01). The ONLY order id the
+  // HTTP API accepts/returns; internal FKs, TCP-to-payments and RMQ events keep
+  // the numeric PK. Nullable so synchronize can add the column on existing dev
+  // rows — backfilled by database/add_public_id_to_orders.sql.
+  @Column({
+    name: "public_id",
+    type: "varchar",
+    length: 32,
+    unique: true,
+    nullable: true,
+    default: null,
+  })
+  publicId!: string | null;
+
   @Column({ name: "user_id", type: "bigint" })
   userId!: number;
 

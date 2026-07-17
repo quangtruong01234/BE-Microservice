@@ -1,6 +1,7 @@
 import { PaymentMethod } from "@app/common";
 import { OrderStatus } from "./entity/order.entity";
 import { OrderItem } from "./entity/order_item.entity";
+import { OrderReturnRequest } from "./entity/order-return-request.entity";
 import { GhnOrderDetail } from "./ghn/ghn.types";
 
 export type StockReservationItem = {
@@ -20,8 +21,10 @@ export interface AdminGhnOrderListQuery {
   dateTo?: string;
 }
 
+// PUBID-01: `orderId` on all admin-GHN response shapes is the opaque public id
+// (`ord_...`) — the numeric PK never leaves the orders service on these paths.
 export interface AdminGhnOrderListItem {
-  orderId: number;
+  orderId: string;
   userId: number;
   sellerId: number;
   orderStatus: OrderStatus | undefined;
@@ -37,7 +40,7 @@ export interface AdminGhnOrderListItem {
 
 export interface AdminGhnOrderDetail {
   localOrder: {
-    orderId: number;
+    orderId: string;
     userId: number;
     sellerId: number;
     orderStatus: OrderStatus | undefined;
@@ -47,7 +50,8 @@ export interface AdminGhnOrderDetail {
     codAmount: number | null;
     paymentMethod: PaymentMethod;
     total: number;
-    items: OrderItem[];
+    // PUBID-01: items are exposed without their numeric `orderId` FK.
+    items: Omit<OrderItem, "orderId">[];
     createdAt: Date;
     updatedAt: Date;
   };
@@ -59,7 +63,7 @@ export interface AdminGhnOrderDetail {
 }
 
 export interface AdminGhnSyncResult {
-  orderId: number;
+  orderId: string;
   previousStatus: OrderStatus | undefined;
   newStatus: OrderStatus | undefined;
   ghnStatus: string;
@@ -108,7 +112,7 @@ export interface OrderAnalytics {
 export type AdminGhnActionType = "cancel" | "return";
 
 export interface AdminGhnActionResult {
-  orderId: number;
+  orderId: string;
   action: AdminGhnActionType;
   ghnOrderCode: string;
   previousStatus: OrderStatus | undefined;
@@ -119,7 +123,7 @@ export interface AdminGhnActionResult {
 }
 
 export interface AdminGhnUpdateCodResult {
-  orderId: number;
+  orderId: string;
   action: "update_cod";
   ghnOrderCode: string;
   previousCodAmount: number;
@@ -136,7 +140,7 @@ export interface AdminGhnReceiverUpdateInput {
 }
 
 export interface AdminGhnUpdateReceiverResult {
-  orderId: number;
+  orderId: string;
   action: "update_receiver";
   ghnOrderCode: string;
   shippingAddress: string;
@@ -145,6 +149,13 @@ export interface AdminGhnUpdateReceiverResult {
   message: string;
   actionedAt: Date;
 }
+
+// PUBID-01: return-request rows carry the parent order's public id so the FE
+// can deep-link the order without the numeric id (request.id stays numeric
+// until PUBID-04).
+export type ReturnRequestView = OrderReturnRequest & {
+  orderPublicId: string | null;
+};
 
 export interface GhnStatusApplyResult {
   previousStatus: OrderStatus | undefined;

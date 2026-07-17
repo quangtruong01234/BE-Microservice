@@ -19,7 +19,13 @@ import {
   Repository,
 } from "typeorm";
 import { Order, OrderStatus } from "./entity/order.entity";
-import { PaymentMethod, PaginatedResponse } from "@app/common";
+import {
+  PaymentMethod,
+  PaginatedResponse,
+  generatePublicId,
+  isPublicId,
+} from "@app/common";
+import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 import { HttpService } from "@nestjs/axios";
 import { ClientProxy } from "@nestjs/microservices";
 import { catchError, firstValueFrom, throwError, timeout } from "rxjs";
@@ -73,6 +79,7 @@ import {
   AdminGhnReceiverUpdateInput,
   AdminGhnUpdateReceiverResult,
   GhnStatusApplyResult,
+  ReturnRequestView,
 } from "./orders.types";
 
 @Injectable()
@@ -117,6 +124,7 @@ export class OrdersService {
     shippingAddress: string,
     items: Array<{
       productId: number;
+      productPublicId?: string | null;
       productName: string;
       quantity: number;
       price: number;
@@ -191,6 +199,7 @@ export class OrdersService {
         async (manager) => {
           const savedOrder = await manager.save(
             manager.create(Order, {
+              publicId: generatePublicId(PUBLIC_ID_PREFIXES.ORDER),
               userId,
               sellerId,
               total,
@@ -489,6 +498,7 @@ export class OrdersService {
     shippingAddress: string,
     items: Array<{
       productId: number;
+      productPublicId?: string | null;
       productName: string;
       quantity: number;
       price: number;
@@ -591,6 +601,7 @@ export class OrdersService {
 
           const order = await manager.save(
             manager.create(Order, {
+              publicId: generatePublicId(PUBLIC_ID_PREFIXES.ORDER),
               userId,
               sellerId,
               total,
@@ -606,6 +617,7 @@ export class OrdersService {
             manager.create(OrderItem, {
               orderId: order.id,
               productId: item.productId,
+              productPublicId: item.productPublicId ?? null,
               productName: item.productName,
               quantity: item.quantity,
               price: item.price,
@@ -1134,6 +1146,11 @@ export class OrdersService {
           if (Number.isInteger(searchId)) {
             where.orWhere("order.id = :searchId", { searchId });
           }
+          if (isPublicId(PUBLIC_ID_PREFIXES.ORDER, search)) {
+            where.orWhere("order.publicId = :searchPublicId", {
+              searchPublicId: search,
+            });
+          }
         }),
       );
     }
@@ -1317,7 +1334,7 @@ export class OrdersService {
     });
 
     return {
-      orderId: order.id,
+      orderId: order.publicId ?? String(order.id),
       previousStatus: result.previousStatus,
       newStatus: result.newStatus,
       ghnStatus: detail.status,
@@ -1371,7 +1388,7 @@ export class OrdersService {
     });
 
     return {
-      orderId: order.id,
+      orderId: order.publicId ?? String(order.id),
       previousStatus: result.previousStatus,
       newStatus: result.newStatus,
       ghnStatus,
@@ -1480,7 +1497,7 @@ export class OrdersService {
     });
 
     return {
-      orderId: order.id,
+      orderId: order.publicId ?? String(order.id),
       action,
       ghnOrderCode,
       previousStatus,
@@ -1557,7 +1574,7 @@ export class OrdersService {
     });
 
     return {
-      orderId: order.id,
+      orderId: order.publicId ?? String(order.id),
       action: "update_cod",
       ghnOrderCode,
       previousCodAmount,
@@ -1647,7 +1664,7 @@ export class OrdersService {
     });
 
     return {
-      orderId: order.id,
+      orderId: order.publicId ?? String(order.id),
       action: "update_receiver",
       ghnOrderCode,
       shippingAddress,
@@ -1743,7 +1760,7 @@ export class OrdersService {
     latestHistory?: ShippingHistory,
   ): AdminGhnOrderListItem {
     return {
-      orderId: order.id,
+      orderId: order.publicId ?? String(order.id),
       userId: Number(order.userId),
       sellerId: Number(order.sellerId),
       orderStatus: order.status,
@@ -1763,7 +1780,7 @@ export class OrdersService {
     order: Order,
   ): AdminGhnOrderDetail["localOrder"] {
     return {
-      orderId: order.id,
+      orderId: order.publicId ?? String(order.id),
       userId: Number(order.userId),
       sellerId: Number(order.sellerId),
       orderStatus: order.status,
@@ -1774,7 +1791,13 @@ export class OrdersService {
       codAmount: order.codAmount === null ? null : Number(order.codAmount ?? 0),
       paymentMethod: order.paymentMethod,
       total: Number(order.total),
-      items: order.items ?? [],
+      // PUBID-01: drop each item's numeric `orderId` FK before it leaves the
+      // service — the parent's public id already identifies the order.
+      items: (order.items ?? []).map((item) => {
+        const exposed: Record<string, unknown> = { ...item };
+        delete exposed.orderId;
+        return exposed as unknown as Omit<OrderItem, "orderId">;
+      }),
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,
     };
@@ -1866,6 +1889,41 @@ export class OrdersService {
     return this.orderRepository.findOne({
       where: { id: orderId },
       relations: ["items"],
+    });
+  }
+
+  /**
+   * PUBID-01 — resolve an order id received over TCP to the numeric PK.
+   * The gateway forwards the opaque public id (`ord_...`); internal callers
+   * (notification consumers, RMQ handlers) still send the numeric id. Unknown
+   * public id → 404, same as a missing numeric order downstream.
+   */
+  async resolveOrderId(orderId: number | string): Promise<number> {
+    if (typeof orderId === "number") {
+      return orderId;
+    }
+    if (!isPublicId(PUBLIC_ID_PREFIXES.ORDER, orderId)) {
+      throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
+    }
+    const order = await this.orderRepository.findOne({
+      where: { publicId: orderId },
+      select: { id: true },
+    });
+    if (!order) {
+      throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
+    }
+    return order.id;
+  }
+
+  async getOrderPublicIdsByIds(
+    orderIds: number[],
+  ): Promise<{ id: number; publicId: string | null }[]> {
+    if (orderIds.length === 0) {
+      return [];
+    }
+    return this.orderRepository.find({
+      where: { id: In(orderIds) },
+      select: { id: true, publicId: true },
     });
   }
 
@@ -2664,7 +2722,7 @@ export class OrdersService {
     orderId: number,
     userId: number,
     reason: string,
-  ): Promise<OrderReturnRequest> {
+  ): Promise<ReturnRequestView> {
     const order = await this.orderRepository.findOne({
       where: { id: orderId },
     });
@@ -2700,6 +2758,7 @@ export class OrdersService {
       this.returnRequestRepository.create({
         orderId,
         userId,
+        publicId: generatePublicId(PUBLIC_ID_PREFIXES.RETURN_REQUEST),
         reason,
         status: ReturnRequestStatus.PENDING_REVIEW,
         previousOrderStatus: order.status ?? null,
@@ -2711,7 +2770,7 @@ export class OrdersService {
     this.logger.log(
       `[ORDERS] Return request ${saved.id} opened for order ${orderId} by user ${userId}`,
     );
-    return saved;
+    return { ...saved, orderPublicId: order.publicId };
   }
 
   /**
@@ -2721,14 +2780,17 @@ export class OrdersService {
    * COD). Reject → the order is restored to its pre-request status.
    */
   async reviewReturnRequest(
-    requestId: number,
+    requestId: number | string,
     reviewerId: number,
     reviewerRole: string,
     decision: "approve" | "reject",
     rejectReason?: string,
-  ): Promise<OrderReturnRequest> {
+  ): Promise<ReturnRequestView> {
     const request = await this.returnRequestRepository.findOne({
-      where: { id: requestId },
+      where:
+        typeof requestId === "number"
+          ? { id: requestId }
+          : { publicId: requestId },
     });
     if (!request) {
       throw new NotFoundException(
@@ -2771,7 +2833,7 @@ export class OrdersService {
     request: OrderReturnRequest,
     order: Order,
     reviewerId: number,
-  ): Promise<OrderReturnRequest> {
+  ): Promise<ReturnRequestView> {
     // Best-effort GHN return — non-fatal (sandbox may reject; demo records the
     // refund regardless).
     if (order.ghnOrderCode) {
@@ -2810,7 +2872,7 @@ export class OrdersService {
     this.logger.log(
       `[ORDERS] Return request ${request.id} approved for order ${order.id}; refund ${refundAmount} (${refundStatus})`,
     );
-    return saved;
+    return { ...saved, orderPublicId: order.publicId };
   }
 
   private async rejectReturnRequest(
@@ -2818,7 +2880,7 @@ export class OrdersService {
     order: Order,
     reviewerId: number,
     rejectReason?: string,
-  ): Promise<OrderReturnRequest> {
+  ): Promise<ReturnRequestView> {
     if (!rejectReason || rejectReason.trim().length === 0) {
       throw new BadRequestException(ORDER_MESSAGE.REJECT_REASON_REQUIRED);
     }
@@ -2836,7 +2898,7 @@ export class OrdersService {
     this.logger.log(
       `[ORDERS] Return request ${request.id} rejected for order ${order.id}; restored to ${restoreStatus}`,
     );
-    return saved;
+    return { ...saved, orderPublicId: order.publicId };
   }
 
   /** Buyer's own return requests, newest first. */
@@ -2844,14 +2906,39 @@ export class OrdersService {
     userId: number,
     page: number,
     limit: number,
-  ): Promise<PaginatedResponse<OrderReturnRequest>> {
+  ): Promise<PaginatedResponse<ReturnRequestView>> {
     const [data, total] = await this.returnRequestRepository.findAndCount({
       where: { userId },
       order: { createdAt: "DESC" },
       skip: (page - 1) * limit,
       take: limit,
     });
-    return PaginatedResponse.of(data, total, page, limit);
+    const enriched = await this.attachOrderPublicIds(data);
+    return PaginatedResponse.of(enriched, total, page, limit);
+  }
+
+  // PUBID-01 — batch-attach the parent order's public id so return-request
+  // rows can deep-link to `/order/:publicId` without exposing the numeric id.
+  private async attachOrderPublicIds(
+    requests: OrderReturnRequest[],
+  ): Promise<ReturnRequestView[]> {
+    if (requests.length === 0) {
+      return [];
+    }
+    const orderIds = [
+      ...new Set(requests.map((request) => Number(request.orderId))),
+    ];
+    const orders = await this.orderRepository.find({
+      where: { id: In(orderIds) },
+      select: { id: true, publicId: true },
+    });
+    const publicIdByOrderId = new Map(
+      orders.map((order) => [order.id, order.publicId]),
+    );
+    return requests.map((request) => ({
+      ...request,
+      orderPublicId: publicIdByOrderId.get(Number(request.orderId)) ?? null,
+    }));
   }
 
   /**
@@ -2864,7 +2951,7 @@ export class OrdersService {
     page: number,
     limit: number,
     status?: ReturnRequestStatus,
-  ): Promise<PaginatedResponse<OrderReturnRequest>> {
+  ): Promise<PaginatedResponse<ReturnRequestView>> {
     const qb = this.returnRequestRepository.createQueryBuilder("rr");
     if (!isAdmin) {
       const productIds = await this.getSellerProductIds(sellerId);
@@ -2884,7 +2971,8 @@ export class OrdersService {
       .skip((page - 1) * limit)
       .take(limit)
       .getManyAndCount();
-    return PaginatedResponse.of(data, total, page, limit);
+    const enriched = await this.attachOrderPublicIds(data);
+    return PaginatedResponse.of(enriched, total, page, limit);
   }
 
   /**

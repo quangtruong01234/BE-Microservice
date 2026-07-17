@@ -145,34 +145,38 @@ export class OrdersController {
     return this.ordersService.getAdminGhnOrders(payload);
   }
 
+  // PUBID-01: HTTP-facing order-id handlers accept the opaque public id
+  // (`ord_...`) forwarded by the gateway; internal callers (notification
+  // consumers) still send the numeric PK. `resolveOrderId` handles both.
+
   @MessagePattern(ORDER_MESSAGE_PATTERN.ADMIN_GHN_ORDER_DETAIL)
   async getAdminGhnOrderDetail(
-    @Payload() payload: { orderId: number },
+    @Payload() payload: { orderId: number | string },
   ): Promise<unknown> {
-    return this.ordersService.getAdminGhnOrderDetail(payload.orderId);
+    const orderId = await this.ordersService.resolveOrderId(payload.orderId);
+    return this.ordersService.getAdminGhnOrderDetail(orderId);
   }
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.ADMIN_GHN_SYNC)
   async syncAdminGhnOrder(
-    @Payload() payload: { orderId: number; actorId: number | null },
+    @Payload() payload: { orderId: number | string; actorId: number | null },
   ): Promise<unknown> {
-    return this.ordersService.syncAdminGhnOrder(
-      payload.orderId,
-      payload.actorId,
-    );
+    const orderId = await this.ordersService.resolveOrderId(payload.orderId);
+    return this.ordersService.syncAdminGhnOrder(orderId, payload.actorId);
   }
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.ADMIN_GHN_DEMO_STATUS)
   async setDemoGhnStatus(
     @Payload()
     payload: {
-      orderId: number;
+      orderId: number | string;
       actorId: number | null;
       ghnStatus: string;
     },
   ): Promise<unknown> {
+    const orderId = await this.ordersService.resolveOrderId(payload.orderId);
     return this.ordersService.setDemoGhnStatus(
-      payload.orderId,
+      orderId,
       payload.actorId,
       payload.ghnStatus,
     );
@@ -180,42 +184,40 @@ export class OrdersController {
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.ADMIN_GHN_HISTORY)
   async getAdminGhnHistory(
-    @Payload() payload: { orderId: number },
+    @Payload() payload: { orderId: number | string },
   ): Promise<unknown> {
-    return this.ordersService.getAdminGhnHistory(payload.orderId);
+    const orderId = await this.ordersService.resolveOrderId(payload.orderId);
+    return this.ordersService.getAdminGhnHistory(orderId);
   }
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.ADMIN_GHN_CANCEL)
   async cancelAdminGhnOrder(
-    @Payload() payload: { orderId: number; actorId: number | null },
+    @Payload() payload: { orderId: number | string; actorId: number | null },
   ): Promise<unknown> {
-    return this.ordersService.cancelAdminGhnOrder(
-      payload.orderId,
-      payload.actorId,
-    );
+    const orderId = await this.ordersService.resolveOrderId(payload.orderId);
+    return this.ordersService.cancelAdminGhnOrder(orderId, payload.actorId);
   }
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.ADMIN_GHN_RETURN)
   async returnAdminGhnOrder(
-    @Payload() payload: { orderId: number; actorId: number | null },
+    @Payload() payload: { orderId: number | string; actorId: number | null },
   ): Promise<unknown> {
-    return this.ordersService.returnAdminGhnOrder(
-      payload.orderId,
-      payload.actorId,
-    );
+    const orderId = await this.ordersService.resolveOrderId(payload.orderId);
+    return this.ordersService.returnAdminGhnOrder(orderId, payload.actorId);
   }
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.ADMIN_GHN_UPDATE_COD)
   async updateAdminGhnCod(
     @Payload()
     payload: {
-      orderId: number;
+      orderId: number | string;
       actorId: number | null;
       codAmount: number;
     },
   ): Promise<unknown> {
+    const orderId = await this.ordersService.resolveOrderId(payload.orderId);
     return this.ordersService.updateAdminGhnCod(
-      payload.orderId,
+      orderId,
       payload.actorId,
       payload.codAmount,
     );
@@ -225,40 +227,46 @@ export class OrdersController {
   async updateAdminGhnReceiver(
     @Payload()
     payload: {
-      orderId: number;
+      orderId: number | string;
       actorId: number | null;
       toName?: string;
       toPhone?: string;
       toAddress?: string;
     },
   ): Promise<unknown> {
-    return this.ordersService.updateAdminGhnReceiver(
-      payload.orderId,
-      payload.actorId,
-      {
-        toName: payload.toName,
-        toPhone: payload.toPhone,
-        toAddress: payload.toAddress,
-      },
-    );
+    const orderId = await this.ordersService.resolveOrderId(payload.orderId);
+    return this.ordersService.updateAdminGhnReceiver(orderId, payload.actorId, {
+      toName: payload.toName,
+      toPhone: payload.toPhone,
+      toAddress: payload.toAddress,
+    });
   }
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.GET_ORDER_BY_ID)
-  async getOrderById(@Payload() orderId: number) {
-    return await this.ordersService.getOrderById(orderId);
+  async getOrderById(@Payload() orderId: number | string) {
+    const resolvedOrderId = await this.ordersService.resolveOrderId(orderId);
+    return await this.ordersService.getOrderById(resolvedOrderId);
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.GET_ORDER_PUBLIC_IDS_BY_IDS)
+  async getOrderPublicIdsByIds(
+    @Payload() orderIds: number[],
+  ): Promise<{ id: number; publicId: string | null }[]> {
+    return this.ordersService.getOrderPublicIdsByIds(orderIds);
   }
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.CANCEL_ORDER)
   async cancelOrder(
     @Payload()
     payload: {
-      orderId: number;
+      orderId: number | string;
       callerId: number;
       callerRole: string;
     },
   ) {
+    const orderId = await this.ordersService.resolveOrderId(payload.orderId);
     return await this.ordersService.cancelOrder(
-      payload.orderId,
+      orderId,
       payload.callerId,
       payload.callerRole,
     );
@@ -268,13 +276,14 @@ export class OrdersController {
   async getOrderInvoice(
     @Payload()
     data: {
-      orderId: number;
+      orderId: number | string;
       requestingUserId: number;
       requestingUserRole?: string;
     },
   ): Promise<Buffer> {
+    const orderId = await this.ordersService.resolveOrderId(data.orderId);
     return await this.ordersService.generateInvoice(
-      data.orderId,
+      orderId,
       data.requestingUserId,
       data.requestingUserRole ?? "user",
     );
@@ -366,24 +375,32 @@ export class OrdersController {
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.CONFIRM_ORDER)
   async handleConfirmOrder(
-    @Payload() data: { orderId: number; sellerId: number },
+    @Payload() data: { orderId: number | string; sellerId: number },
   ): Promise<Order> {
-    return this.ordersService.confirmOrder(data.orderId, data.sellerId);
+    const orderId = await this.ordersService.resolveOrderId(data.orderId);
+    return this.ordersService.confirmOrder(orderId, data.sellerId);
   }
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.READY_TO_SHIP)
   async handleReadyToShip(
-    @Payload() data: { orderId: number; sellerId: number },
+    @Payload() data: { orderId: number | string; sellerId: number },
   ): Promise<Order> {
-    return this.ordersService.readyToShip(data.orderId, data.sellerId);
+    const orderId = await this.ordersService.resolveOrderId(data.orderId);
+    return this.ordersService.readyToShip(orderId, data.sellerId);
   }
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.GET_SELLER_ORDER_DETAIL)
   async handleGetSellerOrderDetail(
-    @Payload() data: { orderId: number; sellerId: number; isAdmin: boolean },
+    @Payload()
+    data: {
+      orderId: number | string;
+      sellerId: number;
+      isAdmin: boolean;
+    },
   ): Promise<Order> {
+    const orderId = await this.ordersService.resolveOrderId(data.orderId);
     return this.ordersService.getSellerOrderDetail(
-      data.orderId,
+      orderId,
       data.sellerId,
       data.isAdmin,
     );
@@ -393,14 +410,15 @@ export class OrdersController {
   async handleAdvanceOrderStatus(
     @Payload()
     data: {
-      orderId: number;
+      orderId: number | string;
       sellerId: number;
       isAdmin: boolean;
       targetStatus: OrderStatus;
     },
   ): Promise<Order> {
+    const orderId = await this.ordersService.resolveOrderId(data.orderId);
     return this.ordersService.advanceOrderStatus(
-      data.orderId,
+      orderId,
       data.sellerId,
       data.isAdmin,
       data.targetStatus,
@@ -409,13 +427,15 @@ export class OrdersController {
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.RETURN_REQUEST_CREATE)
   async handleRequestReturn(
-    @Payload() data: { orderId: number; userId: number; reason: string },
+    @Payload()
+    data: {
+      orderId: number | string;
+      userId: number;
+      reason: string;
+    },
   ) {
-    return this.ordersService.requestReturn(
-      data.orderId,
-      data.userId,
-      data.reason,
-    );
+    const orderId = await this.ordersService.resolveOrderId(data.orderId);
+    return this.ordersService.requestReturn(orderId, data.userId, data.reason);
   }
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.RETURN_REQUEST_LIST_USER)
@@ -453,7 +473,7 @@ export class OrdersController {
   async handleReviewReturnRequest(
     @Payload()
     data: {
-      requestId: number;
+      requestId: number | string;
       reviewerId: number;
       reviewerRole: string;
       decision: "approve" | "reject";

@@ -23,6 +23,15 @@ export class OrderItem {
   @Column({ name: "product_id", type: "bigint" })
   productId!: number;
 
+  @Column({
+    name: "product_public_id",
+    type: "varchar",
+    length: 32,
+    nullable: true,
+    default: null,
+  })
+  productPublicId!: string | null;
+
   @Column({ name: "seller_id", type: "int" })
   sellerId!: number;
 
