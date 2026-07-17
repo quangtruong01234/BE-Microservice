@@ -134,7 +134,8 @@ async function bootstrap() {
   }
 
   const port = process.env.GATEWAY_PORT || 3000;
-  await app.listen(port);
+  const host = process.env.GATEWAY_HOST || "0.0.0.0";
+  await app.listen(port, host);
   logger.log(`Gateway listening on http://localhost:${port}`);
 }
 void bootstrap();
