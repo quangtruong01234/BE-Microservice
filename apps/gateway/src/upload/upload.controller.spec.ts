@@ -2,8 +2,9 @@ import {
   BadGatewayException,
   ForbiddenException,
   ServiceUnavailableException,
+  ValidationPipe,
 } from "@nestjs/common";
-import { UploadController } from "./upload.controller";
+import { GetSignatureQueryDto, UploadController } from "./upload.controller";
 import { UploadService } from "./upload.service";
 
 describe("UploadController", () => {
@@ -37,6 +38,44 @@ describe("UploadController", () => {
       generateSignature,
       generateDeleteSignature,
     } as unknown as UploadService);
+  });
+
+  describe("GetSignatureQueryDto validation (matches the global pipe)", () => {
+    // Same options as the global ValidationPipe in main.ts
+    const pipe = new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    });
+    const metadata = {
+      type: "query" as const,
+      metatype: GetSignatureQueryDto,
+    };
+
+    it("accepts an opaque usr_... userId (deprecated, ignored)", async () => {
+      await expect(
+        pipe.transform(
+          {
+            folder: "trybuy/products",
+            userId: "usr_60ccbe6081c411f1",
+            publicId: "20_x8az3ev",
+          },
+          metadata,
+        ),
+      ).resolves.toMatchObject({ folder: "trybuy/products" });
+    });
+
+    it("accepts a legacy numeric userId", async () => {
+      await expect(
+        pipe.transform({ folder: "trybuy/products", userId: "20" }, metadata),
+      ).resolves.toMatchObject({ folder: "trybuy/products" });
+    });
+
+    it("accepts the param-less call", async () => {
+      await expect(
+        pipe.transform({ folder: "trybuy/products" }, metadata),
+      ).resolves.toMatchObject({ folder: "trybuy/products" });
+    });
   });
 
   it("uses the normalized authenticated user id for product uploads", () => {

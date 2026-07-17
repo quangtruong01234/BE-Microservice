@@ -16,32 +16,39 @@ import {
   ApiPropertyOptional,
   ApiTags,
 } from "@nestjs/swagger";
-import { Type } from "class-transformer";
-import { IsInt, IsNotEmpty, IsOptional, IsString } from "class-validator";
+import { IsNotEmpty, IsOptional, IsString } from "class-validator";
 import { UPLOAD_MESSAGE } from "libs/constant/response-message.constant";
 import { UploadService } from "./upload.service";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
 
-class GetSignatureQueryDto {
+export class GetSignatureQueryDto {
   @ApiProperty({ example: "trybuy/products" })
   @IsString()
   @IsNotEmpty()
   declare folder: string;
 
-  @ApiPropertyOptional({ example: "3_abc1234" })
+  @ApiPropertyOptional({
+    example: "3_abc1234",
+    description:
+      "Optional custom public id. Must be prefixed with the caller's internal " +
+      "numeric id (`<id>_...`); opaque `usr_...` prefixes are not accepted. " +
+      "Prefer omitting it — the server generates an owner-prefixed id and " +
+      "returns it as `public_id`.",
+  })
   @IsOptional()
   @IsString()
   declare publicId?: string;
 
   @ApiPropertyOptional({
     deprecated: true,
-    description: "Ignored. The authenticated JWT user id is authoritative.",
+    description:
+      "Ignored. The authenticated JWT user id is authoritative. Any string " +
+      "(legacy numeric or opaque `usr_...`) is accepted and discarded.",
   })
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  declare userId?: number;
+  @IsString()
+  declare userId?: string;
 }
 
 class DeleteMediaDto {

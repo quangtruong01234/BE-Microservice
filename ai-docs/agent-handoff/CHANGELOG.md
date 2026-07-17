@@ -6,6 +6,17 @@
 
 ## Completed Milestones
 
+- UP-08 upload-signature PUBID compatibility (2026-07-17, sweep): the deprecated
+  `userId` query param on `POST /api/upload/signature` no longer requires an
+  integer — it is now an optional free-form string (still ignored; the JWT user
+  is authoritative), so a client sending the opaque `usr_...` id can never break
+  uploads with `400 "userId must be an integer number"` again. Swagger for
+  `publicId` now states the numeric-owner-prefix contract (`<internalId>_...`,
+  `usr_...` prefixes rejected 403, omit to get a server-generated id). No service
+  logic change. 3 new DTO-validation unit tests (upload suites 22/22), tsc/eslint
+  clean; runtime-verified 5/5 (usr_ userId → 201, param-less → 201 with `20_...`
+  id, foreign numeric userId ignored, usr_-prefixed publicId → 403, unauth → 401).
+
 - GHN shipping-history public-id boundary fix (2026-07-17):
   `GET /api/order/admin/ghn/orders/:orderId/history` now projects the validated
   `ord_...` path id onto every response row instead of exposing the raw numeric
