@@ -15,6 +15,16 @@ export class Message {
   @PrimaryGeneratedColumn("increment", { type: "bigint" })
   id!: number;
 
+  @Column({
+    name: "public_id",
+    type: "varchar",
+    length: 32,
+    nullable: true,
+    unique: true,
+    default: null,
+  })
+  publicId!: string | null;
+
   @Column({ name: "conversation_id" })
   conversationId!: number;
 

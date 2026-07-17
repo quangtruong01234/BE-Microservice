@@ -3,16 +3,21 @@ import {
   ForbiddenException,
   Injectable,
   Logger,
+  NotFoundException,
 } from "@nestjs/common";
-import { PaginatedResponse } from "@app/common";
+import { generatePublicId, PaginatedResponse } from "@app/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { In, Repository } from "typeorm";
 import { Cron } from "@nestjs/schedule";
+import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 import { Conversation } from "./entity/conversation.entity";
 import { Message } from "./entity/message.entity";
-import { SendMessageDto } from "./dto/send-message.dto";
 import { CHAT_MESSAGE } from "libs/constant/response-message.constant";
-import { ConversationWithMeta } from "./chat.types";
+import {
+  ConversationWithMeta,
+  MessageWithParentMeta,
+  SendMessagePayload,
+} from "./chat.types";
 
 @Injectable()
 export class ChatService {
@@ -25,10 +30,37 @@ export class ChatService {
     private readonly messageRepo: Repository<Message>,
   ) {}
 
+  /**
+   * Accepts the internal numeric id or the opaque public id (`conv_...`) and
+   * returns the numeric PK, or null when a public id matches no row.
+   */
+  private async lookupConversationId(
+    conversationId: number | string,
+  ): Promise<number | null> {
+    if (typeof conversationId === "number") return conversationId;
+    const conversation = await this.conversationRepo.findOne({
+      where: { publicId: conversationId },
+      select: { id: true },
+    });
+    return conversation?.id ?? null;
+  }
+
+  private async resolveConversationId(
+    conversationId: number | string,
+  ): Promise<number> {
+    const resolvedId = await this.lookupConversationId(conversationId);
+    if (resolvedId === null) {
+      throw new NotFoundException(CHAT_MESSAGE.ACCESS_DENIED);
+    }
+    return resolvedId;
+  }
+
   async checkMembership(
     userId: number,
-    conversationId: number,
+    conversationRef: number | string,
   ): Promise<boolean> {
+    const conversationId = await this.lookupConversationId(conversationRef);
+    if (conversationId === null) return false;
     const conversation = await this.conversationRepo
       .createQueryBuilder("c")
       .where("c.id = :conversationId", { conversationId })
@@ -50,7 +82,11 @@ export class ChatService {
       where: { user1Id, user2Id },
     });
     if (existing) return existing;
-    const conversation = this.conversationRepo.create({ user1Id, user2Id });
+    const conversation = this.conversationRepo.create({
+      user1Id,
+      user2Id,
+      publicId: generatePublicId(PUBLIC_ID_PREFIXES.CONVERSATION),
+    });
     return this.conversationRepo.save(conversation);
   }
 
@@ -122,6 +158,7 @@ export class ChatService {
         lastMessage: last
           ? {
               id: last.id,
+              publicId: last.publicId,
               content: last.content,
               senderId: last.senderId,
               createdAt: last.createdAt,
@@ -140,7 +177,11 @@ export class ChatService {
     });
   }
 
-  async markRead(userId: number, conversationId: number): Promise<null> {
+  async markRead(
+    userId: number,
+    conversationRef: number | string,
+  ): Promise<null> {
+    const conversationId = await this.resolveConversationId(conversationRef);
     const conversation = await this.conversationRepo
       .createQueryBuilder("c")
       .where("c.id = :conversationId", { conversationId })
@@ -157,12 +198,44 @@ export class ChatService {
     return null;
   }
 
+  /**
+   * Attaches each message's parent public id (`msg_...`) so the gateway can
+   * expose reply threading without numeric ids. One batched lookup per page.
+   */
+  private async attachParentPublicIds(
+    messages: Message[],
+  ): Promise<MessageWithParentMeta[]> {
+    const parentIds = messages
+      .map((message) => message.parentMessageId)
+      .filter((parentId): parentId is number => parentId !== null);
+    const parentPublicIdById = new Map<number, string | null>();
+    if (parentIds.length > 0) {
+      const parents = await this.messageRepo.find({
+        where: { id: In(parentIds) },
+        select: { id: true, publicId: true },
+      });
+      for (const parent of parents) {
+        parentPublicIdById.set(Number(parent.id), parent.publicId);
+      }
+    }
+    return messages.map(
+      (message): MessageWithParentMeta => ({
+        ...message,
+        parentMessagePublicId:
+          message.parentMessageId !== null
+            ? (parentPublicIdById.get(Number(message.parentMessageId)) ?? null)
+            : null,
+      }),
+    );
+  }
+
   async getMessages(
     userId: number,
-    conversationId: number,
+    conversationRef: number | string,
     page: number,
     limit: number,
-  ): Promise<PaginatedResponse<Message>> {
+  ): Promise<PaginatedResponse<MessageWithParentMeta>> {
+    const conversationId = await this.resolveConversationId(conversationRef);
     const conversation = await this.conversationRepo
       .createQueryBuilder("c")
       .where("c.id = :conversationId", { conversationId })
@@ -177,25 +250,50 @@ export class ChatService {
       skip: (page - 1) * limit,
       take: limit,
     });
-    return PaginatedResponse.of(data, total, page, limit);
+    const withParents = await this.attachParentPublicIds(data);
+    return PaginatedResponse.of(withParents, total, page, limit);
   }
 
-  async sendMessage(userId: number, dto: SendMessageDto): Promise<Message> {
+  async sendMessage(
+    userId: number,
+    payload: SendMessagePayload,
+  ): Promise<MessageWithParentMeta> {
+    const conversationId = await this.resolveConversationId(
+      payload.conversationId,
+    );
     const conversation = await this.conversationRepo
       .createQueryBuilder("c")
-      .where("c.id = :conversationId", { conversationId: dto.conversationId })
+      .where("c.id = :conversationId", { conversationId })
       .andWhere("(c.user1_id = :userId OR c.user2_id = :userId)", { userId })
       .getOne();
     if (!conversation) {
       throw new ForbiddenException(CHAT_MESSAGE.ACCESS_DENIED);
     }
+    let parentMessageId: number | null = null;
+    let parentMessagePublicId: string | null = null;
+    if (payload.parentMessageId !== undefined) {
+      const parent = await this.messageRepo.findOne({
+        where:
+          typeof payload.parentMessageId === "number"
+            ? { id: payload.parentMessageId }
+            : { publicId: payload.parentMessageId },
+        select: { id: true, publicId: true, conversationId: true },
+      });
+      if (!parent || Number(parent.conversationId) !== conversationId) {
+        throw new BadRequestException(CHAT_MESSAGE.INVALID_PARENT_MESSAGE);
+      }
+      parentMessageId = Number(parent.id);
+      parentMessagePublicId = parent.publicId;
+    }
     const message = this.messageRepo.create({
-      conversationId: dto.conversationId,
+      conversationId,
       senderId: userId,
-      content: dto.content,
-      parentMessageId: dto.parentMessageId ?? null,
+      content: payload.content,
+      parentMessageId,
+      publicId: generatePublicId(PUBLIC_ID_PREFIXES.MESSAGE),
     });
-    return this.messageRepo.save(message);
+    const saved = await this.messageRepo.save(message);
+    return { ...saved, parentMessagePublicId };
   }
 
   @Cron("0 2 * * *")

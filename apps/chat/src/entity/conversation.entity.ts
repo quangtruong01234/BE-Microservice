@@ -12,6 +12,16 @@ export class Conversation {
   @PrimaryGeneratedColumn()
   id!: number;
 
+  @Column({
+    name: "public_id",
+    type: "varchar",
+    length: 32,
+    nullable: true,
+    unique: true,
+    default: null,
+  })
+  publicId!: string | null;
+
   @Column({ name: "user1_id" })
   user1Id!: number;
 

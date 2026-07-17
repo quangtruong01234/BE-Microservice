@@ -3,9 +3,12 @@ import { MessagePattern, Payload } from "@nestjs/microservices";
 import { HttpToRpcExceptionFilter } from "@app/common/filters/http-to-rpc-exception.filter";
 import { CHAT_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { Conversation } from "./entity/conversation.entity";
-import { Message } from "./entity/message.entity";
 import { ChatService } from "./chat.service";
-import { ConversationWithMeta } from "./chat.types";
+import {
+  ConversationWithMeta,
+  MessageWithParentMeta,
+  SendMessagePayload,
+} from "./chat.types";
 
 @UseFilters(new HttpToRpcExceptionFilter())
 @Controller()
@@ -34,11 +37,16 @@ export class ChatController {
     @Payload()
     data: {
       userId: number;
-      conversationId: number;
+      conversationId: number | string;
       page: number;
       limit: number;
     },
-  ): Promise<{ data: Message[]; total: number; page: number; limit: number }> {
+  ): Promise<{
+    data: MessageWithParentMeta[];
+    total: number;
+    page: number;
+    limit: number;
+  }> {
     return this.chatService.getMessages(
       data.userId,
       data.conversationId,
@@ -52,26 +60,22 @@ export class ChatController {
     @Payload()
     data: {
       userId: number;
-      dto: {
-        conversationId: number;
-        content: string;
-        parentMessageId?: number;
-      };
+      dto: SendMessagePayload;
     },
-  ): Promise<Message> {
+  ): Promise<MessageWithParentMeta> {
     return this.chatService.sendMessage(data.userId, data.dto);
   }
 
   @MessagePattern(CHAT_MESSAGE_PATTERN.CHAT_CHECK_MEMBERSHIP)
   async checkMembership(
-    @Payload() data: { userId: number; conversationId: number },
+    @Payload() data: { userId: number; conversationId: number | string },
   ): Promise<boolean> {
     return this.chatService.checkMembership(data.userId, data.conversationId);
   }
 
   @MessagePattern(CHAT_MESSAGE_PATTERN.CHAT_MARK_READ)
   async markRead(
-    @Payload() data: { userId: number; conversationId: number },
+    @Payload() data: { userId: number; conversationId: number | string },
   ): Promise<null> {
     return this.chatService.markRead(data.userId, data.conversationId);
   }
