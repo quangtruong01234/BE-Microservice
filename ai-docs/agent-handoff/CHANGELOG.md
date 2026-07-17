@@ -6,6 +6,18 @@
 
 ## Completed Milestones
 
+- Port-bind architecture alignment (2026-07-18): VPS `ss -lntp` audit showed two
+  binds violating the "only Nginx is public" rule. (1) chat hardcoded
+  `host: "0.0.0.0"` on TCP 3012 → now `TCP_HOST` (`127.0.0.1`) like every other
+  internal service. (2) product had a stray HTTP `app.listen(PRODUCT_TCP_PORT +
+  100)` (= 3106, all interfaces, zero HTTP routes) → removed, replaced with
+  `app.init()` (same fix as inventory 3002 below). (3) gateway `app.listen(port)`
+  bound all interfaces → now `app.listen(port, process.env.GATEWAY_HOST ||
+  "0.0.0.0")`; dev behavior unchanged, VPS must set `GATEWAY_HOST=127.0.0.1`.
+  Note: no listener on 3004 is CORRECT — rewards is RMQ-only, no TCP server.
+  tsc/eslint clean; runtime-verified locally (chat on `127.0.0.1:3012`, 3106
+  gone, gateway → product HTTP 200). No FE impact, no migration.
+
 - Inventory double-bind on port 3002 fixed (2026-07-18): `apps/inventory/src/main.ts`
   bound port 3002 twice in the same process — the TCP microservice on
   `TCP_HOST:3002` and then an HTTP `app.listen(3002)`. Windows dev tolerated the
