@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { TypeOrmModule } from "@nestjs/typeorm";
+import { ScheduleModule } from "@nestjs/schedule";
 import { ProductService } from "./product.service";
 import { ProductController } from "./product.controller";
 import { ProductImageHashService } from "./product-image-hash.service";
@@ -10,6 +11,7 @@ import { ProductSku } from "./entity/product-sku.entity";
 import { WishlistItem } from "./entity/wishlist-item.entity";
 import { Brand } from "./entity/brand.entity";
 import { Category } from "./entity/category.entity";
+import { ProductRiskFeedback } from "./entity/product-risk-feedback.entity";
 import { DatabaseModule } from "@app/database";
 import { CloudinaryModule, RmqModule, RmqService } from "@app/common";
 import { CachedModule } from "@app/cached";
@@ -26,6 +28,7 @@ import {
       isGlobal: true,
       envFilePath: "./local/nodeA/.env",
     }),
+    ScheduleModule.forRoot(),
     DatabaseModule,
     TypeOrmModule.forFeature([
       Product,
@@ -34,6 +37,7 @@ import {
       WishlistItem,
       Brand,
       Category,
+      ProductRiskFeedback,
     ]),
     ClientsModule.register([
       {

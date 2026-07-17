@@ -26,7 +26,15 @@ import { CreateCategoryDto } from "./dto/create-category.dto";
 import { GetProductsQueryDto } from "./dto/get-products-query.dto";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
 import { PriceSuggestion, PriceSuggestionQuery } from "./product.types";
-import { ProductRiskQuery, ProductRiskSummary } from "./product-risk.types";
+import {
+  ProductDuplicateAdvisory,
+  ProductRiskBackfillRequest,
+  ProductRiskBackfillResult,
+  ProductRiskFeedbackRequest,
+  ProductRiskFeedbackResult,
+  ProductRiskQuery,
+  ProductRiskSummary,
+} from "./product-risk.types";
 import { Product } from "./entity/product.entity";
 
 @UseFilters(HttpToRpcExceptionFilter)
@@ -54,13 +62,17 @@ export class ProductController {
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_ID)
-  async findProductById(@Payload() id: number) {
-    return this.productService.findProductById(id);
+  async findProductById(@Payload() id: number | string) {
+    return this.productService.findProductById(
+      await this.productService.resolveProductId(id),
+    );
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_IDS)
-  async findProductsByIds(@Payload() ids: number[]) {
-    return this.productService.findProductsByIds(ids);
+  async findProductsByIds(@Payload() ids: (number | string)[]) {
+    return this.productService.findProductsByIds(
+      await this.productService.resolveProductIds(ids),
+    );
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_SKU)
@@ -70,15 +82,24 @@ export class ProductController {
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_UPDATE)
   async updateProduct(
-    @Payload() data: { id: number; updateProductDto: UpdateProductDto },
+    @Payload()
+    data: {
+      id: number | string;
+      updateProductDto: UpdateProductDto;
+    },
   ) {
     const { id, updateProductDto } = data;
-    return this.productService.updateProduct(id, updateProductDto);
+    return this.productService.updateProduct(
+      await this.productService.resolveProductId(id),
+      updateProductDto,
+    );
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_DELETE)
-  async deleteProduct(@Payload() id: number) {
-    return this.productService.deleteProduct(id);
+  async deleteProduct(@Payload() id: number | string) {
+    return this.productService.deleteProduct(
+      await this.productService.resolveProductId(id),
+    );
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_CATEGORY)
@@ -125,9 +146,41 @@ export class ProductController {
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_ADMIN_RISK_RESCORE)
   async rescoreProduct(
-    @Payload() productId: number,
+    @Payload() productId: number | string,
   ): Promise<ProductRiskSummary> {
-    return this.productService.rescoreProduct(productId);
+    return this.productService.rescoreProduct(
+      await this.productService.resolveProductId(productId),
+    );
+  }
+
+  @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_ADMIN_RISK_BACKFILL)
+  async enqueueRiskBackfill(
+    @Payload() request: ProductRiskBackfillRequest,
+  ): Promise<ProductRiskBackfillResult> {
+    return this.productService.enqueueRiskBackfill(request);
+  }
+
+  @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_DUPLICATE_IMAGE_CHECK)
+  async checkDuplicateImage(
+    @Payload() payload: { sellerId: number; imageUrl: string },
+  ): Promise<ProductDuplicateAdvisory> {
+    return this.productService.checkDuplicateImage(
+      payload.sellerId,
+      payload.imageUrl,
+    );
+  }
+
+  @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_ADMIN_RISK_FEEDBACK)
+  async recordRiskFeedback(
+    @Payload()
+    request: ProductRiskFeedbackRequest & {
+      productId: number | string;
+    },
+  ): Promise<ProductRiskFeedbackResult> {
+    return this.productService.recordRiskFeedback({
+      ...request,
+      productId: await this.productService.resolveProductId(request.productId),
+    });
   }
 
   // ============================================================================
@@ -215,8 +268,10 @@ export class ProductController {
   // ============================================================================
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.SKU_FIND_BY_PRODUCT)
-  async findSkusByProduct(@Payload() productId: number) {
-    return this.productService.findSkusByProduct(productId);
+  async findSkusByProduct(@Payload() productId: number | string) {
+    return this.productService.findSkusByProduct(
+      await this.productService.resolveProductId(productId),
+    );
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.SKU_FIND_BY_ID)
@@ -233,12 +288,15 @@ export class ProductController {
     @Payload()
     data: {
       userId: number;
-      productId: number;
+      productId: number | string;
       rating: number;
       comment?: string;
     },
   ): Promise<ProductReview> {
-    return this.productService.createReview(data);
+    return this.productService.createReview({
+      ...data,
+      productId: await this.productService.resolveProductId(data.productId),
+    });
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.REVIEW_DELETE)
@@ -251,10 +309,15 @@ export class ProductController {
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.REVIEW_FIND_BY_PRODUCT)
   async findReviewsByProduct(
-    @Payload() data: { productId: number; page: number; limit: number },
+    @Payload()
+    data: {
+      productId: number | string;
+      page: number;
+      limit: number;
+    },
   ): Promise<PaginatedResponse<ProductReview>> {
     return this.productService.findReviewsByProduct(
-      data.productId,
+      await this.productService.resolveProductId(data.productId),
       data.page,
       data.limit,
     );
@@ -266,16 +329,22 @@ export class ProductController {
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.WISHLIST_ADD)
   async addWishlistItem(
-    @Payload() data: { userId: number; productId: number },
+    @Payload() data: { userId: number; productId: number | string },
   ): Promise<{ productId: number; isWishlisted: boolean; createdAt: Date }> {
-    return this.productService.addWishlistItem(data.userId, data.productId);
+    return this.productService.addWishlistItem(
+      data.userId,
+      await this.productService.resolveProductId(data.productId),
+    );
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.WISHLIST_REMOVE)
   async removeWishlistItem(
-    @Payload() data: { userId: number; productId: number },
+    @Payload() data: { userId: number; productId: number | string },
   ): Promise<null> {
-    return this.productService.removeWishlistItem(data.userId, data.productId);
+    return this.productService.removeWishlistItem(
+      data.userId,
+      await this.productService.resolveProductId(data.productId),
+    );
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.WISHLIST_LIST)

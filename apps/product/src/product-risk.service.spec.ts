@@ -56,11 +56,21 @@ const createQueryBuilderMock = <T extends ObjectLiteral>(terminal: {
 describe("ProductService product risk scoring", () => {
   const productRepository = {
     createQueryBuilder: jest.fn(),
+    find: jest.fn(),
+    findOne: jest.fn(),
     query: jest.fn(),
     update: jest.fn(),
   };
   const productImageHashService = {
     hashImageUrls: jest.fn(),
+  };
+  const feedbackRepository = {
+    findOne: jest.fn(),
+    create: jest.fn((input: object) => input),
+    save: jest.fn(),
+  };
+  const dataSource = {
+    getRepository: jest.fn().mockReturnValue(feedbackRepository),
   };
   let service: ProductService;
 
@@ -74,7 +84,7 @@ describe("ProductService product risk scoring", () => {
       {} as unknown as Repository<ProductReview>,
       {} as unknown as Repository<ProductSku>,
       {} as unknown as Repository<WishlistItem>,
-      {} as unknown as DataSource,
+      dataSource as unknown as DataSource,
       {} as unknown as CachedService,
       {} as unknown as CloudinaryService,
       productImageHashService as unknown as ProductImageHashService,
@@ -173,11 +183,105 @@ describe("ProductService product risk scoring", () => {
       },
     ]);
 
-    await expect(service.rescoreProduct(10)).resolves.toEqual({
+    const summary = await service.rescoreProduct(10);
+    expect(summary).toEqual({
       productId: 10,
       riskScore: 0,
       riskFlags: [],
+      riskScoringStatus: "ready",
+      riskScoredAt: summary.riskScoredAt,
     });
+    expect(summary.riskScoredAt).toBeInstanceOf(Date);
+  });
+
+  it("enqueues a bounded resumable legacy backfill page", async () => {
+    productRepository.find.mockResolvedValue([
+      { id: 11 },
+      { id: 12 },
+      { id: 13 },
+    ]);
+    productRepository.createQueryBuilder.mockReturnValueOnce(
+      createQueryBuilderMock({ getMany: [] }),
+    );
+
+    await expect(
+      service.enqueueRiskBackfill({ cursor: 10, limit: 2 }),
+    ).resolves.toEqual({
+      enqueued: 2,
+      nextCursor: 12,
+      hasMore: true,
+    });
+    expect(productRepository.update).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        riskScoringStatus: "pending",
+        riskScoringAttempts: 0,
+      }),
+    );
+  });
+
+  it("returns a public duplicate advisory without exposing stored hashes", async () => {
+    const candidate = {
+      id: 11,
+      userId: 21,
+      name: "Camera Alpha",
+      imageUrls: ["https://res.cloudinary.com/demo/image/upload/11_camera.jpg"],
+      imagePhashes: ["0000000000000000"],
+      isActive: true,
+    } as unknown as Product;
+    productImageHashService.hashImageUrls.mockResolvedValue([
+      "0000000000000000",
+    ]);
+    productRepository.createQueryBuilder.mockReturnValueOnce(
+      createQueryBuilderMock({ getMany: [candidate] }),
+    );
+
+    const advisory = await service.checkDuplicateImage(
+      20,
+      "https://res.cloudinary.com/demo/image/upload/20_upload.jpg",
+    );
+
+    expect(advisory).toEqual({
+      duplicateLikely: true,
+      match: {
+        productId: 11,
+        name: "Camera Alpha",
+        imageUrl: "https://res.cloudinary.com/demo/image/upload/11_camera.jpg",
+        hammingDistance: 0,
+        evidenceCount: 1,
+      },
+    });
+    expect(advisory).not.toHaveProperty("imagePhashes");
+  });
+
+  it("upserts auditable moderator feedback without changing listing state", async () => {
+    productRepository.findOne.mockResolvedValue({ id: 10 });
+    feedbackRepository.findOne.mockResolvedValue(undefined);
+    feedbackRepository.save.mockImplementation((feedback: object) =>
+      Promise.resolve({
+        ...feedback,
+        updatedAt: new Date("2026-07-16T00:00:00.000Z"),
+      }),
+    );
+
+    await expect(
+      service.recordRiskFeedback({
+        productId: 10,
+        moderatorId: 1,
+        decision: "dismissed",
+        note: "  false positive  ",
+      }),
+    ).resolves.toEqual({
+      productId: 10,
+      moderatorId: 1,
+      decision: "dismissed",
+      note: "false positive",
+      updatedAt: new Date("2026-07-16T00:00:00.000Z"),
+    });
+    expect(productRepository.update).not.toHaveBeenCalledWith(
+      10,
+      expect.objectContaining({ isActive: false }),
+    );
   });
 
   it("normalizes unscored product risk fields in the admin list", async () => {
@@ -198,6 +302,39 @@ describe("ProductService product risk scoring", () => {
 
     expect(response.data[0]).toEqual(
       expect.objectContaining({ riskScore: 0, riskFlags: [] }),
+    );
+  });
+
+  it("persists bounded retry metadata when scoring fails", async () => {
+    const product = {
+      id: 10,
+      userId: 20,
+      name: "Camera Alpha",
+      imageUrls: ["https://res.cloudinary.com/demo/image/upload/20_bad.jpg"],
+      categories: [{ id: 2 }],
+      skus: [],
+    } as unknown as Product;
+    productRepository.createQueryBuilder.mockReturnValueOnce(
+      createQueryBuilderMock({ getOne: product }),
+    );
+    productImageHashService.hashImageUrls.mockRejectedValue(
+      new Error("temporary image fetch failure"),
+    );
+    productRepository.findOne.mockResolvedValue({
+      id: 10,
+      riskScoringAttempts: 1,
+    });
+
+    await expect(service.rescoreProduct(10)).rejects.toThrow(
+      "temporary image fetch failure",
+    );
+    expect(productRepository.update).toHaveBeenCalledWith(
+      10,
+      expect.objectContaining({
+        riskScoringStatus: "failed",
+        riskScoringAttempts: 2,
+        riskLastError: "temporary image fetch failure",
+      }),
     );
   });
 });

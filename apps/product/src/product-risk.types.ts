@@ -9,6 +9,7 @@ export type DuplicateImageRiskFlag = {
   weight: number;
   matchedProductId: number;
   hammingDistance: number;
+  evidenceCount: number;
 };
 
 export type PriceAnomalyRiskFlag = {
@@ -41,4 +42,43 @@ export type ProductRiskSummary = {
   productId: number;
   riskScore: number;
   riskFlags: ProductRiskFlag[];
+  riskScoringStatus: "ready";
+  riskScoredAt: Date;
+};
+
+export type ProductRiskBackfillRequest = {
+  cursor?: number;
+  limit?: number;
+};
+
+export type ProductRiskBackfillResult = {
+  enqueued: number;
+  nextCursor: number | null;
+  hasMore: boolean;
+};
+
+export type ProductDuplicateAdvisory = {
+  duplicateLikely: boolean;
+  match: {
+    productId: number;
+    name: string;
+    imageUrl: string | null;
+    hammingDistance: number;
+    evidenceCount: number;
+  } | null;
+};
+
+export type ProductRiskFeedbackRequest = {
+  productId: number;
+  moderatorId: number;
+  decision: "confirmed_duplicate" | "dismissed";
+  note?: string;
+};
+
+export type ProductRiskFeedbackResult = {
+  productId: number;
+  moderatorId: number;
+  decision: "confirmed_duplicate" | "dismissed";
+  note: string | null;
+  updatedAt: Date;
 };

@@ -17,10 +17,21 @@ import { Category } from "./category.entity";
 import { ProductSku } from "./product-sku.entity";
 import { ProductRiskFlag } from "../product-risk.types";
 
+export type ProductRiskScoringStatus = "pending" | "ready" | "failed";
+
 @Entity("products")
 export class Product {
   @PrimaryGeneratedColumn("increment", { type: "bigint" })
   id!: number;
+
+  @Column({
+    name: "public_id",
+    type: "varchar",
+    length: 32,
+    unique: true,
+    nullable: true,
+  })
+  publicId!: string | null;
 
   @Column({ type: "varchar", length: 255 })
   name!: string;
@@ -150,6 +161,49 @@ export class Product {
     select: false,
   })
   riskFlags!: ProductRiskFlag[] | null;
+
+  @Index("idx_products_risk_scoring_queue")
+  @Column({
+    type: "enum",
+    enum: ["pending", "ready", "failed"],
+    default: "pending",
+    name: "risk_scoring_status",
+    select: false,
+  })
+  riskScoringStatus!: ProductRiskScoringStatus;
+
+  @Column({
+    type: "timestamp",
+    nullable: true,
+    name: "risk_scored_at",
+    select: false,
+  })
+  riskScoredAt!: Date | null;
+
+  @Column({
+    type: "int",
+    default: 0,
+    name: "risk_scoring_attempts",
+    select: false,
+  })
+  riskScoringAttempts!: number;
+
+  @Column({
+    type: "timestamp",
+    nullable: true,
+    name: "risk_next_retry_at",
+    select: false,
+  })
+  riskNextRetryAt!: Date | null;
+
+  @Column({
+    type: "varchar",
+    length: 500,
+    nullable: true,
+    name: "risk_last_error",
+    select: false,
+  })
+  riskLastError!: string | null;
 
   @CreateDateColumn({ type: "timestamp", name: "created_at" })
   createdAt!: Date;

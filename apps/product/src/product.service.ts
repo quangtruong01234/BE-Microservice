@@ -7,12 +7,26 @@ import {
   ForbiddenException,
   BadRequestException,
 } from "@nestjs/common";
+import { Cron, CronExpression } from "@nestjs/schedule";
 import { InjectRepository } from "@nestjs/typeorm";
-import { DataSource, In, Raw, Repository, SelectQueryBuilder } from "typeorm";
+import {
+  DataSource,
+  In,
+  MoreThan,
+  Raw,
+  Repository,
+  SelectQueryBuilder,
+} from "typeorm";
 import { ClientProxy } from "@nestjs/microservices";
 import { firstValueFrom, timeout } from "rxjs";
 import { Channel } from "amqplib";
-import { CloudinaryService, PaginatedResponse } from "@app/common";
+import {
+  CloudinaryService,
+  generatePublicId,
+  isPublicId,
+  PaginatedResponse,
+} from "@app/common";
+import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 import { EXCHANGE } from "@app/common/constants/exchange";
 import { EVENT } from "@app/common/constants/event";
 import { CachedService } from "@app/cached";
@@ -22,6 +36,7 @@ import { Product } from "./entity/product.entity";
 import { ProductReview } from "./entity/product-review.entity";
 import { ProductSku } from "./entity/product-sku.entity";
 import { WishlistItem } from "./entity/wishlist-item.entity";
+import { ProductRiskFeedback } from "./entity/product-risk-feedback.entity";
 import { Brand } from "./entity/brand.entity";
 import { Category } from "./entity/category.entity";
 import { ProductImageHashService } from "./product-image-hash.service";
@@ -49,13 +64,23 @@ import {
 import {
   PRODUCT_RISK_WEIGHTS,
   ProductRiskFlag,
+  ProductRiskBackfillRequest,
+  ProductRiskBackfillResult,
+  ProductDuplicateAdvisory,
+  ProductRiskFeedbackRequest,
+  ProductRiskFeedbackResult,
   ProductRiskQuery,
   ProductRiskSummary,
 } from "./product-risk.types";
 
+const RISK_SCORING_BATCH_SIZE = 3;
+const RISK_SCORING_MAX_ATTEMPTS = 5;
+const RISK_SCORING_ERROR_MAX_LENGTH = 500;
+
 @Injectable()
 export class ProductService {
   private readonly logger = new Logger(ProductService.name);
+  private isRiskScoringWorkerRunning = false;
 
   constructor(
     @InjectRepository(Product)
@@ -296,6 +321,11 @@ export class ProductService {
       .createQueryBuilder("product")
       .addSelect("product.riskScore")
       .addSelect("product.riskFlags")
+      .addSelect("product.riskScoringStatus")
+      .addSelect("product.riskScoredAt")
+      .addSelect("product.riskScoringAttempts")
+      .addSelect("product.riskNextRetryAt")
+      .addSelect("product.riskLastError")
       .leftJoinAndSelect("product.brand", "brand")
       .leftJoinAndSelect("product.categories", "category")
       .where("product.riskScore >= :minScore", { minScore })
@@ -315,6 +345,17 @@ export class ProductService {
   }
 
   async rescoreProduct(productId: number): Promise<ProductRiskSummary> {
+    try {
+      return await this.calculateAndPersistProductRisk(productId);
+    } catch (error: unknown) {
+      await this.markRiskScoringFailed(productId, error);
+      throw error;
+    }
+  }
+
+  private async calculateAndPersistProductRisk(
+    productId: number,
+  ): Promise<ProductRiskSummary> {
     const product = await this.productRepository
       .createQueryBuilder("product")
       .addSelect("product.imagePhashes")
@@ -363,13 +404,215 @@ export class ProductService {
       100,
       riskFlags.reduce((score, flag) => score + flag.weight, 0),
     );
+    const riskScoredAt = new Date();
     await this.productRepository.update(productId, {
       imagePhashes: imagePhashes.length > 0 ? imagePhashes : null,
       riskScore,
       riskFlags: riskFlags.length > 0 ? riskFlags : null,
+      riskScoringStatus: "ready",
+      riskScoredAt,
+      riskScoringAttempts: 0,
+      riskNextRetryAt: null,
+      riskLastError: null,
     });
 
-    return { productId, riskScore, riskFlags };
+    return {
+      productId,
+      riskScore,
+      riskFlags,
+      riskScoringStatus: "ready",
+      riskScoredAt,
+    };
+  }
+
+  private async markRiskScoringFailed(
+    productId: number,
+    error: unknown,
+  ): Promise<void> {
+    const product = await this.productRepository.findOne({
+      where: { id: productId },
+      select: ["id", "riskScoringAttempts"],
+    });
+    if (!product) return;
+
+    const attempts = Math.min(
+      RISK_SCORING_MAX_ATTEMPTS,
+      (product.riskScoringAttempts ?? 0) + 1,
+    );
+    const retryDelayMs = Math.min(60 * 60 * 1000, 60_000 * 2 ** attempts);
+    const message = error instanceof Error ? error.message : String(error);
+    await this.productRepository.update(productId, {
+      riskScoringStatus: "failed",
+      riskScoringAttempts: attempts,
+      riskNextRetryAt:
+        attempts < RISK_SCORING_MAX_ATTEMPTS
+          ? new Date(Date.now() + retryDelayMs)
+          : null,
+      riskLastError: message.slice(0, RISK_SCORING_ERROR_MAX_LENGTH),
+    });
+  }
+
+  @Cron(CronExpression.EVERY_MINUTE)
+  async processRiskScoringQueue(): Promise<void> {
+    if (this.isRiskScoringWorkerRunning) return;
+    this.isRiskScoringWorkerRunning = true;
+    try {
+      const dueProducts = await this.productRepository
+        .createQueryBuilder("product")
+        .addSelect("product.riskScoringAttempts")
+        .where(
+          "product.riskScoringStatus = :pending OR (product.riskScoringStatus = :failed AND product.riskScoringAttempts < :maxAttempts AND product.riskNextRetryAt <= :now)",
+          {
+            pending: "pending",
+            failed: "failed",
+            maxAttempts: RISK_SCORING_MAX_ATTEMPTS,
+            now: new Date(),
+          },
+        )
+        .orderBy("product.id", "ASC")
+        .take(RISK_SCORING_BATCH_SIZE)
+        .getMany();
+
+      await Promise.all(
+        dueProducts.map(async (product) => {
+          try {
+            await this.calculateAndPersistProductRisk(Number(product.id));
+          } catch (error: unknown) {
+            await this.markRiskScoringFailed(Number(product.id), error);
+            this.logger.warn(
+              `Risk scoring failed for product ${product.id}: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        }),
+      );
+    } finally {
+      this.isRiskScoringWorkerRunning = false;
+    }
+  }
+
+  async enqueueRiskBackfill(
+    request: ProductRiskBackfillRequest,
+  ): Promise<ProductRiskBackfillResult> {
+    const cursor = Math.max(0, Math.trunc(request.cursor ?? 0));
+    const limit = Math.min(100, Math.max(1, Math.trunc(request.limit ?? 50)));
+    const products = await this.productRepository.find({
+      where: { id: MoreThan(cursor) },
+      select: ["id"],
+      order: { id: "ASC" },
+      take: limit + 1,
+    });
+    const page = products.slice(0, limit);
+    const productIds = page.map((product) => Number(product.id));
+    if (productIds.length > 0) {
+      await this.productRepository.update(
+        { id: In(productIds) },
+        {
+          riskScoringStatus: "pending",
+          riskScoringAttempts: 0,
+          riskNextRetryAt: null,
+          riskLastError: null,
+        },
+      );
+      void this.processRiskScoringQueue();
+    }
+    return {
+      enqueued: productIds.length,
+      nextCursor: productIds.at(-1) ?? null,
+      hasMore: products.length > limit,
+    };
+  }
+
+  async checkDuplicateImage(
+    sellerId: number,
+    imageUrl: string,
+  ): Promise<ProductDuplicateAdvisory> {
+    const hashes = await this.productImageHashService.hashImageUrls([imageUrl]);
+    if (hashes.length === 0) {
+      return { duplicateLikely: false, match: null };
+    }
+    const candidates = await this.productRepository
+      .createQueryBuilder("product")
+      .addSelect("product.imagePhashes")
+      .where("product.isActive = TRUE")
+      .andWhere("product.userId != :sellerId", { sellerId })
+      .andWhere("product.imagePhashes IS NOT NULL")
+      .getMany();
+
+    let closest:
+      | { product: Product; hammingDistance: number; evidenceCount: number }
+      | undefined;
+    for (const candidate of candidates) {
+      let evidenceCount = 0;
+      let closestDistance = Number.POSITIVE_INFINITY;
+      for (const hash of hashes) {
+        for (const candidateHash of candidate.imagePhashes ?? []) {
+          const hammingDistance = this.calculateHammingDistance(
+            hash,
+            candidateHash,
+          );
+          if (hammingDistance <= 6) {
+            evidenceCount += 1;
+            closestDistance = Math.min(closestDistance, hammingDistance);
+          }
+        }
+      }
+      const hasStrongEvidence = closestDistance <= 2 || evidenceCount >= 2;
+      if (
+        hasStrongEvidence &&
+        (!closest || closestDistance < closest.hammingDistance)
+      ) {
+        closest = {
+          product: candidate,
+          hammingDistance: closestDistance,
+          evidenceCount,
+        };
+      }
+    }
+
+    return closest
+      ? {
+          duplicateLikely: true,
+          match: {
+            productId: Number(closest.product.id),
+            name: closest.product.name,
+            imageUrl: closest.product.imageUrls?.[0] ?? null,
+            hammingDistance: closest.hammingDistance,
+            evidenceCount: closest.evidenceCount,
+          },
+        }
+      : { duplicateLikely: false, match: null };
+  }
+
+  async recordRiskFeedback(
+    request: ProductRiskFeedbackRequest,
+  ): Promise<ProductRiskFeedbackResult> {
+    const product = await this.productRepository.findOne({
+      where: { id: request.productId },
+      select: ["id"],
+    });
+    if (!product) {
+      throw new NotFoundException(PRODUCT_MESSAGE.NOT_FOUND);
+    }
+    const feedbackRepository =
+      this.dataSource.getRepository(ProductRiskFeedback);
+    const existing = await feedbackRepository.findOne({
+      where: { productId: request.productId },
+    });
+    const feedback = feedbackRepository.create({
+      ...existing,
+      productId: request.productId,
+      moderatorId: request.moderatorId,
+      decision: request.decision,
+      note: request.note?.trim() || null,
+    });
+    const saved = await feedbackRepository.save(feedback);
+    return {
+      productId: saved.productId,
+      moderatorId: saved.moderatorId,
+      decision: saved.decision,
+      note: saved.note,
+      updatedAt: saved.updatedAt,
+    };
   }
 
   private findDuplicateImageRisk(
@@ -382,28 +625,40 @@ export class ProductService {
     }
 
     let closestMatch:
-      | { matchedProductId: number; hammingDistance: number }
+      | {
+          matchedProductId: number;
+          hammingDistance: number;
+          evidenceCount: number;
+        }
       | undefined;
     for (const candidate of candidates) {
       if (!this.isDifferentSeller(product, candidate)) {
         continue;
       }
+      let evidenceCount = 0;
+      let closestDistance = Number.POSITIVE_INFINITY;
       for (const imagePhash of imagePhashes) {
         for (const candidatePhash of candidate.imagePhashes ?? []) {
           const hammingDistance = this.calculateHammingDistance(
             imagePhash,
             candidatePhash,
           );
-          if (
-            hammingDistance <= 6 &&
-            (!closestMatch || hammingDistance < closestMatch.hammingDistance)
-          ) {
-            closestMatch = {
-              matchedProductId: Number(candidate.id),
-              hammingDistance,
-            };
+          if (hammingDistance <= 6) {
+            evidenceCount += 1;
+            closestDistance = Math.min(closestDistance, hammingDistance);
           }
         }
+      }
+      const hasStrongEvidence = closestDistance <= 2 || evidenceCount >= 2;
+      if (
+        hasStrongEvidence &&
+        (!closestMatch || closestDistance < closestMatch.hammingDistance)
+      ) {
+        closestMatch = {
+          matchedProductId: Number(candidate.id),
+          hammingDistance: closestDistance,
+          evidenceCount,
+        };
       }
     }
 
@@ -566,12 +821,8 @@ export class ProductService {
     );
   }
 
-  private scheduleRiskRescore(productId: number): void {
-    void this.rescoreProduct(productId).catch((error: unknown) => {
-      this.logger.warn(
-        `Risk scoring failed for product ${productId}: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    });
+  private scheduleRiskRescore(): void {
+    void this.processRiskScoringQueue();
   }
 
   /**
@@ -868,7 +1119,11 @@ export class ProductService {
       }
     }
 
-    const product = this.productRepository.create({ ...rest, categories });
+    const product = this.productRepository.create({
+      ...rest,
+      publicId: generatePublicId(PUBLIC_ID_PREFIXES.PRODUCT),
+      categories,
+    });
     product.likesCount = 0;
     product.commentsCount = 0;
     product.sharesCount = 0;
@@ -877,6 +1132,11 @@ export class ProductService {
     product.isTrending = false;
     product.rating = 0;
     product.ratingCount = 0;
+    product.riskScoringStatus = "pending";
+    product.riskScoringAttempts = 0;
+    product.riskScoredAt = null;
+    product.riskNextRetryAt = null;
+    product.riskLastError = null;
     const saved = await this.productRepository.save(product);
 
     if (skuList && skuList.length > 0) {
@@ -886,7 +1146,7 @@ export class ProductService {
     }
 
     await this.invalidateSearchCache();
-    this.scheduleRiskRescore(saved.id);
+    this.scheduleRiskRescore();
     return saved;
   }
 
@@ -920,6 +1180,7 @@ export class ProductService {
       sortBy = "id",
       sortOrder = "ASC",
       userId,
+      userIds,
       skuSearch,
     } = query;
 
@@ -939,6 +1200,10 @@ export class ProductService {
 
     if (userId !== undefined) {
       queryBuilder.andWhere("product.userId = :userId", { userId });
+    }
+
+    if (userIds && userIds.length > 0) {
+      queryBuilder.andWhere("product.userId IN (:...userIds)", { userIds });
     }
 
     if (skuSearch) {
@@ -1055,6 +1320,29 @@ export class ProductService {
     return product;
   }
 
+  async resolveProductId(productId: number | string): Promise<number> {
+    if (typeof productId === "number") {
+      return productId;
+    }
+    if (!isPublicId(PUBLIC_ID_PREFIXES.PRODUCT, productId)) {
+      throw new NotFoundException(PRODUCT_MESSAGE.NOT_FOUND);
+    }
+    const product = await this.productRepository.findOne({
+      where: { publicId: productId },
+      select: { id: true },
+    });
+    if (!product) {
+      throw new NotFoundException(PRODUCT_MESSAGE.NOT_FOUND);
+    }
+    return Number(product.id);
+  }
+
+  async resolveProductIds(productIds: (number | string)[]): Promise<number[]> {
+    return Promise.all(
+      productIds.map((productId) => this.resolveProductId(productId)),
+    );
+  }
+
   // Batch variant of findProductById (GAP-01). Missing ids are skipped —
   // callers treat absent products as deleted and fall back to snapshots/null.
   async findProductsByIds(ids: number[]): Promise<Product[]> {
@@ -1161,7 +1449,14 @@ export class ProductService {
       updateProductDto.condition !== undefined ||
       updateProductDto.skuList !== undefined
     ) {
-      this.scheduleRiskRescore(updated.id);
+      await this.productRepository.update(updated.id, {
+        riskScoringStatus: "pending",
+        riskScoringAttempts: 0,
+        riskNextRetryAt: null,
+        riskLastError: null,
+      });
+      updated.riskScoringStatus = "pending";
+      this.scheduleRiskRescore();
     }
     return updated;
   }

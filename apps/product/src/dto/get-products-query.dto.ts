@@ -87,6 +87,13 @@ export class GetProductsQueryDto {
   @Type(() => Number)
   userId?: number;
 
+  // Seller-id batch filter, resolved by the gateway from the province filter
+  @IsOptional()
+  @IsArray()
+  @IsNumber({}, { each: true })
+  @Type(() => Number)
+  userIds?: number[];
+
   @IsOptional()
   @IsString()
   skuSearch?: string;
