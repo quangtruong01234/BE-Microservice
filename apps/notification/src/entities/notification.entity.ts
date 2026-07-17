@@ -10,6 +10,15 @@ export class Notification {
   @PrimaryGeneratedColumn("increment")
   id!: number;
 
+  @Column({
+    name: "public_id",
+    type: "varchar",
+    length: 32,
+    unique: true,
+    nullable: true,
+  })
+  publicId!: string | null;
+
   @Column({ name: "user_id", type: "int", nullable: false })
   userId!: number;
 

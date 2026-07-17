@@ -49,7 +49,7 @@ export class NotificationController {
 
   @EventPattern(EVENT.ORDER_CREATED_EVENT)
   async handleOrderCreated(
-    @Payload() data: { id: number; userId: number },
+    @Payload() data: { id: number; publicId?: string | null; userId: number },
     @Ctx() context: RmqContext,
   ): Promise<void> {
     const { id: orderId, userId } = data;
@@ -63,6 +63,8 @@ export class NotificationController {
         "order_created",
         orderId,
         message,
+        {},
+        data.publicId ?? null,
       );
       await this.sendOrderEmail(userId, message);
       this.rmqService.ack(context);
@@ -101,6 +103,8 @@ export class NotificationController {
         "payment_completed",
         orderId,
         message,
+        {},
+        order.publicId,
       );
       await this.sendOrderEmail(order.userId, message);
       this.rmqService.ack(context);
@@ -144,6 +148,8 @@ export class NotificationController {
         "order_canceled",
         orderId,
         message,
+        {},
+        order.publicId,
       );
       await this.sendOrderEmail(order.userId, message);
       this.rmqService.ack(context);
@@ -188,6 +194,8 @@ export class NotificationController {
         "order_return_requested",
         orderId,
         message,
+        {},
+        order.publicId,
       );
       await this.sendOrderEmail(order.sellerId, message);
       this.rmqService.ack(context);
@@ -232,6 +240,8 @@ export class NotificationController {
         "order_return_approved",
         orderId,
         message,
+        {},
+        order.publicId,
       );
       await this.sendOrderEmail(order.userId, message);
       this.rmqService.ack(context);
@@ -276,6 +286,8 @@ export class NotificationController {
         "order_return_rejected",
         orderId,
         message,
+        {},
+        order.publicId,
       );
       await this.sendOrderEmail(order.userId, message);
       this.rmqService.ack(context);
@@ -484,7 +496,7 @@ export class NotificationController {
 
   @MessagePattern(NOTIFICATION_MESSAGE_PATTERN.MARK_NOTIFICATION_READ)
   async markNotificationRead(
-    @Payload() data: { notificationId: number; userId: number },
+    @Payload() data: { notificationId: number | string; userId: number },
   ): Promise<{ success: boolean }> {
     return this.notificationService.markNotificationRead(
       data.notificationId,

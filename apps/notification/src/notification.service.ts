@@ -4,11 +4,19 @@ import { Repository } from "typeorm";
 import { Channel } from "amqplib";
 import { ClientProxy } from "@nestjs/microservices";
 import { firstValueFrom, Observable, timeout } from "rxjs";
-import { MailerService, PaginatedResponse } from "@app/common";
+import {
+  generatePublicId,
+  MailerService,
+  PaginatedResponse,
+} from "@app/common";
 import { EXCHANGE } from "@app/common/constants/exchange";
 import { EVENT } from "@app/common/constants/event";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
-import { USER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
+import {
+  ORDER_MESSAGE_PATTERN,
+  USER_MESSAGE_PATTERN,
+} from "libs/constant/message-pattern.constant";
+import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 import { Notification } from "./entities/notification.entity";
 import { NOTIFICATION_TEXT_MAX_LENGTH } from "./notification.constants";
 import { NotificationMetadata, UserEmailInfo } from "./notification.types";
@@ -30,6 +38,8 @@ export class NotificationService {
     private readonly fanoutChannel: Channel | null,
     @Inject(NAME_SERVICE_TCP.USER_SERVICE)
     private readonly userClient: ClientProxy,
+    @Inject(NAME_SERVICE_TCP.ORDERS_SERVICE)
+    private readonly ordersClient: ClientProxy,
     private readonly mailerService: MailerService,
   ) {}
 
@@ -72,8 +82,10 @@ export class NotificationService {
     orderId: number | null,
     message: string,
     metadata: NotificationMetadata = {},
+    orderPublicId: string | null = null,
   ): Promise<void> {
     const notification = this.notificationRepository.create({
+      publicId: generatePublicId(PUBLIC_ID_PREFIXES.NOTIFICATION),
       userId,
       type,
       orderId,
@@ -96,7 +108,10 @@ export class NotificationService {
           Buffer.from(
             JSON.stringify({
               pattern: EVENT.NOTIFY_USER_PUSH_EVENT,
-              data: { userId, notification: saved },
+              data: {
+                userId,
+                notification: this.exposeNotification(saved, orderPublicId),
+              },
             }),
           ),
         );
@@ -116,14 +131,47 @@ export class NotificationService {
     userId: number,
     page: number,
     limit: number,
-  ): Promise<PaginatedResponse<Notification>> {
+  ): Promise<PaginatedResponse<Record<string, unknown>>> {
     const [data, total] = await this.notificationRepository.findAndCount({
       where: { userId },
       order: { createdAt: "DESC" },
       skip: (page - 1) * limit,
       take: limit,
     });
-    return PaginatedResponse.of(data, total, page, limit);
+    const orderIds = [
+      ...new Set(
+        data
+          .map((notification) => notification.orderId)
+          .filter((orderId): orderId is number => orderId !== null)
+          .map(Number),
+      ),
+    ];
+    const orders =
+      orderIds.length === 0
+        ? []
+        : await firstValueFrom(
+            this.ordersClient
+              .send(ORDER_MESSAGE_PATTERN.GET_ORDER_PUBLIC_IDS_BY_IDS, orderIds)
+              .pipe(timeout(10000)) as Observable<
+              { id: number; publicId: string | null }[]
+            >,
+          );
+    const publicIdByOrderId = new Map(
+      orders.map((order) => [Number(order.id), order.publicId]),
+    );
+    return PaginatedResponse.of(
+      data.map((notification) =>
+        this.exposeNotification(
+          notification,
+          notification.orderId === null
+            ? null
+            : (publicIdByOrderId.get(Number(notification.orderId)) ?? null),
+        ),
+      ),
+      total,
+      page,
+      limit,
+    );
   }
 
   async countUnread(userId: number): Promise<{ unreadCount: number }> {
@@ -134,13 +182,28 @@ export class NotificationService {
   }
 
   async markNotificationRead(
-    notificationId: number,
+    notificationId: number | string,
     userId: number,
   ): Promise<{ success: boolean }> {
     await this.notificationRepository.update(
-      { id: notificationId, userId },
+      typeof notificationId === "number"
+        ? { id: notificationId, userId }
+        : { publicId: notificationId, userId },
       { isRead: true },
     );
     return { success: true };
+  }
+
+  private exposeNotification(
+    notification: Notification,
+    orderPublicId: string | null,
+  ): Record<string, unknown> {
+    const exposed: Record<string, unknown> = {
+      ...notification,
+      id: notification.publicId ?? String(notification.id),
+      orderId: notification.orderId === null ? null : orderPublicId,
+    };
+    delete exposed.publicId;
+    return exposed;
   }
 }

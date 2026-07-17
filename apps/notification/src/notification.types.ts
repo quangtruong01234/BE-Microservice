@@ -11,6 +11,7 @@ export interface UserEmailInfo {
 
 export interface OrderInfo {
   id: number;
+  publicId: string | null;
   userId: number;
   sellerId: number;
   total: number;
