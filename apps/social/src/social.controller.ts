@@ -28,7 +28,7 @@ export class SocialController {
   async updatePost(
     @Payload()
     payload: {
-      postId: number;
+      postId: number | string;
       userId: number;
       content?: string;
       imageUrls?: string[] | null;
@@ -36,19 +36,25 @@ export class SocialController {
       productId?: number | null;
     },
   ): Promise<Post> {
-    return this.socialService.updatePost(payload);
+    return this.socialService.updatePost({
+      ...payload,
+      postId: await this.socialService.resolvePostId(payload.postId),
+    });
   }
 
   @MessagePattern(SOCIAL_MESSAGE_PATTERN.REPORT_POST)
   async reportPost(
     @Payload()
     payload: {
-      postId: number;
+      postId: number | string;
       reporterId: number;
       reason: string;
     },
   ): Promise<{ reported: boolean; postId: number }> {
-    return this.socialService.reportPost(payload);
+    return this.socialService.reportPost({
+      ...payload,
+      postId: await this.socialService.resolvePostId(payload.postId),
+    });
   }
 
   @MessagePattern(SOCIAL_MESSAGE_PATTERN.GET_POSTS)
@@ -78,71 +84,129 @@ export class SocialController {
 
   @MessagePattern(SOCIAL_MESSAGE_PATTERN.GET_POST_BY_ID)
   async getPostById(
-    @Payload() payload: { postId: number; viewerUserId?: number | null },
+    @Payload()
+    payload: {
+      postId: number | string;
+      viewerUserId?: number | null;
+    },
   ): Promise<unknown> {
-    return this.socialService.getPostById(payload.postId, payload.viewerUserId);
+    return this.socialService.getPostById(
+      await this.socialService.resolvePostId(payload.postId),
+      payload.viewerUserId,
+    );
+  }
+
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.GET_POST_PUBLIC_IDS_BY_IDS)
+  async getPostPublicIdsByIds(
+    @Payload() postIds: number[],
+  ): Promise<Array<{ id: number; publicId: string }>> {
+    return this.socialService.getPostPublicIdsByIds(postIds);
   }
 
   @MessagePattern(SOCIAL_MESSAGE_PATTERN.DELETE_POST)
   async deletePost(
-    @Payload() payload: { postId: number; userId: number },
+    @Payload() payload: { postId: number | string; userId: number },
   ): Promise<{ success: boolean }> {
-    return this.socialService.deletePost(payload);
+    return this.socialService.deletePost({
+      ...payload,
+      postId: await this.socialService.resolvePostId(payload.postId),
+    });
   }
 
   @MessagePattern(SOCIAL_MESSAGE_PATTERN.LIKE_POST)
   async likePost(
-    @Payload() payload: { postId: number; userId: number },
+    @Payload() payload: { postId: number | string; userId: number },
   ): Promise<{ liked: boolean; postId: number }> {
-    return this.socialService.likePost(payload);
+    return this.socialService.likePost({
+      ...payload,
+      postId: await this.socialService.resolvePostId(payload.postId),
+    });
   }
 
   @MessagePattern(SOCIAL_MESSAGE_PATTERN.UNLIKE_POST)
   async unlikePost(
-    @Payload() payload: { postId: number; userId: number },
+    @Payload() payload: { postId: number | string; userId: number },
   ): Promise<{ liked: boolean; postId: number }> {
-    return this.socialService.unlikePost(payload);
+    return this.socialService.unlikePost({
+      ...payload,
+      postId: await this.socialService.resolvePostId(payload.postId),
+    });
   }
 
   @MessagePattern(SOCIAL_MESSAGE_PATTERN.CREATE_COMMENT)
   async createComment(
-    @Payload() payload: { postId: number; userId: number; content: string },
+    @Payload()
+    payload: {
+      postId: number | string;
+      userId: number;
+      content: string;
+    },
   ): Promise<Comment> {
-    return this.socialService.createComment(payload);
+    return this.socialService.createComment({
+      ...payload,
+      postId: await this.socialService.resolvePostId(payload.postId),
+    });
   }
 
   @MessagePattern(SOCIAL_MESSAGE_PATTERN.GET_COMMENTS)
   async getComments(
-    @Payload() payload: { postId: number; page: number; limit: number },
+    @Payload()
+    payload: {
+      postId: number | string;
+      page: number;
+      limit: number;
+    },
   ): Promise<unknown> {
-    return this.socialService.getComments(payload);
+    return this.socialService.getComments({
+      ...payload,
+      postId: await this.socialService.resolvePostId(payload.postId),
+    });
   }
 
   @MessagePattern(SOCIAL_MESSAGE_PATTERN.DELETE_COMMENT)
   async deleteComment(
-    @Payload() payload: { commentId: number; userId: number },
+    @Payload() payload: { commentId: number | string; userId: number },
   ): Promise<{ deleted: boolean }> {
-    return this.socialService.deleteComment(payload);
+    return this.socialService.deleteComment({
+      ...payload,
+      commentId: await this.socialService.resolveCommentId(payload.commentId),
+    });
   }
 
   @MessagePattern(SOCIAL_MESSAGE_PATTERN.CREATE_REPLY)
   async createReply(
     @Payload()
     payload: {
-      postId: number;
-      parentCommentId: number;
+      postId: number | string;
+      parentCommentId: number | string;
       userId: number;
       content: string;
     },
   ): Promise<Comment> {
-    return this.socialService.createReply(payload);
+    return this.socialService.createReply({
+      ...payload,
+      postId: await this.socialService.resolvePostId(payload.postId),
+      parentCommentId: await this.socialService.resolveCommentId(
+        payload.parentCommentId,
+      ),
+    });
   }
 
   @MessagePattern(SOCIAL_MESSAGE_PATTERN.GET_REPLIES)
   async getReplies(
-    @Payload() payload: { commentId: number; depth?: number },
+    @Payload() payload: { commentId: number | string; depth?: number },
   ): Promise<Comment> {
-    return this.socialService.getReplies(payload);
+    return this.socialService.getReplies({
+      ...payload,
+      commentId: await this.socialService.resolveCommentId(payload.commentId),
+    });
+  }
+
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.GET_COMMENT_PUBLIC_IDS_BY_IDS)
+  async getCommentPublicIdsByIds(
+    @Payload() commentIds: number[],
+  ): Promise<Array<{ id: number; publicId: string }>> {
+    return this.socialService.getCommentPublicIdsByIds(commentIds);
   }
 
   @MessagePattern(SOCIAL_MESSAGE_PATTERN.FOLLOW_USER)
@@ -200,29 +264,39 @@ export class SocialController {
 
   @MessagePattern(SOCIAL_MESSAGE_PATTERN.ADMIN_HIDE_POST)
   async adminHidePost(
-    @Payload() payload: { postId: number; adminId: number },
+    @Payload() payload: { postId: number | string; adminId: number },
   ): Promise<{ postId: number; isHidden: boolean }> {
-    return this.socialService.hidePost(payload);
+    return this.socialService.hidePost({
+      ...payload,
+      postId: await this.socialService.resolvePostId(payload.postId),
+    });
   }
 
   @MessagePattern(SOCIAL_MESSAGE_PATTERN.ADMIN_UNHIDE_POST)
   async adminUnhidePost(
-    @Payload() payload: { postId: number },
+    @Payload() payload: { postId: number | string },
   ): Promise<{ postId: number; isHidden: boolean }> {
-    return this.socialService.unhidePost(payload);
+    return this.socialService.unhidePost({
+      postId: await this.socialService.resolvePostId(payload.postId),
+    });
   }
 
   @MessagePattern(SOCIAL_MESSAGE_PATTERN.ADMIN_DISMISS_REPORTS)
   async adminDismissReports(
-    @Payload() payload: { postId: number; adminId: number },
+    @Payload() payload: { postId: number | string; adminId: number },
   ): Promise<{ postId: number; dismissed: number }> {
-    return this.socialService.dismissReports(payload);
+    return this.socialService.dismissReports({
+      ...payload,
+      postId: await this.socialService.resolvePostId(payload.postId),
+    });
   }
 
   @MessagePattern(SOCIAL_MESSAGE_PATTERN.ADMIN_DELETE_POST)
   async adminDeletePost(
-    @Payload() payload: { postId: number },
+    @Payload() payload: { postId: number | string },
   ): Promise<{ success: boolean }> {
-    return this.socialService.adminDeletePost(payload);
+    return this.socialService.adminDeletePost({
+      postId: await this.socialService.resolvePostId(payload.postId),
+    });
   }
 }

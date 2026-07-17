@@ -16,6 +16,9 @@ export class Comment {
   @PrimaryGeneratedColumn("increment")
   id!: number;
 
+  @Column({ name: "public_id", type: "varchar", length: 32, unique: true })
+  publicId!: string;
+
   @Column({ name: "post_id", type: "int", nullable: false })
   postId!: number;
 

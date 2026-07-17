@@ -12,6 +12,7 @@ import { DataSource, In, IsNull, QueryFailedError, Repository } from "typeorm";
 import { Channel } from "amqplib";
 import { CachedService } from "@app/cached";
 import { CloudinaryService, PaginatedResponse } from "@app/common";
+import { generatePublicId } from "@app/common";
 import { EXCHANGE } from "@app/common/constants/exchange";
 import { EVENT } from "@app/common/constants/event";
 import { Post } from "./entities/post.entity";
@@ -21,6 +22,7 @@ import { Comment } from "./entities/comment.entity";
 import { Follow } from "./entities/follow.entity";
 import { SOCIAL_MESSAGE } from "libs/constant/response-message.constant";
 import { NOTIFICATION_PREVIEW_MAX_LENGTH } from "./social.constants";
+import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 
 @Injectable()
 export class SocialService {
@@ -48,6 +50,50 @@ export class SocialService {
     @Inject(EXCHANGE.RMQ_PUBLISHER_CHANNEL)
     private readonly fanoutChannel: Channel | null,
   ) {}
+
+  async resolvePostId(postId: number | string): Promise<number> {
+    if (typeof postId === "number") return postId;
+    const post = await this.postRepository.findOne({
+      where: { publicId: postId },
+      select: ["id"],
+    });
+    if (!post) {
+      throw new NotFoundException(SOCIAL_MESSAGE.POST_NOT_FOUND(postId));
+    }
+    return post.id;
+  }
+
+  async resolveCommentId(commentId: number | string): Promise<number> {
+    if (typeof commentId === "number") return commentId;
+    const comment = await this.commentRepository.findOne({
+      where: { publicId: commentId },
+      select: ["id"],
+    });
+    if (!comment) {
+      throw new NotFoundException(SOCIAL_MESSAGE.COMMENT_NOT_FOUND(commentId));
+    }
+    return comment.id;
+  }
+
+  async getPostPublicIdsByIds(
+    postIds: number[],
+  ): Promise<Array<{ id: number; publicId: string }>> {
+    if (postIds.length === 0) return [];
+    return this.postRepository.find({
+      where: { id: In(postIds) },
+      select: ["id", "publicId"],
+    });
+  }
+
+  async getCommentPublicIdsByIds(
+    commentIds: number[],
+  ): Promise<Array<{ id: number; publicId: string }>> {
+    if (commentIds.length === 0) return [];
+    return this.commentRepository.find({
+      where: { id: In(commentIds) },
+      select: ["id", "publicId"],
+    });
+  }
 
   private collectPostMediaUrls(post: Post): string[] {
     return [...(post.imageUrls ?? []), post.videoUrl].filter(
@@ -251,6 +297,7 @@ export class SocialService {
     productId?: number | null;
   }): Promise<Post> {
     const post = this.postRepository.create({
+      publicId: generatePublicId(PUBLIC_ID_PREFIXES.POST),
       userId: payload.userId,
       content: payload.content,
       imageUrls: payload.imageUrls ?? null,
@@ -509,6 +556,7 @@ export class SocialService {
       );
     }
     const comment = this.commentRepository.create({
+      publicId: generatePublicId(PUBLIC_ID_PREFIXES.COMMENT),
       postId: payload.postId,
       userId: payload.userId,
       content: payload.content,
@@ -601,6 +649,7 @@ export class SocialService {
     }
     const saved = await this.treeRepo.save(
       this.commentRepository.create({
+        publicId: generatePublicId(PUBLIC_ID_PREFIXES.COMMENT),
         postId: payload.postId,
         userId: payload.userId,
         content: payload.content,

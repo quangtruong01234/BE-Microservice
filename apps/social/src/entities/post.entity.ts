@@ -14,6 +14,9 @@ export class Post {
   @PrimaryGeneratedColumn("increment")
   id!: number;
 
+  @Column({ name: "public_id", type: "varchar", length: 32, unique: true })
+  publicId!: string;
+
   @Column({ name: "user_id", type: "int", nullable: false })
   userId!: number;
 
