@@ -30,7 +30,7 @@ async function bootstrap() {
   app.useGlobalFilters(new AllRpcExceptionFilter());
 
   await app.startAllMicroservices();
-  await app.listen(PORT_TCP.PRODUCT_TCP_PORT + 100);
+  await app.init();
 
   console.log("✅ Product service is running:");
   console.log(`   🔌 TCP Microservice: localhost:${PORT_TCP.PRODUCT_TCP_PORT}`);
