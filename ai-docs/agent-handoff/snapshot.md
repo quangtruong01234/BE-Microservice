@@ -15,6 +15,76 @@ Base URL: http://localhost:3000 | Swagger: /doc
 
 ## Active Tasks
 
+### 🆔 Public-ID backlog — Stripe-style opaque external ids (decided 2026-07-17)
+
+> Decision (user-approved): adopt **option B** — keep INT/BIGINT PKs and all FKs/
+> TCP contracts as numbers internally; ADD a `public_id` VARCHAR(32) UNIQUE column
+> (prefixed opaque id, e.g. `ord_8fK2mQ9xL3pT7vWb`) ONLY on tables whose ids are
+> exposed on HTTP route params / responses and are enumerable cross-user. API
+> boundary accepts+returns ONLY the public id once a domain is converted. Purpose:
+> anti-IDOR/enumeration story for the demo, done at the source (no global
+> transform layer). No prod data exists yet, so responses REPLACE `id` outright
+> (no dual-field compatibility period); FE migrates per domain via handoff entries.
+> NOT converting (stay int, deliberately): order_items, voucher_redemptions,
+> shipping_history, product_skus, product_reviews, wishlist_items, cart_items,
+> roles, resources, payment_methods, reward_points, inventory, payments, brands,
+> categories, vouchers (looked up by `code`).
+>
+> Shared mechanics per domain task: additive SQL migration (+ manifest entry) →
+> entity + generate-on-create → resolve `public_id`→int at the owning service's
+> read/write paths → gateway route param drops `ParseIntPipe` (string, validate
+> prefix) → response maps `id` to public id → Swagger types → tsc/eslint →
+> runtime self-test → FE handoff entry (storefront and/or GHN file as relevant).
+> Work top-down; move each to CHANGELOG when shipped and delete its line here.
+
+- [x] **PUBID-00 — DONE 2026-07-17** (see CHANGELOG): `generatePublicId`/
+      `isPublicId` in `libs/common/src/public-id/public-id.util.ts` (crypto
+      base62, no new deps) + `PUBLIC_ID_PREFIXES`/`PUBLIC_ID_RANDOM_LENGTH` in
+      `libs/constant/public-id.constant.ts`. 9 unit tests. Note: `@app/constant`
+      alias is NOT in tsconfig — constants are imported as `libs/constant/...`
+      (existing repo convention).
+- [x] **PUBID-01 — DONE 2026-07-17** (see CHANGELOG): orders pilot shipped and
+      runtime-verified. All HTTP order ids are `ord_...`; numeric `:id` → 400
+      via `ParsePublicIdPipe`. Migration `nodeA-20260717-001-add-public-id-to-orders`
+      applied to Aiven (backfill included). Internals stay int (GHN, invoice
+      number, payments TCP, RMQ, notifications until PUBID-04). Pattern for the
+      next domains: TCP responses carry `publicId` alongside `id`; gateway
+      strips via `exposeOrder`-style mappers; controller TCP handlers accept
+      `number | string` + `resolveOrderId` so internal numeric callers keep working.
+- [x] **PUBID-02 — DONE 2026-07-17** (see CHANGELOG): users converted and
+      runtime-verified (11/11). All HTTP user ids are `usr_...` (login/me/
+      register/profile/admin list/featured-sellers + product `user`, social
+      `author`, order `buyer`/`seller` embeds); numeric `/user/:id` → 400.
+      Migration `nodeA-20260717-002-add-public-id-to-users` applied to Aiven.
+      JWT/`req.user.id` stay numeric; PATCH ownership check moved into the user
+      service (`resolveUserId` on `targetId` → 403); `GET_USER_INFO` accepts
+      `number | string` so internal numeric callers (invoice, notification
+      email) keep working. Embedded HTTP `userId`/`sellerId` refs were completed
+      by PUBID-07.
+- [x] **PUBID-03 — DONE 2026-07-17** (see CHANGELOG): chat converted and
+      runtime-verified (7 REST + 14 WS checks). Conversations `conv_...`,
+      messages `msg_...` (incl. `lastMessage.id`, `parentMessageId`, WS
+      `join`/`send_message` payloads + `new_message` emits via shared
+      `exposeChatMessage`). Chat runs `synchronize:false` — migration
+      `nodeA-20260717-003-add-public-id-to-chat` applied to Aiven BEFORE code.
+      New: invalid/foreign `parentMessageId` now 400 (was unvalidated).
+      Chat user references were converted to `usr_...` by PUBID-07.
+- [x] **PUBID-04 — DONE 2026-07-17** (see CHANGELOG): addresses (`addr_`),
+      notifications (`ntf_`), and return requests (`rr_`) converted and
+      runtime-verified; notification order deep-links now use `ord_`.
+      Migration `nodeA-20260717-004-add-public-id-to-addresses-notifications-returns`
+      applied to Aiven.
+- [x] **PUBID-05 — DONE 2026-07-17** (see CHANGELOG): products (`prod_`)
+      converted across catalog, SKU/product references, cart, checkout, orders,
+      social, risk, inventory embeds, and GHN local-order detail. Migration
+      `nodeA-20260717-005-add-public-id-to-products` applied to Aiven.
+- [x] **PUBID-06 — DONE 2026-07-17** (see CHANGELOG): posts (`post_`) and
+      comments/replies (`cmt_`) converted; guarded migration
+      `nodeA-20260717-006-add-public-id-to-posts-comments` applied to Aiven.
+- [x] **PUBID-07 — DONE 2026-07-17** (see CHANGELOG): converted-domain numeric
+      cross-references no longer leave HTTP/WS boundaries; contract documented
+      in API context/root README and enforced by the `$review` checklist.
+
 ### Architecture prep - hybrid TCP/RabbitMQ hardening (recorded 2026-06-30)
 
 > Decision: keep the current hybrid transport model. Do NOT migrate all
@@ -260,32 +330,8 @@ suggestion shipped at `GET /api/products/price-suggestion` via
 active base/SKU prices and suppresses samples smaller than three. No migration
 or external API. Storefront integration is recorded in `frontend-handoff.md`.
 
-**AI-02 follow-up backlog — hardening/scale (MVP shipped 2026-07-13; none gate release)**
+**AI-02 follow-up backlog — hardening/scale (F1–F4 shipped 2026-07-16; see CHANGELOG)**
 
-- [ ] **AI-02F1 — Durable scoring state + retry.** Add `risk_scoring_status`
-      (`pending|ready|failed`), `risk_scored_at`, and bounded retry metadata;
-      enqueue scoring through the planned outbox/job path instead of an
-      in-process fire-and-forget promise. Create/update must still succeed, but
-      admin/seller reads can distinguish fresh, pending, and failed scores and
-      retry transient Cloudinary failures automatically. Migration: yes. FE:
-      show pending/failed state instead of briefly displaying a stale score.
-- [ ] **AI-02F2 — Legacy catalog backfill.** Add an admin-only cursor/batch
-      rescore command (plus resumable script or scheduled job) so products that
-      predate AI-02 receive hashes without needing a seller edit. Must be
-      idempotent, rate/concurrency bounded, and resume after interruption. No
-      mandatory migration beyond AI-02F1 metadata. FE: optional progress UI.
-- [ ] **AI-02F3 — Seller duplicate warning.** Add a rate-limited, authenticated
-      pre-submit check for an already-uploaded owned Cloudinary URL, returning
-      advisory matches without publishing or blocking the listing. Reuse the
-      same hash/threshold code and cache by URL/hash; do not expose other
-      sellers' internal hashes. No migration. FE: warning banner with an
-      explicit "continue anyway" path.
-- [ ] **AI-02F4 — False-positive calibration + moderator feedback.** Compare
-      multiple images/evidence instead of accepting one plain-background match,
-      expose matched-product links/reasons, and record admin
-      `confirmed_duplicate|dismissed` feedback so thresholds can be tuned from
-      real decisions. Never auto-unlist until measured precision supports a
-      separately approved policy. Migration: likely a small review/audit table.
 - [ ] **AI-02F5 — Hash lookup scale path.** Current Hamming comparison is an
       O(catalog) scan and is acceptable only for the present small catalog.
       Before/at ~10k products, benchmark it and replace the scan with persisted
@@ -303,9 +349,8 @@ or external API. Storefront integration is recorded in `frontend-handoff.md`.
       2 new unit tests (concurrency counter ≤3; oversized no-`Content-Length` stream
       aborted); product suite 17/17.
 
-**Recommended follow-up order:** AI-02F1 → AI-02F2 → AI-02F3 →
-AI-02F4 → AI-02F5. F1/F2 close correctness/operability gaps; F5 is triggered by
-catalog size/load evidence, not by calendar time.
+**Remaining trigger:** AI-02F5 is activated by catalog size/load evidence near
+10k products, not by calendar time. The current catalog remains below that gate.
 
 **AI-03 — Sell From Photo (Gemini)** (Google AI Studio free tier, no card; no migration)
 
@@ -693,8 +738,8 @@ SCALE-06 numbers will prove or disprove.
   come from `apps/orders/src/invoice/invoice.generator.ts`. VAT/tax line
   intentionally NOT rendered (shops self-handle VAT). No DB fields for company
   MST/tax id exist — adding a legal seller MST block later needs a migration + FE.
-- Forgot-password (2026-07-11, NO migration): `POST /api/user/forgot-password` (`@Public`, rate-limit 5/60s, `{email}` → always generic 201) and `POST /api/user/reset-password` (`@Public`, 10/60s, `{email, code, newPassword}` → `{success:true}` or 400 "Invalid or expired verification code"). User service TCP `{cmd: user.forgot_password|user.reset_password}`. Code: 6-digit crypto `randomInt`, stored PLAINTEXT in Redis `user:pwreset:code:<userId>` (TTL 600s — plaintext is deliberate: short TTL + attempt cap, and enables self-testing via `docker exec redis redis-cli GET user:pwreset:code:<id>`); attempts counter `user:pwreset:attempts:<userId>` (max 5, then code invalidated); resend cooldown `user:pwreset:cooldown:<userId>` (60s via setNx). Email via dependency-free `MailerService` (`libs/common/src/mailer/`, implicit-TLS SMTPS only, e.g. Gmail :465 app password; env `SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS/SMTP_FROM` — keys in `local/nodeA/.env.example` only; the real `.env` is write-denied to agents, so the user must add SMTP_* manually for real delivery). SMTP unconfigured → dev fallback: user service logs the code, endpoint still returns the generic 201.
-- Order email notifications (F7, 2026-07-12, NO migration): the notification service mirrors order in-app notifications to email, best-effort. Handlers covered: `order_created` (NEW consumer — notification queue was already bound to the orders fanout; recipient = buyer), `payment_completed` (buyer), `order_canceled` (buyer), `order.return_requested` (seller), `order.return_approved`/`order.return_rejected` (buyer). Flow: after `saveNotification`, `NotificationService.emailUser(userId, subject, text)` resolves the address via user TCP `{cmd: user.get_user_info}` `{userId, includeEmail:true}` then `MailerService.sendMail` (shared `libs/common/src/mailer/`, SMTPS). `emailUser` NEVER throws — any TCP/mail failure logs a warn and the RMQ ack/nack outcome is unchanged. SMTP_* unset (current dev state) → MailerService logs the mail and returns false. Requires `SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS/SMTP_FROM` in the notification service env (`local/nodeA/.env`) for real delivery. Side effect for FE: a new `order_created` notification row/WS push now exists (was previously only `payment_completed`).
+- Forgot-password (2026-07-11, NO migration): `POST /api/user/forgot-password` (`@Public`, rate-limit 5/60s, `{email}` → always generic 201) and `POST /api/user/reset-password` (`@Public`, 10/60s, `{email, code, newPassword}` → `{success:true}` or 400 "Invalid or expired verification code"). User service TCP `{cmd: user.forgot_password|user.reset_password}`. Code: 6-digit crypto `randomInt`, stored PLAINTEXT in Redis `user:pwreset:code:<userId>` (TTL 600s — plaintext is deliberate: short TTL + attempt cap, and enables self-testing via `docker exec redis redis-cli GET user:pwreset:code:<id>`); attempts counter `user:pwreset:attempts:<userId>` (max 5, then code invalidated); resend cooldown `user:pwreset:cooldown:<userId>` (60s via setNx). Email via dependency-free `MailerService` (`libs/common/src/mailer/`, implicit-TLS SMTPS only, e.g. Gmail :465 app password; env `SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS/SMTP_FROM` — keys in `local/nodeA/.env.example` only; the real `.env` is write-denied to agents, so the user must add SMTP\_\* manually for real delivery). SMTP unconfigured → dev fallback: user service logs the code, endpoint still returns the generic 201.
+- Order email notifications (F7, 2026-07-12, NO migration): the notification service mirrors order in-app notifications to email, best-effort. Handlers covered: `order_created` (NEW consumer — notification queue was already bound to the orders fanout; recipient = buyer), `payment_completed` (buyer), `order_canceled` (buyer), `order.return_requested` (seller), `order.return_approved`/`order.return_rejected` (buyer). Flow: after `saveNotification`, `NotificationService.emailUser(userId, subject, text)` resolves the address via user TCP `{cmd: user.get_user_info}` `{userId, includeEmail:true}` then `MailerService.sendMail` (shared `libs/common/src/mailer/`, SMTPS). `emailUser` NEVER throws — any TCP/mail failure logs a warn and the RMQ ack/nack outcome is unchanged. SMTP\_\* unset (current dev state) → MailerService logs the mail and returns false. Requires `SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS/SMTP_FROM` in the notification service env (`local/nodeA/.env`) for real delivery. Side effect for FE: a new `order_created` notification row/WS push now exists (was previously only `payment_completed`).
 - GHN env (local/nodeA/.env): `GHN_API_URL=https://dev-online-gateway.ghn.vn/shiip/public-api`, `GHN_API_TOKEN`, `GHN_SHOP_ID=200481`; `GHN_WEBHOOK_SECRET` required on the gateway webhook (`x-ghn-webhook-token` preferred; `?token=` still accepted but logs a deprecation warn — SEC-M1 2026-07-11). Webhook body known fields runtime-validated (`GhnWebhookDto`, extra GHN fields tolerated); explicit rate limit 300/60s.
 - GHN webhook is served at BOTH `POST /ghn/webhook` (legacy) AND `POST /api/ghn/webhook` (prefix-consistent) — same handler, both excluded from the global `api` prefix (`main.ts` exclude list + `GhnWebhookController` `@Post(["ghn/webhook","api/ghn/webhook"])`). A GHN dashboard configured with either URL works; no more silent 404 if `/api` is included. Body accepts PascalCase (`OrderCode`/`Status`, real GHN) or snake_case (`order_code`/`status`, manual tests).
 - GHN shipping_address: pipe-delimited `name|phone|addr|ward|district|province`; failure non-fatal (order saved with ghn_order_code=null).
@@ -713,6 +758,13 @@ SCALE-06 numbers will prove or disprove.
 - Cloudinary: client uploads direct; server signs via `POST /api/upload/signature`; allowed folders are `trybuy/products`, `trybuy/posts`, and existing storefront avatar folder `avatars`. Upload `publicId` must be a basename matching `${userId}_...` (server generates one if omitted); delete `public_id` must be full `<allowed-folder>/${userId}_...` unless caller role is admin. Invalid folder/path → 400; foreign prefix → 403 before Cloudinary is called. Delete ownership enforcement runtime-verified 2026-07-08 (user 17 deleting a `18_` leaf → 403; disallowed folder → 400; no-folder public_id → 400; unauth → 401; all reject inside `generateDeleteSignature` before any Cloudinary destroy). Orphan cleanup of dropped media on entity update is now server-side (SEC-M7, 2026-07-11 — `CloudinaryService.destroyAssets` in `libs/common/src/cloudinary/`, wired into social/product/user mutations post-commit; needs `CLOUDINARY_CLOUD_NAME/API_KEY/API_SECRET` in the service env or it logs a warn and no-ops). Upload signatures now sign `allowed_formats` (SEC-M8): products/avatars `jpg,png,webp`, posts `jpg,png,webp,mp4`; FE must forward that returned field to Cloudinary with the signature. Upload folders switch by `NODE_ENV` (2026-07-15) so ONE shared Cloudinary account separates prod from dev media: `NODE_ENV==="production"` → `trybuy-prod/products` + `trybuy-prod/posts`; any other env (dev/test) → `trybuy/products` + `trybuy/posts`. Avatars always stay in the shared legacy `avatars` folder. Prefix derived in `getCloudinaryFolderPrefix()` (`libs/common/src/cloudinary/cloudinary.constants.ts`) — no Cloudinary folder env var to set (prod already sets `NODE_ENV=production` via `.env` + pm2 `env_production`). DTO validators + the FE still use the STABLE LOGICAL folders (`trybuy/products`, `trybuy/posts`, `avatars`); the server resolves logical→physical at runtime (`resolvePhysicalUploadFolder`) for signing, delete-allowlist, orphan-destroy, and delivery-URL validation. FE contract unchanged (server-authoritative folder is returned in the signature response and echoed into the Cloudinary upload form) — no FE change needed.
 - Deploy runtime: host PM2 runs compiled NestJS apps from `ecosystem.config.js`; Docker Compose runs Redis/RabbitMQ only (`docker compose up -d redis rabbitmq`); MySQL/PostgreSQL are external Aiven services; internal TCP/payments callback listeners bind to `127.0.0.1`; production Nginx exposes the gateway on `127.0.0.1:3000` only (including `/zalopay/callback` and `/vnpay/callback` facades); VPS firewall/security group must expose only 80/443 publicly; set the real domain in `nginx/trybuy.conf`.
 - CI: `.github/workflows/ci.yml` validates PRs and pushes to `main` only; it runs npm install/lint/typecheck/Jest/build/PM2 syntax/Compose config/whitespace checks with safe dummy env values. It does not deploy, publish Docker images, connect to Aiven, run migrations, or require repository secrets.
+- Database migration cutoff (2026-07-17): all schema work through PUBID-07 is
+  squashed into `database/prod-baseline-20260717/`. Standalone historical
+  `database/*.sql` and app-local migration files referenced by older notes
+  below were retired and must not be replayed. Empty databases use the Node
+  A/Node B baseline files; later changes use only post-cutoff manifest
+  migrations. Existing historical `schema_migrations` rows are classified as
+  `baseline-absorbed`.
 - Applied migrations (P1-03, social DB, `synchronize:false`): `database/add_product_id_to_posts.sql` (`posts.product_id INT NULL`) and `database/create_post_reports_table.sql` (`post_reports` table) — both applied to Aiven on 2026-06-25. Re-run on any fresh DB before the post-edit / report endpoints work.
 - Applied migration (P1-06, chat read-tracking, `synchronize:false`): `database/add_read_tracking_to_conversations.sql` (`conversations.user1_last_read_at` / `user2_last_read_at` DATETIME NULL) — applied to Aiven on 2026-06-26. Re-run on any fresh DB before `unreadCount` / mark-read work.
 - Applied migration (P2-02, order snapshot, `synchronize:false`): `database/add_snapshot_columns_to_order_items.sql` (`order_items.product_image` VARCHAR(2048) NULL, `order_items.sku_label` VARCHAR(512) NULL) — applied to Aiven on 2026-06-26. Re-run on any fresh DB before order-snapshot rendering works.

@@ -208,6 +208,7 @@ A task is complete only when the relevant checks pass:
   - **TryBuy storefront** (`../frontend`, React + Vite, dev `5173`; catalog/cart/orders/checkout/payments/chat/social) → `../.agent-local/frontend-handoff.md`; its FE-waiting backlog is `../frontend/.ai/agent-handoff/snapshot.md`.
   - **GHN Shipping console** (`../web-flow-GHN`, Next.js, dev `3013`; shipping auth/role gating, `GET/POST /api/order/admin/ghn/*`, GHN sync/history) → `../.agent-local/frontend-handoff-ghn.md`.
   - Never cross-file an item (no GHN-console item in `frontend-handoff.md`, no storefront item in `frontend-handoff-ghn.md`); if a change affects both, add a tailored entry to each. First read the matching FE backlog and reuse its waiting-item id, then append a contract-first entry (route, method, request/response shape, status codes) under **Open** using the template in that file. Skip this step if the task has no FE impact.
+  - **Mandatory BE→FE routing:** every backend add/update must identify its actual frontend consumer before closure. Record required storefront work in `frontend-handoff.md`, required GHN-console work in `frontend-handoff-ghn.md`, and tailored entries in both only when both consumers are affected; never add an entry to an unaffected handoff.
 
 ## Test Accounts
 
@@ -249,7 +250,7 @@ Codex runs API tests directly when they can be run inside the workspace. If test
 
 When a task adds or modifies an endpoint, after tsc + eslint pass:
 1. Read `../.agent-local/test-accounts.md` — pick an account with the required role (user / admin / shop)
-2. Login via `POST /api/auth/login` with `-c tmpcookies_test.txt` to capture the cookie
+2. Login via `POST /api/user/login` with `-c tmpcookies_test.txt` to capture the cookie
 3. Run each test curl with `-b tmpcookies_test.txt`
 4. Assert the response: check HTTP status code and key fields in the JSON body
 5. Report results inline — pass/fail per test case, with actual response snippets

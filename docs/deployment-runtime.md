@@ -203,7 +203,18 @@ Generate strong local service secrets:
 openssl rand -base64 48
 ```
 
-Do not run `npm run db:migrate:*` during this first deploy pass.
+Provision both empty Aiven databases before starting PM2:
+
+1. Read `database/prod-baseline-20260717/baseline-review.md`.
+2. Verify the package with `database/prod-baseline-20260717/SHA256SUMS`.
+3. Import `nodeA-mysql-baseline.sql` into Node A MySQL.
+4. Import `nodeB-postgresql-baseline.sql` into Node B PostgreSQL.
+5. Run `npm run db:migrate:dry-run`; the release cutoff expects zero pending
+   post-baseline migrations.
+
+The migration runner never imports baseline files. Do not start application
+services against empty databases or enable TypeORM synchronization as a
+bootstrap shortcut.
 
 ## 5. First Manual Deploy Commands
 

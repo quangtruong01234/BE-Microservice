@@ -29,6 +29,9 @@ $review <file-or-folder>   # reviews a specific path
 - [ ] Every `ClientProxy.send()` call has `.pipe(timeout(10000))`
 - [ ] Every gateway method uses `MicroserviceErrorHandler`
 - [ ] Every gateway DTO field has `@ApiProperty()`
+- [ ] No internal numeric id for a converted domain leaves an HTTP or WebSocket
+      boundary; route/DTO references and nested response FKs use the matching
+      opaque public id (`ord_`, `usr_`, `prod_`, `post_`, etc.)
 - [ ] No hardcoded message pattern strings — uses constants from `@app/constant`
 
 ### Backend: Microservices

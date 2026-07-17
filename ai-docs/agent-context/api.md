@@ -6,6 +6,15 @@ All routes prefixed with `/api/`
 
 Auth: HttpOnly cookie set on login. Protected routes require the cookie (sent automatically via `credentials: 'include'`).
 
+External identifier contract: converted resources expose and accept opaque ids
+only: orders `ord_`, users `usr_`, conversations `conv_`, messages `msg_`, user
+addresses `addr_`, notifications `ntf_`, return requests `rr_`, and products
+`prod_`, posts `post_`, and comments `cmt_` (each prefix followed by 16
+alphanumeric characters). Numeric ids remain internal DB/TCP references. Nested
+references to converted domains (`userId`, `sellerId`, `productId`, `postId`,
+`commentId`, `actorId`, and similar fields) also use opaque ids at HTTP and
+WebSocket boundaries.
+
 ---
 
 ## Auth Zones
@@ -27,6 +36,7 @@ Auth: HttpOnly cookie set on login. Protected routes require the cookie (sent au
 **Cookie required (authenticated user):**
 - POST /api/products/, PATCH /api/products/:id, DELETE /api/products/:id
 - GET /api/products/price-suggestion
+- POST /api/products/risk/duplicate-check (seller `product create:own`, rate limited)
 - GET /api/products/wishlist, POST /api/products/wishlist/:productId, DELETE /api/products/wishlist/:productId
 - POST /api/products/:id/skus, PATCH /api/products/:id/skus/:skuId, DELETE /api/products/:id/skus/:skuId
 - POST /api/order/, POST /api/order/shipping-fee, GET /api/order/:id, GET /api/order/user/:id, PATCH /api/order/:id/cancel, GET /api/order/:id/invoice
@@ -48,6 +58,8 @@ Auth: HttpOnly cookie set on login. Protected routes require the cookie (sent au
 **Role: admin only:**
 - GET /api/products/admin/risk
 - POST /api/products/admin/risk/:id/rescore
+- POST /api/products/admin/risk/backfill
+- POST /api/products/admin/risk/:id/feedback
 - GET /api/user/all
 - GET /api/order/admin/orders
 - GET /api/order/admin/ghn/orders
@@ -108,6 +120,9 @@ views, and invoices.
 | GET | `/api/products/price-suggestion` | Cookie | Suggest a catalog price range by category, brand, and condition |
 | GET | `/api/products/admin/risk` | Role: admin | Paginated advisory product-risk queue |
 | POST | `/api/products/admin/risk/:id/rescore` | Role: admin | Recompute one product's advisory risk score |
+| POST | `/api/products/admin/risk/backfill` | Role: admin | Enqueue a resumable cursor batch for risk scoring (202) |
+| POST | `/api/products/admin/risk/:id/feedback` | Role: admin | Record `confirmed_duplicate` or `dismissed` moderator feedback |
+| POST | `/api/products/risk/duplicate-check` | Cookie (seller) | Rate-limited advisory check for an already-uploaded owned Cloudinary URL |
 | GET | `/api/products/wishlist` | Cookie | Current user's wishlist products (paginated) |
 | POST | `/api/products/wishlist/:productId` | Cookie | Add product to current user's wishlist |
 | DELETE | `/api/products/wishlist/:productId` | Cookie | Remove product from current user's wishlist (204) |
@@ -163,11 +178,16 @@ Product seller enrichment uses the same public-profile projection as
 ### Product risk response (admin only)
 
 `GET /api/products/admin/risk?minScore=&page=&limit=` returns the standard
-paginated product shape with additive `riskScore` and `riskFlags` fields. Flag
+paginated product shape with additive `riskScore`, `riskFlags`,
+`riskScoringStatus`, `riskScoredAt`, retry metadata, and last-error fields. Flag
 types are `duplicate_image`, `price_anomaly`, and `similar_name`; internal image
 hashes are never exposed. `POST /api/products/admin/risk/:id/rescore` returns
-`{ productId, riskScore, riskFlags }`. Scoring is advisory and never
-automatically deactivates a product.
+`{ productId, riskScore, riskFlags, riskScoringStatus: "ready", riskScoredAt }`.
+Create/update enqueue durable scoring state; the product worker retries transient
+failures with bounded exponential backoff. Backfill accepts `{cursor?,limit?}`
+and returns `{enqueued,nextCursor,hasMore}`. Duplicate pre-check accepts an owned
+`{imageUrl}` and returns only public match evidence; moderator feedback is an
+audit record and never automatically deactivates a product.
 
 ### Create/Update SKU DTO (`CreateSkuGatewayDto`)
 ```typescript
@@ -208,7 +228,7 @@ automatically deactivates a product.
   paymentMethod: 'zalopay' | 'vnpay' | 'cod';
   shippingAddress: string;   // max 500 chars, pipe-delimited for GHN: "name|phone|addr|ward|district|province"
   items: Array<{
-    productId: number;
+    productId: string;      // prod_<16 alphanumeric characters>
     skuId?: number;          // omit for base-price products
     productName: string;
     quantity: number;        // >= 1
@@ -217,6 +237,12 @@ automatically deactivates a product.
   }>;
 }
 ```
+
+Order responses keep `items[].productId` as the checkout-time `prod_...`
+snapshot even if the product is later deleted. The internal
+`productPublicId` snapshot column is never exposed over HTTP. Rows whose product
+was already deleted before migration 007 may remain `null` because their public
+id cannot be reconstructed.
 
 ### Shipping Fee DTO (`POST /api/order/shipping-fee`)
 ```typescript
@@ -269,7 +295,7 @@ All cart endpoints require a valid JWT cookie.
 
 ### Add to Cart DTO
 ```typescript
-{ productId: number; skuId?: number; quantity: number /* >= 1 */ }
+{ productId: string; skuId?: number; quantity: number /* >= 1 */ }
 ```
 
 ### Update Cart Item DTO
@@ -295,8 +321,9 @@ All cart endpoints require a valid JWT cookie.
 | PATCH | `/api/notifications/:id/read` | Cookie | Mark notification as read |
 
 Comment/reply notification items include social metadata for deep links:
-`postId`, `actorId`, and `preview`; `orderId` is `null` for these social
-notifications. Order-related notifications continue to use `orderId`.
+`postId: "post_..."`, `actorId: "usr_..."`, and `preview`; `orderId` is `null`
+for these social notifications. Order-related notifications use
+`orderId: "ord_..."`.
 
 ---
 
@@ -334,13 +361,18 @@ notifications. Order-related notifications continue to use `orderId`.
 | GET | `/api/social/users/:id/feed` | — | Posts from users the user follows |
 
 Social author/user decoration uses public profiles only; `author` objects do not
-include `email`.
+include `email`. Post route params and response ids use `post_...`; comment and
+reply route params/ids use `cmt_...`; user route params and all user references
+use `usr_...`; attached products use `prod_...`. Numeric forms for converted
+domains return `400` at the gateway boundary.
 
 ---
 
 ## Chat Endpoints (`/api/chat/`)
 
 All chat endpoints require a valid JWT cookie. WebSocket on `gateway:3000/chat` namespace.
+Conversation participants, `otherUserId`, and message `senderId` use `usr_...`
+at HTTP/WS boundaries; internal chat TCP payloads remain numeric.
 
 | Method | Path | Auth | Description |
 |---|---|---|---|

@@ -6,6 +6,263 @@
 
 ## Completed Milestones
 
+- GHN shipping-history public-id boundary fix (2026-07-17):
+  `GET /api/order/admin/ghn/orders/:orderId/history` now projects the validated
+  `ord_...` path id onto every response row instead of exposing the raw numeric
+  `shipping_history.order_id` bigint value. The Orders service and database keep
+  numeric IDs internally. Added a gateway regression test for the former
+  `"120"` leak. Prettier, ESLint, TypeScript, gateway build, and the targeted
+  Jest suite (10/10) passed. Authenticated runtime checks returned 200 for GHN
+  list/history; the first 20 local orders had no history rows, so the non-empty
+  payload assertion is covered by the regression test.
+
+- Database migration-history squash (2026-07-17): established the production
+  baseline as the release cutoff, removed 74 standalone root/app-local/unused
+  Docker-init SQL files whose final schema is already represented by the Node
+  A/Node B baseline, removed 3 destructive/demo inventory setup scripts, and
+  reset the incremental manifest to zero post-cutoff migrations. Manifest v2 now
+  validates baseline hashes and classifies the 18 Node A / 3 Node B historical
+  tracking IDs as `baseline-absorbed`, so existing databases keep their audit
+  rows without requiring retired files. Updated database/deployment guidance;
+  no Aiven connection or schema apply was performed.
+
+- Production fresh-database baseline package (2026-07-17): audited the
+  incremental-only migration manifest and generated reviewed, engine-specific
+  schema imports for empty Aiven Node A MySQL and Node B PostgreSQL databases
+  under `database/prod-baseline-20260717/`. The package creates the full current
+  TypeORM schema, seeds only required roles/resources/payment methods, and
+  baselines enabled manifest entries in `schema_migrations` using their current
+  checksums. Added import gates, post-import verification queries, known schema
+  caveats, and package-level SHA-256 checksums. No production connection or
+  database apply was performed.
+
+- PUBID-00-07 full regression audit and stable historical product references
+  (2026-07-17, migration
+  `nodeA-20260717-007-snapshot-product-public-id-on-order-items` APPLIED to
+  Aiven): cross-domain runtime coverage found one real PUBID-05 regression:
+  hard-deleting a product made historical order `items[].productId` become
+  `null`, because the gateway resolved the public id from the live product row.
+  Order items now persist the checkout-time product public id and use that
+  snapshot for storefront and GHN order responses; the internal snapshot field
+  is stripped at the HTTP boundary. Existing rows were backfilled where the
+  product still existed; already-deleted legacy rows cannot be reconstructed.
+  Validation passed across all PUBID domains: 22/22 Jest suites (163/163 tests),
+  TypeScript, lint (0 errors; 7 pre-existing scaffold warnings), all 10 app
+  builds, 25/25 broad runtime checks, 10/10 numeric-id/DTO rejection and
+  mutation checks, chat REST/WS 23/23, plus a full product -> inventory -> cart
+  -> COD order -> cancel -> product deletion lifecycle proving the historical
+  order still returns its `prod_...` reference.
+
+- PUBID-07 — cross-reference sweep and contract lock (2026-07-17): converted
+  remaining HTTP/WS references for already-public domains, including user ids
+  in orders/GHN, products, cart, chat participants/messages, notifications,
+  addresses, and social follow/admin payloads; product ids in inventory; and
+  post/comment references in social/notification shapes. Catalog `userId`
+  filtering now accepts `usr_...` and resolves it internally. Internal DB/TCP
+  FKs remain numeric. Gateway routes/DTOs now reject numeric forms for converted
+  references. Added the invariant to `$review` and documented the design in the
+  root README/API context. No PUBID-07 schema migration was required. Runtime
+  verification covered authenticated storefront/GHN lists, social create/read/
+  delete, inventory lookup, numeric 400 cases, and chat REST/WS; regression
+  suite 73/73, chat scripts 23/23, tsc and full build passed. Separate
+  storefront and GHN-console handoffs were written.
+
+- PUBID-06 — post and comment opaque public ids (2026-07-17, migration
+  `nodeA-20260717-006-add-public-id-to-posts-comments` APPLIED to Aiven): posts
+  now expose/accept `post_<16 alnum>` and comments/replies `cmt_<16 alnum>` on
+  feed/detail/create/edit/delete/like/report, comment/reply trees, follow feed,
+  and admin moderation routes. Notification social metadata now carries
+  `post_...` and `usr_...`. The guarded migration adds/backfills unique
+  `public_id` columns on `posts` and `comments`; owning-service TCP handlers
+  resolve public ids while preserving numeric internal callers. Runtime tests
+  covered public feeds, authenticated post/comment/reply lifecycle, opaque
+  nested references, and numeric route rejection.
+
+- PUBID-05 — product opaque public ids (2026-07-17, migration
+  `nodeA-20260717-005-add-public-id-to-products` APPLIED to Aiven): BREAKING API
+  change — catalog product `id` and every HTTP product reference now use
+  `prod_<16 alnum>`. Numeric product route params are rejected with 400. Product
+  references were converted across SKU payloads, wishlist/reviews, risk tools,
+  cart/checkout DTOs, orders, social, inventory-enriched responses, and
+  `GET /api/order/admin/ghn/orders/:id` local-order items. Internal TCP, DB FKs,
+  inventory, cart, order, and social persistence remain numeric. Runtime checks
+  covered catalog list/detail, numeric rejection, and GHN detail product refs.
+  Storefront and GHN-console handoffs were written separately.
+
+- PUBID-04 — address, notification, and return-request opaque public ids
+  (2026-07-17, migration
+  `nodeA-20260717-004-add-public-id-to-addresses-notifications-returns` APPLIED
+  to Aiven): `addr_`, `ntf_`, and `rr_` replace numeric ids at HTTP/WS
+  boundaries. Address mutation params, notification mark-read, and return-review
+  params accept only their matching prefix (numeric refs return 400).
+  Notification list/push `orderId` now uses the parent `ord_` id; return-request
+  list/create/review shapes expose their own `rr_` plus parent `ord_`. Internal
+  DB/TCP identifiers remain numeric. Runtime checks covered non-empty address,
+  notification, and managed-return lists plus all three numeric-param failures.
+  Storefront handoff was written.
+
+- PUBID-03 — chat opaque public ids (2026-07-17, migration
+  `nodeA-20260717-003-add-public-id-to-chat` APPLIED to Aiven BEFORE code —
+  chat runs `synchronize:false`, so the guarded SQL
+  (`database/add_public_id_to_chat.sql`: `conversations.public_id` +
+  `messages.public_id` VARCHAR(32), `conv_`/`msg_` UUID-hex backfill, guarded
+  unique indexes, INPLACE/LOCK=NONE) is REQUIRED on any fresh DB before this
+  code runs): BREAKING API change — every HTTP/WS chat id is now opaque.
+  Conversations: `id: conv_<16 alnum>` on `POST/GET /api/chat/conversations`
+  (+ `lastMessage.id: msg_...`); route params `GET .../:id/messages` and
+  `POST .../:id/read` take ONLY `conv_` ids (numeric → 400 via
+  `ParsePublicIdPipe(conv_)`; unknown → 404; non-member → 403). Messages:
+  `id`/`parentMessageId` are `msg_...`, `conversationId` in message rows is the
+  `conv_` string. WS `/chat`: `join`/`send_message` payloads take
+  `conv_`/`msg_` strings; `new_message` emits the identical exposed shape via
+  shared `exposeChatMessage` (gateway `chat.types.ts` — `ChatMessageTcp`/
+  `ChatConversationTcp` TCP shapes + `exposeChatConversation`). Chat service:
+  `publicId` columns on both entities, `generatePublicId` on create,
+  `lookupConversationId`/`resolveConversationId` (`number | string` — internal
+  numeric callers keep working), batched parent-public-id attach in
+  `getMessages` (one `In(parentIds)` query per page), `sendMessage` resolves
+  `msg_` parent refs and NOW VALIDATES the parent exists in the same
+  conversation (400 `INVALID_PARENT_MESSAGE` — previously any numeric parent
+  was accepted unvalidated); `SendMessageDto` replaced by `SendMessagePayload`
+  (dto file deleted). `otherUserId`, `user1Id`/`user2Id`, `senderId` stay
+  numeric until PUBID-07. Test scripts `scripts/test-chat-{ws,reply}.mjs`
+  updated to the new contract (WS on gateway :3000, conv* arg, msg* assertions,
+  new invalid-parent negative test). Runtime-verified: 7 REST checks (create/
+  list/messages/400/404/403/mark-read) + 14 WS checks (9 + 14 script totals)
+  all pass. FE handoff entry written to `../.agent-local/frontend-handoff.md`.
+
+- PUBID-02 — users opaque public ids (2026-07-17, migration
+  `nodeA-20260717-002-add-public-id-to-users` APPLIED to Aiven — guarded
+  `users.public_id VARCHAR(32)` add + `usr_` UUID-hex backfill + guarded unique
+  index; user service also runs `synchronize:true` so dev auto-syncs):
+  BREAKING API change — every HTTP user id is now `usr_<16 base62>` (hex for
+  backfilled rows). Converted surfaces: `POST /api/user/{login,register}` user
+  object, `GET /api/user/me`, `GET/PATCH /api/user/:id` (numeric → 400 via
+  `ParsePublicIdPipe(usr_)`), admin `GET /api/user?page=&limit=`,
+  `GET /api/user/featured-sellers`, and ALL user embeds: product list/detail
+  `user{id,...}` (`enrichProductWithUserInfo`/`enrichProductsWithUserInfo`),
+  social `author`/follow `user` (`fetchAuthorMap` → new `UserInfoTcp`/`UserInfo`
+  split in `social.types.ts`), order admin `buyer` + GHN admin list/detail
+  `buyer`/`seller` (`exposeUserSummary` in gateway order service). User service:
+  `publicId` column on the entity, `generatePublicId(usr_)` on register,
+  `resolveUserId(number|string)` (public id → PK, numbers pass through so
+  internal numeric callers — orders invoice buyer lookup, notification
+  `emailUser` — keep working; malformed/unknown `usr_` → 404); PATCH ownership
+  moved from the gateway int-equality check into the user TCP handler
+  (`targetId` resolved then compared to JWT `userId` → 403
+  "Cannot update another user"). JWT payload unchanged (numeric `userId`;
+  gateway signs the token from the raw TCP user before `exposeUser` swaps the
+  id). Enrichment maps keep numeric keys (matching `product.userId`/
+  `post.userId`/`order.userId` FKs); only stored values carry the exposed
+  string id — those embedded numeric FK fields themselves are PUBID-07 scope.
+  tsc/eslint clean; jest 36/36 (user + gateway order + product suites; 5 user
+  spec select-shape assertions updated for `publicId`). Runtime-verified 11/11:
+  login/me/profile usr* + no `publicId` leak, numeric id 400, PATCH own 200 /
+  foreign usr* 403, unknown usr* 404, admin list + featured-sellers +
+  product/social/order embeds all usr*, register generates base62 usr\_,
+  invoice PDF still 200 (internal numeric GET_USER_INFO path intact). FE
+  handoff entries written to BOTH storefront and GHN files (login/me shared;
+  buyer/seller embeds GHN; author/seller embeds storefront).
+
+- PUBID-01 — orders opaque public ids, pilot domain (2026-07-17, migration
+  `nodeA-20260717-001-add-public-id-to-orders` APPLIED to Aiven — guarded
+  `orders.public_id VARCHAR(32)` add + `ord_` backfill for existing rows +
+  guarded unique index; orders also runs `synchronize:true` so dev auto-syncs):
+  BREAKING API change — every HTTP order id is now `ord_<16 base62>`; numeric
+  ids on order `:id` routes → 400 via new
+  `apps/gateway/src/common/pipes/parse-public-id.pipe.ts`. Orders service
+  generates `publicId` in the create tx and carries it alongside the numeric
+  `id` over TCP; controller handlers accept `orderId: number | string` +
+  `resolveOrderId()` (public id → PK; numeric passes through for internal
+  callers like notification). Gateway strips at the HTTP boundary:
+  `exposeOrder` (replaces `id` with `publicId ?? String(id)`, drops `publicId`
+  - each item's numeric `orderId` FK) and `exposeReturnRequest` (rows'
+    `orderId` → parent order public id via `orderPublicId` attach) in
+    `apps/gateway/src/order/order.service.ts`; admin GHN mappers in
+    `apps/orders/src/orders.service.ts` emit public-id `orderId` directly, and
+    `toAdminGhnLocalOrder` now strips item `orderId` (leak found+fixed during
+    self-test). Internals stay numeric: GHN client*order_code, invoice number
+    `INV-YYYYMM-<int id>`, payments TCP (`GET_PAYMENT_URL` gets the resolved
+    PK), RMQ events, shipping_history, notifications.order_id (until PUBID-04);
+    return-request own ids + voucher ids + `user/:id` stay numeric (PUBID-04/02).
+    tsc/eslint clean, jest 53/53 (gateway order + orders suites).
+    Runtime-verified 2026-07-17: buyer list/detail/create/cancel/payment-url/
+    invoice(PDF), return-request create + mine/list, seller list/detail/confirm,
+    admin reject, GHN list/detail/history/sync — all `ord*...`; numeric
+`GET /api/order/123` → 400. FE handoff entries written to BOTH storefront
+    and GHN files (id contract change, supersedes SEC-L1 integer-id notes for
+    order routes).
+
+- PUBID-00 — public-id foundation (2026-07-17, NO migration, NO API change):
+  groundwork for the Stripe-style opaque external-id rollout (see snapshot
+  "Public-ID backlog"). New `generatePublicId(prefix)` (crypto.randomBytes →
+  rejection-sampled base62, 16 chars after `<prefix>_`, ~95 bits entropy, fits
+  VARCHAR(32)) and `isPublicId(prefix, value)` type guard in
+  `libs/common/src/public-id/public-id.util.ts` (exported from `@app/common`);
+  `PUBLIC_ID_PREFIXES` (usr/ord/prod/post/cmt/conv/msg/addr/rr/ntf) +
+  `PUBLIC_ID_RANDOM_LENGTH` in `libs/constant/public-id.constant.ts`. No new
+  dependencies. 9 unit tests (format, VARCHAR(32) fit, 10k-collision,
+  guard accept/reject incl. legacy numeric string). tsc + eslint clean.
+  Discrepancy noted: CLAUDE.md documents an `@app/constant` alias but tsconfig
+  has none — followed the existing `libs/constant/...` import convention.
+
+- Fix: post create/edit 400 on string `productId` (2026-07-16, NO migration):
+  `POST /api/social/posts` rejected `{productId: "35"}` with 400
+  "productId must be an integer number" because the gateway `CreatePostDto`
+  had `@IsInt() @Min(1)` without `@Type(() => Number)` (global ValidationPipe
+  runs `transform:true` but no implicit conversion). Added the `@Type`
+  transform; `UpdatePostDto` inherits via `PartialType` so PATCH is fixed too.
+  Runtime-verified 5/5: string "35" → 201, numeric 35 → 201, "abc" → 400,
+  0 → 400, PATCH with "36" → 200. File:
+  `apps/gateway/src/social/dto/create-post.dto.ts`. tsc/eslint clean.
+
+- Product list seller province + province filter (2026-07-16, backend-handoff,
+  NO migration): every product row on `GET /api/products` and
+  `GET /api/products/with-inventory/all` now carries additive
+  `sellerProvince: {id,name} | null`, sourced from the seller's DEFAULT GHN
+  address (`user_addresses.is_default=1`; null when absent). Both endpoints
+  accept a `provinceId` filter (single or repeated key; scalar→array
+  `@Transform` guard like categoryIds; non-numeric → 400). Implementation:
+  gateway `fetchProductsPage` resolves provinces → seller ids via new user TCP
+  `{cmd: user.get_user_ids_by_province}` (DISTINCT default-address user_ids;
+  resolution failure throws — never silently unfiltered; zero match
+  short-circuits to an empty page without a product hop), then forwards
+  `userIds` to the product service, whose `findAllProducts` gained a
+  `product.userId IN (...)` filter (`userIds` in the microservice DTO; search
+  cache key already serializes the full query, so cache-safe). Enrichment:
+  `getUsersByIds` gained an opt-in `includeProvince` flag (one extra
+  `user_addresses` batch query; other callers unaffected) and the gateway's
+  batched enrichment now emits row-level `sellerProvince` while leaving
+  `user {id,name,avatar}` unchanged. Files: `libs/constant/
+message-pattern.constant.ts`, user `user.types.ts`/`user.service.ts`/
+  `user.controller.ts`, gateway product `dto/get-products-query.dto.ts`/
+  `product.types.ts`/`product.service.ts`, product `dto/get-products-query.dto.ts`/
+  `product.service.ts`. Validation: prettier/eslint clean, `tsc --noEmit` zero
+  errors; runtime-verified 7/7 self-tests (rows carry `{id:201,name:"Hà Nội"}`
+  after seeding techstore_demo's default address; single + repeated-key filter
+  return only province-201 sellers; unknown province → empty; with-inventory
+  keeps pagination + inventory; `provinceId=abc` → 400; seller without default
+  address → `sellerProvince:null`). FE handoff entry written to
+  `frontend-handoff.md` (storefront) same date.
+- AI-02 follow-up hardening F1–F4 (2026-07-16): replaced product-risk
+  fire-and-forget scoring with durable DB state (`pending|ready|failed`, scored
+  timestamp, bounded attempts/backoff, next retry, safe last error) and a
+  concurrency-3 cron worker. Create/update enqueue without blocking catalog
+  mutations; admin risk reads opt into state metadata while public reads do not
+  expose it. Added resumable admin batch enqueue
+  `POST /api/products/admin/risk/backfill {cursor?,limit?}` (202), rate-limited
+  seller advisory `POST /api/products/risk/duplicate-check {imageUrl}` with
+  Cloudinary ownership enforcement and no hash leakage, and moderator audit
+  `POST /api/products/admin/risk/:id/feedback` for
+  `confirmed_duplicate|dismissed`. Duplicate-image scoring now requires an exact
+  match or multiple near-match evidence pairs; it remains advisory and never
+  auto-unlists. Added guarded migrations
+  `add_product_risk_scoring_state.sql` and
+  `create_product_risk_feedback_table.sql` to the enabled Node A manifest.
+  Validation: targeted ESLint clean; `tsc --noEmit`; product Jest 21/21; full
+  monorepo build; live backfill 202, risk state 200, duplicate owned/foreign
+  200/403, feedback validation/auth 400/404/403. AI-02F5 remains evidence-gated
+  near 10k catalog items.
 - PDF invoice production-readiness rewrite (2026-07-15, backend-handoff): the
   `GET /api/order/:id/invoice` PDF was unusable in production — Helvetica has zero
   Vietnamese glyph coverage (every diacritic rendered blank/□), it showed only a
@@ -49,7 +306,7 @@
   order responses carried only the net `total` (shipping folded in) + nullable
   `discountAmount` — no explicit `shippingFee` guaranteed as a number and no line
   `subtotal`; the FE was deriving `shippingFee = max(0, total − subtotal +
-  discount)`, which misattributes rounding drift. Gateway-only fix (single
+discount)`, which misattributes rounding drift. Gateway-only fix (single
   service, no migration, no TCP contract change): added a `computeSubtotal(items)`
   helper in `apps/gateway/src/order/order.service.ts` that sums
   `Number(item.price) * Number(item.quantity)` — the `Number()` coercion is
@@ -61,10 +318,10 @@
   (`GET /api/order/seller/:id`), and the single-seller `createOrderInternal`
   branch (`POST /api/order`). Extended the `OrderResponse` interface in
   `order.types.ts` with `shippingFee?: number | null`, `discountAmount?: number |
-  null`, `subtotal?: number`. The money identity `total = subtotal −
-  discountAmount + shippingFee` now holds explicitly in the payload so the FE can
+null`, `subtotal?: number`. The money identity `total = subtotal −
+discountAmount + shippingFee` now holds explicitly in the payload so the FE can
   drop its derivation. Validation: Prettier/ESLint clean, `tsc --noEmit -p
-  apps/gateway/tsconfig.app.json` zero errors. Self-test (3/3 read paths, gateway
+apps/gateway/tsconfig.app.json` zero errors. Self-test (3/3 read paths, gateway
   live): `GET /api/order/user/17` → orders 118/117 `subtotal` 99/299,
   `shippingFee` 0 (number); `GET /api/order/118` → `subtotal:99`,
   `shippingFee:0`, both `typeof "number"`; `GET /api/order/seller/118` (admin) →
@@ -94,7 +351,7 @@
   state, blocked on the planned outbox path), F2–F5.
 
 - AI-02 non-null risk response follow-up (2026-07-13, /sweep): fixed `GET
-  /api/products/admin/risk` so clean, legacy, and not-yet-scored products always
+/api/products/admin/risk` so clean, legacy, and not-yet-scored products always
   follow the documented response contract. The product service now normalizes
   nullable stored values at the read boundary to `riskScore:0` and
   `riskFlags:[]`; scoring, persistence, filtering, sorting, pagination, and
@@ -117,14 +374,14 @@
   similarity >=0.8 in a shared category (15). New admin-only endpoints:
   `GET /api/products/admin/risk?minScore=&page=&limit=` (`product read:any`)
   returns the paginated queue sorted by score; `POST
-  /api/products/admin/risk/:id/rescore` (`product update:any`) recomputes one
+/api/products/admin/risk/:id/rescore` (`product update:any`) recomputes one
   item. Scores are advisory only--no auto-unlist--and internal hashes are
   `select:false`/not exposed by HTTP. Added `products.image_phashes`,
   `risk_score` (indexed), and `risk_flags` through guarded migration
   `database/add_risk_columns_to_products.sql` plus manifest entry
   `nodeA-20260713-001-add-product-risk-columns`; added `sharp` and
   `blockhash-core`. Validation: targeted Prettier/ESLint clean, `npx.cmd tsc
-  --noEmit` zero errors, product Jest 14/14, Node A migration dry-run includes
+--noEmit` zero errors, product Jest 14/14, Node A migration dry-run includes
   the candidate, and the full 10-service `npm.cmd run build` passed. Runtime
   HTTP self-test: login 201, unauthenticated queue 401,
   invalid `minScore=101` 400, admin queue 200, rescore product 38 returned 200
@@ -138,7 +395,7 @@
   `{sufficientData,sampleSize,median,p25,p75,min,max}`. Samples below three
   return `sufficientData:false` with null price statistics. No migration or
   external API. Validation: targeted Prettier/ESLint clean, `npx.cmd tsc
-  --noEmit` zero errors, product Jest 10/10. Runtime self-test: unauthenticated
+--noEmit` zero errors, product Jest 10/10. Runtime self-test: unauthenticated
   `401`; category 16 `200` with sample size 3 and numeric stats; category 18
   `200` with sample size 2 and suppressed stats; empty category `200` with
   sample size 0; missing category and invalid condition `400`.
@@ -159,8 +416,8 @@
   best-effort, reusing the shared dependency-free `MailerService`
   (`libs/common/src/mailer/`, imported via `MailerModule` from `@app/common` —
   no nodemailer added). New `NotificationService.emailUser(userId, subject,
-  text)` resolves the recipient address over user TCP (`{cmd:
-  user.get_user_info}` with `{userId, includeEmail:true}`, new USER_SERVICE
+text)` resolves the recipient address over user TCP (`{cmd:
+user.get_user_info}` with `{userId, includeEmail:true}`, new USER*SERVICE
   TCP client in `notification.module.ts`) and never throws — TCP/mail failures
   log a warn so the RMQ ack/nack outcome of the triggering handler is
   unchanged. Handlers wired: NEW `order_created` consumer (queue was already
@@ -168,15 +425,15 @@
   notification for the buyer + emails), plus email mirrors on the existing
   `payment_completed` (buyer), `order_canceled` (buyer),
   `order.return_requested` (seller), `order.return_approved` /
-  `order.return_rejected` (buyer) handlers. SMTP_* unset → MailerService dev
+  `order.return_rejected` (buyer) handlers. SMTP*\* unset → MailerService dev
   fallback logs the mail and returns false (matches forgot-password
   precedent); real delivery needs `SMTP_HOST/PORT/USER/PASS/FROM` in
   `local/nodeA/.env`. No migration. Files: `apps/notification/src/
-  notification.module.ts|notification.service.ts|notification.controller.ts`.
+notification.module.ts|notification.service.ts|notification.controller.ts`.
   Validation: prettier/eslint clean, `npx.cmd tsc --noEmit` zero errors.
   Runtime self-test (buyer canceltest1779978329/user 17): COD order 118
   created → new notification id 89 `{type:"order_created", orderId:118,
-  message:"Đơn hàng #118 đã được đặt thành công"}`; cancel → id 90
+message:"Đơn hàng #118 đã được đặt thành công"}`; cancel → id 90
   `order_canceled`; buyer has an email on file so the email path reached
   `sendMail` (dev fallback, SMTP unset); handlers ack'd exactly once (no
   requeue duplicates). FOLLOW-UP recorded in snapshot: shipping-milestone
@@ -208,8 +465,8 @@
   plaintext password. Contract is unchanged externally: login still returns the
   same safe user fields and sets the HttpOnly `access_token` cookie. Validation:
   prettier/eslint clean on touched TS files; `npx.cmd jest
-  apps/user/src/user.service.spec.ts --runInBand` -> 7/7 pass; `npx.cmd tsc
-  --noEmit` clean. Runtime self-test: login 201, auth cookie present, login
+apps/user/src/user.service.spec.ts --runInBand` -> 7/7 pass; `npx.cmd tsc
+--noEmit` clean. Runtime self-test: login 201, auth cookie present, login
   response omits `password` and keeps `role`, `/api/user/me` with the cookie
   returns 200 and omits `password`.
 
@@ -221,7 +478,7 @@
   invoice, and payment-url paths. Admin GHN order detail/history/sync and
   existing seller/return/voucher/action paths are covered by the same pipe.
   Focused validation: `npx.cmd jest apps/gateway/src/order/order.service.spec.ts
-  --runInBand` -> 8/8 pass; `npx.cmd tsc --noEmit` clean; prettier/eslint
+--runInBand` -> 8/8 pass; `npx.cmd tsc --noEmit` clean; prettier/eslint
   clean on touched TS files. Runtime self-test: authenticated malformed ids now
   return 400 for storefront order routes (`/api/order/abc`,
   `/api/order/user/abc`, `/status-counts`, `/cancel`, `/payment-url`,
@@ -240,7 +497,7 @@
   `PROD-<productId>` after the product service returns the new id. Explicit SKU
   behavior is unchanged, and SKU-matrix products still skip base auto-inventory.
   Tests: `npx.cmd jest apps/gateway/src/product/product-ownership.service.spec.ts
-  --runInBand` -> 7/7 pass (new explicit-SKU and fallback-SKU cases);
+--runInBand` -> 7/7 pass (new explicit-SKU and fallback-SKU cases);
   `npx.cmd tsc --noEmit` clean. Runtime self-test: before fix, shop create
   without `sku` returned 502; after fix, login 201, create 201 for product #56,
   `GET /api/inventory/product/56` returned `sku:"PROD-56"` and stock 2, cleanup
@@ -259,7 +516,7 @@
   upload form along with `folder`, `public_id`, `timestamp`, `api_key`, and
   `signature`; otherwise Cloudinary will reject the request because the signed
   param set no longer matches. Focused tests: `npx.cmd jest
-  apps/gateway/src/upload` -> 15/15 pass. Validation: `npx.cmd tsc --noEmit`
+apps/gateway/src/upload` -> 15/15 pass. Validation: `npx.cmd tsc --noEmit`
   clean; live gateway self-test with user account returned 201 and response
   `data.allowed_formats:"jpg,png,webp"` for `trybuy/products`; direct
   Cloudinary upload using that returned signature rejected a temporary `.txt`
@@ -344,8 +601,8 @@
   Files: `libs/constant/message-pattern.constant.ts`,
   `libs/common/src/mailer/{mailer.service.ts,mailer.module.ts}`,
   `libs/common/src/index.ts`, `apps/user/src/{user.module.ts,user.service.ts,
-  user.controller.ts}`, `apps/gateway/src/user/{dto/user.dto.ts,
-  user.controller.ts,user.service.ts}`, `local/nodeA/.env.example`.
+user.controller.ts}`, `apps/gateway/src/user/{dto/user.dto.ts,
+user.controller.ts,user.service.ts}`, `local/nodeA/.env.example`.
   Validation: tsc/prettier/eslint clean. Runtime self-test 12/12: unknown
   email → generic 201; real email (user 23) → code in Redis; wrong code →
   400; correct code → 201 `{success:true}`; new password login 201 / old 401
@@ -388,7 +645,7 @@
   error semantics stay identical (single code path). No contract change.
   Validation: tsc/prettier/eslint clean. Runtime self-test 4/4 on the live
   gateway: owner (user 17, order 116) → 200 `{orderUrl:"https://qcgateway.
-  zalopay.vn/...", status:"pending"}`; foreign user (user 18) → 403; unknown
+zalopay.vn/...", status:"pending"}`; foreign user (user 18) → 403; unknown
   order 999999 → 404; unauth → 401. No FE impact — no handoff entry. This
   empties the perf-audit backlog (0 remaining); future perf work is the
   SCALE-01..06 scalability backlog.
@@ -407,7 +664,7 @@
   `Referrer-Policy: no-referrer`, `X-DNS-Prefetch-Control: off`, COOP/CORP
   `same-origin`, `Origin-Agent-Cluster`, a restrictive `Permissions-Policy`,
   and — only in production — `Strict-Transport-Security: max-age=15552000;
-  includeSubDomains`. SEC-M6: Swagger setup is wrapped in `isSwaggerEnabled()`
+includeSubDomains`. SEC-M6: Swagger setup is wrapped in `isSwaggerEnabled()`
   (`SWAGGER_ENABLED` boolean env, defaulting to enabled only when
   `NODE_ENV !== "production"`); when disabled the bootstrap logs and skips
   `SwaggerModule.setup`. Runtime verification: dev gateway (:3000) → `/doc` 200
@@ -432,8 +689,7 @@
   eslint clean. Runtime self-test 5/5: admin → 200, 4 rows all carrying the
   key, product 28 resolved "iPhone 15 Pro 256GB", products 10/17 confirmed
   deleted (404) so their null is the correct orphan fallback; shop
-  (techstore_demo) → 200 `[]` (empty path intact); user role → 403; unauth →
-  401. FE handoff entry written (storefront `frontend-handoff.md`) — FE can
+  (techstore_demo) → 200 `[]` (empty path intact); user role → 403; unauth → 401. FE handoff entry written (storefront `frontend-handoff.md`) — FE can
   drop the client-side product-list join + SKU fallback in
   `buildLowStockRows`.
 
@@ -448,7 +704,7 @@
   stack (fresh ZaloPay order #117, forged HMAC-SHA256 callback via the gateway
   facade `POST :3000/zalopay/callback`): bad MAC → `return_code:-1`, payment
   stays `pending`; valid callback #1 → `return_code:1`, payment `completed`,
-  order → `processing` (payment_completed consumed); identical callback #2 →
+  order → `processing` (payment*completed consumed); identical callback #2 →
   `return_code:1` (provider-friendly ack) with payment status/transaction_id/row
   count AND order status/updatedAt all bit-identical — no re-transition, no
   re-emit side effect. VNPay shares the same `completePayment` core (both
@@ -460,14 +716,14 @@
   mirrors `WishlistQueryDto`: optional page `@Min(1)`, limit `@Min(1)@Max(100)`,
   `@Type(()=>Number)`; controller defaults `page ?? 1` / `limit ?? 10`).
   (b) `GET /api/gateway/payment-result` KEEPS the raw `Record<string,string>`
-  query — deliberate: VNPay signature verification hashes ALL `vnp_*` params, so
-  a whitelisted DTO would strip unknown fields and break the checksum — but now
-  bounds it via `assertBoundedPaymentQuery` (`apps/gateway/src/gateway.controller.ts`):
-  max 40 keys, max 512 chars per value, string-only values (rejects Express
-  repeated-key arrays). All violations → 400. Validation: tsc/prettier/eslint
-  clean. Runtime self-test 8/8 on the live gateway: reviews `?page=1&limit=10` →
-  200, no params → 200 (defaults, paginated shape), `?limit=100000` → 400
-  "limit must not be greater than 100", `?limit=0` → 400, `?page=abc` → 400;
+  query — deliberate: VNPay signature verification hashes ALL `vnp*\*`params, so
+a whitelisted DTO would strip unknown fields and break the checksum — but now
+bounds it via`assertBoundedPaymentQuery` (`apps/gateway/src/gateway.controller.ts`):
+max 40 keys, max 512 chars per value, string-only values (rejects Express
+repeated-key arrays). All violations → 400. Validation: tsc/prettier/eslint
+clean. Runtime self-test 8/8 on the live gateway: reviews `?page=1&limit=10`→
+200, no params → 200 (defaults, paginated shape),`?limit=100000`→ 400
+"limit must not be greater than 100",`?limit=0`→ 400,`?page=abc` → 400;
   payment-result no query → 400 "Missing transaction reference" (unchanged),
   46 keys → 400 "Too many query parameters", 600-char value → 400 "Query
   parameter too long", duplicated key → 400 "Invalid query parameter". FE

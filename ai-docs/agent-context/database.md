@@ -1,43 +1,46 @@
 # Database
 
-## Current Architecture
+## Current architecture
 
-TryBuy uses external managed databases on Aiven for application data.
+TryBuy uses external managed databases on Aiven:
 
-- **Node A MySQL**: orders, user, product, social, notification, chat.
-- **Node B PostgreSQL**: inventory, payments, rewards.
+- **Node A MySQL**: orders, user, product, social, notification, and chat.
+- **Node B PostgreSQL**: inventory, payments, and rewards.
 - **Gateway**: no database provider.
-- **Redis/RabbitMQ**: Docker services from `docker-compose.yml`; they are not part of SQL migrations.
+- **Redis/RabbitMQ**: Docker services, outside SQL migration scope.
 
-Node env files:
+Node A services load `local/nodeA/.env`; Node B services load `local/nodeB/.env`.
 
-- Node A services load `local/nodeA/.env`.
-- Node B services load `local/nodeB/.env`.
+## Production schema policy
 
-## TypeORM Synchronize Policy
+Production must not rely on TypeORM schema synchronization.
 
-Production must not rely on TypeORM schema sync.
+- `libs/database/src/typeorm-synchronize.ts` defaults synchronization to `false` when `NODE_ENV=production`.
+- Keep `TYPEORM_SYNCHRONIZE=false` and `TYPEORM_SYNCHRONIZE_ALLOW_PRODUCTION=false` in production.
+- User and product use the shared MySQL `DatabaseModule`; orders owns a MySQL root connection.
+- Inventory, payments, and rewards use the shared PostgreSQL `PostgresDatabaseModule`.
+- Social, notification, and chat explicitly use `synchronize:false`.
 
-- `libs/database/src/typeorm-synchronize.ts` defaults synchronize to `false` when `NODE_ENV=production`.
-- `TYPEORM_SYNCHRONIZE_ALLOW_PRODUCTION=true` is required for an intentional one-off production sync.
-- Local/dev may keep `TYPEORM_SYNCHRONIZE=true`.
+## Baseline cutoff and migration flow
 
-Current synchronize ownership:
+All schema history through 2026-07-17 is squashed into `database/prod-baseline-20260717/`:
 
-- `user` and `product` use `@app/database` MySQL (`DatabaseModule`).
-- `orders` has its own MySQL `TypeOrmModule.forRoot`.
-- `inventory`, `payments`, and `rewards` use `@app/database` PostgreSQL (`PostgresDatabaseModule`).
-- `social`, `notification`, and `chat` use MySQL with `synchronize:false` and require SQL migrations for schema changes.
+- `nodeA-mysql-baseline.sql`
+- `nodeB-postgresql-baseline.sql`
+- `baseline-review.md`
+- `SHA256SUMS`
 
-## Explicit SQL Migration Runner
+The baseline files are the only supported bootstrap path for empty production databases. Historical root and app-local SQL files were removed after their final state was absorbed.
 
-Migration automation is manifest-driven:
+The deploy runner remains incremental-only:
 
 - Manifest: `database/migrations.manifest.json`
 - Runner: `scripts/migrate-database.mjs`
-- Tracking table per database: `schema_migrations`
+- Tracking table: `schema_migrations`
 
-This runner is **incremental-only**. It is for reviewed deploy migrations on Aiven databases that already have their base schema. It cannot initialize an empty Aiven database.
+The manifest has no pending migrations at the cutoff. Its `baselines` metadata validates baseline hashes and identifies historical tracking rows as `baseline-absorbed`. Existing databases may retain those rows; they do not need to be deleted.
+
+Future migrations belong under `database/migrations/nodeA/` or `database/migrations/nodeB/` and must be added to the manifest. Never edit the frozen baseline to deliver a later schema change.
 
 Commands:
 
@@ -47,91 +50,48 @@ npm run db:migrate:dry-run -- --target=nodeA
 npm run db:migrate:dry-run -- --target=nodeB
 npm run db:migrate:status -- --target=nodeA
 npm run db:migrate:status -- --target=nodeB
-npm run db:migrate:nodeA
-npm run db:migrate:nodeB
-```
-
-Production apply requires:
-
-```bash
 npm run db:migrate:nodeA -- --confirm-production
 npm run db:migrate:nodeB -- --confirm-production
 ```
 
-Dry-run does not connect to databases. Status/apply connect to the selected Aiven target and must only be run with explicit approval/credentials. Status creates `schema_migrations` if it is missing, so status mode is not fully read-only.
+Dry-run does not connect. Status/apply connect to the selected Aiven database; status creates `schema_migrations` if absent.
 
-## Migration File Policy
+## Migration file policy
 
-Only conservative schema candidates are enabled in the manifest:
+Every post-cutoff migration must:
 
-- Idempotent `CREATE TABLE IF NOT EXISTS`.
-- Guarded additive ALTER scripts.
-- No destructive/reset/demo/seed/cleanup files.
-- No one-off ALTER/backfill/constraint-drop files without a schema-specific review.
+1. Target the owning service database.
+2. Be additive and idempotent whenever possible.
+3. Avoid seed, demo, reset, cleanup, destructive, and unreviewed backfill behavior.
+4. Use one SQL file and one manifest entry with a stable ID.
+5. Pass dry-run before apply.
+6. Be applied with schema synchronization disabled.
 
-`CREATE TABLE IF NOT EXISTS` does not validate an existing table's real shape. Before enabling historical create-table files, compare the live schema against the active TypeORM entities and service write paths.
+Do not use the incremental runner to bootstrap an empty database. Import the matching reviewed baseline first.
 
-Blocked categories are still listed in the manifest for visibility, but the runner refuses to execute them:
+## Practical service map
 
-- `reset`
-- `seed`
-- `demo`
-- `cleanup`
-- `manual`
-
-Never automate these deployment paths without explicit review:
-
-- `database/order_module_ddl.sql`
-- `database/products_module_ddl.sql`
-- `database/products_typeorm_safe.sql`
-- `database/inventory_migration.sql`
-- `database/create_sample_users.sql`
-- `database/seed.sql`
-- `database/cleanup_broken_social_post_image_urls.sql`
-- `database/create_cart_items_table.sql`
-- `database/create_product_skus_table.sql`
-- `database/create_shipping_history_table.sql`
-- `database/add_social_notification_metadata.sql`
-- app-local SQL files that drop columns/tables, seed data, or backfill live data.
-
-## Practical Service Map
-
-### Node A MySQL Entities
+### Node A MySQL entities
 
 - Orders: `apps/orders/src/entity/*`
   - `orders`, `order_items`, `carts`, `cart_items`, `shipping_history`, `order_return_requests`, `vouchers`, `voucher_redemptions`
 - User: `apps/user/src/entity/*`
   - `users`, `resources`, `roles`, `user_addresses`
 - Product: `apps/product/src/entity/*`
-  - `products`, `brands`, `categories`, `product_skus`, `product_reviews`
+  - `products`, `brands`, `categories`, `product_skus`, `product_reviews`, `wishlist_items`, `product_risk_feedback`
 - Social: `apps/social/src/entities/*`
   - `posts`, `post_likes`, `post_reports`, `likes`, `comments`, `follows`
-- Notification: `apps/notification/src/entities/notification.entity.ts`
-  - `notifications`
-- Chat: `apps/chat/src/entity/*`
-  - `conversations`, `messages`
+- Notification: `notifications`
+- Chat: `conversations`, `messages`
 
-### Node B PostgreSQL Entities
+### Node B PostgreSQL entities
 
-- Inventory: `apps/inventory/src/*.entity.ts`
-  - `inventory_v2`, `inventory_reservations`
-- Payments: `apps/payments/src/entity/*`
-  - `payments`, `payment_methods`
-- Rewards: `apps/rewards/src/entity/reward_point.entity.ts`
-  - `reward_points`
+- Inventory: `inventory_v2`, `inventory_reservations`
+- Payments: `payments`, `payment_methods`
+- Rewards: `reward_points`
 
-## ID Type Convention
+## ID convention
 
 - Default PK/FK type is `int`.
-- High-volume transaction tables use `bigint` where already defined by entities, especially orders/order_items/payments paths.
-- Cross-database references are logical only; do not add foreign keys across MySQL/PostgreSQL boundaries.
-
-## Before Adding A Migration
-
-1. Check the owning service and target database.
-2. Prefer additive, idempotent SQL.
-3. Add the SQL file without modifying existing data unless required.
-4. Add a manifest entry with the correct target/dialect/category.
-5. Keep destructive, seed, cleanup, and backfill files `manualOnly`.
-6. Do not use the manifest as a fresh DB bootstrap plan; base schema must already exist.
-7. Run dry-run and TypeScript validation.
+- Preserve existing `bigint` transaction identifiers where declared by entities.
+- Cross-database references are logical only; never add MySQL-to-PostgreSQL foreign keys.
