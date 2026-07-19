@@ -15,6 +15,7 @@ import {
   ProductOwnershipData,
   SkuOwnershipData,
 } from "./inventory.types";
+import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 
 @Injectable()
 export class InventoryService {
@@ -35,7 +36,7 @@ export class InventoryService {
           PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_ID,
           productId,
         )
-        .pipe(timeout(10000)),
+        .pipe(timeout(TCP_TIMEOUT_MS.READ)),
     );
     return Number(product.id);
   }
@@ -68,7 +69,7 @@ export class InventoryService {
         .send<
           ProductNameData[]
         >(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_IDS, [...productIds])
-        .pipe(timeout(10000)),
+        .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
     );
     const publicIdById = new Map(
       products.map((product) => [Number(product.id), product.publicId ?? null]),
@@ -119,7 +120,7 @@ export class InventoryService {
               productId: internalProductId,
             })
             .pipe(
-              timeout(10000),
+              timeout(TCP_TIMEOUT_MS.WRITE),
               catchError((err: unknown) => {
                 throw err;
               }),
@@ -146,7 +147,7 @@ export class InventoryService {
               internalProductId,
             )
             .pipe(
-              timeout(10000),
+              timeout(TCP_TIMEOUT_MS.READ),
               catchError((err: unknown) => {
                 throw err;
               }),
@@ -170,7 +171,7 @@ export class InventoryService {
         const productIds = (await firstValueFrom(
           this.productClient
             .send(PRODUCT_MESSAGE_PATTERNS.GET_PRODUCT_IDS_BY_SELLER, callerId)
-            .pipe(timeout(10000)),
+            .pipe(timeout(TCP_TIMEOUT_MS.READ)),
         )) as number[];
         if (!Array.isArray(productIds) || productIds.length === 0) {
           return [];
@@ -183,7 +184,7 @@ export class InventoryService {
             INVENTORY_MESSAGE_PATTERNS.INVENTORY_GET_LOW_STOCK,
             lowStockPayload,
           )
-          .pipe(timeout(10000)),
+          .pipe(timeout(TCP_TIMEOUT_MS.READ)),
       )) as LowStockInventoryRow[];
       if (!Array.isArray(lowStockRows) || lowStockRows.length === 0) {
         return [];
@@ -218,7 +219,7 @@ export class InventoryService {
         const products = (await firstValueFrom(
           this.productClient
             .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_IDS, productIds)
-            .pipe(timeout(10000)),
+            .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
         )) as ProductNameData[];
         productNameById = new Map(
           (Array.isArray(products) ? products : [])
@@ -250,7 +251,7 @@ export class InventoryService {
           this.inventoryClient
             .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_UPDATE, { id, update })
             .pipe(
-              timeout(10000),
+              timeout(TCP_TIMEOUT_MS.WRITE),
               catchError((err: unknown) => {
                 throw err;
               }),
@@ -306,7 +307,7 @@ export class InventoryService {
       const sku = (await firstValueFrom(
         this.productClient
           .send(PRODUCT_MESSAGE_PATTERNS.SKU_FIND_BY_ID, skuId)
-          .pipe(timeout(10000)),
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
       )) as SkuOwnershipData;
       if (Number(sku.productId) !== productId) {
         throw new ForbiddenException(INVENTORY_MESSAGE.SKU_NOT_OF_PRODUCT);
@@ -330,7 +331,7 @@ export class InventoryService {
       return (await firstValueFrom(
         this.inventoryClient
           .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_FIND_ONE, inventoryId)
-          .pipe(timeout(10000)),
+          .pipe(timeout(TCP_TIMEOUT_MS.READ)),
       )) as InventoryOwnershipData;
     } catch (error) {
       MicroserviceErrorHandler.handleError(
@@ -348,7 +349,7 @@ export class InventoryService {
       return (await firstValueFrom(
         this.productClient
           .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_ID, productId)
-          .pipe(timeout(10000)),
+          .pipe(timeout(TCP_TIMEOUT_MS.READ)),
       )) as ProductOwnershipData;
     } catch (error) {
       MicroserviceErrorHandler.handleError(

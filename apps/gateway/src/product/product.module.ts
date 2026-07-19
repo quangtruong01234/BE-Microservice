@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { ClientsModule, Transport } from "@nestjs/microservices";
+import { CachedModule } from "@app/cached";
 import { ProductController } from "./product.controller";
 import { ProductService } from "./product.service";
 import {
@@ -10,6 +11,7 @@ import {
 
 @Module({
   imports: [
+    CachedModule,
     ClientsModule.register([
       {
         name: NAME_SERVICE_TCP.PRODUCT_SERVICE,

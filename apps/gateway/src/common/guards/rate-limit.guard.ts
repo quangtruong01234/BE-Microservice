@@ -10,6 +10,7 @@ import {
 } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { COMMON_MESSAGE } from "libs/constant/response-message.constant";
+import { IS_PUBLIC_KEY } from "../decorators/public.decorator";
 import { RATE_LIMIT_OPTIONS_KEY } from "../decorators/rate-limit.decorator";
 import { isProduction, resolvePositiveIntegerEnv } from "../security";
 import { RequestWithRateLimit } from "./rate-limit.types";
@@ -29,6 +30,11 @@ export class CustomRateLimitGuard implements CanActivate {
     "RATE_LIMIT_REDIS_TIMEOUT_MS",
     500,
   );
+  // Set RATE_LIMIT_SKIP_PUBLIC_GET=true ONLY when nginx limit_req fronts the
+  // gateway — it skips the Redis counter for @Public GET/HEAD routes that have
+  // no explicit @RateLimit, so cached catalog reads cost zero Redis roundtrips.
+  private readonly isPublicGetSkipEnabled: boolean =
+    process.env.RATE_LIMIT_SKIP_PUBLIC_GET === "true";
 
   constructor(
     private cachedService: CachedService,
@@ -45,17 +51,28 @@ export class CustomRateLimitGuard implements CanActivate {
       const ttl = decoratorOptions?.ttl ?? this.defaultTtl;
 
       const request = context.switchToHttp().getRequest<RequestWithRateLimit>();
+
+      if (
+        this.isPublicGetSkipEnabled &&
+        !decoratorOptions &&
+        (request.method === "GET" || request.method === "HEAD") &&
+        this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
+          context.getHandler(),
+          context.getClass(),
+        ])
+      ) {
+        return true;
+      }
+
       const identifier = this.getIdentifier(request);
       const routePath =
         (request.route as { path?: string } | undefined)?.path ?? request.path;
       const route = `${request.method}:${routePath}`;
       const key = `throttle:${route}:${identifier}`;
 
-      const current = await this.withRedisTimeout(this.cachedService.incr(key));
-
-      if (current === 1) {
-        await this.withRedisTimeout(this.cachedService.expire(key, ttl));
-      }
+      const current = await this.withRedisTimeout(
+        this.cachedService.incrementWithWindow(key, ttl),
+      );
 
       if (current > limit) {
         throw new HttpException(

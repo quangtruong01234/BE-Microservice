@@ -22,6 +22,11 @@ import {
   resolveBodyLimit,
   securityHeadersMiddleware,
 } from "./common/security";
+import { RedisIoAdapter } from "./common/redis-io.adapter";
+import {
+  backpressureMiddleware,
+  isBackpressureEnabled,
+} from "./common/backpressure";
 
 function collectValidationMessages(errors: ValidationError[]): string[] {
   const messages = errors.flatMap((error) => {
@@ -48,11 +53,21 @@ async function bootstrap() {
   }
   const app = await NestFactory.create(GatewayModule, { bodyParser: false });
   app.enableShutdownHooks();
+  // SCALE-01a: route Socket.IO rooms/emits (/chat + /notifications) through
+  // Redis pub/sub so a future multi-instance gateway keeps WS delivery intact.
+  const redisIoAdapter = new RedisIoAdapter(app);
+  await redisIoAdapter.connectToRedis();
+  app.useWebSocketAdapter(redisIoAdapter);
   const expressApp = app
     .getHttpAdapter()
     .getInstance() as import("express").Application;
   expressApp.set("trust proxy", 1);
   app.use(securityHeadersMiddleware());
+  // SCALE-05c: shed load with a cheap 503 before body parsing/routing when the
+  // event loop is saturated, instead of letting every request time out at once.
+  if (isBackpressureEnabled()) {
+    app.use(backpressureMiddleware());
+  }
   app.use(json({ limit: resolveBodyLimit("JSON_BODY_LIMIT", "1mb") }));
   app.use(
     urlencoded({

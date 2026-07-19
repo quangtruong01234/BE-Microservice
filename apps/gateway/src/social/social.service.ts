@@ -10,6 +10,7 @@ import { MicroserviceErrorHandler } from "../common/exception/microservice-error
 import { assertCloudinaryUrlsOwnedBy } from "../common/media/cloudinary-ownership";
 import { UserInfo, UserInfoTcp } from "./social.types";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
+import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 
 @Injectable()
 export class SocialGatewayService {
@@ -30,7 +31,7 @@ export class SocialGatewayService {
       const users = await firstValueFrom(
         this.userClient
           .send({ cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS }, userIds)
-          .pipe(timeout(10000)) as Observable<UserInfoTcp[]>,
+          .pipe(timeout(TCP_TIMEOUT_MS.READ)) as Observable<UserInfoTcp[]>,
       );
       // Map keys stay the internal numeric id (matches post.userId); the
       // embedded author `id` is the exposed opaque public id (PUBID-02).
@@ -55,7 +56,7 @@ export class SocialGatewayService {
         .send<{
           id: number;
         }>({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, { userId })
-        .pipe(timeout(10000)),
+        .pipe(timeout(TCP_TIMEOUT_MS.READ)),
     );
     return Number(user.id);
   }
@@ -112,7 +113,7 @@ export class SocialGatewayService {
               .send<
                 Array<{ id: number; publicId: string }>
               >(SOCIAL_MESSAGE_PATTERN.GET_POST_PUBLIC_IDS_BY_IDS, [...postIds])
-              .pipe(timeout(10000)),
+              .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
           ),
       commentIds.size === 0
         ? Promise.resolve([])
@@ -121,7 +122,7 @@ export class SocialGatewayService {
               .send<
                 Array<{ id: number; publicId: string }>
               >(SOCIAL_MESSAGE_PATTERN.GET_COMMENT_PUBLIC_IDS_BY_IDS, [...commentIds])
-              .pipe(timeout(10000)),
+              .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
           ),
       userIds.size === 0
         ? Promise.resolve(new Map<number, UserInfo>())
@@ -180,7 +181,7 @@ export class SocialGatewayService {
               videoUrl: videoUrl ?? null,
               productId: internalProductId,
             })
-            .pipe(timeout(10000)) as Observable<unknown>,
+            .pipe(timeout(TCP_TIMEOUT_MS.WRITE)) as Observable<unknown>,
         ),
       );
     } catch (error) {
@@ -219,7 +220,7 @@ export class SocialGatewayService {
               ...changes,
               productId: internalProductId,
             })
-            .pipe(timeout(10000)) as Observable<unknown>,
+            .pipe(timeout(TCP_TIMEOUT_MS.WRITE)) as Observable<unknown>,
         ),
       );
     } catch (error) {
@@ -237,7 +238,7 @@ export class SocialGatewayService {
         .send<{
           id: number;
         }>(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_ID, productId)
-        .pipe(timeout(10000)),
+        .pipe(timeout(TCP_TIMEOUT_MS.READ)),
     );
     return Number(product.id);
   }
@@ -266,7 +267,7 @@ export class SocialGatewayService {
         .send<
           { id: number; publicId: string | null }[]
         >(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_IDS, [...productIds])
-        .pipe(timeout(10000)),
+        .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
     );
     const publicIdById = new Map(
       products.map((product) => [Number(product.id), product.publicId]),
@@ -302,7 +303,7 @@ export class SocialGatewayService {
               reporterId,
               reason,
             })
-            .pipe(timeout(10000)) as Observable<unknown>,
+            .pipe(timeout(TCP_TIMEOUT_MS.WRITE)) as Observable<unknown>,
         ),
       );
     } catch (error) {
@@ -327,7 +328,7 @@ export class SocialGatewayService {
             limit,
             viewerUserId: viewerUserId ?? null,
           })
-          .pipe(timeout(10000)) as Observable<unknown>,
+          .pipe(timeout(TCP_TIMEOUT_MS.READ)) as Observable<unknown>,
       )) as {
         data: Array<{ userId: number }>;
         total: number;
@@ -371,7 +372,7 @@ export class SocialGatewayService {
             limit,
             viewerUserId: viewerUserId ?? null,
           })
-          .pipe(timeout(10000)) as Observable<unknown>,
+          .pipe(timeout(TCP_TIMEOUT_MS.READ)) as Observable<unknown>,
       )) as {
         data: Array<{ userId: number }>;
         total: number;
@@ -410,7 +411,7 @@ export class SocialGatewayService {
             postId,
             viewerUserId: viewerUserId ?? null,
           })
-          .pipe(timeout(10000)) as Observable<unknown>,
+          .pipe(timeout(TCP_TIMEOUT_MS.READ)) as Observable<unknown>,
       )) as { userId: number };
       const authorMap = await this.fetchAuthorMap([post.userId]);
       return this.exposeReferences({
@@ -431,7 +432,7 @@ export class SocialGatewayService {
       return await firstValueFrom(
         this.socialClient
           .send(SOCIAL_MESSAGE_PATTERN.DELETE_POST, { postId, userId })
-          .pipe(timeout(10000)) as Observable<unknown>,
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)) as Observable<unknown>,
       );
     } catch (error) {
       MicroserviceErrorHandler.handleError(
@@ -448,7 +449,7 @@ export class SocialGatewayService {
         await firstValueFrom(
           this.socialClient
             .send(SOCIAL_MESSAGE_PATTERN.LIKE_POST, { postId, userId })
-            .pipe(timeout(10000)) as Observable<unknown>,
+            .pipe(timeout(TCP_TIMEOUT_MS.WRITE)) as Observable<unknown>,
         ),
       );
     } catch (error) {
@@ -466,7 +467,7 @@ export class SocialGatewayService {
         await firstValueFrom(
           this.socialClient
             .send(SOCIAL_MESSAGE_PATTERN.UNLIKE_POST, { postId, userId })
-            .pipe(timeout(10000)) as Observable<unknown>,
+            .pipe(timeout(TCP_TIMEOUT_MS.WRITE)) as Observable<unknown>,
         ),
       );
     } catch (error) {
@@ -492,7 +493,7 @@ export class SocialGatewayService {
               userId,
               content,
             })
-            .pipe(timeout(10000)) as Observable<unknown>,
+            .pipe(timeout(TCP_TIMEOUT_MS.WRITE)) as Observable<unknown>,
         ),
       );
     } catch (error) {
@@ -514,7 +515,7 @@ export class SocialGatewayService {
         await firstValueFrom(
           this.socialClient
             .send(SOCIAL_MESSAGE_PATTERN.GET_COMMENTS, { postId, page, limit })
-            .pipe(timeout(10000)) as Observable<unknown>,
+            .pipe(timeout(TCP_TIMEOUT_MS.READ)) as Observable<unknown>,
         ),
       );
     } catch (error) {
@@ -531,7 +532,7 @@ export class SocialGatewayService {
       return await firstValueFrom(
         this.socialClient
           .send(SOCIAL_MESSAGE_PATTERN.DELETE_COMMENT, { commentId, userId })
-          .pipe(timeout(10000)) as Observable<unknown>,
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)) as Observable<unknown>,
       );
     } catch (error) {
       MicroserviceErrorHandler.handleError(
@@ -558,7 +559,7 @@ export class SocialGatewayService {
               userId,
               content,
             })
-            .pipe(timeout(10000)) as Observable<unknown>,
+            .pipe(timeout(TCP_TIMEOUT_MS.WRITE)) as Observable<unknown>,
         ),
       );
     } catch (error) {
@@ -576,7 +577,7 @@ export class SocialGatewayService {
         await firstValueFrom(
           this.socialClient
             .send(SOCIAL_MESSAGE_PATTERN.GET_REPLIES, { commentId, depth })
-            .pipe(timeout(10000)) as Observable<unknown>,
+            .pipe(timeout(TCP_TIMEOUT_MS.READ)) as Observable<unknown>,
         ),
       );
     } catch (error) {
@@ -598,7 +599,7 @@ export class SocialGatewayService {
               followerId,
               followingId: internalFollowingId,
             })
-            .pipe(timeout(10000)) as Observable<unknown>,
+            .pipe(timeout(TCP_TIMEOUT_MS.WRITE)) as Observable<unknown>,
         ),
       );
     } catch (error) {
@@ -623,7 +624,7 @@ export class SocialGatewayService {
               followerId,
               followingId: internalFollowingId,
             })
-            .pipe(timeout(10000)) as Observable<unknown>,
+            .pipe(timeout(TCP_TIMEOUT_MS.WRITE)) as Observable<unknown>,
         ),
       );
     } catch (error) {
@@ -649,7 +650,7 @@ export class SocialGatewayService {
             page,
             limit,
           })
-          .pipe(timeout(10000)) as Observable<unknown>,
+          .pipe(timeout(TCP_TIMEOUT_MS.READ)) as Observable<unknown>,
       )) as {
         data: Array<{ followerId: number }>;
         total: number;
@@ -691,7 +692,7 @@ export class SocialGatewayService {
             page,
             limit,
           })
-          .pipe(timeout(10000)) as Observable<unknown>,
+          .pipe(timeout(TCP_TIMEOUT_MS.READ)) as Observable<unknown>,
       )) as {
         data: Array<{ followingId: number }>;
         total: number;
@@ -735,7 +736,7 @@ export class SocialGatewayService {
             limit,
             viewerUserId: viewerUserId ?? null,
           })
-          .pipe(timeout(10000)) as Observable<unknown>,
+          .pipe(timeout(TCP_TIMEOUT_MS.READ)) as Observable<unknown>,
       )) as {
         data: Array<{ userId: number }>;
         total: number;
@@ -778,7 +779,7 @@ export class SocialGatewayService {
             page,
             limit,
           })
-          .pipe(timeout(10000)) as Observable<unknown>,
+          .pipe(timeout(TCP_TIMEOUT_MS.READ)) as Observable<unknown>,
       )) as {
         data: Array<{ post: { userId: number } }>;
         total: number;
@@ -815,7 +816,7 @@ export class SocialGatewayService {
         await firstValueFrom(
           this.socialClient
             .send(SOCIAL_MESSAGE_PATTERN.ADMIN_HIDE_POST, { postId, adminId })
-            .pipe(timeout(10000)) as Observable<unknown>,
+            .pipe(timeout(TCP_TIMEOUT_MS.WRITE)) as Observable<unknown>,
         ),
       );
     } catch (error) {
@@ -833,7 +834,7 @@ export class SocialGatewayService {
         await firstValueFrom(
           this.socialClient
             .send(SOCIAL_MESSAGE_PATTERN.ADMIN_UNHIDE_POST, { postId })
-            .pipe(timeout(10000)) as Observable<unknown>,
+            .pipe(timeout(TCP_TIMEOUT_MS.WRITE)) as Observable<unknown>,
         ),
       );
     } catch (error) {
@@ -854,7 +855,7 @@ export class SocialGatewayService {
               postId,
               adminId,
             })
-            .pipe(timeout(10000)) as Observable<unknown>,
+            .pipe(timeout(TCP_TIMEOUT_MS.WRITE)) as Observable<unknown>,
         ),
       );
     } catch (error) {
@@ -871,7 +872,7 @@ export class SocialGatewayService {
       return await firstValueFrom(
         this.socialClient
           .send(SOCIAL_MESSAGE_PATTERN.ADMIN_DELETE_POST, { postId })
-          .pipe(timeout(10000)) as Observable<unknown>,
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)) as Observable<unknown>,
       );
     } catch (error) {
       MicroserviceErrorHandler.handleError(

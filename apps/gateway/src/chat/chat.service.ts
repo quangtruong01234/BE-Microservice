@@ -16,6 +16,7 @@ import {
   exposeChatConversation,
   exposeChatMessage,
 } from "./chat.types";
+import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 
 @Injectable()
 export class ChatGatewayService {
@@ -32,7 +33,7 @@ export class ChatGatewayService {
         .send<{
           id: number;
         }>({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, { userId })
-        .pipe(timeout(10000)),
+        .pipe(timeout(TCP_TIMEOUT_MS.READ)),
     );
     return Number(user.id);
   }
@@ -47,7 +48,7 @@ export class ChatGatewayService {
         .send<
           Array<{ id: number; publicId?: string | null }>
         >({ cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS }, { userIds: uniqueUserIds })
-        .pipe(timeout(10000)),
+        .pipe(timeout(TCP_TIMEOUT_MS.READ)),
     );
     return new Map(
       users
@@ -76,7 +77,9 @@ export class ChatGatewayService {
             userId,
             otherUserId: internalOtherUserId,
           })
-          .pipe(timeout(10000)) as Observable<ChatConversationTcp>,
+          .pipe(
+            timeout(TCP_TIMEOUT_MS.WRITE),
+          ) as Observable<ChatConversationTcp>,
       );
       const users = await this.getUserPublicIdMap([
         conversation.user1Id,
@@ -100,7 +103,9 @@ export class ChatGatewayService {
       const conversations = await firstValueFrom(
         this.chatClient
           .send(CHAT_MESSAGE_PATTERN.CHAT_GET_CONVERSATIONS, { userId })
-          .pipe(timeout(10000)) as Observable<ChatConversationTcp[]>,
+          .pipe(timeout(TCP_TIMEOUT_MS.READ)) as Observable<
+          ChatConversationTcp[]
+        >,
       );
       const users = await this.getUserPublicIdMap(
         conversations.flatMap((conversation) => [
@@ -139,7 +144,7 @@ export class ChatGatewayService {
             page,
             limit,
           })
-          .pipe(timeout(10000)) as Observable<ChatPaginatedTcp>,
+          .pipe(timeout(TCP_TIMEOUT_MS.READ)) as Observable<ChatPaginatedTcp>,
       );
       const users = await this.getUserPublicIdMap(
         messagesPage.data.map((message) => message.senderId),
@@ -167,7 +172,7 @@ export class ChatGatewayService {
             userId,
             conversationId,
           })
-          .pipe(timeout(10000)) as Observable<unknown>,
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)) as Observable<unknown>,
       );
     } catch (error) {
       MicroserviceErrorHandler.handleError(

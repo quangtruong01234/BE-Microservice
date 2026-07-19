@@ -18,6 +18,7 @@ import {
   PAYMENT_RESULT_MAX_QUERY_KEYS,
   PAYMENT_RESULT_MAX_VALUE_LENGTH,
 } from "./gateway.constants";
+import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 
 @ApiTags("Gateway")
 @Controller("gateway")
@@ -102,7 +103,7 @@ export class GatewayController {
               checksum: query["checksum"],
             },
           )
-          .pipe(timeout(10000)),
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
       );
       return result.status;
     } catch (error) {
@@ -123,7 +124,7 @@ export class GatewayController {
           .send<{
             status: "success" | "failed";
           }>(PAYMENT_MESSAGE_PATTERN.COMPLETE_VNPAY_RETURN, query)
-          .pipe(timeout(10000)),
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
       );
       return result.status;
     } catch (error) {

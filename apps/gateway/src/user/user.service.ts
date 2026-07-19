@@ -18,6 +18,7 @@ import { MicroserviceErrorHandler } from "../common/exception/microservice-error
 import { assertCloudinaryUrlsOwnedBy } from "../common/media/cloudinary-ownership";
 import { JwtService } from "@nestjs/jwt";
 import { UserData } from "./user.types";
+import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 
 @Injectable()
 export class UserService {
@@ -68,7 +69,7 @@ export class UserService {
     const user = (await firstValueFrom(
       this.userClient
         .send({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, { userId })
-        .pipe(timeout(10000)),
+        .pipe(timeout(TCP_TIMEOUT_MS.READ)),
     )) as { publicId?: string | null };
     return user.publicId ?? null;
   }
@@ -81,7 +82,7 @@ export class UserService {
           this.userClient
             .send({ cmd: USER_MESSAGE_PATTERN.REGISTER_USER }, dto)
             .pipe(
-              timeout(10000),
+              timeout(TCP_TIMEOUT_MS.WRITE),
               catchError((err: unknown) => {
                 throw err;
               }),
@@ -104,7 +105,7 @@ export class UserService {
         this.userClient
           .send({ cmd: USER_MESSAGE_PATTERN.LOGIN_USER }, loginPayload)
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -125,7 +126,7 @@ export class UserService {
         this.userClient
           .send({ cmd: USER_MESSAGE_PATTERN.FORGOT_PASSWORD }, dto)
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -146,7 +147,7 @@ export class UserService {
         this.userClient
           .send({ cmd: USER_MESSAGE_PATTERN.RESET_PASSWORD }, dto)
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -182,7 +183,7 @@ export class UserService {
           this.userClient
             .send({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, { userId })
             .pipe(
-              timeout(10000),
+              timeout(TCP_TIMEOUT_MS.READ),
               catchError((err: unknown) => {
                 throw err;
               }),
@@ -207,7 +208,7 @@ export class UserService {
             { page, limit },
           )
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.READ),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -232,7 +233,7 @@ export class UserService {
         this.userClient
           .send({ cmd: USER_MESSAGE_PATTERN.GET_FEATURED_SELLERS }, { limit })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.READ),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -257,7 +258,7 @@ export class UserService {
           this.userClient
             .send({ cmd: USER_MESSAGE_PATTERN.GET_ME }, { userId })
             .pipe(
-              timeout(10000),
+              timeout(TCP_TIMEOUT_MS.READ),
               catchError((err: unknown) => {
                 throw err;
               }),
@@ -289,7 +290,7 @@ export class UserService {
               { userId: requesterId, targetId, dto },
             )
             .pipe(
-              timeout(10000),
+              timeout(TCP_TIMEOUT_MS.WRITE),
               catchError((err: unknown) => {
                 throw err;
               }),
@@ -311,7 +312,7 @@ export class UserService {
         this.userClient
           .send({ cmd: USER_MESSAGE_PATTERN.ADDRESS_LIST }, { userId })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.READ),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -341,7 +342,7 @@ export class UserService {
           this.userClient
             .send({ cmd: USER_MESSAGE_PATTERN.ADDRESS_CREATE }, { userId, dto })
             .pipe(
-              timeout(10000),
+              timeout(TCP_TIMEOUT_MS.WRITE),
               catchError((err: unknown) => {
                 throw err;
               }),
@@ -373,7 +374,7 @@ export class UserService {
               { userId, addressId, dto },
             )
             .pipe(
-              timeout(10000),
+              timeout(TCP_TIMEOUT_MS.WRITE),
               catchError((err: unknown) => {
                 throw err;
               }),
@@ -399,7 +400,7 @@ export class UserService {
             { userId, addressId },
           )
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -425,7 +426,7 @@ export class UserService {
               { userId, addressId },
             )
             .pipe(
-              timeout(10000),
+              timeout(TCP_TIMEOUT_MS.WRITE),
               catchError((err: unknown) => {
                 throw err;
               }),

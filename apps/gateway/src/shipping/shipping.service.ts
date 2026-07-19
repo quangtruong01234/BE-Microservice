@@ -5,6 +5,7 @@ import { ORDER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
 import { ShippingLocation } from "./shipping.types";
+import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 
 /**
  * Proxies GHN master-data (province/district/ward) through the orders service so
@@ -27,7 +28,7 @@ export class ShippingService {
             ShippingLocation[]
           >(ORDER_MESSAGE_PATTERN.SHIPPING_PROVINCES, {})
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -50,7 +51,7 @@ export class ShippingService {
             provinceId,
           })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -73,7 +74,7 @@ export class ShippingService {
             districtId,
           })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),

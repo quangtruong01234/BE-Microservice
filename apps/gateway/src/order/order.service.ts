@@ -44,6 +44,7 @@ import {
   SkuPriceResponse,
   UserSummary,
 } from "./order.types";
+import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 
 export abstract class BaseAggregatorService {
   protected logger = new Logger(BaseAggregatorService.name);
@@ -181,7 +182,7 @@ export class OrderService {
             PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_ID,
             productId,
           )
-          .pipe(timeout(10000)),
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
       ).catch((err: unknown) =>
         MicroserviceErrorHandler.handleError(
           err,
@@ -212,7 +213,7 @@ export class OrderService {
                 PRODUCT_MESSAGE_PATTERNS.SKU_FIND_BY_ID,
                 item.skuId,
               )
-              .pipe(timeout(10000)),
+              .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
           ).catch((err: unknown) =>
             MicroserviceErrorHandler.handleError(
               err,
@@ -323,7 +324,7 @@ export class OrderService {
               items: enrichedItems,
             })
             .pipe(
-              timeout(10000),
+              timeout(TCP_TIMEOUT_MS.WRITE),
               catchError((err: unknown) => {
                 throw err;
               }),
@@ -354,7 +355,7 @@ export class OrderService {
                 paymentMethod: dto.paymentMethod,
               })
               .pipe(
-                timeout(10000),
+                timeout(TCP_TIMEOUT_MS.WRITE),
                 catchError((err: unknown) => {
                   throw err;
                 }),
@@ -394,7 +395,7 @@ export class OrderService {
             voucherCode: dto.voucherCode ?? null,
           })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -478,7 +479,7 @@ export class OrderService {
     try {
       return (await firstValueFrom(
         this.ordersClient.send(pattern, payload).pipe(
-          timeout(10000),
+          timeout(TCP_TIMEOUT_MS.WRITE),
           catchError((err: unknown) => {
             throw err;
           }),
@@ -506,7 +507,7 @@ export class OrderService {
               callerId: userId,
               callerRole: "user",
             })
-            .pipe(timeout(10000)),
+            .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
         ).catch((error: unknown) => {
           this.logger.error(
             `Failed to compensate order ${order.id} after payment initialization failure: ${String(error)}`,
@@ -528,7 +529,7 @@ export class OrderService {
             items: dto.items,
           })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -575,7 +576,7 @@ export class OrderService {
       this.ordersClient
         .send(ORDER_MESSAGE_PATTERN.GET_ORDER_BY_ID, orderId)
         .pipe(
-          timeout(10000),
+          timeout(TCP_TIMEOUT_MS.READ),
           catchError((err: unknown) => {
             throw err;
           }),
@@ -618,7 +619,7 @@ export class OrderService {
         .send<{
           id: number;
         }>({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, { userId })
-        .pipe(timeout(10000)),
+        .pipe(timeout(TCP_TIMEOUT_MS.READ)),
     );
     return Number(user.id);
   }
@@ -786,7 +787,7 @@ export class OrderService {
           limit,
         })
         .pipe(
-          timeout(10000),
+          timeout(TCP_TIMEOUT_MS.READ),
           catchError((err: unknown) => {
             throw err;
           }),
@@ -841,7 +842,7 @@ export class OrderService {
         this.ordersClient
           .send(ORDER_MESSAGE_PATTERN.GET_ORDER_STATUS_COUNTS, internalUserId)
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.READ),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -870,7 +871,7 @@ export class OrderService {
             callerRole,
           })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -903,7 +904,7 @@ export class OrderService {
             requestingUserRole,
           })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -932,7 +933,7 @@ export class OrderService {
         this.paymentsClient
           .send(PAYMENT_MESSAGE_PATTERN.GET_PAYMENT_URL, { orderId: order.id })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -960,7 +961,7 @@ export class OrderService {
       this.ordersClient
         .send(ORDER_MESSAGE_PATTERN.GET_ALL_ORDERS, { page, limit })
         .pipe(
-          timeout(10000),
+          timeout(TCP_TIMEOUT_MS.READ),
           catchError((err: unknown) => {
             throw err;
           }),
@@ -979,7 +980,7 @@ export class OrderService {
               { userIds, includeEmail: true },
             )
             .pipe(
-              timeout(10000),
+              timeout(TCP_TIMEOUT_MS.READ),
               catchError((err: unknown) => {
                 throw err;
               }),
@@ -1053,7 +1054,7 @@ export class OrderService {
             dateTo: query.dateTo,
           })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1091,7 +1092,7 @@ export class OrderService {
         this.ordersClient
           .send(ORDER_MESSAGE_PATTERN.ADMIN_GHN_ORDER_DETAIL, { orderId })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1147,7 +1148,7 @@ export class OrderService {
         this.ordersClient
           .send(ORDER_MESSAGE_PATTERN.ADMIN_GHN_SYNC, { orderId, actorId })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1172,7 +1173,7 @@ export class OrderService {
             Record<string, unknown>[]
           >(ORDER_MESSAGE_PATTERN.ADMIN_GHN_HISTORY, { orderId })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1197,7 +1198,7 @@ export class OrderService {
         this.ordersClient
           .send(ORDER_MESSAGE_PATTERN.ADMIN_GHN_CANCEL, { orderId, actorId })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1221,7 +1222,7 @@ export class OrderService {
         this.ordersClient
           .send(ORDER_MESSAGE_PATTERN.ADMIN_GHN_RETURN, { orderId, actorId })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1250,7 +1251,7 @@ export class OrderService {
             codAmount,
           })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1279,7 +1280,7 @@ export class OrderService {
             ...receiver,
           })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1308,7 +1309,7 @@ export class OrderService {
             ghnStatus,
           })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1338,7 +1339,7 @@ export class OrderService {
             { userIds: uniqueIds, includeEmail: true },
           )
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.READ),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1372,7 +1373,7 @@ export class OrderService {
             status: query.status,
           })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.READ),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1435,7 +1436,7 @@ export class OrderService {
             topN: query.topN,
           })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.READ),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1452,7 +1453,7 @@ export class OrderService {
         this.ordersClient
           .send(ORDER_MESSAGE_PATTERN.CONFIRM_ORDER, { orderId, sellerId })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1474,7 +1475,7 @@ export class OrderService {
         this.ordersClient
           .send(ORDER_MESSAGE_PATTERN.READY_TO_SHIP, { orderId, sellerId })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1511,7 +1512,7 @@ export class OrderService {
             isAdmin,
           })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.READ),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1578,7 +1579,7 @@ export class OrderService {
           .send<
             ProductDetailResponse[]
           >(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_IDS, uniqueProductIds)
-          .pipe(timeout(10000)),
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
       );
       if (Array.isArray(products)) {
         products.forEach((product) => {
@@ -1674,7 +1675,7 @@ export class OrderService {
             targetStatus,
           })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1708,7 +1709,7 @@ export class OrderService {
             reason,
           })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1741,7 +1742,7 @@ export class OrderService {
             limit,
           })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.READ),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1783,7 +1784,7 @@ export class OrderService {
             status,
           })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.READ),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1825,7 +1826,7 @@ export class OrderService {
             rejectReason,
           })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),

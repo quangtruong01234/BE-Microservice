@@ -10,15 +10,24 @@ describe("ProductService ownership", () => {
   const inventoryClient = { send: jest.fn() };
   const userClient = { send: jest.fn() };
   const ordersClient = { send: jest.fn() };
+  const cachedService = {
+    get: jest.fn().mockResolvedValue(null),
+    set: jest.fn().mockResolvedValue("OK"),
+    del: jest.fn().mockResolvedValue(1),
+    keys: jest.fn().mockResolvedValue([]),
+  };
   let service: ProductService;
 
   beforeEach(() => {
     jest.clearAllMocks();
+    cachedService.get.mockResolvedValue(null);
+    cachedService.keys.mockResolvedValue([]);
     service = new ProductService(
       productClient as unknown as ClientProxy,
       inventoryClient as unknown as ClientProxy,
       userClient as unknown as ClientProxy,
       ordersClient as unknown as ClientProxy,
+      cachedService as unknown as import("@app/cached").CachedService,
     );
   });
 

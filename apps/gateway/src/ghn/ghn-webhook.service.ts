@@ -3,6 +3,7 @@ import { ClientProxy } from "@nestjs/microservices";
 import { catchError, firstValueFrom, timeout } from "rxjs";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { ORDER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
+import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 
 @Injectable()
 export class GhnWebhookService {
@@ -19,7 +20,7 @@ export class GhnWebhookService {
         this.ordersClient
           .send(ORDER_MESSAGE_PATTERN.GHN_WEBHOOK, { ghnOrderCode, ghnStatus })
           .pipe(
-            timeout(10000),
+            timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {
               throw err;
             }),

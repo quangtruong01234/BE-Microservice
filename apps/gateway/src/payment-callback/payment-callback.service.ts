@@ -10,6 +10,7 @@ import {
   ZaloPayCallbackBody,
   ZaloPayCallbackResponse,
 } from "./payment-callback.types";
+import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 
 @Injectable()
 export class PaymentCallbackService {
@@ -28,7 +29,7 @@ export class PaymentCallbackService {
             PAYMENT_MESSAGE_PATTERN.ZALOPAY_CALLBACK,
             body,
           )
-          .pipe(timeout(10000)),
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
       );
     } catch (error) {
       MicroserviceErrorHandler.handleError(
@@ -49,7 +50,7 @@ export class PaymentCallbackService {
             PAYMENT_MESSAGE_PATTERN.VNPAY_CALLBACK,
             payload,
           )
-          .pipe(timeout(10000)),
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
       );
     } catch (error) {
       MicroserviceErrorHandler.handleError(

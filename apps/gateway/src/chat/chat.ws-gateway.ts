@@ -15,6 +15,7 @@ import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { gatewayCorsOptions } from "../common/cors";
 import { ChatMessageTcp } from "./chat.types";
 import { ChatGatewayService } from "./chat.service";
+import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 
 @Injectable()
 @WebSocketGateway({
@@ -89,7 +90,7 @@ export class ChatWsGateway implements OnGatewayConnection, OnGatewayDisconnect {
             userId,
             conversationId: payload.conversationId,
           })
-          .pipe(timeout(10000)),
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
       );
       if (!isMember) {
         client.emit("error", "Access denied");
@@ -128,7 +129,7 @@ export class ChatWsGateway implements OnGatewayConnection, OnGatewayDisconnect {
               parentMessageId: payload.parentMessageId,
             },
           })
-          .pipe(timeout(10000)),
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
       );
       // Emit the same exposed shape as REST — only opaque public ids leave
       // the gateway (room keys reuse the client-supplied conv_ id).

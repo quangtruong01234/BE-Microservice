@@ -9,6 +9,7 @@ import {
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
 import { PaginatedNotifications } from "./notification.types";
+import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 
 @Injectable()
 export class NotificationGatewayService {
@@ -55,7 +56,7 @@ export class NotificationGatewayService {
               .send<
                 Array<{ id: number; publicId: string }>
               >(SOCIAL_MESSAGE_PATTERN.GET_POST_PUBLIC_IDS_BY_IDS, postIds)
-              .pipe(timeout(10000)),
+              .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
           ),
       userIds.length === 0
         ? Promise.resolve([])
@@ -64,7 +65,7 @@ export class NotificationGatewayService {
               .send<
                 Array<{ id: number; publicId?: string | null }>
               >({ cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS }, { userIds })
-              .pipe(timeout(10000)),
+              .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
           ),
     ]);
     const postPublicIdById = new Map(
@@ -110,7 +111,9 @@ export class NotificationGatewayService {
             page,
             limit,
           })
-          .pipe(timeout(10000)) as Observable<PaginatedNotifications>,
+          .pipe(
+            timeout(TCP_TIMEOUT_MS.READ),
+          ) as Observable<PaginatedNotifications>,
       );
       return (await this.exposeReferences(
         notifications as unknown as Record<string, unknown>,
@@ -129,7 +132,9 @@ export class NotificationGatewayService {
       return await firstValueFrom(
         this.notificationClient
           .send(NOTIFICATION_MESSAGE_PATTERN.GET_UNREAD_COUNT, { userId })
-          .pipe(timeout(10000)) as Observable<{ unreadCount: number }>,
+          .pipe(timeout(TCP_TIMEOUT_MS.READ)) as Observable<{
+          unreadCount: number;
+        }>,
       );
     } catch (error) {
       MicroserviceErrorHandler.handleError(
@@ -151,7 +156,9 @@ export class NotificationGatewayService {
             notificationId,
             userId,
           })
-          .pipe(timeout(10000)) as Observable<{ success: boolean }>,
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)) as Observable<{
+          success: boolean;
+        }>,
       );
     } catch (error) {
       MicroserviceErrorHandler.handleError(

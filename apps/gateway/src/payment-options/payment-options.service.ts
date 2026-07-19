@@ -5,6 +5,7 @@ import { PAYMENT_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant"
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
 import { PaymentOption } from "./payment-options.types";
+import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 
 @Injectable()
 export class PaymentOptionsService {
@@ -18,7 +19,7 @@ export class PaymentOptionsService {
       const options = await firstValueFrom(
         this.paymentsClient
           .send(PAYMENT_MESSAGE_PATTERN.GET_PAYMENT_OPTIONS, {})
-          .pipe(timeout(10000)) as Observable<PaymentOption[]>,
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)) as Observable<PaymentOption[]>,
       );
       return { options };
     } catch (error) {
