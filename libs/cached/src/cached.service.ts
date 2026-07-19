@@ -67,6 +67,31 @@ export class CachedService {
     return await this.redis.incr(key);
   }
 
+  /**
+   * Atomic INCR that guarantees the key carries a TTL. Plain INCR + EXPIRE
+   * ("expire only when count === 1") loses the EXPIRE under concurrency,
+   * leaving a counter with TTL -1 that never resets (permanent 429 for
+   * rate-limit windows). The Lua script increments and (re)arms the TTL in
+   * one atomic step whenever the key has no expiry — which also self-heals
+   * keys already stuck at TTL -1.
+   */
+  async incrementWithWindow(
+    key: string,
+    windowSeconds: number,
+  ): Promise<number> {
+    const result = await this.redis.eval(
+      `local count = redis.call('INCR', KEYS[1])
+       if redis.call('TTL', KEYS[1]) < 0 then
+         redis.call('EXPIRE', KEYS[1], ARGV[1])
+       end
+       return count`,
+      1,
+      key,
+      windowSeconds,
+    );
+    return Number(result);
+  }
+
   async decr(key: string): Promise<number> {
     return await this.redis.decr(key);
   }
