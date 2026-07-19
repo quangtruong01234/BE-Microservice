@@ -6,6 +6,217 @@
 
 ## Completed Milestones
 
+- SCALE-03 — nginx load-absorption layer (2026-07-20): rewrote
+  `nginx/trybuy.conf` (+ `nginx/trybuy-local.conf` docker mirror pointing at
+  `host.docker.internal:3000`). **(a) Rate limiting** — http-level
+  `limit_req_zone` 30r/s per `$binary_remote_addr` (10m zone) applied with
+  `burst=60 nodelay` on the API locations, `limit_conn 32`, both returning 429;
+  `/zalopay/callback`, `/vnpay/callback`, and `/socket.io/` are exempt
+  (providers retry on their own schedule; sockets are long-lived). **(b)
+  Upstream keepalive** — `upstream trybuy_gateway { server 127.0.0.1:3000;
+  keepalive 32; }` + `proxy_http_version 1.1` + `Connection ""` on non-WS
+  locations (the old conf forced `Connection "upgrade"` on `/`, which killed
+  reuse); `/socket.io/` keeps upgrade headers + 300s read timeout. **(c)
+  gzip** — JSON/text types, level 5, min 1024, `gzip_vary` (no Node
+  compression middleware needed). **(d) 5s micro-cache** — `proxy_cache_path
+  /var/cache/nginx/trybuy` (10m keys, 100m max) with `proxy_cache_lock on`
+  (stampede guard) + `proxy_cache_use_stale updating` on a regex matching
+  EXACTLY the four @Public user-invariant catalog GETs: `GET /api/products`,
+  `/api/products/prod_<id>`, `/api/products/brands`, `/api/products/categories`
+  (verified all four are `@Public()` in `product.controller.ts` — never widen
+  the regex to authenticated routes or nginx serves one user's response to
+  everyone; POSTs on the same paths pass through since only GET/HEAD is
+  cached, and Set-Cookie responses are never stored). `X-Cache-Status` header
+  exposed. **(e) SCALE-05 remainder** — gateway
+  `CustomRateLimitGuard` now supports `RATE_LIMIT_SKIP_PUBLIC_GET=true`
+  (default off): skips the Redis counter for `@Public` GET/HEAD routes with NO
+  explicit `@RateLimit` decorator (explicit limits like login/webhook always
+  still enforced) — set ONLY in prod behind nginx `limit_req`; added to
+  `local/nodeA/.env.production.example`. 5 new unit tests
+  (`rate-limit.guard.spec.ts`). Verified: `nginx -t` green on the prod conf in
+  a docker nginx:alpine (dummy certs mounted at the letsencrypt path); live
+  docker nginx on :8088 against the running gateway → list MISS→HIT→HIT within
+  TTL, `EXPIRED` after 5s, categories cached, gzip `Content-Encoding: gzip`,
+  `/api/user/me` passes through uncached (401, no cache header), burst of 150
+  concurrent → 65×200 / 85×429 served at nginx before Node. tsc/eslint clean.
+  Deploy notes: `mkdir -p /var/cache/nginx/trybuy` (step added to conf
+  header); tune rate/burst upward if legit FE fan-out trips 429 (OQ-6).
+  Throughput attribution on the target VPS stays with SCALE-06.
+- SCALE-05 — overload failure-mode tuning: timeout split + atomic throttle +
+  backpressure shed (2026-07-19): three parts. **(a) TCP timeout split** —
+  new `TCP_TIMEOUT_MS = { READ: 5000, WRITE: 10000 }` in
+  `libs/constant/tcp-timeout.constant.ts`; a codemod reclassified all 172
+  gateway `timeout(10000)` sites by enclosing method: read-only queries
+  (get/find/list/search/check/resolve/validate…) → 5s so a slow service sheds
+  stuck reads instead of parking sockets 10s; mutations AND any call whose
+  downstream leg hits an external API (GHN admin/sync/webhook, shipping
+  master-data, ZaloPay/VNPay callbacks + payment-url, invoice PDF) keep 10s.
+  Ambiguous read-shaped helpers (enrichment/expose batch lookups) were left
+  conservatively at WRITE. **(b) Atomic rate-limit window** — new
+  `CachedService.incrementWithWindow(key, ttl)` (Lua: `INCR` + `EXPIRE` iff
+  `TTL < 0`, one atomic script) replaces the guard's non-atomic
+  `incr` → `expire if count===1` pair in
+  `apps/gateway/src/common/guards/rate-limit.guard.ts`. Fixes the Known Issue
+  where concurrent load lost the EXPIRE and left `throttle:*` keys at TTL -1
+  → permanent 429; the TTL<0 condition also self-heals keys already stuck.
+  Runtime-verified: seeded a TTL -1 key → one request re-armed it (TTL 59);
+  10 rapid requests → 6×200 then 4×429 with TTL still positive. **(c)
+  Backpressure shed** — `apps/gateway/src/common/backpressure.ts`
+  (`monitorEventLoopDelay`, mean sampled each
+  `BACKPRESSURE_SAMPLE_INTERVAL_MS`=1000) registered in `main.ts` right after
+  security headers, BEFORE body parsing: when mean event-loop delay exceeds
+  `BACKPRESSURE_MAX_EVENT_LOOP_DELAY_MS` (default 500) it answers 503 +
+  `Retry-After` (default 2s) in the standard error envelope instead of letting
+  every queued request time out at once. Exempt: `/zalopay/callback`,
+  `/vnpay/callback`, `/ghn/webhook`, `/api/ghn/webhook`, `/live`, `/ready`,
+  `/health` (providers retry on their own schedule; a shed callback could lose
+  a payment confirmation). Kill switch `BACKPRESSURE_ENABLED=false`. 4/4 unit
+  tests (`backpressure.spec.ts`: pass-through, shed shape, exemptions, sample
+  caching). tsc/eslint clean; anon + auth reads (products list, cart, buyer
+  order list) still 200 on the dev stack. Left for SCALE-03: skip the Redis
+  rate-limit guard on `@Public` cacheable GETs once nginx `limit_req` owns L7
+  flood control.
+
+- SCALE-01b — env-gated gateway pm2 cluster mode (2026-07-19): closes SCALE-01
+  (part a = Redis Socket.IO adapter, shipped earlier same week). Change:
+  `ecosystem.config.js` gateway entry now reads `GATEWAY_INSTANCES` (default 1
+  → fork, identical to before); >1 switches `exec_mode:"cluster"` with that
+  instance count — `GATEWAY_INSTANCES=4 pm2 start ecosystem.config.js --env
+  production`. Safe because gateway HTTP is stateless (JWT cookie) and WS
+  broadcast is cross-instance via the SCALE-01a Redis adapter; the gateway
+  holds no SQL pool so the SCALE-02 per-service budget is unaffected.
+  Verified with ×4 on the prod build: 4 workers online, 0 restarts, 0 non-2xx
+  across all load probes, and a Socket.IO smoke (8/8 connects to `/chat`,
+  `transports:["websocket"]`, token auth) proving websocket-only needs no
+  sticky sessions across workers. Measurement (4th "Recorded baselines" entry
+  in `scripts/load/baseline.mjs`; raw `scripts/load/results/2026-07-19-scale01b-*`):
+  on the shared dev machine throughput showed NO stable gain (anon list
+  428–923 req/s noisy vs 790 stable single-instance; auth cart ~92.6 vs 101.7
+  req/s — DB-bound, unchanged as expected) because the load generator + 13
+  Node processes + Redis share the same 12 cores. Decision: keep default 1;
+  prod may raise it ONLY after (1) FE ships websocket-only transport on
+  `/chat` + `/notifications` (storefront handoff entry written) and (2) a
+  re-measure on the target VPS with an external load source shows a gain.
+
+- SCALE-04 — gateway micro-cache for hot @Public product reads (2026-07-19):
+  full-response Redis cache-aside (TTL 10s) added in
+  `apps/gateway/src/product/product.service.ts` (+ `CachedModule` in
+  `product.module.ts`) for `GET /api/products` (key
+  `gw:products:list:<stable-sorted-query-json>`, same stable-key technique as
+  the product service's `buildSearchCacheKey`) and `GET /api/products/:id`
+  (key `gw:products:detail:<publicId>`). Rationale: the post-SCALE-02 61 req/s
+  ceiling persisted on an identical URL even though the product service list is
+  already cached 5s — the binding leg was the gateway's uncached per-request
+  user-enrichment TCP (`GET_USERS_BY_IDS` → user MySQL, pool 16 ≈ 64 rps).
+  Both routes are user-invariant (no `req.user` in the response), so caching
+  the FINAL exposed payload (public ids applied) is safe and collapses product
+  TCP + user TCP + expose into one local Redis GET. Details: warn-and-continue
+  on any Redis failure (cache down ≠ request fails); not-found detail responses
+  are never cached; `updateProduct`/`deleteProduct` best-effort invalidate the
+  detail key + all list keys (10s TTL bounds staleness regardless). Validation:
+  tsc/eslint clean; ownership spec 7/7 (mock gained a CachedService stub).
+  Runtime self-test (dev stack): list cold 200/0.95s → warm 200/0.22s, detail
+  cold 200/1.17s → warm 200/0.22s, bodies byte-identical except the per-request
+  envelope `timestamp`; `gw:products:detail:*` key observed then expired ≤10s.
+  No FE impact (response shape unchanged). Found during self-test: stale
+  `throttle:*` Redis key with TTL -1 caused a permanent 429 — recorded in
+  snapshot Known Issues (fix scoped to SCALE-05b). Prod-build re-measure done
+  same day (3rd "Recorded baselines" entry in `scripts/load/baseline.mjs`;
+  raw JSON in `scripts/load/results/2026-07-19-scale04-*.json`): anon product
+  list 61 → 798 req/s at c=50 (p50 766ms → 51ms), detail 1692 req/s, and
+  c=500 — previously total collapse — now completes 15132×2xx at 757 req/s
+  with ~3.6% err/timeout; zero 500s, zero pm2 restarts. Cached anon reads are
+  now bound by the single gateway Node process (SCALE-01b is the next lever);
+  uncached auth paths keep their ~102 req/s ceiling from the SCALE-02 run.
+
+- SCALE-02 — per-service DB pool budget under the Aiven-free connection caps
+  (2026-07-19): `ecosystem.config.js` now sets `MYSQL_POOL_SIZE`/`PG_POOL_SIZE`
+  per pm2 app (dotenv never overrides already-set env, so pm2 wins over the
+  shared `local/node{A,B}/.env`). Budget: MySQL product 20 / user 16 / orders
+  16 / social 6 / notification 4 / chat 6 = 68 < `max_connections` 76 (measured
+  live on Aiven free); PG inventory 5 / payments 4 / rewards 3 = 12 < 20 (11
+  already in use when measured). Why a budget instead of one big number: the
+  user's flat `MYSQL_POOL_SIZE=50` across all 6 MySQL services exceeded the 76
+  cap under load → ~35% of responses were HTTP 500 "Too many connections"
+  (probe c=50: 1558×200 + 834×500). With the budget: zero 500s at c=50–500.
+  Measured gains vs the pool=10 baseline (same prod build + pm2, Aiven India
+  ~250ms roundtrip; full numbers in `scripts/load/baseline.mjs` header +
+  `scripts/load/results/2026-07-19T11-23-51-388Z-500.json`): anon product-list
+  ceiling 40 → 61 req/s (bound by the 16-conn user-enrichment pool ≈ 64 req/s
+  theoretical); auth cart 59.6 → 101.7 req/s (0 err at c=500, 3051 completed
+  vs 0 before); 500-profile completed responses S1 213→1314, S2 0→1389;
+  order list (S4) still saturates at c=500 (client timeouts only, no non2xx).
+  Verdict: ~200–300 concurrent degraded (was ≲100–150). Structural note:
+  Aiven free's 76 conns × ~250ms ≈ 300 req/s TOTAL across all services —
+  bigger pools cannot pass this wall; next levers are SCALE-01b (gateway
+  cluster, divide pool budget by instances) and SCALE-03/04 (caching).
+  Ops follow-up for the user: lower `.env` `MYSQL_POOL_SIZE` to ~10 and
+  `PG_POOL_SIZE` to ~5 (dev watch mode reads `.env` directly; the pm2
+  override only protects prod runs).
+
+- SCALE-06 (evidence half) — official concurrency baseline recorded
+  (2026-07-19): ran against a REAL prod build (`npm run build` + pm2 fork ×1
+  per service on the dev machine, Aiven remote DBs, `RATE_LIMIT_DEFAULT_LIMIT`
+  raised to 100000 by the user). Result: **500 concurrent = collapse** — S1
+  completed 213/2000 (p50 9004ms), S2/S3/S4 completed ZERO requests; all
+  failures were client-side connect/timeout errors (zero non2xx, zero
+  service crashes — all 10 pm2 apps stayed online). Capacity probes found a
+  hard **~40 req/s throughput ceiling** on the anon product-list path
+  (identical at c=50/100/200 while p50 grew 1166→2338→4684ms — pure queue
+  saturation), matching `MYSQL_POOL_SIZE=10` × ~250ms Aiven roundtrip; the
+  auth cart path did ~60 req/s (p50 826ms, 0 err at c=50). Verdict recorded
+  in the script header: current stack handles ≲100–150 concurrent with
+  degraded latency; 1k/5k runs skipped as moot. Data directly implicates
+  SCALE-02 (DB pool size) as the first lever, then SCALE-01b (gateway
+  cluster). Raw JSON: `scripts/load/results/2026-07-19T09-53-45-278Z-500.json`.
+  Checkout load (`--write`) intentionally not exercised (would flood Aiven
+  with real orders); contract probe only.
+
+- SCALE-06 (script half) — load-test baseline runner (2026-07-19, sweep): new
+  `scripts/load/baseline.mjs`, an autocannon-based runner (autocannon CLI is
+  the tool actually installed globally; k6 is not). Scenarios: S1 anon
+  `GET /api/products?page=1&limit=20`, S2 anon product detail, S3 auth
+  `GET /api/cart`, S4 auth `GET /api/order/user/:usrId` (cookie JWT from
+  `LOAD_USER`/`LOAD_PASS` env — credentials never hardcoded), S5
+  `POST /api/order` checkout (full load only under `--write`, which creates
+  real COD orders auto-swept by the 24h stale-reservation sweeper; without
+  `--write` a single contract probe runs). Profiles `smoke|500|1k|5k`; summary
+  table (req/s, p50/p95/p99, error %, 429 count) + raw autocannon JSON saved
+  to `scripts/load/results/`. Implementation notes: spawns the autocannon CLI
+  via `node <resolved cli.js>` with NO shell — on Windows `shell:true` mangled
+  the `-H "Cookie: …"` quoting and every auth request 401'd; error % =
+  `(non2xx + socketErrors) / (completed + socketErrors)` since autocannon's
+  `errors` counter is socket-level and can exceed `requests.total`; the
+  checkout product is picked by scanning page 1 for the first product with
+  `availableStock ≥ 1` via `GET /api/inventory/product/:id` (first listed
+  product had no inventory row → "Unable to reserve stock" 400). Smoke-verified
+  2026-07-19: 5/5 scenarios valid (S1/S2/S4 0% err, S3 one transient 502,
+  checkout probe 201 `ord_yUc1wnH80EpxYkaF`). Smoke numbers are explicitly NOT
+  recordable baselines (dev `nest --watch` target, 15 req/s cap). REMAINING:
+  official 500→1k→5k runs against a prod build (pm2 + raised
+  `RATE_LIMIT_DEFAULT_LIMIT`) — user-coordinated; record results in the script
+  header. No FE impact, no migration, no runtime code touched.
+
+- SCALE-01a — Socket.IO Redis adapter on the gateway (2026-07-19, sweep): new
+  `RedisIoAdapter` (`apps/gateway/src/common/redis-io.adapter.ts`) extends
+  NestJS `IoAdapter` and attaches `@socket.io/redis-adapter` (new dep,
+  user-installed) built on two ioredis pub/sub clients using the same
+  `REDIS_HOST/PORT/PASSWORD` env as `@app/cached`. Wired server-wide in gateway
+  `main.ts` (`useWebSocketAdapter` before `listen`), so BOTH WS namespaces
+  (`/chat`, `/notifications`) broadcast through Redis — prerequisite for
+  multi-instance gateway (SCALE-01b). Boot behavior: 3s connect probe; if Redis
+  is unreachable the adapter logs a warn and falls back to the default
+  in-memory adapter (single-instance WS keeps working, gateway never fails to
+  start because of Redis). Both clients carry `error` listeners so an idle
+  Redis drop can't become an uncaught exception (nodeB-crash lesson); ioredis
+  auto-reconnects after boot. No contract change for FE (same origin/port/
+  namespaces/auth). Verified: `tsc --noEmit` + eslint clean; Redis
+  `PUBSUB CHANNELS` shows `socket.io-request/response#/chat#` +
+  `#/notifications#` subscriptions (adapter live); runtime self-test 6/6 —
+  login×2, `POST /api/chat/conversations` (conv\_...), WS connect both
+  namespaces, chat round-trip A→B via room broadcast (`msg_...` received),
+  `/notifications` stays connected.
+
 - Port-bind architecture alignment (2026-07-18): VPS `ss -lntp` audit showed two
   binds violating the "only Nginx is public" rule. (1) chat hardcoded
   `host: "0.0.0.0"` on TCP 3012 → now `TCP_HOST` (`127.0.0.1`) like every other

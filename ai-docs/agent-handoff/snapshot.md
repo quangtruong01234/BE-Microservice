@@ -15,6 +15,7 @@ Base URL: http://localhost:3000 | Swagger: /doc
 
 ## Active Tasks
 
+
 ### 🆔 Public-ID backlog — Stripe-style opaque external ids (decided 2026-07-17)
 
 > Decision (user-approved): adopt **option B** — keep INT/BIGINT PKs and all FKs/
@@ -642,65 +643,116 @@ user/inventory offenders; PERF-05/06 closed 2026-07-07; PERF-11 closed
 > Each item should ship with a k6/autocannon before/after number (SCALE-06).
 > Move to CHANGELOG when shipped, delete the line here.
 
-- [ ] **SCALE-01 — gateway is a single Node process (1 core).**
-      `ecosystem.config.js` runs every service `instances:1, exec_mode:'fork'`; the
-      gateway's one event loop takes ALL HTTP + both WS namespaces (`/chat`,
-      `/notifications`). Biggest bottleneck. Fix in two steps: (a) add
-      `@socket.io/redis-adapter` to both WS gateways (Redis already provisioned via
-      `@app/cached` env) — WITHOUT this, multi-instance gateway breaks WS rooms/
-      emits silently; (b) then scale gateway via pm2 `instances:'max'` cluster mode
-      (HTTP is stateless — JWT cookie, no in-memory session) or N fork instances
-      behind an nginx `upstream` + `least_conn`. WS needs sticky sessions
-      (`ip_hash`) OR polling disabled (`transports:['websocket']` on FE) when going
-      multi-instance. TCP-only services (orders/product/user…) can also multiply —
-      NestJS TCP clients reconnect per instance — but gateway first.
-- [ ] **SCALE-02 — DB pools default to 10 connections/service (ops tuning only;
-      code now env-driven).** MySQL `connectionLimit` is now
-      `Number(MYSQL_POOL_SIZE) || 10` across ALL 6 Node A MySQL pools
-      (`libs/database/src/database.module.ts` for user/product + the inline
-      TypeORM configs in orders/social/notification/chat), PG `max:10`
-      (`postgres-database.module.ts:23`, `PG_POOL_SIZE` env already existed). The
-      earlier hardcode was removed 2026-07-16; the dead `libs/common` raw
-      `mysql/` + `postgres/` pool wrappers (the only other `MYSQL_POOL_SIZE`
-      reader, never wired in) were deleted at the same time. Remaining work is
-      OPS, not code: set `MYSQL_POOL_SIZE`/`PG_POOL_SIZE` (30–50 prod) and raise
-      per Aiven plan — CHECK the Aiven plan's max_connections first; total = pool
-      × service count × pm2 instances, so cluster mode (SCALE-01) multiplies pool
-      consumption.
-- [ ] **SCALE-03 — nginx does zero load absorption.** `nginx/trybuy.conf` has
-      no `limit_req`/`limit_conn` (L7 floods reach Node), no `gzip`, no upstream
-      `keepalive` (new conn per proxied request), no `proxy_cache`. Fix: `limit_req`
-      zone per IP (burst tuned above FE's normal fan-out), `gzip on` for JSON,
-      `keepalive 32` in the upstream block, and a 1–5s micro-cache
-      (`proxy_cache` + `proxy_cache_lock on` = stampede guard) for public GETs
-      (product list/detail, brands, categories) — absorbs most read bursts before
-      Node sees them. Nginx owning gzip means no Node `compression` middleware
-      needed.
-- [ ] **SCALE-04 — hot public product detail reads still uncached in-app.**
-      Brand/category lookup caching closed the PERF-09 overlap on 2026-07-09.
-      Remaining concurrency question: consider product detail cache-aside (short TTL)
-      if SCALE-03 micro-cache is not adopted.
-- [ ] **SCALE-05 — overload failure modes untuned.** (a) `timeout(10000)` on
-      every TCP call is too long under saturation — one slow service parks
-      requests+sockets for 10s and the pileup cascades; drop read paths to 3–5s
-      (keep 10s for checkout/payment writes). (b) Rate-limit guard does Redis
-      INCR(+EXPIRE) on EVERY request and is fail-closed in prod → single Redis is
-      a shared choke/kill switch; verify Redis maxclients/latency under load,
-      consider skipping the guard for `@Public` cacheable GETs once nginx
-      `limit_req` (SCALE-03) owns L7 flood control. (c) No backpressure signal:
-      add a cheap `503` guard (event-loop-delay or in-flight counter) so the
-      gateway sheds load instead of timing out everything at once.
-- [ ] **SCALE-06 — no load-test evidence.** Nothing in the repo proves ANY
-      concurrency number. Add a k6 (or autocannon) script under `scripts/load/`
-      covering: anonymous product list/detail (cache path), logged-in cart+order
-      read, checkout write path; run at 500 → 1k → 5k VU against a prod-like build
-      (`npm run build` + pm2, NOT `nest --watch`). Record p95/p99 + error% in the
-      script header; re-run after each SCALE item to attribute gains. Gate: declare
-      "handles N concurrent" only from these numbers, never from code reading.
+- [x] **SCALE-01 — DONE 2026-07-19** (see CHANGELOG). **(a)** `RedisIoAdapter`
+      (`apps/gateway/src/common/redis-io.adapter.ts`, `@socket.io/redis-adapter`
+      + 2 ioredis clients off `REDIS_*` env) wired via `useWebSocketAdapter` in
+      gateway `main.ts` — covers both WS namespaces; falls back to in-memory
+      with a warn if Redis is down at boot. Runtime-verified 6/6.
+      **(b)** gateway cluster mode shipped env-gated in `ecosystem.config.js`:
+      `GATEWAY_INSTANCES=N pm2 start … --env production` → N cluster workers
+      (default 1 = fork, current behavior unchanged). Verified with ×4: all
+      workers online 0 restarts, 0 non-2xx under load, and 8/8 Socket.IO
+      connects to `/chat` with `transports:["websocket"]` across workers.
+      **CAVEATS before enabling in prod:** (1) FE MUST connect websocket-only
+      (`transports:["websocket"]`) on `/chat` + `/notifications` — polling
+      handshake breaks under cluster round-robin (handoff entry written);
+      (2) DB pool totals multiply per instance — gateway holds no SQL pool so
+      the SCALE-02 budget is safe, but re-check if other services scale;
+      (3) dev-machine measurement showed NO stable gain (4th baseline entry:
+      428–923 req/s noisy vs 790 stable single) because autocannon + 13 Node
+      processes share 12 cores — re-measure on the target VPS with an external
+      load source before choosing N.
+- [x] **SCALE-02 — DONE 2026-07-19** (see CHANGELOG): per-service DB pool
+      budget set via pm2 `env` in `ecosystem.config.js` (dotenv never overrides
+      already-set env, so pm2 wins over `local/node{A,B}/.env`). MySQL: product
+      20 / user 16 / orders 16 / social 6 / notification 4 / chat 6 = 68 <
+      Aiven-free `max_connections` 76; PG: inventory 5 / payments 4 / rewards 3
+      = 12 < 20. A flat `MYSQL_POOL_SIZE=50` (all 6 services) blew the 76 cap
+      under load → ~35% HTTP 500 "Too many connections"; the budget removes all
+      500s. Measured: product-list ceiling 40 → 61 req/s, auth cart 59.6 →
+      101.7 req/s (full numbers in `scripts/load/baseline.mjs` header).
+      Aiven-free hard wall ≈ 76 conns / 250ms ≈ 300 req/s across ALL services —
+      next levers are SCALE-01b + SCALE-03/04 caching, not bigger pools.
+      Cluster note: total = pool × instances; divide before enabling cluster.
+      OPS: user should lower `.env` `MYSQL_POOL_SIZE`/`PG_POOL_SIZE` back to
+      ~10/5 for dev watch mode (pm2 override only protects prod).
+- [x] **SCALE-03 — DONE 2026-07-20** (see CHANGELOG): `nginx/trybuy.conf` (+
+      `trybuy-local.conf` mirror) now has per-IP `limit_req` 30r/s burst 60
+      (`limit_req_status 429`; callbacks + `/socket.io/` exempt), `limit_conn 32`,
+      `gzip` for JSON, upstream `keepalive 32` (`Connection ""`), and a 5s
+      `proxy_cache` micro-cache with `proxy_cache_lock` on EXACTLY the four
+      @Public user-invariant catalog GETs (list, `prod_*` detail, brands,
+      categories — never widen the regex to authenticated routes). Bonus: the
+      SCALE-05 remainder shipped too — `RATE_LIMIT_SKIP_PUBLIC_GET=true` (env,
+      default off; set in prod ONLY behind nginx limit_req) skips the Redis
+      counter for @Public GET/HEAD routes without an explicit `@RateLimit`.
+      Verified: prod conf `nginx -t` green (dockerized); live docker nginx →
+      MISS→HIT, gzip on, auth routes uncached, burst 150 → 65×200/85×429
+      absorbed at nginx. Deploy: create `/var/cache/nginx/trybuy` (step in conf
+      header) + tune rate/burst per OQ-6 if FE fan-out trips 429.
+- [x] **SCALE-04 — DONE 2026-07-19** (see CHANGELOG): gateway full-response
+      micro-cache (Redis, TTL 10s) on the two @Public user-invariant product
+      reads `GET /api/products` (key `gw:products:list:<stable-sorted-query>`)
+      and `GET /api/products/:id` (`gw:products:detail:<publicId>`) in
+      `apps/gateway/src/product/product.service.ts` (+ `CachedModule` import).
+      One local Redis GET replaces product TCP + user-enrichment TCP + expose
+      work — the measured 61 req/s ceiling was the gateway's uncached
+      per-request `GET_USERS_BY_IDS` leg (user pool 16 ≈ 64 rps), not the
+      already-cached product search. Cache stores the FINAL exposed payload;
+      warn-and-continue on Redis failure; not-found never cached;
+      update/delete invalidate detail + all list keys (10s TTL bounds
+      staleness anyway). Runtime-verified: cold 0.95–1.17s → warm 0.22s,
+      bodies identical minus envelope timestamp, key expires at 10s.
+      Prod-build re-measure (3rd baseline entry): anon list 61 → **798 req/s**
+      (c=50, p50 766ms→51ms), detail 1692 req/s, c=500 now survives (757
+      req/s, ~3.6% err; was total collapse). Anon reads are now bound by the
+      single gateway Node process → SCALE-01b is the next lever; auth paths
+      stay ~102 req/s (uncached).
+- [x] **SCALE-05 — DONE 2026-07-19** (see CHANGELOG): overload failure modes
+      tuned. **(a)** `TCP_TIMEOUT_MS.READ=5000/WRITE=10000` in
+      `libs/constant/tcp-timeout.constant.ts`; all 172 gateway `timeout(10000)`
+      sites reclassified per enclosing method — pure reads → 5s, mutations and
+      anything with an external-API leg (GHN/ZaloPay/VNPay/shipping master-data,
+      invoice, payment-url) keep 10s. **(b)** rate-limit guard now uses one
+      atomic Lua `incrementWithWindow` (`CachedService`) — INCR + EXPIRE-if-no-TTL
+      in one script, fixing the TTL -1 permanent-429 bug and self-healing
+      already-stuck keys. **(c)** `backpressureMiddleware`
+      (`apps/gateway/src/common/backpressure.ts`, registered before body parsing)
+      sheds 503 + `Retry-After` when event-loop mean delay exceeds
+      `BACKPRESSURE_MAX_EVENT_LOOP_DELAY_MS` (default 500ms, 1s sampling);
+      payment/GHN callbacks + `/live|/ready|/health` exempt; kill switch
+      `BACKPRESSURE_ENABLED=false`. Runtime-verified (TTL self-heal −1→59,
+      429 enforcement intact, auth+anon reads 200); backpressure unit-tested 4/4.
+      The remainder (skip the guard for `@Public` cacheable GETs behind nginx
+      `limit_req`) shipped with SCALE-03 (`RATE_LIMIT_SKIP_PUBLIC_GET`).
+- [ ] **SCALE-06 — no load-test evidence.** Script SHIPPED 2026-07-19 (see
+      CHANGELOG): `scripts/load/baseline.mjs` (autocannon runner — autocannon
+      is globally installed, k6 is not). Scenarios: anon product list/detail,
+      auth cart read + order list (cookie JWT), checkout write (`--write` =
+      real COD orders, auto-swept 24h; without it a single contract probe).
+      Profiles `smoke|500|1k|5k`; raw JSON saved to `scripts/load/results/`.
+      Smoke-verified 2026-07-19 (5/5 scenarios valid, checkout probe 201).
+      **BASELINE RECORDED 2026-07-19** (prod build + pm2, rate limit raised —
+      full numbers in the script header "Recorded baselines"): 500 concurrent
+      = COLLAPSE (S2–S4 zero completed responses, pure client timeouts, no
+      service crash); capacity probes show a hard ~40 req/s ceiling on the
+      anon product-list path at c=50/100/200 with latency growing linearly
+      (p50 1.2s→4.7s) — consistent with MYSQL_POOL_SIZE=10 × ~250ms Aiven
+      roundtrip; auth cart path ~60 req/s. Verdict: handles ≲100–150
+      concurrent degraded; 500+ collapses. 1k/5k runs skipped as moot until
+      SCALE-01b/02/03 land. Post-SCALE-02 re-run recorded 2026-07-19 (2nd
+      entry in the script header): ceiling 61 req/s, cart 101.7 req/s, zero
+      500s. Post-SCALE-04 re-run recorded 2026-07-19 (3rd entry): anon list
+      798 req/s / detail 1692 req/s cached, c=500 survives at ~3.6% err.
+      Post-SCALE-01b probe recorded 2026-07-19 (4th entry): cluster ×4 correct
+      (0 non-2xx, WS 8/8) but throughput noisy/no stable gain on the shared
+      dev machine — VPS re-measure required before GATEWAY_INSTANCES>1.
+      REMAINING: re-run after each further SCALE item to attribute gains.
 
-**Recommended order:** SCALE-01a (redis-adapter) → SCALE-06 baseline → SCALE-02
-→ SCALE-01b (cluster) → SCALE-03 → SCALE-04 → SCALE-05, re-running the k6
-baseline between steps. **Cost note:** all items are config/infra-level on the
+**Recommended order:** all items except SCALE-06 re-runs are DONE (01/02/03/04/05
+shipped). Remaining: SCALE-06 re-run behind nginx on the target VPS (attributes
+SCALE-03 gains — local docker nginx verified behavior, not throughput) and the
+GATEWAY_INSTANCES>1 VPS re-measure. **Cost note:** all items are config/infra-level on the
 existing single-VPS+Aiven+Redis stack — no new paid services required; true
 10k concurrent sustained likely also needs a bigger VPS/Aiven tier, which the
 SCALE-06 numbers will prove or disprove.
@@ -756,7 +808,7 @@ SCALE-06 numbers will prove or disprove.
 - Low-stock endpoint (unused-API sweep, 2026-07-06): `GET /api/inventory/low-stock` — `@Roles("shop","admin")`. Admin → all low-stock rows; shop → auto-scoped server-side (gateway first fetches the seller's productIds via `PRODUCT_MESSAGE_PATTERNS.GET_PRODUCT_IDS_BY_SELLER`, empty → `[]` without hitting inventory). Returns `Inventory[]` (max 100, `availableStock ASC`, `isActive` only; bigint ids serialize as strings). Since 2026-07-10 each row also carries a denormalized `productName: string | null` (gateway batch `PRODUCT_FIND_BY_IDS` enrichment, best-effort — null for deleted products or on product-service failure). Remaining HTTP inventory surface: `POST /api/inventory`, `GET /api/inventory/product/:productId` (`@Public`), `PUT /api/inventory/:id` — list/sku/by-id/delete/check-stock/reserve/release HTTP routes were removed (internal TCP paths unchanged).
 - CORS: one shared gateway delegate `apps/gateway/src/common/cors.ts` (`gatewayCorsOptions`) used by HTTP (`main.ts` `enableCors`) + both WS gateways (`/chat`, `/notifications`). Allows: no-Origin requests, any origin in `FRONTEND_URL` (comma-split), and — only when `NODE_ENV !== "production"` — any `localhost`/`127.0.0.1` origin on any port. Prod is strict (localhost bypass off) → every allowed web origin MUST be in `FRONTEND_URL`. Sockets live on the gateway origin/port (3000), namespaces `/chat`+`/notifications`, connect `withCredentials:true`.
 - Cloudinary: client uploads direct; server signs via `POST /api/upload/signature`; allowed folders are `trybuy/products`, `trybuy/posts`, and existing storefront avatar folder `avatars`. Upload `publicId` must be a basename matching `${userId}_...` (server generates one if omitted); delete `public_id` must be full `<allowed-folder>/${userId}_...` unless caller role is admin. Invalid folder/path → 400; foreign prefix → 403 before Cloudinary is called. Delete ownership enforcement runtime-verified 2026-07-08 (user 17 deleting a `18_` leaf → 403; disallowed folder → 400; no-folder public_id → 400; unauth → 401; all reject inside `generateDeleteSignature` before any Cloudinary destroy). Orphan cleanup of dropped media on entity update is now server-side (SEC-M7, 2026-07-11 — `CloudinaryService.destroyAssets` in `libs/common/src/cloudinary/`, wired into social/product/user mutations post-commit; needs `CLOUDINARY_CLOUD_NAME/API_KEY/API_SECRET` in the service env or it logs a warn and no-ops). Upload signatures now sign `allowed_formats` (SEC-M8): products/avatars `jpg,png,webp`, posts `jpg,png,webp,mp4`; FE must forward that returned field to Cloudinary with the signature. Upload folders switch by `NODE_ENV` (2026-07-15) so ONE shared Cloudinary account separates prod from dev media: `NODE_ENV==="production"` → `trybuy-prod/products` + `trybuy-prod/posts`; any other env (dev/test) → `trybuy/products` + `trybuy/posts`. Avatars always stay in the shared legacy `avatars` folder. Prefix derived in `getCloudinaryFolderPrefix()` (`libs/common/src/cloudinary/cloudinary.constants.ts`) — no Cloudinary folder env var to set (prod already sets `NODE_ENV=production` via `.env` + pm2 `env_production`). DTO validators + the FE still use the STABLE LOGICAL folders (`trybuy/products`, `trybuy/posts`, `avatars`); the server resolves logical→physical at runtime (`resolvePhysicalUploadFolder`) for signing, delete-allowlist, orphan-destroy, and delivery-URL validation. FE contract unchanged (server-authoritative folder is returned in the signature response and echoed into the Cloudinary upload form) — no FE change needed.
-- Deploy runtime: host PM2 runs compiled NestJS apps from `ecosystem.config.js`; Docker Compose runs Redis/RabbitMQ only (`docker compose up -d redis rabbitmq`); MySQL/PostgreSQL are external Aiven services; internal TCP/payments callback listeners bind to `127.0.0.1` (chat's hardcoded `0.0.0.0` and product's stray HTTP bind on 3106 fixed 2026-07-18); gateway bind host is `GATEWAY_HOST` env, default `0.0.0.0` for dev — **set `GATEWAY_HOST=127.0.0.1` in the VPS env** so only Nginx is public; production Nginx exposes the gateway on `127.0.0.1:3000` only (including `/zalopay/callback` and `/vnpay/callback` facades); VPS firewall/security group must expose only 80/443 publicly; set the real domain in `nginx/trybuy.conf`.
+- Deploy runtime: host PM2 runs compiled NestJS apps from `ecosystem.config.js`; Docker Compose runs Redis/RabbitMQ only (`docker compose up -d redis rabbitmq`); MySQL/PostgreSQL are external Aiven services; internal TCP/payments callback listeners bind to `127.0.0.1` (chat's hardcoded `0.0.0.0` and product's stray HTTP bind on 3106 fixed 2026-07-18); gateway bind host is `GATEWAY_HOST` env, default `0.0.0.0` for dev — **set `GATEWAY_HOST=127.0.0.1` in the VPS env** so only Nginx is public; production Nginx exposes the gateway on `127.0.0.1:3000` only (including `/zalopay/callback` and `/vnpay/callback` facades); VPS firewall/security group must expose only 80/443 publicly; set the real domain in `nginx/trybuy.conf`. Nginx now owns L7 load absorption (SCALE-03): per-IP `limit_req` 30r/s burst 60 + `limit_conn 32`, gzip, upstream keepalive 32, and a 5s micro-cache on the four @Public catalog GETs — at deploy also `mkdir /var/cache/nginx/trybuy` (steps in the conf header) and set `RATE_LIMIT_SKIP_PUBLIC_GET=true` in the gateway prod env (ONLY behind nginx; skips the Redis rate-limit counter for @Public GETs without explicit `@RateLimit`).
 - CI: `.github/workflows/ci.yml` validates PRs and pushes to `main` only; it runs npm install/lint/typecheck/Jest/build/PM2 syntax/Compose config/whitespace checks with safe dummy env values. It does not deploy, publish Docker images, connect to Aiven, run migrations, or require repository secrets.
 - Database migration cutoff (2026-07-17): all schema work through PUBID-07 is
   squashed into `database/prod-baseline-20260717/`. Standalone historical
