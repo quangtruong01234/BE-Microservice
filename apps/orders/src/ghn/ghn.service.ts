@@ -20,6 +20,7 @@ import {
   GhnOrderDetail,
   GhnProvince,
   GhnReceiverUpdate,
+  GhnResolvedAddress,
   GhnResponse,
   GhnShippingItem,
   GhnSwitchStatusResponse,
@@ -63,6 +64,7 @@ export class GhnService {
     shippingAddress: string,
     codAmount: number,
     items: GhnShippingItem[],
+    resolvedIds?: GhnResolvedAddress,
   ): Promise<Record<string, unknown>> {
     const [
       to_name,
@@ -73,18 +75,25 @@ export class GhnService {
       to_province_name,
     ] = shippingAddress.split("|").map((part) => (part ?? "").trim());
 
-    if (!to_ward_name || !to_district_name || !to_province_name) {
-      throw new BadRequestException(GHN_MESSAGE.ADDRESS_MISSING_PARTS);
-    }
-
     // GHN's create/preview endpoints require the numeric to_district_id +
-    // to_ward_code; the checkout only stores free-text names, so resolve them
-    // against GHN master data here (robust to diacritics / prefix variants).
-    const { districtId, wardCode } = await this.resolveAddressToGhnIds(
-      to_province_name,
-      to_district_name,
-      to_ward_name,
-    );
+    // to_ward_code. Prefer the exact ids captured at checkout (from the FE GHN
+    // address dropdowns); only fall back to resolving the free-text names against
+    // master data when the checkout did not supply them.
+    let districtId: number;
+    let wardCode: string;
+    if (resolvedIds) {
+      districtId = resolvedIds.districtId;
+      wardCode = resolvedIds.wardCode;
+    } else {
+      if (!to_ward_name || !to_district_name || !to_province_name) {
+        throw new BadRequestException(GHN_MESSAGE.ADDRESS_MISSING_PARTS);
+      }
+      ({ districtId, wardCode } = await this.resolveAddressToGhnIds(
+        to_province_name,
+        to_district_name,
+        to_ward_name,
+      ));
+    }
 
     return {
       to_name,
@@ -118,6 +127,7 @@ export class GhnService {
         price: Number(i.price),
         weight: i.weight ?? undefined,
       })),
+      this.toResolvedAddress(order.toDistrictId, order.toWardCode),
     );
 
     const response = await firstValueFrom(
@@ -142,12 +152,14 @@ export class GhnService {
     shippingAddress: string,
     codAmount: number,
     items: GhnShippingItem[],
+    resolvedIds?: GhnResolvedAddress,
   ): Promise<ShippingFeePreview> {
     const apiUrl = requireEnv("GHN_API_URL");
     const body = await this.buildShippingOrderBody(
       shippingAddress,
       codAmount,
       items,
+      resolvedIds,
     );
 
     const response = await firstValueFrom(
@@ -534,6 +546,19 @@ export class GhnService {
     }
     partialMatches.sort((a, b) => a.score - b.score);
     return [...exactMatches, ...partialMatches.map((match) => match.candidate)];
+  }
+
+  // Build a GhnResolvedAddress only when both the district id and ward code are
+  // present. A partial pair is treated as "not supplied" so the caller falls
+  // back to free-text resolution rather than sending GHN an incomplete location.
+  private toResolvedAddress(
+    districtId: number | null | undefined,
+    wardCode: string | null | undefined,
+  ): GhnResolvedAddress | undefined {
+    if (typeof districtId === "number" && districtId > 0 && wardCode) {
+      return { districtId, wardCode };
+    }
+    return undefined;
   }
 
   private async resolveAddressToGhnIds(

@@ -24,6 +24,20 @@ import { ORDER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { Order, OrderStatus } from "./entity/order.entity";
 import { ReturnRequestStatus } from "./entity/order-return-request.entity";
 import { VoucherDiscountType } from "./entity/voucher.entity";
+import { GhnResolvedAddress } from "./ghn/ghn.types";
+
+// Build the exact GHN location pair from a checkout payload only when both the
+// district id and ward code are present; a partial pair is treated as absent so
+// the order service falls back to free-text address resolution.
+function toGhnResolvedAddress(
+  toDistrictId: number | null | undefined,
+  toWardCode: string | null | undefined,
+): GhnResolvedAddress | undefined {
+  if (typeof toDistrictId === "number" && toDistrictId > 0 && toWardCode) {
+    return { districtId: toDistrictId, wardCode: toWardCode };
+  }
+  return undefined;
+}
 
 @UseFilters(new HttpToRpcExceptionFilter())
 @Controller("orders")
@@ -41,6 +55,8 @@ export class OrdersController {
       userId: number;
       paymentMethod: PaymentMethod;
       shippingAddress: string;
+      toDistrictId?: number | null;
+      toWardCode?: string | null;
       items: {
         productId: number;
         productName: string;
@@ -65,6 +81,7 @@ export class OrdersController {
       shippingAddress,
       items,
       voucherCode,
+      toGhnResolvedAddress(payload.toDistrictId, payload.toWardCode),
     );
   }
 
@@ -75,6 +92,8 @@ export class OrdersController {
       userId: number;
       paymentMethod: PaymentMethod;
       shippingAddress: string;
+      toDistrictId?: number | null;
+      toWardCode?: string | null;
       items: {
         productId: number;
         productName: string;
@@ -93,6 +112,7 @@ export class OrdersController {
       paymentMethod,
       shippingAddress,
       items,
+      toGhnResolvedAddress(payload.toDistrictId, payload.toWardCode),
     );
   }
 
@@ -305,6 +325,8 @@ export class OrdersController {
     @Payload()
     payload: {
       shippingAddress: string;
+      toDistrictId?: number | null;
+      toWardCode?: string | null;
       items: {
         productName?: string;
         quantity: number;
@@ -316,6 +338,7 @@ export class OrdersController {
     return this.ordersService.calculateShippingFee(
       payload.shippingAddress,
       payload.items,
+      toGhnResolvedAddress(payload.toDistrictId, payload.toWardCode),
     );
   }
 

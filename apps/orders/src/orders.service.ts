@@ -42,6 +42,7 @@ import { GhnService } from "./ghn/ghn.service";
 import {
   GhnOrderDetail,
   GhnReceiverUpdate,
+  GhnResolvedAddress,
   GhnShippingItem,
   ShippingFeePreview,
 } from "./ghn/ghn.types";
@@ -136,6 +137,7 @@ export class OrdersService {
       skuLabel?: string | null;
     }>,
     voucherCode?: string | null,
+    ghnAddress?: GhnResolvedAddress,
   ): Promise<Order> {
     // Single-seller path: gateway enriches every item with the same sellerId
     const sellerId = items[0]?.sellerId;
@@ -186,6 +188,7 @@ export class OrdersService {
       shippingAddress,
       paymentMethod === PaymentMethod.COD ? itemsTotal : 0,
       items,
+      ghnAddress,
     );
     // Discount applies to goods only — never to shipping — and can never drive
     // the total below the shipping fee.
@@ -208,6 +211,8 @@ export class OrdersService {
               shippingFee,
               codAmount: paymentMethod === PaymentMethod.COD ? total : null,
               reservationKey,
+              toDistrictId: ghnAddress?.districtId ?? null,
+              toWardCode: ghnAddress?.wardCode ?? null,
               voucherCode: voucherResult ? voucherResult.voucher.code : null,
               discountAmount: voucherResult ? discountAmount : null,
             }),
@@ -509,6 +514,7 @@ export class OrdersService {
       productImage?: string | null;
       skuLabel?: string | null;
     }>,
+    ghnAddress?: GhnResolvedAddress,
   ): Promise<Order[]> {
     // Check stock in inventory for all items before creating any order
     for (const item of items) {
@@ -560,6 +566,7 @@ export class OrdersService {
         shippingAddress,
         paymentMethod === PaymentMethod.COD ? sellerItemsTotal : 0,
         sellerItems,
+        ghnAddress,
       );
       shippingFeeBySeller.set(sellerId, fee);
     }
@@ -610,6 +617,8 @@ export class OrdersService {
               shippingFee,
               codAmount: paymentMethod === PaymentMethod.COD ? total : null,
               reservationKey: reservationKeyBySeller.get(sellerId),
+              toDistrictId: ghnAddress?.districtId ?? null,
+              toWardCode: ghnAddress?.wardCode ?? null,
             }),
           );
 
@@ -810,6 +819,7 @@ export class OrdersService {
       price: number;
       weight?: number;
     }>,
+    resolvedIds?: GhnResolvedAddress,
   ): Promise<number> {
     try {
       const preview = await this.ghnService.previewShippingFee(
@@ -823,6 +833,7 @@ export class OrdersService {
             weight: i.weight,
           }),
         ),
+        resolvedIds,
       );
       return preview.shippingFee;
     } catch (err) {
@@ -841,6 +852,7 @@ export class OrdersService {
       price?: number;
       weight?: number;
     }>,
+    resolvedIds?: GhnResolvedAddress,
   ): Promise<ShippingFeePreview> {
     return this.ghnService.previewShippingFee(
       shippingAddress,
@@ -853,6 +865,7 @@ export class OrdersService {
           weight: i.weight,
         }),
       ),
+      resolvedIds,
     );
   }
 

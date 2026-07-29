@@ -112,6 +112,27 @@ export class Order {
   })
   ghnOrderCode!: string | null;
 
+  // GHN numeric location ids captured at checkout (from the FE address dropdowns,
+  // GET /api/shipping/districts|wards). When both are set the waybill is created
+  // by exact GHN id, avoiding the best-effort free-text resolution. Null on legacy
+  // orders and when the FE did not supply them → free-text fallback still applies.
+  @Column({
+    name: "to_district_id",
+    type: "int",
+    nullable: true,
+    default: null,
+  })
+  toDistrictId!: number | null;
+
+  @Column({
+    name: "to_ward_code",
+    type: "varchar",
+    length: 20,
+    nullable: true,
+    default: null,
+  })
+  toWardCode!: string | null;
+
   @Column({ name: "reservation_key", type: "varchar", length: 36 })
   reservationKey!: string;
 

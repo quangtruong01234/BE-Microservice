@@ -1,3 +1,10 @@
+// Exact GHN location ids for a delivery address, captured at checkout. When
+// present they bypass the best-effort free-text master-data resolution.
+export interface GhnResolvedAddress {
+  districtId: number;
+  wardCode: string;
+}
+
 export interface GhnResponseData {
   order_code?: string;
   total_fee?: number;
