@@ -1061,10 +1061,12 @@ export class ProductService {
       const product = await this.fetchProductForAccess(productId);
       const internalProductId = Number(product.id);
       const inventory = await firstValueFrom(
-        this.inventoryClient.send<unknown>(
-          INVENTORY_MESSAGE_PATTERNS.INVENTORY_FIND_BY_PRODUCT_ID,
-          internalProductId,
-        ),
+        this.inventoryClient
+          .send<unknown>(
+            INVENTORY_MESSAGE_PATTERNS.INVENTORY_FIND_BY_PRODUCT_ID,
+            internalProductId,
+          )
+          .pipe(timeout(TCP_TIMEOUT_MS.READ)),
       ).catch((err: unknown) => {
         this.logger.warn(
           `Inventory service error for product ID ${productId}: ${err instanceof Error ? err.message : String(err)}`,
@@ -1301,10 +1303,12 @@ export class ProductService {
 
       // Fetch inventory data for the page in a single batch TCP call
       const inventoryItems = (await firstValueFrom(
-        this.inventoryClient.send(
-          INVENTORY_MESSAGE_PATTERNS.INVENTORY_GET_BY_PRODUCT_IDS,
-          productIds,
-        ),
+        this.inventoryClient
+          .send(
+            INVENTORY_MESSAGE_PATTERNS.INVENTORY_GET_BY_PRODUCT_IDS,
+            productIds,
+          )
+          .pipe(timeout(TCP_TIMEOUT_MS.READ)),
       )) as unknown as InventoryData[];
 
       // Create inventory map
@@ -1351,10 +1355,12 @@ export class ProductService {
     try {
       const product = await this.fetchProductForAccess(productId);
       return (await firstValueFrom(
-        this.inventoryClient.send(
-          INVENTORY_MESSAGE_PATTERNS.INVENTORY_CHECK_STOCK,
-          { productId: Number(product.id), quantity },
-        ),
+        this.inventoryClient
+          .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_CHECK_STOCK, {
+            productId: Number(product.id),
+            quantity,
+          })
+          .pipe(timeout(TCP_TIMEOUT_MS.READ)),
       )) as unknown;
     } catch (error) {
       this.logger.error(
