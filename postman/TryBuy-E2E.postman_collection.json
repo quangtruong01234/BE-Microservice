@@ -1,0 +1,2510 @@
+{
+  "info": {
+    "_postman_id": "trybuy-e2e-automation",
+    "name": "TryBuy E2E Automation",
+    "description": "Collection Runner automation for TryBuy. Each 🎯 flow folder starts with a role login and chains a full end-to-end journey — open the folder, click **Run**, and it executes every step top-to-bottom, capturing ids into collection variables and asserting each response.\n\n**Before running:** fill the four *Password variables (buyerPassword / sellerPassword / adminPassword / shippingPassword) — credentials are in ../.agent-local/test-accounts.md and are NOT committed. Switch dev↔prod by editing baseUrl/rootUrl (reuses the TryBuy Local/Prod environments).\n\nAuth is a HttpOnly cookie; Postman's cookie jar carries it between steps and each in-flow Login swaps the active role.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "🛒 Buyer flow (role: user)",
+      "id": "e2e-000c",
+      "description": "Full storefront purchase journey: browse -> cart -> address -> checkout (COD) -> view -> cancel. Self-contained; needs at least one active product in the catalog.",
+      "item": [
+        {
+          "name": "Login (buyer)",
+          "id": "e2e-0000",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/user/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "user",
+                "login"
+              ]
+            },
+            "description": "Sets the HttpOnly access_token cookie for the buyer role. Fill the buyerPassword variable first (see ../.agent-local/test-accounts.md).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{buyerUsername}}\",\n  \"password\": \"{{buyerPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"buyer login 2xx\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "if (payload && payload.id) { pm.collectionVariables.set(\"e2eBuyerId\", payload.id); console.log(\"buyer id:\", payload.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get me",
+          "id": "e2e-0001",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/user/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "user",
+                "me"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"me 200\", () => pm.response.code === 200 || pm.expect(pm.response.code).to.eql(200));",
+                  "if (payload && payload.id) pm.collectionVariables.set(\"e2eBuyerId\", payload.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Browse products",
+          "id": "e2e-0002",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/products?page=1&limit=5",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "products"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "5"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"products 200\", () => pm.expect(pm.response.code).to.eql(200));",
+                  "pm.test(\"at least one product\", () => pm.expect(list.length).to.be.above(0));",
+                  "const p = list[0];",
+                  "pm.collectionVariables.set(\"e2eProductId\", p.id);",
+                  "// price is best-effort; server re-prices at checkout anyway",
+                  "pm.collectionVariables.set(\"e2eProductName\", p.name || \"E2E product\");",
+                  "console.log(\"picked product:\", p.id, p.name);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get product detail",
+          "id": "e2e-0003",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/products/{{e2eProductId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "products",
+                "{{e2eProductId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"detail 200\", () => pm.expect(pm.response.code).to.eql(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Add to cart",
+          "id": "e2e-0004",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/cart",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "cart"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"{{e2eProductId}}\",\n  \"quantity\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"add to cart 2xx\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get cart",
+          "id": "e2e-0005",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/cart",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "cart"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"cart 200\", () => pm.expect(pm.response.code).to.eql(200));",
+                  "const items = (payload && payload.items) || [];",
+                  "if (items.length) pm.collectionVariables.set(\"e2eCartItemId\", items[0].id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create shipping address",
+          "id": "e2e-0006",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/user/me/addresses",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "user",
+                "me",
+                "addresses"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"recipientName\": \"E2E Buyer\",\n  \"phone\": \"0900000000\",\n  \"addressLine\": \"12 Nguyen Hue\",\n  \"provinceId\": 202,\n  \"provinceName\": \"Hồ Chí Minh\",\n  \"districtId\": 1442,\n  \"districtName\": \"Quận 1\",\n  \"wardCode\": \"20101\",\n  \"wardName\": \"Phường Bến Nghé\",\n  \"isDefault\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"address 2xx\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "if (payload && payload.id) pm.collectionVariables.set(\"e2eAddressId\", payload.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Preview shipping fee",
+          "id": "e2e-0007",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/order/shipping-fee",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order",
+                "shipping-fee"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"shippingAddress\": \"E2E Buyer|0900000000|12 Nguyen Hue|Phường Bến Nghé|Quận 1|Hồ Chí Minh\",\n  \"items\": [\n    {\n      \"productName\": \"{{e2eProductName}}\",\n      \"quantity\": 1,\n      \"weight\": 500\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"fee 2xx\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create order (COD)",
+          "id": "e2e-0008",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/order",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order"
+              ]
+            },
+            "description": "COD order — no payment gateway redirect. Reserves stock; status PENDING.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"paymentMethod\": \"cod\",\n  \"shippingAddress\": \"E2E Buyer|0900000000|12 Nguyen Hue|Phường Bến Nghé|Quận 1|Hồ Chí Minh\",\n  \"items\": [\n    {\n      \"productId\": \"{{e2eProductId}}\",\n      \"productName\": \"{{e2eProductName}}\",\n      \"quantity\": 1\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"order created 2xx\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "if (payload && payload.id) { pm.collectionVariables.set(\"e2eOrderId\", payload.id); console.log(\"order:\", payload.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get my order",
+          "id": "e2e-0009",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/order/{{e2eOrderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order",
+                "{{e2eOrderId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"order 200\", () => pm.expect(pm.response.code).to.eql(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "My orders (status counts)",
+          "id": "e2e-000a",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/order/user/{{e2eBuyerId}}/status-counts",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order",
+                "user",
+                "{{e2eBuyerId}}",
+                "status-counts"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"counts 200\", () => pm.expect(pm.response.code).to.eql(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cancel order",
+          "id": "e2e-000b",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/order/{{e2eOrderId}}/cancel",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order",
+                "{{e2eOrderId}}",
+                "cancel"
+              ]
+            },
+            "description": "Releases the reserved stock — clean terminal state for a repeatable run."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"cancel 2xx\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "🏪 Seller flow (role: shop)",
+      "id": "e2e-000n",
+      "description": "Catalog management journey: pick a category -> create product -> view/update -> shop stats -> price suggestion -> read own orders. Self-contained; order fulfilment lives in the Full lifecycle folder (needs a buyer order).",
+      "item": [
+        {
+          "name": "Login (seller)",
+          "id": "e2e-000d",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/user/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "user",
+                "login"
+              ]
+            },
+            "description": "Sets the HttpOnly access_token cookie for the seller role. Fill the sellerPassword variable first (see ../.agent-local/test-accounts.md).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{sellerUsername}}\",\n  \"password\": \"{{sellerPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"seller login 2xx\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "if (payload && payload.id) { pm.collectionVariables.set(\"e2eSellerId\", payload.id); console.log(\"seller id:\", payload.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List categories",
+          "id": "e2e-000e",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/products/categories",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "products",
+                "categories"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"categories 200\", () => pm.expect(pm.response.code).to.eql(200));",
+                  "const cats = Array.isArray(list) ? list : [];",
+                  "if (cats.length) pm.collectionVariables.set(\"e2eCategoryId\", cats[0].id); else pm.collectionVariables.set(\"e2eCategoryId\", 1);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create product",
+          "id": "e2e-000f",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/products",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "products"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"E2E Test Product\",\n  \"description\": \"Created by the Postman E2E seller flow.\",\n  \"price\": 199000,\n  \"stockQuantity\": 25,\n  \"sku\": \"{{e2eSku}}\",\n  \"categoryIds\": [{{e2eCategoryId}}],\n  \"condition\": \"new\",\n  \"weight\": 500\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(\"e2eSku\", \"E2E-\" + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"product created 2xx\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "if (payload && payload.id) { pm.collectionVariables.set(\"e2eSellerProductId\", payload.id); console.log(\"product:\", payload.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get created product",
+          "id": "e2e-000g",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/products/{{e2eSellerProductId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "products",
+                "{{e2eSellerProductId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"product 200\", () => pm.expect(pm.response.code).to.eql(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update product price",
+          "id": "e2e-000h",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/products/{{e2eSellerProductId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "products",
+                "{{e2eSellerProductId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"price\": 179000\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"update 2xx\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Shop stats",
+          "id": "e2e-000i",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/products/shop/stats",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "products",
+                "shop",
+                "stats"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"stats 200\", () => pm.expect(pm.response.code).to.eql(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Price suggestion",
+          "id": "e2e-000j",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/products/price-suggestion?categoryId={{e2eCategoryId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "products",
+                "price-suggestion"
+              ],
+              "query": [
+                {
+                  "key": "categoryId",
+                  "value": "{{e2eCategoryId}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"suggestion 2xx\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "My (seller) orders",
+          "id": "e2e-000k",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/order/seller",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order",
+                "seller"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"seller orders 200\", () => pm.expect(pm.response.code).to.eql(200));",
+                  "const orders = Array.isArray(list) ? list : [];",
+                  "if (orders.length) pm.collectionVariables.set(\"e2eSellerOrderId\", orders[0].id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Seller analytics",
+          "id": "e2e-000l",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/order/seller/analytics",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order",
+                "seller",
+                "analytics"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"analytics 200\", () => pm.expect(pm.response.code).to.eql(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete product (cleanup)",
+          "id": "e2e-000m",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/products/{{e2eSellerProductId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "products",
+                "{{e2eSellerProductId}}"
+              ]
+            },
+            "description": "Removes the E2E product so the flow is repeatable."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"delete 2xx\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201, 204]));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "🛡️ Admin flow (role: admin)",
+      "id": "e2e-000y",
+      "description": "Back-office journey: users -> moderation queues -> brand/category review -> voucher CRUD -> analytics -> reported posts. All read/admin-permitted; always green.",
+      "item": [
+        {
+          "name": "Login (admin)",
+          "id": "e2e-000o",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/user/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "user",
+                "login"
+              ]
+            },
+            "description": "Sets the HttpOnly access_token cookie for the admin role. Fill the adminPassword variable first (see ../.agent-local/test-accounts.md).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{adminUsername}}\",\n  \"password\": \"{{adminPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"admin login 2xx\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "if (payload && payload.id) { pm.collectionVariables.set(\"e2eAdminId\", payload.id); console.log(\"admin id:\", payload.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List users",
+          "id": "e2e-000p",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/user?page=1&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "user"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"users 200\", () => pm.expect(pm.response.code).to.eql(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Pending brands",
+          "id": "e2e-000q",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/products/brands/pending",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "products",
+                "brands",
+                "pending"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"pending brands 200\", () => pm.expect(pm.response.code).to.eql(200));",
+                  "const brands = Array.isArray(list) ? list : [];",
+                  "if (brands.length) pm.collectionVariables.set(\"e2ePendingBrandId\", brands[0].id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Pending categories",
+          "id": "e2e-000r",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/products/categories/pending",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "products",
+                "categories",
+                "pending"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"pending categories 200\", () => pm.expect(pm.response.code).to.eql(200));",
+                  "const cats = Array.isArray(list) ? list : [];",
+                  "if (cats.length) pm.collectionVariables.set(\"e2ePendingCategoryId\", cats[0].id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create voucher",
+          "id": "e2e-000s",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/order/admin/vouchers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order",
+                "admin",
+                "vouchers"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"{{e2eVoucherCode}}\",\n  \"description\": \"E2E automation voucher\",\n  \"discountType\": \"percent\",\n  \"discountValue\": 10,\n  \"minOrderAmount\": 100000,\n  \"maxDiscountAmount\": 50000,\n  \"usageLimit\": 100,\n  \"perUserLimit\": 1,\n  \"isActive\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(\"e2eVoucherCode\", \"E2E\" + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"voucher created 2xx\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "if (payload && payload.id) pm.collectionVariables.set(\"e2eVoucherId\", payload.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List vouchers",
+          "id": "e2e-000t",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/order/admin/vouchers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order",
+                "admin",
+                "vouchers"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"vouchers 200\", () => pm.expect(pm.response.code).to.eql(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Deactivate voucher",
+          "id": "e2e-000u",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/order/admin/vouchers/{{e2eVoucherId}}/deactivate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order",
+                "admin",
+                "vouchers",
+                "{{e2eVoucherId}}",
+                "deactivate"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"deactivate 2xx\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Admin analytics",
+          "id": "e2e-000v",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/order/admin/analytics",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order",
+                "admin",
+                "analytics"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"analytics 200\", () => pm.expect(pm.response.code).to.eql(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Admin orders",
+          "id": "e2e-000w",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/order/admin/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order",
+                "admin",
+                "orders"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"admin orders 200\", () => pm.expect(pm.response.code).to.eql(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reported posts (moderation queue)",
+          "id": "e2e-000x",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/social/admin/reports?status=pending&page=1&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "social",
+                "admin",
+                "reports"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "pending"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"reports 200\", () => pm.expect(pm.response.code).to.eql(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "🚚 Shipping flow (role: shipping_manager)",
+      "id": "e2e-0014",
+      "description": "GHN console journey: list shipping orders -> detail -> history -> manual sync. Read steps are always green; detail/history/sync run only when a GHN order exists (guarded) and are lenient on GHN reachability.",
+      "item": [
+        {
+          "name": "Login (shipping)",
+          "id": "e2e-000z",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/user/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "user",
+                "login"
+              ]
+            },
+            "description": "Sets the HttpOnly access_token cookie for the shipping role. Fill the shippingPassword variable first (see ../.agent-local/test-accounts.md).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{shippingUsername}}\",\n  \"password\": \"{{shippingPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"shipping login 2xx\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "if (payload && payload.id) { pm.collectionVariables.set(\"e2eShippingId\", payload.id); console.log(\"shipping id:\", payload.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List GHN orders",
+          "id": "e2e-0010",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/order/admin/ghn/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order",
+                "admin",
+                "ghn",
+                "orders"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"ghn orders 200\", () => pm.expect(pm.response.code).to.eql(200));",
+                  "const orders = Array.isArray(list) ? list : [];",
+                  "if (orders.length) { pm.collectionVariables.set(\"e2eGhnOrderId\", orders[0].id); console.log(\"ghn order:\", orders[0].id); }",
+                  "else console.log(\"No GHN orders yet — detail/history/sync will be skipped.\");"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GHN order detail",
+          "id": "e2e-0011",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/order/admin/ghn/orders/{{e2eGhnOrderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order",
+                "admin",
+                "ghn",
+                "orders",
+                "{{e2eGhnOrderId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"e2eGhnOrderId\")) { console.log(\"skip: no GHN order\"); pm.execution.skipRequest && pm.execution.skipRequest(); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"detail responded\", () => pm.expect(pm.response.code).to.be.oneOf([200, 400, 404]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GHN shipping history",
+          "id": "e2e-0012",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/order/admin/ghn/orders/{{e2eGhnOrderId}}/history",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order",
+                "admin",
+                "ghn",
+                "orders",
+                "{{e2eGhnOrderId}}",
+                "history"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"e2eGhnOrderId\")) { console.log(\"skip: no GHN order\"); pm.execution.skipRequest && pm.execution.skipRequest(); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"history responded\", () => pm.expect(pm.response.code).to.be.oneOf([200, 400, 404]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Manual GHN sync",
+          "id": "e2e-0013",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/order/admin/ghn/orders/{{e2eGhnOrderId}}/sync",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order",
+                "admin",
+                "ghn",
+                "orders",
+                "{{e2eGhnOrderId}}",
+                "sync"
+              ]
+            },
+            "description": "Lenient: GHN sandbox may be unreachable in dev."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"e2eGhnOrderId\")) { console.log(\"skip: no GHN order\"); pm.execution.skipRequest && pm.execution.skipRequest(); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"sync responded\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201, 400, 404, 502, 503]));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "🔗 Full lifecycle (all 4 roles, in order)",
+      "id": "e2e-001l",
+      "description": "True cross-role E2E: seller creates a product -> buyer orders it -> seller confirms & ships (GHN, lenient) -> shipping drives delivery via demo-status (needs GHN_DEMO_ENDPOINTS_ENABLED, lenient) -> admin sees it in analytics -> buyer reads the final status. Each Login swaps the active cookie. Core steps are strict; GHN/demo steps are lenient so a sandbox/env gap never reds the run.",
+      "item": [
+        {
+          "name": "Login (seller)",
+          "id": "e2e-0015",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/user/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "user",
+                "login"
+              ]
+            },
+            "description": "Sets the HttpOnly access_token cookie for the seller role. Fill the sellerPassword variable first (see ../.agent-local/test-accounts.md).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{sellerUsername}}\",\n  \"password\": \"{{sellerPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"seller login 2xx\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "if (payload && payload.id) { pm.collectionVariables.set(\"e2eSellerId\", payload.id); console.log(\"seller id:\", payload.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Seller: list categories",
+          "id": "e2e-0016",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/products/categories",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "products",
+                "categories"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "const cats = Array.isArray(list) ? list : [];",
+                  "pm.collectionVariables.set(\"e2eCategoryId\", cats.length ? cats[0].id : 1);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Seller: create product",
+          "id": "e2e-0017",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/products",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "products"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"E2E Lifecycle Product\",\n  \"description\": \"Created by the full-lifecycle flow.\",\n  \"price\": 250000,\n  \"stockQuantity\": 10,\n  \"sku\": \"{{e2eLcSku}}\",\n  \"categoryIds\": [{{e2eCategoryId}}],\n  \"condition\": \"new\",\n  \"weight\": 500\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(\"e2eLcSku\", \"E2ELC-\" + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"product created\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "pm.collectionVariables.set(\"e2eLcProductId\", payload.id);",
+                  "pm.collectionVariables.set(\"e2eLcProductName\", payload.name || \"E2E Lifecycle Product\");"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login (buyer)",
+          "id": "e2e-0018",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/user/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "user",
+                "login"
+              ]
+            },
+            "description": "Sets the HttpOnly access_token cookie for the buyer role. Fill the buyerPassword variable first (see ../.agent-local/test-accounts.md).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{buyerUsername}}\",\n  \"password\": \"{{buyerPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"buyer login 2xx\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "if (payload && payload.id) { pm.collectionVariables.set(\"e2eBuyerId\", payload.id); console.log(\"buyer id:\", payload.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Buyer: create order (COD)",
+          "id": "e2e-0019",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/order",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"paymentMethod\": \"cod\",\n  \"shippingAddress\": \"E2E Buyer|0900000000|12 Nguyen Hue|Phường Bến Nghé|Quận 1|Hồ Chí Minh\",\n  \"items\": [\n    {\n      \"productId\": \"{{e2eLcProductId}}\",\n      \"productName\": \"{{e2eLcProductName}}\",\n      \"quantity\": 1\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"order created\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "pm.collectionVariables.set(\"e2eLcOrderId\", payload.id);",
+                  "console.log(\"lifecycle order:\", payload.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login (seller)",
+          "id": "e2e-001a",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/user/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "user",
+                "login"
+              ]
+            },
+            "description": "Sets the HttpOnly access_token cookie for the seller role. Fill the sellerPassword variable first (see ../.agent-local/test-accounts.md).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{sellerUsername}}\",\n  \"password\": \"{{sellerPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"seller login 2xx\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "if (payload && payload.id) { pm.collectionVariables.set(\"e2eSellerId\", payload.id); console.log(\"seller id:\", payload.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Seller: confirm order",
+          "id": "e2e-001b",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/order/{{e2eLcOrderId}}/confirm",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order",
+                "{{e2eLcOrderId}}",
+                "confirm"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"confirm responded\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201, 400, 409]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Seller: ready-to-ship (creates GHN waybill)",
+          "id": "e2e-001c",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/order/{{e2eLcOrderId}}/ready-to-ship",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order",
+                "{{e2eLcOrderId}}",
+                "ready-to-ship"
+              ]
+            },
+            "description": "Lenient: creates a real GHN waybill; may 400 on address resolution or 5xx if GHN is unreachable in dev."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"ready-to-ship responded\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201, 400, 409, 502, 503]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login (shipping)",
+          "id": "e2e-001d",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/user/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "user",
+                "login"
+              ]
+            },
+            "description": "Sets the HttpOnly access_token cookie for the shipping role. Fill the shippingPassword variable first (see ../.agent-local/test-accounts.md).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{shippingUsername}}\",\n  \"password\": \"{{shippingPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"shipping login 2xx\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "if (payload && payload.id) { pm.collectionVariables.set(\"e2eShippingId\", payload.id); console.log(\"shipping id:\", payload.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Shipping: demo-status delivering",
+          "id": "e2e-001e",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/order/admin/ghn/orders/{{e2eLcOrderId}}/demo-status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order",
+                "admin",
+                "ghn",
+                "orders",
+                "{{e2eLcOrderId}}",
+                "demo-status"
+              ]
+            },
+            "description": "Needs GHN_DEMO_ENDPOINTS_ENABLED=true; 403 otherwise. Lenient.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ghnStatus\": \"delivering\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"demo delivering responded\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201, 400, 403, 404]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Shipping: demo-status delivered",
+          "id": "e2e-001f",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/order/admin/ghn/orders/{{e2eLcOrderId}}/demo-status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order",
+                "admin",
+                "ghn",
+                "orders",
+                "{{e2eLcOrderId}}",
+                "demo-status"
+              ]
+            },
+            "description": "Drives the order to COMPLETED (+ stock consume / COD payment_completed). Lenient.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ghnStatus\": \"delivered\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"demo delivered responded\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201, 400, 403, 404]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login (admin)",
+          "id": "e2e-001g",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/user/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "user",
+                "login"
+              ]
+            },
+            "description": "Sets the HttpOnly access_token cookie for the admin role. Fill the adminPassword variable first (see ../.agent-local/test-accounts.md).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{adminUsername}}\",\n  \"password\": \"{{adminPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"admin login 2xx\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "if (payload && payload.id) { pm.collectionVariables.set(\"e2eAdminId\", payload.id); console.log(\"admin id:\", payload.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Admin: analytics",
+          "id": "e2e-001h",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/order/admin/analytics",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order",
+                "admin",
+                "analytics"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"analytics 200\", () => pm.expect(pm.response.code).to.eql(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Admin: order detail",
+          "id": "e2e-001i",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/order/admin/ghn/orders/{{e2eLcOrderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order",
+                "admin",
+                "ghn",
+                "orders",
+                "{{e2eLcOrderId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"admin order detail responded\", () => pm.expect(pm.response.code).to.be.oneOf([200, 404]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login (buyer)",
+          "id": "e2e-001j",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/user/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "user",
+                "login"
+              ]
+            },
+            "description": "Sets the HttpOnly access_token cookie for the buyer role. Fill the buyerPassword variable first (see ../.agent-local/test-accounts.md).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{buyerUsername}}\",\n  \"password\": \"{{buyerPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"buyer login 2xx\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "if (payload && payload.id) { pm.collectionVariables.set(\"e2eBuyerId\", payload.id); console.log(\"buyer id:\", payload.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Buyer: final order status",
+          "id": "e2e-001k",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/order/{{e2eLcOrderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order",
+                "{{e2eLcOrderId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Response envelope: { statusCode, status, message, timestamp, data }",
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const payload = (json && json.data !== undefined) ? json.data : json;",
+                  "// Paginated payloads are { data:[...], total, ... }; lists unwrap one more level.",
+                  "const list = (payload && Array.isArray(payload.data)) ? payload.data : payload;",
+                  "pm.test(\"final order 200\", () => pm.expect(pm.response.code).to.eql(200));",
+                  "console.log(\"final status:\", payload && payload.status);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000/api"
+    },
+    {
+      "key": "rootUrl",
+      "value": "http://localhost:3000"
+    },
+    {
+      "key": "buyerUsername",
+      "value": "canceltest1779978329"
+    },
+    {
+      "key": "buyerPassword",
+      "value": ""
+    },
+    {
+      "key": "sellerUsername",
+      "value": "techstore_demo"
+    },
+    {
+      "key": "sellerPassword",
+      "value": ""
+    },
+    {
+      "key": "adminUsername",
+      "value": "testadmin"
+    },
+    {
+      "key": "adminPassword",
+      "value": ""
+    },
+    {
+      "key": "shippingUsername",
+      "value": "shipmgr_test"
+    },
+    {
+      "key": "shippingPassword",
+      "value": ""
+    },
+    {
+      "key": "e2eBuyerId",
+      "value": ""
+    },
+    {
+      "key": "e2eSellerId",
+      "value": ""
+    },
+    {
+      "key": "e2eAdminId",
+      "value": ""
+    },
+    {
+      "key": "e2eShippingId",
+      "value": ""
+    },
+    {
+      "key": "e2eProductId",
+      "value": ""
+    },
+    {
+      "key": "e2eProductName",
+      "value": ""
+    },
+    {
+      "key": "e2eCartItemId",
+      "value": ""
+    },
+    {
+      "key": "e2eAddressId",
+      "value": ""
+    },
+    {
+      "key": "e2eOrderId",
+      "value": ""
+    },
+    {
+      "key": "e2eCategoryId",
+      "value": ""
+    },
+    {
+      "key": "e2eSku",
+      "value": ""
+    },
+    {
+      "key": "e2eSellerProductId",
+      "value": ""
+    },
+    {
+      "key": "e2eSellerOrderId",
+      "value": ""
+    },
+    {
+      "key": "e2ePendingBrandId",
+      "value": ""
+    },
+    {
+      "key": "e2ePendingCategoryId",
+      "value": ""
+    },
+    {
+      "key": "e2eVoucherCode",
+      "value": ""
+    },
+    {
+      "key": "e2eVoucherId",
+      "value": ""
+    },
+    {
+      "key": "e2eGhnOrderId",
+      "value": ""
+    },
+    {
+      "key": "e2eLcSku",
+      "value": ""
+    },
+    {
+      "key": "e2eLcProductId",
+      "value": ""
+    },
+    {
+      "key": "e2eLcProductName",
+      "value": ""
+    },
+    {
+      "key": "e2eLcOrderId",
+      "value": ""
+    }
+  ]
+}

@@ -37,6 +37,8 @@ lerna-debug.log*
 
 # dotenv environment variable files
 .env
+.env.seed
+!.env.seed.example
 .env.development.local
 .env.test.local
 .env.production.local
@@ -64,6 +66,9 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 test-accounts.md
 .agent-local/
 *.txt
+
+# Load-test run artifacts (machine-specific numbers; baselines live in the script header)
+scripts/load/results/
 
 # MCP config (contains Postman API key — do not commit)
 .mcp.json
