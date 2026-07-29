@@ -6,6 +6,215 @@
 
 ## Completed Milestones
 
+- PROD-01 — prod migration applied + catalog purge (2026-07-30, ops, NO code
+  change): `nodeA-20260723-001-add-ghn-ids-to-orders` applied to the prod Aiven
+  Node A ahead of the GHN-ADDR-01 code deploy. Order matters: prod forces
+  `synchronize:false` (`resolveTypeOrmSynchronize`, `NODE_ENV=production`), so the
+  columns can never auto-appear there; and because they are extra NULLABLE columns
+  they are inert to the currently-deployed code, which makes migration-before-deploy
+  a zero-downtime, no-restart step. Verified via the manifest runner: status
+  `[pending]` (18 `[baseline-absorbed]` rows) → dry-run `runnable=1 blocked=0`
+  (baseline sha256 `d71c77af…`, candidate `907f2f45…`) → apply → re-status
+  `[applied]`. Post-migration smoke on prod: 4/4 order read paths 200
+  (`GET /api/order/seller`, `/api/order/user/:id`, `/api/order/user/:id/status-counts`,
+  `/api/order/seller/analytics`) — old code still SELECTs fine with the new columns
+  present. Node B needed nothing: the manifest holds exactly ONE post-cutoff
+  migration and it targets nodeA (verified statically, no DB connection needed —
+  the dev Aiven PG host was un-resolvable at the time because the free-tier service
+  had been powered off for days). Also completed the SEED-02 `--prune` cleanup by
+  hard-deleting the two off-catalog leftovers (`prod_AGAo3Vq7gI6izTz1` "Nồi chiên
+  không dầu TryBuy 5L", `prod_FOGcwfJmnx8PKO4A` "Áo thun TryBuy Basic") — hard
+  DELETE was required because a rejected category only sets `isActive:false` and
+  the product list still returns deactivated rows (see snapshot Known Issues);
+  order history survives via the P2-02 order-item snapshot. Prod catalog is now 20
+  products, all `active=true`, all tech, 0 `isActive:false` rows.
+
+- VNPAY-IPN-01 — malformed VNPay callback returns a response code, not 502
+  (2026-07-30, fix): `VNPayStrategy.verifyCallback` called
+  `this.vnpay.verifyIpnCall(payload)` unguarded, and the SDK THROWS on a malformed
+  payload (missing/garbled `vnp_*` fields) rather than returning
+  `isVerified:false`. That throw propagated out of all three callers — the POST
+  callback, the GET IPN, and the TCP return-url path — so a garbage or truncated
+  provider callback surfaced as a 5xx. A provider callback must always answer with
+  a response code, so the call is now wrapped: a throw is logged
+  (`Logger.warn`) and reported as `{orderId:"", success:false}`, which the existing
+  callback controller already maps to `RspCode 97` (checksum failed). No contract,
+  schema, or happy-path change — a genuinely valid callback still verifies exactly
+  as before. New `apps/payments/src/vnpay/vnpay.service.spec.ts` (3 tests) runs
+  against the REAL SDK, not a mock, so a future SDK upgrade that throws on a new
+  class of bad input still cannot turn a callback into a 5xx: no-`vnp_`-fields
+  payload, `undefined` payload, and a well-shaped payload with a bad
+  `vnp_SecureHash`. Validated: tsc 0 errors, `jest apps/payments` 3 suites / 15
+  tests green (the run's own `WARN [VNPayStrategy] VNPay callback payload
+rejected: …` lines prove the guard executes instead of throwing).
+
+- SCALE-05b — timeout the three untimed inventory TCP calls (2026-07-30, fix):
+  SCALE-05 reclassified all 172 gateway `timeout(10000)` sites into
+  `TCP_TIMEOUT_MS.READ`/`WRITE`, but three inventory sends in
+  `apps/gateway/src/product/product.service.ts` had NO timeout operator at all and
+  were therefore missed — `INVENTORY_FIND_BY_PRODUCT_ID` (product detail),
+  `INVENTORY_GET_BY_PRODUCT_IDS` (the `getAllProductsWithInventory` batch), and
+  `INVENTORY_CHECK_STOCK`. Without one, a hung inventory service holds the gateway
+  request open indefinitely instead of failing fast, which is precisely the
+  overload failure mode SCALE-05 exists to bound. All three now
+  `.pipe(timeout(TCP_TIMEOUT_MS.READ))` (5s — all are pure reads). Existing error
+  semantics are unchanged: the detail call keeps its `.catch` → warn + `inventory:
+null` fallback, the batch stays inside its try/catch that logs and rethrows, and
+  check-stock keeps its `logger.error` path.
+
+- SEED-02 — tech-only catalog (2026-07-30, tooling only, NO code/schema change):
+  product decision — TryBuy sells consumer electronics plus the accessories and
+  desk furniture around them (ốp lưng, lót chuột, bàn nâng hạ, ghế công thái học);
+  no fashion/groceries/household. `scripts/seed/seed-products.mjs` now encodes
+  that: `CATEGORY_SEED` = 9 tech categories (Điện thoại, Laptop, PC & Linh kiện,
+  Phụ kiện, Gaming Gear, Bàn ghế Setup, Âm thanh, Thiết bị mạng, Thiết bị thông
+  minh) and `PRODUCT_SEED` = 20 tech products. Script changes: `ensureCategories`
+  no longer early-returns when active categories exist — it submits+approves any
+  MISSING seed category, and only approves pending rows whose name is in the seed
+  list (someone else's pending proposal is left alone); new `--prune` flag rejects
+  every ACTIVE category absent from `CATEGORY_SEED` via
+  `PATCH /api/products/categories/:id/review {action:"reject"}`, which cascades
+  `approvalBlocked:true, isActive:false` onto that category's products — nothing
+  is deleted, so re-approving the category restores them; `createProducts` now
+  skips names already in the catalog (re-run tops up instead of duplicating) and
+  `--count` defaults to the full seed list. Runtime-verified against prod
+  2026-07-30: "Thời trang"(4) + "Gia dụng"(5) retired (their 2 products →
+  `isActive:false, approvalBlocked:true`), 6 tech categories approved (ids 6–11),
+  14 products created at stock 500, 6 skipped as existing, load-test prerequisite
+  green. **Found during verification** → new Known Issue: the product list applies
+  `isActive` only when the caller passes it, so deactivated/risk-blocked products
+  are still returned by `GET /api/products` and
+  `GET /api/products/with-inventory/all` (see snapshot Known Issues — a default
+  flip needs a paired storefront ShopPage change).
+
+- SEED-01 — catalog bootstrap script for a fresh environment (2026-07-29, tooling
+  only, NO code/schema change): `scripts/seed/seed-products.mjs` unblocks
+  `scripts/load/baseline.mjs`, which aborts with `No prod_ product found via
+GET /api/products` on an empty catalog. Root cause chain on a fresh DB: the prod
+  baseline SQL (`database/prod-baseline-20260717/nodeA-mysql-baseline.sql`) seeds
+  only `resources` + `roles` — **no categories** — while `createProduct` rejects
+  unknown categories (404 `CATEGORIES_NOT_FOUND`) and non-`active` ones (400
+  `CATEGORIES_NOT_APPROVED`), and `createCategory` always saves `status:"pending"`.
+  So a shop account alone cannot bootstrap a catalog; an admin must approve the
+  categories first. The script does the whole chain: shop+admin login → POST 5
+  categories (tolerates 409 duplicates) → admin `PATCH /api/products/categories/:id/review
+{action:"approve"}` → POST N simple products (no `skuList`, so the gateway's
+  create saga also creates the inventory row with `stockQuantity`) → re-runs
+  `baseline.mjs`'s own `pickProduct` logic as a self-check. Products are created
+  WITHOUT `imageUrls` — attaching images needs a real Cloudinary signed upload
+  (`@IsCloudinaryUrl` + `assertCloudinaryUrlsOwnedBy`), so images are deferred to
+  `PATCH /api/products/:id`. Credentials come from a gitignored `api/.env.seed`
+  (template `.env.seed.example` is committed) via a dependency-free KEY=VALUE
+  loader — real env vars win over the file and passwords are never logged.
+  Flags: `--base` (overrides `SEED_BASE`), `--count` (≤10), `--dry-run`.
+  Runtime-verified against prod 2026-07-29: 5 categories approved, 8 products
+  created with stock 500, then a full `--profile smoke` baseline run passed 5/5
+  scenarios incl. a 201 checkout probe.
+
+- GHN-ADDR-01 — durable GHN address ids at checkout (2026-07-23, sweep): fixes the
+  long-standing Known Issue where GHN free-text ward/district/province names could
+  resolve to a wrong-but-valid GHN location (short master-data names match many
+  free-text parts by containment). Root fix: capture the exact GHN ids at checkout
+  instead of resolving free-text at ship time. **Contract (additive, backward-
+  compatible):** `POST /api/order` and `POST /api/order/shipping-fee` now accept
+  optional `toDistrictId` (GHN DistrictID, int ≥1) + `toWardCode` (GHN WardCode,
+  string ≤20) — both picked from the existing `GET /api/shipping/districts|wards`
+  proxy. When BOTH are present the waybill create + fee preview use the exact ids
+  and skip `resolveAddressToGhnIds` name resolution entirely; a partial pair (one
+  missing) is treated as absent → legacy free-text fallback, so existing callers
+  are unaffected. **Wiring:** gateway DTOs `CreateOrderDto`/`ShippingFeeDto` →
+  gateway `order.service.ts` forwards the two fields on all three TCP sends
+  (`CREATE_ORDER`, `CREATE_MULTI_SELLER_ORDER`, `CALCULATE_SHIPPING_FEE`) →
+  `orders.controller.ts` `toGhnResolvedAddress` guard builds a `GhnResolvedAddress`
+  → `OrdersService.placeOrder`/`placeMultiSellerOrder` persist `orders.to_district_id`
+  /`to_ward_code` and forward the resolved pair into the fee preview →
+  `GhnService.buildShippingOrderBody`/`previewShippingFee`/`createShippingOrder`
+  consume it (new optional `resolvedIds?: GhnResolvedAddress` param + `toResolvedAddress`
+  entity→resolved guard). New `GhnResolvedAddress` interface in `ghn.types.ts`;
+  new nullable columns on `order.entity.ts`. **Migration:**
+  `database/migrations/nodeA/20260723-001-add-ghn-ids-to-orders.sql`
+  (`nodeA-20260723-001-add-ghn-ids-to-orders` in the manifest — idempotent,
+  INFORMATION_SCHEMA-guarded; orders runs `synchronize:true` so dev auto-adds the
+  columns, SQL is for fresh/`synchronize:false` DBs). Validated: tsc 0, eslint 0,
+  prettier clean; `db:migrate:dry-run --target=nodeA` lists it as the sole runnable
+  candidate. **Runtime self-test (live gateway, user `canceltest1779978329`):**
+  fee preview with valid ids → 201 (GHN responded); valid free-text no ids → 201
+  (legacy path intact); **real street + GARBAGE ward/district/province names +
+  valid ids → 201 (name resolution bypassed — the fix)**; SAME garbage names, no
+  ids → 400 (`Cannot resolve province "wwwww"`); partial pair (district only) →
+  201 free-text fallback; `toDistrictId:"abc"` → 400 validation. Full order-create
+  persistence leg reached the authoritative stock-reserve step (new fields accepted
+  + validated) but could not complete a 201 because this dev env's PG inventory has
+  0 availableStock for all products (pre-existing seed gap, unrelated) — the GHN
+  build-body core it would exercise at ship time is already proven by the fee-preview
+  bypass test. FE handoff (storefront checkout) written to `frontend-handoff.md`.
+  Follow-up (not scheduled): the GHN admin `update-receiver` path still rewrites
+  only the free-text head and does not update the persisted ids.
+
+- SCALE-07 — gateway inventory-read TCP timeouts (2026-07-22): added the missing
+  `.pipe(timeout(TCP_TIMEOUT_MS.READ))` (5s, pure reads) to the three
+  `inventoryClient.send(...)` calls in `apps/gateway/src/product/product.service.ts`
+  that were shipped uncapped: `getProductWithInventoryById`
+  (`INVENTORY_FIND_BY_PRODUCT_ID`, keeps its existing `.catch()` degradation),
+  `getAllProductsWithInventory` (`INVENTORY_GET_BY_PRODUCT_IDS`), and
+  `checkProductStock` (`INVENTORY_CHECK_STOCK`). These three were missed by
+  SCALE-05's "all 172 timeout sites reclassified" pass because they never had a
+  `timeout(10000)` to reclassify — a half-open / GC-stalled / deadlocked Node B
+  inventory service (which never rejects, unlike a crash's fast ECONNREFUSED)
+  would hang product-detail-with-inventory, product-list-with-inventory, and the
+  checkout stock check with no cap, pinning the single gateway process under
+  load. Audit-confirmed the other 4 inventory sends in the file (2 write-path
+  `INVENTORY_CREATE`/`INVENTORY_REMOVE_BY_PRODUCT` → WRITE 10s, 2 other read
+  batches) were already piped; all 7 inventory sends now carry a timeout.
+  Single-file, no contract/response-shape change, no migration. Validated: tsc 0,
+  eslint 0, prettier clean. Runtime self-tested 3/3 on the live stack —
+  `GET /api/products/with-inventory/all?limit=2` → 200 (rows carry `inventory`),
+  `GET /api/products/prod_ffc802c681d211f1/with-inventory` → 200,
+  `GET /api/products/prod_ffc802c681d211f1/stock-check?quantity=1` → 200
+  (`available:true, availableStock:99`) — happy-path behavior unchanged. No FE
+  impact (internal resilience only).
+
+- Snapshot hygiene (2026-07-22): closed the stale "database.md index/entity info
+  is out of date" Known Issue (originally logged 2026-07-02). Verification —
+  cross-checked all 33 live `@Entity` table names against the entity/service map
+  in `ai-docs/agent-context/database.md`: 100% match, including the post-note
+  additions (`order_return_requests`, `vouchers`, `voucher_redemptions`,
+  `wishlist_items`, `product_risk_feedback`, `user_addresses`). The doc was
+  rewritten lean at the 2026-07-17 baseline cutoff and no longer carries any
+  index/uniques claims, so the "out of date" note no longer applied. No doc edit
+  needed; removed the note from snapshot Known Issues.
+
+- DEP-01 — npm audit triage + safe remediation (2026-07-22): swept the
+  dependency-vulnerability backlog. Baseline `npm audit` = 28 findings (2
+  critical, 12 high, 12 moderate, 2 low). Every finding was mapped to
+  direct-vs-transitive and runtime-vs-dev exposure, then remediated with a
+  plain `npm audit fix` (NON-force — only semver-compatible upgrades, 44
+  packages changed, 6 added). Result: **28 → 10 findings; all 2 critical + 12
+  high eliminated.** Runtime-exposed packages cleared: axios (prod HTTP client
+  to GHN/ZaloPay/VNPay), typeorm 0.3.28→0.3.31 (SQL injection in
+  UpdateQueryBuilder/SoftDeleteQueryBuilder `orderBy` on MySQL — directly
+  relevant), ws 8.20.1→8.21.1 + engine.io/engine.io-client/socket.io-adapter
+  (WS memory-DoS on chat/notification namespaces), form-data (CRLF injection),
+  multer + @nestjs/platform-express 11.1.19→11.1.28 (upload DoS), @nestjs/swagger
+  11.4.2→11.4.6 + js-yaml (merge-key DoS), qs + body-parser (express query/body
+  DoS), fast-uri (path traversal), brace-expansion (DoS). Dev/build-only cleared:
+  @babel/core, shell-quote (critical, under `concurrently`), and the critical
+  `@xhmikosr/decompress` (zip-slip) + high `piscina` (prototype-pollution→RCE).
+  Validation all green post-upgrade: `tsc --noEmit` 0 errors, `npm run build`
+  10/10 services (webpack), `npm run lint` 0 errors (7 pre-existing e2e
+  warnings), `npm test` 24 suites / 176 tests passed. Also removed the redundant
+  direct `@swc/cli` devDependency (it duplicated the copy already pulled in
+  transitively by `@nestjs/cli`). **Accepted residual (10 moderate):** all are
+  `file-type`/`@xhmikosr/*` DoS reachable ONLY through the build chain
+  `@nestjs/cli@11.0.21 → @swc/cli@0.6.0 → @xhmikosr/*` — build-time only, zero
+  production runtime exposure. `npm audit fix --force` (which would force the
+  breaking `@swc/cli@0.8.1` under @nestjs/cli's 0.6.x range and probably break
+  `nest build`) was deliberately NOT run; these clear upstream when @nestjs/cli
+  bumps @swc/cli. No API/response/contract change → no FE handoff. Execution note:
+  the agent is denied npm install/uninstall/audit-fix, so the user ran the
+  mutating commands via `!` while the agent did the triage, validation, and
+  bookkeeping.
+
 - SCALE-03 — nginx load-absorption layer (2026-07-20): rewrote
   `nginx/trybuy.conf` (+ `nginx/trybuy-local.conf` docker mirror pointing at
   `host.docker.internal:3000`). **(a) Rate limiting** — http-level

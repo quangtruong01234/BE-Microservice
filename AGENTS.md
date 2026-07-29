@@ -262,3 +262,37 @@ When a task adds or modifies an endpoint, after tsc + eslint pass:
 - `@CheckPermission('X', 'read:any')` → `admin` role account
 
 **Never** present curl commands for the user to run. Run them yourself and report results.
+
+## Change-Impact Review (mandatory after self-test)
+
+A functional self-test only proves the happy path of the endpoint you touched.
+It does NOT catch side-effects, downstream legs, or edge cases the change opened
+up. So after the self-test passes — and before marking a task done — re-read
+EVERYTHING you changed in this task and hunt for bugs/gaps the functional test
+did not exercise.
+
+1. List your own diff first: `git diff --stat` then read each changed hunk
+   (`git diff`). Review the actual changed lines, not your memory of them.
+2. For each change, ask:
+   - **Untested legs** — is there a code path that runs LATER or ELSEWHERE off
+     this change that the self-test never reached (e.g. a value is persisted now
+     but only consumed by a different endpoint / a cron / a ship-time waybill /
+     an RMQ consumer)? A self-test that only hits the write path did NOT verify
+     the read/consume path.
+   - **Asymmetric behavior** — do two paths that share the new code diverge
+     (one swallows an error and defaults, the other throws → different HTTP
+     status for the same bad input)?
+   - **Contract edges** — string-vs-number coercion, null/partial inputs,
+     empty arrays, missing optional fields, `@IsInt` without `@Type`, bounds.
+   - **Persistence vs. use** — a new column/field written but never read back,
+     or read by code that still uses the old fallback.
+   - **Blast radius** — every OTHER caller of a function/handler you edited:
+     did the signature/behavior change break them? (grep the callers.)
+3. If you find a bug/gap: fix it (minimal diff), re-run tsc/eslint, re-test the
+   affected leg, and repeat this review on the new diff.
+4. If a leg genuinely cannot be runtime-verified now (e.g. blocked by a dev seed
+   gap, external API, missing infra): do NOT silently pass it. Record it as a
+   `⏳ PENDING RUNTIME TEST (<item id>)` note in `snapshot.md` Known Issues with
+   the exact steps + assertions to run once the blocker is gone.
+5. Report the review outcome in the final summary: what you re-checked, what you
+   found + fixed, and what is left as a pending-test debt.
