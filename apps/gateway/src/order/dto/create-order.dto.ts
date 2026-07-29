@@ -71,6 +71,30 @@ export class CreateOrderDto {
   @MaxLength(500)
   declare shippingAddress: string;
 
+  @ApiPropertyOptional({
+    description:
+      "GHN DistrictID for the delivery address. Send together with toWardCode " +
+      "(both picked from GET /api/shipping/districts|wards) so GHN resolves the " +
+      "waybill by exact id instead of guessing from the free-text address. " +
+      "Omit both to fall back to legacy free-text resolution.",
+    example: 1450,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  toDistrictId?: number;
+
+  @ApiPropertyOptional({
+    description:
+      "GHN WardCode for the delivery address. Send together with toDistrictId.",
+    example: "21211",
+  })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(20)
+  toWardCode?: string;
+
   @ApiProperty({ type: [OrderItemDto], description: "List of order items" })
   @IsArray()
   @ValidateNested({ each: true })

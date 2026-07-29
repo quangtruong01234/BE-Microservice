@@ -321,6 +321,8 @@ export class OrderService {
               userId,
               paymentMethod: dto.paymentMethod,
               shippingAddress: dto.shippingAddress,
+              toDistrictId: dto.toDistrictId ?? null,
+              toWardCode: dto.toWardCode ?? null,
               items: enrichedItems,
             })
             .pipe(
@@ -391,6 +393,8 @@ export class OrderService {
             userId,
             paymentMethod: dto.paymentMethod,
             shippingAddress: dto.shippingAddress,
+            toDistrictId: dto.toDistrictId ?? null,
+            toWardCode: dto.toWardCode ?? null,
             items: enrichedItems,
             voucherCode: dto.voucherCode ?? null,
           })
@@ -526,6 +530,8 @@ export class OrderService {
         this.ordersClient
           .send(ORDER_MESSAGE_PATTERN.CALCULATE_SHIPPING_FEE, {
             shippingAddress: dto.shippingAddress,
+            toDistrictId: dto.toDistrictId ?? null,
+            toWardCode: dto.toWardCode ?? null,
             items: dto.items,
           })
           .pipe(

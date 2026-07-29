@@ -51,6 +51,29 @@ export class ShippingFeeDto {
   @MaxLength(500)
   declare shippingAddress: string;
 
+  @ApiPropertyOptional({
+    description:
+      "GHN DistrictID for the delivery address. Send together with toWardCode " +
+      "so the fee preview uses the exact GHN location instead of resolving the " +
+      "free-text address. Omit both for legacy free-text resolution.",
+    example: 1450,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  toDistrictId?: number;
+
+  @ApiPropertyOptional({
+    description:
+      "GHN WardCode for the delivery address. Send together with toDistrictId.",
+    example: "21211",
+  })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(20)
+  toWardCode?: string;
+
   @ApiProperty({ type: [ShippingFeeItemDto], description: "Items to ship" })
   @IsArray()
   @ValidateNested({ each: true })
