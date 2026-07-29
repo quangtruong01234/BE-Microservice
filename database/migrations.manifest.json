@@ -43,5 +43,16 @@
       ]
     }
   ],
-  "migrations": []
+  "migrations": [
+    {
+      "id": "nodeA-20260723-001-add-ghn-ids-to-orders",
+      "target": "nodeA",
+      "dialect": "mysql",
+      "file": "database/migrations/nodeA/20260723-001-add-ghn-ids-to-orders.sql",
+      "category": "schema",
+      "destructive": false,
+      "manualOnly": false,
+      "enabled": true
+    }
+  ]
 }
