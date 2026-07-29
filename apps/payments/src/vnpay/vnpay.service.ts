@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import {
   VNPay,
   ignoreLogger,
@@ -12,6 +12,7 @@ import { PaymentOrder } from "../payment-strategy.interface";
 
 @Injectable()
 export class VNPayStrategy implements IPaymentStrategy {
+  private readonly logger = new Logger(VNPayStrategy.name);
   private readonly vnpay: VNPay;
 
   constructor() {
@@ -53,10 +54,20 @@ export class VNPayStrategy implements IPaymentStrategy {
   verifyCallback(
     payload: unknown,
   ): Promise<{ orderId: string; success: boolean }> {
-    const result = this.vnpay.verifyIpnCall(payload as ReturnQueryFromVNPay);
-    return Promise.resolve({
-      orderId: String(result.vnp_TxnRef),
-      success: result.isVerified && result.isSuccess,
-    });
+    // The SDK throws when the payload is malformed (missing or garbled vnp_*
+    // fields). A provider callback must always answer with a response code, so
+    // an unparseable payload is reported as a failed verification instead of
+    // propagating as a 5xx to VNPay.
+    try {
+      const result = this.vnpay.verifyIpnCall(payload as ReturnQueryFromVNPay);
+      return Promise.resolve({
+        orderId: String(result.vnp_TxnRef),
+        success: result.isVerified && result.isSuccess,
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      this.logger.warn(`VNPay callback payload rejected: ${message}`);
+      return Promise.resolve({ orderId: "", success: false });
+    }
   }
 }
