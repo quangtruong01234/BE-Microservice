@@ -937,7 +937,12 @@ export class OrderService {
     try {
       return (await firstValueFrom(
         this.paymentsClient
-          .send(PAYMENT_MESSAGE_PATTERN.GET_PAYMENT_URL, { orderId: order.id })
+          .send(PAYMENT_MESSAGE_PATTERN.GET_PAYMENT_URL, {
+            orderId: order.id,
+            // Lets payments re-issue the checkout URL when a previous attempt
+            // saved the row but failed before persisting the gateway URL.
+            paymentMethod: order.paymentMethod,
+          })
           .pipe(
             timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {

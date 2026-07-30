@@ -1,3 +1,5 @@
+import { PaymentMethod } from "@app/common";
+
 export interface OrderResponse {
   id: number;
   // PUBID-01: opaque external id (`ord_...`) carried alongside the numeric PK
@@ -12,6 +14,7 @@ export interface OrderResponse {
   // breakdown without client-side derivation.
   shippingFee?: number | null;
   discountAmount?: number | null;
+  paymentMethod?: PaymentMethod | null;
   subtotal?: number;
   items: unknown[];
   createdAt: string;
