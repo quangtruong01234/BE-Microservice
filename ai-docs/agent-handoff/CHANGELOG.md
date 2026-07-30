@@ -6,6 +6,82 @@
 
 ## Completed Milestones
 
+- PROD-PAY-01/mitigation — payment-URL issuance made non-fatal and self-healing
+  (2026-07-31, fix, NO migration). Prod produced no gateway URL for EITHER
+  provider: order create 201, but `GET /api/order/:id/payment-url` →
+  `{"orderUrl":null,"status":"pending"}` forever, because `processPayment` threw
+  between the row `save` and the `orderUrl` UPDATE, and every RabbitMQ redelivery
+  then short-circuited on the duplicate guard and acked. Root cause narrowed
+  **black-box, without SSH or log access**, by two probes that read config
+  indirectly: a forged ZaloPay return (`GET /api/gateway/payment-result` → 200
+  `{"gateway":"zalopay","status":"failed"}`) proved `ZALOPAY_*` are present, since
+  `verifyZaloPayReturn` reads `getZaloPayConfig().key2` unguarded — which also
+  proves `local/nodeB/.env` is loaded; and `VNPayStrategy` reading `getVNPayConfig()`
+  in its **constructor** means the service could not have booted with `VNP_*`
+  missing. With both env blocks and the factory/UPDATE eliminated, and VNPay's
+  `createPayment` making no network call, the only throw site shared by both
+  providers was `buildFrontendPaymentResultUrl`: `new URL("/payment-result", "")`
+  raises `ERR_INVALID_URL` when `FRONTEND_URL` is empty or scheme-less (the `??`
+  default only covered *undefined*). Changes, all in the payments service plus one
+  gateway field: (1) the URL builder catches and falls back to a default origin
+  with a warn — a misconfigured `FRONTEND_URL` can no longer abort payment
+  creation; (2) `issueGatewayPaymentUrl` extracted from `processPayment` so the
+  create→persist step is replayable; (3) the duplicate branch regenerates when the
+  existing row has no `orderUrl` (it used to return `paymentUrl:""`, making the
+  order permanently unpayable); (4) `getPaymentUrl(orderId, paymentMethod?)`
+  re-issues on read for a PENDING row with no URL — this repairs orders already
+  broken in production AND makes any other root cause surface synchronously in the
+  HTTP body through `MicroserviceErrorHandler` instead of staying silent;
+  (5) the gateway passes `order.paymentMethod` on the `get_payment_url` send
+  (`OrderResponse.paymentMethod` added), since the payments row carries no method
+  column. Multi-order rows (`order_id NULL`) are untouched — the JSONB fallback
+  runs only when no single-order row matched, so they never enter the retry path.
+  **FE contract change:** a genuine issuance failure now returns an error status
+  instead of a silent 200 `{"orderUrl":null}`; COD still legitimately returns
+  `{"orderUrl":null,"status":null}` (no payment row → no retry). Validated:
+  `tsc --noEmit` 0, eslint 0, Jest **183/183** (3 new payments tests: fallback
+  origin for `""` and a scheme-less host, retry-on-read issuing + persisting,
+  stored-URL short-circuit). Prod env fix (`FRONTEND_URL` + `VNP_RETURN_URL`/
+  `ZALOPAY_REDIRECT_URL`/`VNPAY_IPN_URL` in `local/nodeB/.env`) and the EC2 deploy
+  remain with the user — tracked in `snapshot.md`. Cleanup: all 10 prod probe
+  orders were canceled, so prod holds no leftover test data.
+- DEPLOY-VERIFY-01 — 2026-07-30 prod deploy verified, after resolving PROD-INC-01
+  (ops + one prod incident, NO code change). Commits `3f6e212..4d039cc` were
+  verified live against `https://tryhavejob.ooguy.com`.
+  **PROD-INC-01 (prod outage, found + fixed same day):** right after the deploy every
+  request that SELECTs the full `orders` entity failed — `GET /api/order/seller` 502,
+  `GET /api/order/user/:id` 500, `POST /api/order` 502 — while partial-select routes
+  stayed 200 (`status-counts` selects only `order.status`, `analytics` uses raw
+  aggregates, `return-requests/mine` hits another table). Root cause: the prod
+  `orders` table did not actually have `to_district_id`/`to_ward_code`, the only
+  columns this deploy added, and prod runs `synchronize:false`. The PROD-01 entry
+  below recorded the migration as applied, but that apply ran against the DEV Aiven
+  MySQL — `scripts/migrate-database.mjs` resolves credentials from `local/nodeA/.env`
+  RELATIVE TO THE MACHINE IT RUNS ON, and it was run from the dev workstation, not
+  EC2. Fixed by executing the guarded SQL on EC2 against the service's own env
+  (`INFORMATION_SCHEMA`-guarded, idempotent, additive) → both columns present in
+  `defaultdb`; no pm2 restart needed and all failing routes recovered immediately.
+  **V1 (5/5 PASS):** `/api/user/me`, `/api/order/user/:id/status-counts`,
+  `/api/order/seller/analytics`, `/api/order/seller`, `/api/order/user/:publicId` all 200.
+  **V2 (4/4 PASS — closes the GHN-ADDR-01 pending runtime test):** COD order with
+  garbage free-text ward/district/province + `toDistrictId:3440`/`toWardCode:"13010"`
+  → 201, `ghnOrderCode:"LARQ44"`, `shippingFee:46207`, ids persisted; the identical
+  garbage address WITHOUT ids → 201 but `ghnOrderCode:null`/`shippingFee:0`, proving
+  the waybill was built from the exact ids and not from name resolution;
+  `PATCH /:id/ready-to-ship` → `processing` with the waybill intact; numeric-string
+  `toDistrictId:"3440"` → 400 (`@IsInt()` without `@Type`, the documented FE contract).
+  Both test orders were canceled afterwards (admin GHN cancel + buyer cancel) so prod
+  holds no leftover test data. **V3 (4/4 PASS):** malformed VNPay callback POST and GET
+  → 200 `{"RspCode":"99"}` (gateway shape guard), well-formed-bad-hash → 200
+  `{"RspCode":"97"}` (payments TCP leg alive), malformed ZaloPay → 200
+  `{"return_code":-1}`; no 502 on any form.
+  **Found during verification, left open as BUG-404-01 in `snapshot.md`:**
+  `GET /api/order/:id` answers 500 instead of 404 for an unknown order, because
+  `fetchOwnedOrder` rethrows the raw RpcException without `MicroserviceErrorHandler`.
+  **Prevention:** a pre-deploy migration smoke must hit a route that selects the FULL
+  entity being altered (e.g. `GET /api/order/<well-formed id>` expecting 404), never
+  only count/aggregate routes; and any migration apply must be run ON the target host,
+  since the env file is resolved locally.
 - PROD-01 — prod migration applied + catalog purge (2026-07-30, ops, NO code
   change): `nodeA-20260723-001-add-ghn-ids-to-orders` applied to the prod Aiven
   Node A ahead of the GHN-ADDR-01 code deploy. Order matters: prod forces

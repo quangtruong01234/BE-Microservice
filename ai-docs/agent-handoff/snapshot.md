@@ -778,10 +778,70 @@ SCALE-06 numbers will prove or disprove.
       stays via @nestjs/cli.) These 10 clear on their own when @nestjs/cli bumps
       @swc/cli upstream; re-check on the next @nestjs/cli major.
 
+### 🐛 Found during the 2026-07-30 prod verification (open)
+
+- [ ] **BUG-404-01 — `GET /api/order/:id` returns 500 instead of 404 for an
+      unknown order.** `fetchOwnedOrder` (`apps/gateway/src/order/order.service.ts:576`)
+      rethrows the raw RpcException from the orders service (`resolveOrderId` →
+      `NotFoundException`) with NO `MicroserviceErrorHandler.handleError` wrapper, so
+      Nest maps it to 500. Both callers — `getOrderById` (:553) and `getPaymentUrl`
+      (:928, which calls it OUTSIDE its own try/catch) — are affected. Verified live
+      on prod 2026-07-30: `GET /api/order/ord_aaaaaaaaaaaaaaaa` → 500 while every
+      real order path returns 200. FE sees a server error instead of "đơn không tồn
+      tại". Fix: wrap the `firstValueFrom` inside `fetchOwnedOrder` in try/catch →
+      `MicroserviceErrorHandler.handleError(error, "get order", "Orders Service")`,
+      keeping the local NotFound/Forbidden throws outside the catch. Add a
+      nonexistent-id test to the order self-test set.
+
+- [ ] **PROD-PAY-01 — online payment is DOWN on prod: no gateway URL is ever
+      produced. Code mitigation SHIPPED (not yet deployed); prod env fix still owed
+      by the user.** Live probe 2026-07-30 (both providers, fresh orders, prod
+      `https://tryhavejob.ooguy.com`): `POST /api/order` with `paymentMethod:"vnpay"`
+      → 201, and with `"zalopay"` → 201, but `GET /api/order/:id/payment-url` returns
+      `{"orderUrl":null,"status":"pending"}` for BOTH (re-probed after 4–7s and again
+      after the user added the nodeB payment block — unchanged). `status:"pending"`
+      proves the payments row WAS created, so RabbitMQ delivery and the
+      `order_created` consumer are healthy — the failure is inside
+      `PaymentsService.processPayment` AFTER `paymentRepository.save` and BEFORE the
+      `orderUrl` UPDATE.
+      **Black-box eliminations (2026-07-31, no SSH/log access needed):**
+      (a) **ZaloPay env IS present** — `GET /api/gateway/payment-result?appid=1&
+apptransid=probe_diag&…&checksum=deadbeef` returned 200
+      `{"gateway":"zalopay","status":"failed"}`; `verifyZaloPayReturn` reads
+      `getZaloPayConfig().key2` with NO try/catch, so a missing `ZALOPAY_*` would
+      have produced a 5xx instead. This also proves `local/nodeB/.env` IS being
+      loaded. (b) **VNPay env IS present** — `VNPayStrategy`'s constructor calls
+      `getVNPayConfig()` at DI time, so payments could not have booted (nor answered
+      `get_payment_url`) with `VNP_*` missing. (c) amount type, gateway factory, and
+      the UPDATE are all fine; VNPay's `createPayment` makes no network call, so
+      egress cannot explain a symmetric failure. ⇒ **The only surviving shared throw
+      site is `buildFrontendPaymentResultUrl`** — prod `FRONTEND_URL` set but empty
+      or scheme-less (`new URL("/payment-result", "")` throws `ERR_INVALID_URL`; the
+      `??` default only covered *undefined*, not `""`).
+      **Shipped in this repo (awaiting EC2 deploy):** the URL builder now falls back
+      to a safe default origin with a warn instead of throwing; `processPayment`'s
+      duplicate guard regenerates when the existing row has no `orderUrl` (was
+      returning `""` forever); and `getPaymentUrl` retries issuance on read for a
+      PENDING row with no URL — which both **repairs the already-broken orders** and
+      makes any *other* root cause surface synchronously in the HTTP body via
+      `MicroserviceErrorHandler` instead of staying silent. Gateway now passes
+      `order.paymentMethod` on the `get_payment_url` send (the payments row has no
+      method column).
+      **Remaining user actions:** on EC2 `git pull && npm run build && pm2 restart
+ecosystem.config.js --env production`; set `FRONTEND_URL=https://tryhavejob.ooguy.com`
+      (a real scheme+host, NOT a path like `/ready` — `new URL("/payment-result", base)`
+      discards the base path) plus `VNP_RETURN_URL`/`ZALOPAY_REDIRECT_URL`/`VNPAY_IPN_URL`
+      pointing at the real prod origin, in **`local/nodeB/.env`** (nodeA's `FRONTEND_URL`
+      only feeds gateway CORS). Then re-probe a fresh order — and note the retry-on-read
+      means old broken orders now recover too. **Contract note for FE:** when issuance
+      genuinely fails, `GET /api/order/:id/payment-url` now returns an error status
+      instead of a silent `{"orderUrl":null}` 200 (COD orders still legitimately
+      return `{"orderUrl":null,"status":null}` — no payment row, no retry).
+
 ## Known Issues
 
 - Array query params on the gateway (discovered in PERF-10 verification, 2026-07-03): Express runs the **simple** query parser, so bracket syntax `?categoryIds[]=18` arrives as literal key `"categoryIds[]"` and the global `ValidationPipe({whitelist:true})` silently strips it → 200 UNFILTERED, no error. Supported syntaxes: repeated keys `?categoryIds=16&categoryIds=18` or a single `?categoryIds=18` (scalar→array `@Transform` added to `GetProductsQueryDto`). The storefront FE has been sending singular `categoryId`/`brandId` (never matched the DTO) — marketplace filter was a silent NO-OP; FE handoff entry written 2026-07-03 (`../.agent-local/frontend-handoff.md`). Any future array-typed query DTO field needs the same guard-and-wrap `@Transform`.
-- GHN free-text address resolution is best-effort: a garbage/placeholder address (e.g. `District 1 | Ward 1`) can resolve to a wrong-but-valid GHN location instead of failing, because short numeric master-data names match many free-text parts via containment. Real well-formed VN addresses resolve correctly. **Durable fix shipped (GHN-ADDR-01, 2026-07-23):** `POST /api/order` and `POST /api/order/shipping-fee` now accept optional `toDistrictId` (GHN DistrictID, int) + `toWardCode` (GHN WardCode, string) captured from the FE GHN dropdowns. When BOTH are present the waybill/fee-preview use the exact ids and skip free-text name resolution entirely (verified: garbage ward/district/province names + valid ids → 201, same names without ids → 400). A partial pair (one missing) is treated as absent → legacy free-text fallback, so this Known Issue only remains for callers that DON'T send the ids. FE handoff written. (Truly unresolvable free-text addresses still return 400, not 502.) **⏳ PENDING RUNTIME TEST (GHN-ADDR-01):** the full order-create → `PATCH /api/order/:id/ready-to-ship` waybill leg was NOT verified end-to-end — dev PG inventory has `availableStock:0` for every product so no order reaches the reserve/ship step. `createShippingOrder` reading the persisted `to_district_id`/`to_ward_code` (and skipping free-text resolution at ship time) is verified only by code review + tsc + the shipping-fee preview path. **Blocker is gone on PROD** (SEED-02 seeded 20 products at stock 500) — run this on prod immediately after the GHN-ADDR-01 code deploy: create a COD order with `toDistrictId`+`toWardCode` from `GET /api/shipping/districts|wards`, advance to `ready-to-ship`, and assert a GHN `ghnOrderCode` is persisted from the exact ids (not from free-text). Minor: `toDistrictId` DTO is `@IsInt()` without `@Type(()=>Number)` — a numeric-string `"1450"` → 400 (FE must send a real number).
+- GHN free-text address resolution is best-effort: a garbage/placeholder address (e.g. `District 1 | Ward 1`) can resolve to a wrong-but-valid GHN location instead of failing, because short numeric master-data names match many free-text parts via containment. Real well-formed VN addresses resolve correctly. **Durable fix shipped (GHN-ADDR-01, 2026-07-23):** `POST /api/order` and `POST /api/order/shipping-fee` now accept optional `toDistrictId` (GHN DistrictID, int) + `toWardCode` (GHN WardCode, string) captured from the FE GHN dropdowns. When BOTH are present the waybill/fee-preview use the exact ids and skip free-text name resolution entirely (verified: garbage ward/district/province names + valid ids → 201, same names without ids → 400). A partial pair (one missing) is treated as absent → legacy free-text fallback, so this Known Issue only remains for callers that DON'T send the ids. FE handoff written. (Truly unresolvable free-text addresses still return 400, not 502.) **RUNTIME-VERIFIED ON PROD 2026-07-30 (4/4):** COD order created with garbage free-text ward/district/province + `toDistrictId:3440`/`toWardCode:"13010"` → 201 with `ghnOrderCode:"LARQ44"`, `shippingFee:46207`, both ids persisted; the SAME garbage address WITHOUT the ids → 201 but `ghnOrderCode:null`, `shippingFee:0` (free-text resolution fails, non-fatal) — proving the waybill came from the exact ids; `PATCH /api/order/:id/ready-to-ship` → `processing` with the waybill intact. Note: for COD the waybill is created at ORDER-CREATE time, so ready-to-ship only re-uses the existing `ghnOrderCode` (the "waybill created at ready-to-ship" note applies when it is still null). Both test orders were canceled afterwards (admin GHN cancel + buyer cancel), so prod carries no leftover test data. Minor: `toDistrictId` DTO is `@IsInt()` without `@Type(()=>Number)` — a numeric-string `"1450"` → 400 (FE must send a real number).
 - nodeB services (inventory/payments/rewards) used to silently crash after an idle period (e.g. machine sleep / broker restart): `RmqModule.registerDirectPublisher()` opened a raw amqplib connection+channel with NO `'error'`/`'close'` listeners, so an idle connection drop was thrown as an uncaught exception and killed the process (the `nest --watch` wrapper survived, masking it). FIXED 2026-06-26: the publisher now attaches error/close handlers, uses a `?heartbeat=30` URI, connects in the background (never blocks bootstrap), and auto-reconnects via a self-healing Proxy. If a nodeB service is ever found down, check whether its compiled `dist/apps/<svc>/main` process is actually running — `--watch` does NOT auto-restart a runtime crash.
 - Login route is `POST /api/user/login` (sets the HttpOnly `access_token` cookie). (The CLAUDE.md self-test protocol text was corrected to match on 2026-06-28.)
 - **Deactivated products are still listed on the storefront** (found 2026-07-30 while making the prod catalog tech-only). `findAllProducts` (`apps/product/src/product.service.ts:1239`) only applies `product.isActive = :isActive` when the CALLER passes the flag — there is no active-only default. So `GET /api/products` and `GET /api/products/with-inventory/all` return products with `isActive:false, approvalBlocked:true` (verified on prod: 2 rows visible after a category-reject cascade). This also means AI-02 risk-blocked products stay visible on the sàn even though the admin UI labels them "Đang ẩn khỏi sàn". Fixing it is NOT a one-line default flip: the storefront's seller dashboard (`frontend/src/features/shop/ShopPage.tsx:256`, `useProducts({userId: currentUser.id})`) uses the SAME list route and must keep seeing its own hidden products, so the backend default change needs a paired FE change (ShopPage explicitly opts into all states) — coordinate via a handoff entry before shipping. Interim workaround for catalog cleanup: hard `DELETE /api/products/:id` (order history survives via the P2-02 order-item snapshot).
@@ -832,6 +892,13 @@ SCALE-06 numbers will prove or disprove.
   (the gateway saga then creates their inventory rows). `--dry-run` reports
   state without writing. Images are deliberately skipped — add later via
   `PATCH /api/products/:id` after a real Cloudinary signed upload.
+  **Env caveat:** `.env.seed` is read ONLY by the seed script (`SEED_BASE`,
+  `SEED_SHOP_USER/PASS`, `SEED_ADMIN_USER/PASS`) — no service loads it. Service
+  runtime config, including the whole payment block (`FRONTEND_URL`, `VNP_*`,
+  `VNPAY_IPN_URL`, `ZALOPAY_*`), belongs in `local/nodeB/.env`; leaving it out is
+  what caused PROD-PAY-01. A fresh-environment bootstrap must do BOTH: fill
+  `local/node{A,B}/.env` from the `.env.example` templates (then
+  `pm2 restart ecosystem.config.js --env production`) and run the seed script.
 - CI: `.github/workflows/ci.yml` validates PRs and pushes to `main` only; it runs npm install/lint/typecheck/Jest/build/PM2 syntax/Compose config/whitespace checks with safe dummy env values. It does not deploy, publish Docker images, connect to Aiven, run migrations, or require repository secrets.
 - Database migration cutoff (2026-07-17): all schema work through PUBID-07 is
   squashed into `database/prod-baseline-20260717/`. Standalone historical
