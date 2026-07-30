@@ -827,16 +827,70 @@ apptransid=probe_diag&…&checksum=deadbeef` returned 200
       `MicroserviceErrorHandler` instead of staying silent. Gateway now passes
       `order.paymentMethod` on the `get_payment_url` send (the payments row has no
       method column).
-      **Remaining user actions:** on EC2 `git pull && npm run build && pm2 restart
-ecosystem.config.js --env production`; set `FRONTEND_URL=https://tryhavejob.ooguy.com`
-      (a real scheme+host, NOT a path like `/ready` — `new URL("/payment-result", base)`
-      discards the base path) plus `VNP_RETURN_URL`/`ZALOPAY_REDIRECT_URL`/`VNPAY_IPN_URL`
-      pointing at the real prod origin, in **`local/nodeB/.env`** (nodeA's `FRONTEND_URL`
-      only feeds gateway CORS). Then re-probe a fresh order — and note the retry-on-read
-      means old broken orders now recover too. **Contract note for FE:** when issuance
-      genuinely fails, `GET /api/order/:id/payment-url` now returns an error status
-      instead of a silent `{"orderUrl":null}` 200 (COD orders still legitimately
-      return `{"orderUrl":null,"status":null}` — no payment row, no retry).
+      **Env scope correction (2026-07-31, verified by reading the configs):** only
+      `FRONTEND_URL` matters for this fix. `VNPayStrategy.createPayment` uses
+      `vnp_ReturnUrl: order.returnUrl ?? config.returnUrl` and `order.returnUrl` is
+      always supplied by `buildFrontendPaymentResultUrl`, so `VNP_RETURN_URL` is dead
+      weight; ZaloPay takes the same `order.returnUrl`. `VNP_*`, `VNPAY_IPN_URL` and
+      `ZALOPAY_*` are all `requireEnv` reads reached at DI/boot time — payments could
+      not be serving TCP with any of them missing, so they are already set on prod and
+      must NOT be touched. (Earlier notes telling the user to also set
+      `VNP_RETURN_URL`/`ZALOPAY_REDIRECT_URL` were over-prescribed.)
+      **Local runtime verification 2026-07-31 (on the fixed code — gateway PID started
+      05:12:20 and payments 05:12:15, both after the 05:10 edits):** VNPay order
+      `ord_lyoLBvFlwqI93vM2` → 201 then `payment-url` 200 with a real
+      `sandbox.vnpayment.vn/paymentv2/vpcpay.html?...` URL; ZaloPay
+      `ord_Cs6Akehf9cwgbFeX` → 201 then 200 with `qcgateway.zalopay.vn/openinapp?...`.
+      Both orders canceled afterwards (stock released). Local `FRONTEND_URL` is valid so
+      the fallback branch was NOT exercised — same code, same flow, only the env differs
+      from prod.
+      **Contract note for FE:** when issuance genuinely fails,
+      `GET /api/order/:id/payment-url` now returns an error status instead of a silent
+      `{"orderUrl":null}` 200 (COD orders still legitimately return
+      `{"orderUrl":null,"status":null}` — no payment row, no retry).
+
+      > ⏳ IN-PROGRESS (sweep): PROD-PAY-01 — step: self-testing (blocked on a prod deploy)
+      >
+      > **State as of 2026-07-31.** Code is COMMITTED AND PUSHED to `main`:
+      > `3856678 fix(payments)`, `9b63d78 fix(gateway)`, `4170ce0 docs(ai)`.
+      > Validated: tsc 0, eslint 0, Jest 183/183 (25 suites, +3 new tests covering the
+      > FRONTEND_URL fallback and the retry-on-read recovery). Working tree clean.
+      > No migration, no new dependency.
+      >
+      > **Waiting on the user to deploy on EC2:** (1) set
+      > `FRONTEND_URL=https://tryhavejob.ooguy.com` in `local/nodeB/.env` — real
+      > scheme+host, no trailing slash, NOT a path (`new URL("/payment-result", base)`
+      > discards the base path); nodeA's copy only feeds gateway CORS and is irrelevant
+      > here. (2) `npm run build` — pm2 runs `dist/`, a pull alone changes nothing.
+      > (3) `pm2 restart ecosystem.config.js --env production` — needed for BOTH gateway
+      > and payments; `FRONTEND_URL` is not in the pm2 `env` block so the `.env` file
+      > wins via dotenv.
+      >
+      > **Next session — resume by probing prod (no code work pending):**
+      > 1. `GET /api/order/ord_yptm9J0JqLbl3kEm/payment-url` — a REAL VNPay order left
+      >    deliberately uncanceled on prod (total 736,207đ, created 2026-07-30, stuck at
+      >    `{"orderUrl":null,"status":"pending"}`). If retry-on-read works it now returns
+      >    a `sandbox.vnpayment.vn` URL, which both proves the recovery leg and gives the
+      >    user something to actually pay. If it still fails, the error message now
+      >    surfaces in the HTTP body via `MicroserviceErrorHandler` — read it, that is
+      >    the remaining root cause.
+      > 2. Create one fresh order per provider on prod and assert `payment-url` returns a
+      >    URL, proving the normal path too. Cancel them afterwards — prod must carry no
+      >    leftover test data (all 10 earlier probe orders are already canceled).
+      > 3. Then close the item: delete this marker, move PROD-PAY-01 out of Active Tasks,
+      >    and note the verification in `CHANGELOG.md` under the existing
+      >    "PROD-PAY-01/mitigation" milestone. The FE handoff entry is ALREADY written
+      >    in `../.agent-local/frontend-handoff.md` — do not duplicate it.
+      >
+      > **Runtime leg still unproven:** retry-on-read has unit coverage but was never
+      > exercised against a real DB row. Proving it locally needs
+      > `UPDATE payments SET order_url = NULL WHERE order_id = <id>` on Node B PG, which
+      > the permission classifier blocked this session. Step 1 above verifies it on prod
+      > instead; if that is inconclusive, ask the user to allow that one DB write.
+      >
+      > **Separate, do NOT fold into this item:** if a prod payment succeeds but the
+      > order never leaves `pending`, check `VNPAY_IPN_URL` — if it still points at
+      > `localhost:3007`, VNPay cannot call back. Different bug, record it separately.
 
 ## Known Issues
 
