@@ -19,6 +19,8 @@ import { getZaloPayConfig } from "./zalopay/zalopay.config";
 import { PAYMENT_MESSAGE } from "libs/constant/response-message.constant";
 import { generateMac } from "./zalopay/zalopay.helper";
 
+const DEFAULT_FRONTEND_URL = "http://localhost:5173";
+
 @Injectable()
 export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
@@ -51,14 +53,23 @@ export class PaymentsService {
         where: { orderId: Number(orderId) },
       });
       if (existing) {
+        if (existing.orderUrl) {
+          this.logger.warn(
+            `[PAYMENTS] Duplicate orderId ${orderId} detected, skipping`,
+          );
+          return {
+            paymentUrl: existing.orderUrl,
+            transactionId: existing.transactionId ?? "",
+            appTransId: existing.appTransId ?? "",
+          };
+        }
+        // The row exists but the gateway URL was never persisted (a previous
+        // attempt threw between save and update). Retry instead of returning an
+        // empty URL, which would leave the order permanently unpayable.
         this.logger.warn(
-          `[PAYMENTS] Duplicate orderId ${orderId} detected, skipping`,
+          `[PAYMENTS] Duplicate orderId ${orderId} without an order URL — regenerating`,
         );
-        return {
-          paymentUrl: existing.orderUrl ?? "",
-          transactionId: existing.transactionId ?? "",
-          appTransId: existing.appTransId ?? "",
-        };
+        return this.issueGatewayPaymentUrl(orderId, amount, paymentMethod);
       }
 
       const payment = this.paymentRepository.create({
@@ -69,33 +80,48 @@ export class PaymentsService {
       await this.paymentRepository.save(payment);
       this.logger.log("[PAYMENTS] payment record saved");
 
-      const { paymentUrl, transactionId, appTransId } = await this.factory
-        .getStrategy(paymentMethod)
-        .createPayment({
-          id: orderId,
-          total: amount,
-          returnUrl: this.buildFrontendPaymentResultUrl(paymentMethod, orderId),
-        });
-      this.logger.log(
-        "[PAYMENTS] createPayment done, appTransId=" + appTransId,
-      );
-
-      const updateResult = await this.paymentRepository.update(
-        { orderId: Number(orderId) },
-        { orderUrl: paymentUrl, transactionId, appTransId },
-      );
-      this.logger.log("[PAYMENTS] payment record updated with appTransId");
-      if (updateResult.affected === 0) {
-        throw new InternalServerErrorException(
-          PAYMENT_MESSAGE.PERSIST_APP_TRANS_ID_FAILED,
-        );
-      }
-
-      return { paymentUrl, transactionId, appTransId };
+      return await this.issueGatewayPaymentUrl(orderId, amount, paymentMethod);
     } catch (err: unknown) {
       this.logger.error("[PAYMENTS] processPayment failed", err);
       throw err;
     }
+  }
+
+  /**
+   * Builds the gateway checkout URL for an already-persisted payment row and
+   * stores it. Split out of processPayment so the same recovery path can be
+   * replayed when an earlier attempt failed after the row was saved.
+   */
+  private async issueGatewayPaymentUrl(
+    orderId: string,
+    amount: number,
+    paymentMethod: PaymentMethodEnum,
+  ): Promise<{
+    paymentUrl: string;
+    transactionId: string;
+    appTransId: string;
+  }> {
+    const { paymentUrl, transactionId, appTransId } = await this.factory
+      .getStrategy(paymentMethod)
+      .createPayment({
+        id: orderId,
+        total: amount,
+        returnUrl: this.buildFrontendPaymentResultUrl(paymentMethod, orderId),
+      });
+    this.logger.log("[PAYMENTS] createPayment done, appTransId=" + appTransId);
+
+    const updateResult = await this.paymentRepository.update(
+      { orderId: Number(orderId) },
+      { orderUrl: paymentUrl, transactionId, appTransId },
+    );
+    this.logger.log("[PAYMENTS] payment record updated with appTransId");
+    if (updateResult.affected === 0) {
+      throw new InternalServerErrorException(
+        PAYMENT_MESSAGE.PERSIST_APP_TRANS_ID_FAILED,
+      );
+    }
+
+    return { paymentUrl, transactionId, appTransId };
   }
 
   async processMultiOrderPayment(
@@ -259,10 +285,28 @@ export class PaymentsService {
 
   async getPaymentUrl(
     orderId: number,
+    paymentMethod?: PaymentMethodEnum,
   ): Promise<{ orderUrl: string | null; status: string | null }> {
     let payment = await this.paymentRepository.findOne({
       where: { orderId },
     });
+    if (payment && !payment.orderUrl && paymentMethod) {
+      // A pending row with no gateway URL means the creation attempt failed
+      // after the row was saved; the RabbitMQ redelivery cannot recover it
+      // because the duplicate guard short-circuits. Retry on read so the buyer
+      // gets a payable URL, and let the failure surface to the caller.
+      if (payment.status === PaymentStatus.PENDING) {
+        this.logger.warn(
+          `[PAYMENTS] Order ${orderId} has no payment URL — regenerating on read`,
+        );
+        const { paymentUrl } = await this.issueGatewayPaymentUrl(
+          String(orderId),
+          Number(payment.amount),
+          paymentMethod,
+        );
+        return { orderUrl: paymentUrl, status: payment.status };
+      }
+    }
     if (!payment) {
       // Multi-order payments store order_id = NULL and the IDs in order_ids (JSONB)
       payment = await this.paymentRepository
@@ -297,11 +341,24 @@ export class PaymentsService {
     paymentMethod: PaymentMethodEnum,
     orderId?: string,
   ): string {
-    const frontendOrigin = (process.env.FRONTEND_URL ?? "http://localhost:5173")
+    const configuredOrigin = (process.env.FRONTEND_URL ?? "")
       .split(",")[0]
       .trim()
       .replace(/\/+$/, "");
-    const url = new URL("/payment-result", frontendOrigin);
+    let url: URL;
+    try {
+      url = new URL(
+        "/payment-result",
+        configuredOrigin || DEFAULT_FRONTEND_URL,
+      );
+    } catch {
+      // An empty or scheme-less FRONTEND_URL must not abort payment creation:
+      // it would leave the order saved but permanently without a gateway URL.
+      this.logger.warn(
+        `[PAYMENTS] FRONTEND_URL is not a valid origin ("${configuredOrigin}") — falling back to ${DEFAULT_FRONTEND_URL}`,
+      );
+      url = new URL("/payment-result", DEFAULT_FRONTEND_URL);
+    }
     if (orderId) {
       url.searchParams.set("order", orderId);
     }

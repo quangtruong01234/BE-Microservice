@@ -98,9 +98,9 @@ export class PaymentsController {
 
   @MessagePattern("get_payment_url")
   getPaymentUrl(
-    @Payload() data: { orderId: number },
+    @Payload() data: { orderId: number; paymentMethod?: PaymentMethod },
   ): Promise<{ orderUrl: string | null; status: string | null }> {
-    return this.paymentsService.getPaymentUrl(data.orderId);
+    return this.paymentsService.getPaymentUrl(data.orderId, data.paymentMethod);
   }
 
   @MessagePattern(PAYMENT_MESSAGE_PATTERN.GET_PAYMENT_OPTIONS)

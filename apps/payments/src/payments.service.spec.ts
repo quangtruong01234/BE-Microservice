@@ -141,4 +141,93 @@ describe("PaymentsService payment return URLs", () => {
       returnUrl: "https://shop.example.com/payment-result?method=zalopay",
     });
   });
+
+  it.each([["" as const], ["shop.example.com" as const]])(
+    "falls back to the default origin when FRONTEND_URL is %p instead of failing",
+    async (frontendUrl) => {
+      process.env.FRONTEND_URL = frontendUrl;
+      const { service, createPayment } = createService();
+
+      await service.processPayment(
+        "111",
+        3900,
+        "Payment for order 111",
+        PaymentMethodEnum.VNPAY,
+      );
+
+      expect(createPayment).toHaveBeenCalledWith({
+        id: "111",
+        total: 3900,
+        returnUrl:
+          "http://localhost:5173/payment-result?order=111&method=vnpay",
+      });
+    },
+  );
+});
+
+describe("PaymentsService getPaymentUrl recovery", () => {
+  function createService(existing: Partial<Payment>): {
+    service: PaymentsService;
+    createPayment: jest.Mock;
+    update: jest.Mock;
+  } {
+    const createPayment = jest.fn().mockResolvedValue({
+      paymentUrl: "https://gateway.example/pay",
+      transactionId: "txn-2",
+      appTransId: "app-2",
+    });
+    const update = jest.fn().mockResolvedValue({ affected: 1 });
+    const service = new PaymentsService(
+      {
+        findOne: jest.fn().mockResolvedValue(existing),
+        update,
+      } as unknown as Repository<Payment>,
+      {} as Repository<PaymentMethod>,
+      {
+        getStrategy: jest.fn().mockReturnValue({
+          createPayment,
+          verifyCallback: jest.fn(),
+        }),
+      } as unknown as PaymentGatewayFactory,
+      { publish: jest.fn() } as unknown as Channel,
+    );
+    return { service, createPayment, update };
+  }
+
+  it("re-issues the gateway URL when a pending payment has none", async () => {
+    const { service, createPayment, update } = createService({
+      id: 9,
+      orderId: 120,
+      amount: 3900,
+      status: PaymentStatus.PENDING,
+      orderUrl: null,
+    });
+
+    const result = await service.getPaymentUrl(120, PaymentMethodEnum.VNPAY);
+
+    expect(createPayment).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith(
+      { orderId: 120 },
+      expect.objectContaining({ orderUrl: "https://gateway.example/pay" }),
+    );
+    expect(result).toEqual({
+      orderUrl: "https://gateway.example/pay",
+      status: PaymentStatus.PENDING,
+    });
+  });
+
+  it("returns the stored URL without calling the gateway again", async () => {
+    const { service, createPayment } = createService({
+      id: 9,
+      orderId: 120,
+      amount: 3900,
+      status: PaymentStatus.PENDING,
+      orderUrl: "https://gateway.example/existing",
+    });
+
+    const result = await service.getPaymentUrl(120, PaymentMethodEnum.VNPAY);
+
+    expect(createPayment).not.toHaveBeenCalled();
+    expect(result.orderUrl).toBe("https://gateway.example/existing");
+  });
 });
