@@ -27,7 +27,12 @@ describe("VNPayStrategy.verifyCallback", () => {
 
     await expect(
       strategy.verifyCallback({ garbage: "payload" }),
-    ).resolves.toEqual({ orderId: "", success: false });
+    ).resolves.toEqual({
+      orderId: "",
+      success: false,
+      isVerified: false,
+      isSuccess: false,
+    });
   });
 
   it("reports a missing payload as unverified instead of throwing", async () => {
@@ -36,13 +41,15 @@ describe("VNPayStrategy.verifyCallback", () => {
     await expect(strategy.verifyCallback(undefined)).resolves.toEqual({
       orderId: "",
       success: false,
+      isVerified: false,
+      isSuccess: false,
     });
   });
 
   it("rejects a payload whose secure hash does not match", async () => {
     const strategy = new VNPayStrategy();
 
-    const { success } = await strategy.verifyCallback({
+    const { success, isVerified } = await strategy.verifyCallback({
       vnp_TmnCode: "TESTTMN",
       vnp_TxnRef: "1700000000123",
       vnp_TransactionNo: "14567890",
@@ -52,5 +59,6 @@ describe("VNPayStrategy.verifyCallback", () => {
     });
 
     expect(success).toBe(false);
+    expect(isVerified).toBe(false);
   });
 });

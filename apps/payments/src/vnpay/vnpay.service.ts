@@ -51,9 +51,17 @@ export class VNPayStrategy implements IPaymentStrategy {
     });
   }
 
-  verifyCallback(
-    payload: unknown,
-  ): Promise<{ orderId: string; success: boolean }> {
+  // `isVerified` (the secure hash matches) and `isSuccess` (the transaction
+  // itself succeeded) are reported separately: only a hash mismatch may answer
+  // VNPay with "97 Checksum failed". A correctly signed callback for a declined
+  // transaction is a valid callback and must be acknowledged, otherwise VNPay
+  // keeps retrying it.
+  verifyCallback(payload: unknown): Promise<{
+    orderId: string;
+    success: boolean;
+    isVerified: boolean;
+    isSuccess: boolean;
+  }> {
     // The SDK throws when the payload is malformed (missing or garbled vnp_*
     // fields). A provider callback must always answer with a response code, so
     // an unparseable payload is reported as a failed verification instead of
@@ -63,11 +71,18 @@ export class VNPayStrategy implements IPaymentStrategy {
       return Promise.resolve({
         orderId: String(result.vnp_TxnRef),
         success: result.isVerified && result.isSuccess,
+        isVerified: result.isVerified,
+        isSuccess: result.isSuccess,
       });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Unknown error";
       this.logger.warn(`VNPay callback payload rejected: ${message}`);
-      return Promise.resolve({ orderId: "", success: false });
+      return Promise.resolve({
+        orderId: "",
+        success: false,
+        isVerified: false,
+        isSuccess: false,
+      });
     }
   }
 }
