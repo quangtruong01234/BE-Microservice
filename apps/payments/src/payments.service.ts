@@ -345,6 +345,14 @@ export class PaymentsService {
       .split(",")[0]
       .trim()
       .replace(/\/+$/, "");
+    if (!configuredOrigin) {
+      // An unset FRONTEND_URL used to fall through to the localhost default
+      // silently, so a misconfigured deployment issued gateway URLs whose
+      // return URL the provider rejects while the logs stayed clean.
+      this.logger.warn(
+        `[PAYMENTS] FRONTEND_URL is not set — payment return URL falls back to ${DEFAULT_FRONTEND_URL}`,
+      );
+    }
     let url: URL;
     try {
       url = new URL(

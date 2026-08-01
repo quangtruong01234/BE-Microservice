@@ -72,6 +72,15 @@ const MYSQL_POOL = {
 };
 const PG_POOL = { inventory: 5, payments: 4, rewards: 3 };
 
+// Public storefront origin, used by payments to build the gateway return URL
+// (`/payment-result`). Injected by PM2 so it cannot depend on the per-node
+// .env file being picked up: PROD-PAY-01 had payments issuing
+// `http://localhost:5173` return URLs — which VNPay rejects — while
+// local/nodeB/.env carried the right value. PM2-injected env wins, because
+// both dotenv and @nestjs/config only assign keys not already in process.env.
+// Override per machine with `FRONTEND_URL=... pm2 start ecosystem.config.js`.
+const FRONTEND_URL = process.env.FRONTEND_URL || "https://tryhavejob.ooguy.com";
+
 module.exports = {
   apps: [
     // Node A
@@ -88,7 +97,7 @@ module.exports = {
     service("chat", { MYSQL_POOL_SIZE: MYSQL_POOL.chat }),
     // Node B
     service("inventory", { PG_POOL_SIZE: PG_POOL.inventory }),
-    service("payments", { PG_POOL_SIZE: PG_POOL.payments }),
+    service("payments", { PG_POOL_SIZE: PG_POOL.payments, FRONTEND_URL }),
     service("rewards", { PG_POOL_SIZE: PG_POOL.rewards }),
   ],
 };
