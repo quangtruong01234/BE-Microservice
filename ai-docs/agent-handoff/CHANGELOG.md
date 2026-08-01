@@ -6,6 +6,40 @@
 
 ## Completed Milestones
 
+- VNPay IPN response codes — fixed 2026-08-02, verified locally (`cef4981`, NO
+  migration). Found while diagnosing PROD-PAY-02: the VNPay merchant portal's
+  "Test call IPN" button kept answering `{"RspCode":"97","Message":"Checksum
+  failed"}` even though the endpoint itself was healthy. The first hypothesis —
+  the portal's `Kiểu mã hóa` dropdown (MD5) mismatching the SDK's SHA512 default
+  — was **falsified**: the user switched it to SHA256 and 97 persisted. The real
+  cause was in our code. `VNPayStrategy.verifyCallback` returned a single
+  `success: result.isVerified && result.isSuccess`, collapsing two unrelated
+  facts: whether the secure hash matched, and whether the transaction itself
+  succeeded (`isSuccess` is just `vnp_ResponseCode === "00"` — confirmed by
+  reading `node_modules/vnpay/dist/chunk-L7CUEWUR.cjs`). `handleVNPayCallback`
+  then reported any declined transaction as a checksum failure. That is a spec
+  deviation with a real consequence: VNPay treats every RspCode other than "00"
+  as an undelivered notification and **retries the IPN**, so each failed payment
+  produced a retry storm.
+  **Fix:** `verifyCallback` now returns `isVerified` and `isSuccess` alongside
+  the combined `success`, which is deliberately kept — the browser-return leg
+  (`completeVNPayReturn`, `payments.controller.ts:164`) still wants the combined
+  value, because for a user-facing result page a declined transaction genuinely
+  is a failure. `handleVNPayCallback` answers `97` only on a hash mismatch, and
+  logs + acknowledges a verified-but-declined callback with `00 Confirm Success`;
+  nothing is persisted, so the order stays PENDING and the stale-reservation
+  sweeper releases it. Blast radius is contained: all three inbound paths (gateway
+  TCP, direct `POST`, direct `GET`) funnel through the same
+  `handleVNPayCallback`, and the ZaloPay strategy has no equivalent conflation
+  (its `success` is mac validity only — ZaloPay only calls back on success).
+  **Verification:** tsc 0 errors, eslint clean, `jest apps/payments` 23/23
+  (4 new callback-branch tests). Runtime-tested against the running local stack
+  with payloads signed using the SDK's own algorithm: valid-signature/declined
+  (`vnp_ResponseCode=24`) → `00` on gateway `GET`, gateway `POST`, and payments
+  `:3007` `GET`/`POST` (this case returned `97` before the fix); tampered hash →
+  `97`; valid+successful with an unknown `vnp_TxnRef` → `01 Order not found or DB
+  error`. Not yet deployed to EC2 — see PROD-PAY-02 in `snapshot.md`.
+
 - PROD-PAY-01 — CLOSED 2026-08-01, runtime-verified on prod (fix, NO migration).
   After the mitigation below was deployed, prod issued URLs again but VNPay
   rejected them: `vnp_ReturnUrl` was

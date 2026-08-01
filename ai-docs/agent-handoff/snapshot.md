@@ -792,17 +792,34 @@ SCALE-06 numbers will prove or disprove.
       keeping the local NotFound/Forbidden throws outside the catch. Add a
       nonexistent-id test to the order self-test set.
 
-- [ ] **PROD-PAY-02 — a completed prod payment may never advance the order out of
-      `pending` (UNVERIFIED, do NOT fold into PROD-PAY-01).** PROD-PAY-01 only proved
-      the _outbound_ leg (the provider URL is now correct and payable). The _inbound_
-      leg is untested on prod: `VNPAY_IPN_URL` in `local/nodeB/.env` must be a public
-      URL that VNPay can reach (`https://tryhavejob.ooguy.com/vnpay/callback` via the
-      nginx facade), not `http://localhost:3007/...`. Same question for the ZaloPay
-      callback. To verify: actually pay a sandbox order end-to-end, then poll
-      `GET /api/order/:id` and assert `status` leaves `pending`. If it does not, read
-      the payments pm2 log for an inbound callback — no entry at all means the
-      provider never reached us (env/nginx), an entry with a rejection means a
-      checksum/config mismatch.
+- [ ] **PROD-PAY-02 — inbound VNPay IPN leg. Endpoint PROVEN on prod; one real
+      end-to-end payment still owed.** What is already established (2026-08-01/02):
+  - The prod IPN endpoint works. Replaying the user's REAL VNPay-signed
+    transaction against `GET https://tryhavejob.ooguy.com/vnpay/callback` returned
+    `{"RspCode":"00","Message":"Confirm Success"}` — proving nginx→gateway→payments→DB
+    reachability, a correct `VNP_HASH_SECRET` for terminal `C8XARG2R`, SHA512
+    verification, and that `completeVNPayPayment` is idempotent (the order was
+    already `processing`).
+  - `VNPAY_IPN_URL` (`vnpay.config.ts`) is **dead code** — grep shows `ipnUrl` is
+    never consumed. VNPay reads the IPN URL from the merchant portal
+    (`sandbox.vnpayment.vn/merchantv2/Account/TerminalEdit.htm` — reachable by direct
+    URL even when "Danh sách website" renders empty), never from the request.
+    Editing `.env` cannot change where the IPN is sent.
+  - The portal's "Test call IPN" `97 Checksum failed` was a **false alarm caused by
+    a real bug**, since fixed (commit `cef4981`): `verifyCallback` collapsed
+    `isVerified && isSuccess`, so a correctly signed callback for a non-`00`
+    transaction (which is what the portal's test button sends) reported a checksum
+    failure. Verified locally on all four entry points.
+  - **Portal setting still owed by the user:** `Kiểu mã hóa` is currently `SHA256`;
+    the backend verifies **SHA512** (the SDK default — `new VNPay({...})` passes no
+    `hashAlgorithm`). Set it back to SHA512, or the code must pass the algorithm
+    explicitly.
+      REMAINING: deploy the fix to EC2 (`npm run build` + `pm2 restart payments`),
+      then pay a sandbox order for real, **close the tab immediately** so the browser
+      -return leg cannot mask the result, and poll `GET /api/order/:id` for `status`
+      leaving `pending`. If it does not move: no payments pm2 log entry at all ⇒ the
+      provider never reached us (portal URL/nginx); an entry with a rejection ⇒
+      checksum/config mismatch. The ZaloPay callback leg is still unverified.
 
 ## Known Issues
 
