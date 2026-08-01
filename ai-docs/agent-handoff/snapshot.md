@@ -643,8 +643,7 @@ user/inventory offenders; PERF-05/06 closed 2026-07-07; PERF-11 closed
 > Move to CHANGELOG when shipped, delete the line here.
 
 - [x] **SCALE-01 — DONE 2026-07-19** (see CHANGELOG). **(a)** `RedisIoAdapter`
-      (`apps/gateway/src/common/redis-io.adapter.ts`, `@socket.io/redis-adapter`
-      + 2 ioredis clients off `REDIS_*` env) wired via `useWebSocketAdapter` in
+      (`apps/gateway/src/common/redis-io.adapter.ts`, `@socket.io/redis-adapter` + 2 ioredis clients off `REDIS_*` env) wired via `useWebSocketAdapter` in
       gateway `main.ts` — covers both WS namespaces; falls back to in-memory
       with a warn if Redis is down at boot. Runtime-verified 6/6.
       **(b)** gateway cluster mode shipped env-gated in `ecosystem.config.js`:
@@ -793,107 +792,30 @@ SCALE-06 numbers will prove or disprove.
       keeping the local NotFound/Forbidden throws outside the catch. Add a
       nonexistent-id test to the order self-test set.
 
-- [ ] **PROD-PAY-01 — online payment is DOWN on prod: no gateway URL is ever
-      produced. Code mitigation SHIPPED (not yet deployed); prod env fix still owed
-      by the user.** Live probe 2026-07-30 (both providers, fresh orders, prod
-      `https://tryhavejob.ooguy.com`): `POST /api/order` with `paymentMethod:"vnpay"`
-      → 201, and with `"zalopay"` → 201, but `GET /api/order/:id/payment-url` returns
-      `{"orderUrl":null,"status":"pending"}` for BOTH (re-probed after 4–7s and again
-      after the user added the nodeB payment block — unchanged). `status:"pending"`
-      proves the payments row WAS created, so RabbitMQ delivery and the
-      `order_created` consumer are healthy — the failure is inside
-      `PaymentsService.processPayment` AFTER `paymentRepository.save` and BEFORE the
-      `orderUrl` UPDATE.
-      **Black-box eliminations (2026-07-31, no SSH/log access needed):**
-      (a) **ZaloPay env IS present** — `GET /api/gateway/payment-result?appid=1&
-apptransid=probe_diag&…&checksum=deadbeef` returned 200
-      `{"gateway":"zalopay","status":"failed"}`; `verifyZaloPayReturn` reads
-      `getZaloPayConfig().key2` with NO try/catch, so a missing `ZALOPAY_*` would
-      have produced a 5xx instead. This also proves `local/nodeB/.env` IS being
-      loaded. (b) **VNPay env IS present** — `VNPayStrategy`'s constructor calls
-      `getVNPayConfig()` at DI time, so payments could not have booted (nor answered
-      `get_payment_url`) with `VNP_*` missing. (c) amount type, gateway factory, and
-      the UPDATE are all fine; VNPay's `createPayment` makes no network call, so
-      egress cannot explain a symmetric failure. ⇒ **The only surviving shared throw
-      site is `buildFrontendPaymentResultUrl`** — prod `FRONTEND_URL` set but empty
-      or scheme-less (`new URL("/payment-result", "")` throws `ERR_INVALID_URL`; the
-      `??` default only covered *undefined*, not `""`).
-      **Shipped in this repo (awaiting EC2 deploy):** the URL builder now falls back
-      to a safe default origin with a warn instead of throwing; `processPayment`'s
-      duplicate guard regenerates when the existing row has no `orderUrl` (was
-      returning `""` forever); and `getPaymentUrl` retries issuance on read for a
-      PENDING row with no URL — which both **repairs the already-broken orders** and
-      makes any *other* root cause surface synchronously in the HTTP body via
-      `MicroserviceErrorHandler` instead of staying silent. Gateway now passes
-      `order.paymentMethod` on the `get_payment_url` send (the payments row has no
-      method column).
-      **Env scope correction (2026-07-31, verified by reading the configs):** only
-      `FRONTEND_URL` matters for this fix. `VNPayStrategy.createPayment` uses
-      `vnp_ReturnUrl: order.returnUrl ?? config.returnUrl` and `order.returnUrl` is
-      always supplied by `buildFrontendPaymentResultUrl`, so `VNP_RETURN_URL` is dead
-      weight; ZaloPay takes the same `order.returnUrl`. `VNP_*`, `VNPAY_IPN_URL` and
-      `ZALOPAY_*` are all `requireEnv` reads reached at DI/boot time — payments could
-      not be serving TCP with any of them missing, so they are already set on prod and
-      must NOT be touched. (Earlier notes telling the user to also set
-      `VNP_RETURN_URL`/`ZALOPAY_REDIRECT_URL` were over-prescribed.)
-      **Local runtime verification 2026-07-31 (on the fixed code — gateway PID started
-      05:12:20 and payments 05:12:15, both after the 05:10 edits):** VNPay order
-      `ord_lyoLBvFlwqI93vM2` → 201 then `payment-url` 200 with a real
-      `sandbox.vnpayment.vn/paymentv2/vpcpay.html?...` URL; ZaloPay
-      `ord_Cs6Akehf9cwgbFeX` → 201 then 200 with `qcgateway.zalopay.vn/openinapp?...`.
-      Both orders canceled afterwards (stock released). Local `FRONTEND_URL` is valid so
-      the fallback branch was NOT exercised — same code, same flow, only the env differs
-      from prod.
-      **Contract note for FE:** when issuance genuinely fails,
-      `GET /api/order/:id/payment-url` now returns an error status instead of a silent
-      `{"orderUrl":null}` 200 (COD orders still legitimately return
-      `{"orderUrl":null,"status":null}` — no payment row, no retry).
-
-      > ⏳ IN-PROGRESS (sweep): PROD-PAY-01 — step: self-testing (blocked on a prod deploy)
-      >
-      > **State as of 2026-07-31.** Code is COMMITTED AND PUSHED to `main`:
-      > `3856678 fix(payments)`, `9b63d78 fix(gateway)`, `4170ce0 docs(ai)`.
-      > Validated: tsc 0, eslint 0, Jest 183/183 (25 suites, +3 new tests covering the
-      > FRONTEND_URL fallback and the retry-on-read recovery). Working tree clean.
-      > No migration, no new dependency.
-      >
-      > **Waiting on the user to deploy on EC2:** (1) set
-      > `FRONTEND_URL=https://tryhavejob.ooguy.com` in `local/nodeB/.env` — real
-      > scheme+host, no trailing slash, NOT a path (`new URL("/payment-result", base)`
-      > discards the base path); nodeA's copy only feeds gateway CORS and is irrelevant
-      > here. (2) `npm run build` — pm2 runs `dist/`, a pull alone changes nothing.
-      > (3) `pm2 restart ecosystem.config.js --env production` — needed for BOTH gateway
-      > and payments; `FRONTEND_URL` is not in the pm2 `env` block so the `.env` file
-      > wins via dotenv.
-      >
-      > **Next session — resume by probing prod (no code work pending):**
-      > 1. `GET /api/order/ord_yptm9J0JqLbl3kEm/payment-url` — a REAL VNPay order left
-      >    deliberately uncanceled on prod (total 736,207đ, created 2026-07-30, stuck at
-      >    `{"orderUrl":null,"status":"pending"}`). If retry-on-read works it now returns
-      >    a `sandbox.vnpayment.vn` URL, which both proves the recovery leg and gives the
-      >    user something to actually pay. If it still fails, the error message now
-      >    surfaces in the HTTP body via `MicroserviceErrorHandler` — read it, that is
-      >    the remaining root cause.
-      > 2. Create one fresh order per provider on prod and assert `payment-url` returns a
-      >    URL, proving the normal path too. Cancel them afterwards — prod must carry no
-      >    leftover test data (all 10 earlier probe orders are already canceled).
-      > 3. Then close the item: delete this marker, move PROD-PAY-01 out of Active Tasks,
-      >    and note the verification in `CHANGELOG.md` under the existing
-      >    "PROD-PAY-01/mitigation" milestone. The FE handoff entry is ALREADY written
-      >    in `../.agent-local/frontend-handoff.md` — do not duplicate it.
-      >
-      > **Runtime leg still unproven:** retry-on-read has unit coverage but was never
-      > exercised against a real DB row. Proving it locally needs
-      > `UPDATE payments SET order_url = NULL WHERE order_id = <id>` on Node B PG, which
-      > the permission classifier blocked this session. Step 1 above verifies it on prod
-      > instead; if that is inconclusive, ask the user to allow that one DB write.
-      >
-      > **Separate, do NOT fold into this item:** if a prod payment succeeds but the
-      > order never leaves `pending`, check `VNPAY_IPN_URL` — if it still points at
-      > `localhost:3007`, VNPay cannot call back. Different bug, record it separately.
+- [ ] **PROD-PAY-02 — a completed prod payment may never advance the order out of
+      `pending` (UNVERIFIED, do NOT fold into PROD-PAY-01).** PROD-PAY-01 only proved
+      the _outbound_ leg (the provider URL is now correct and payable). The _inbound_
+      leg is untested on prod: `VNPAY_IPN_URL` in `local/nodeB/.env` must be a public
+      URL that VNPay can reach (`https://tryhavejob.ooguy.com/vnpay/callback` via the
+      nginx facade), not `http://localhost:3007/...`. Same question for the ZaloPay
+      callback. To verify: actually pay a sandbox order end-to-end, then poll
+      `GET /api/order/:id` and assert `status` leaves `pending`. If it does not, read
+      the payments pm2 log for an inbound callback — no entry at all means the
+      provider never reached us (env/nginx), an entry with a rejection means a
+      checksum/config mismatch.
 
 ## Known Issues
 
+- `PATCH /api/order/:id/cancel` on a COD order that already has a GHN waybill can
+  return **503 to the client even though the cancel committed** (seen once on prod
+  2026-08-01, order `ord_HuypgIrmcskqq4Ny` / `LAYGKP`: first call 503, order was
+  `canceled` afterwards, retry then 400 "Order cannot be canceled"). Almost
+  certainly the gateway TCP `timeout(10000)` firing while the orders service waits
+  on the GHN cancel call — the local transaction has already committed. Not
+  investigated. FE must treat a 503 on cancel as _unknown outcome_ and re-read the
+  order rather than showing a hard failure. If this recurs, the fix is to make the
+  GHN cancel leg best-effort/async like the create leg instead of blocking the
+  cancel response.
 - Array query params on the gateway (discovered in PERF-10 verification, 2026-07-03): Express runs the **simple** query parser, so bracket syntax `?categoryIds[]=18` arrives as literal key `"categoryIds[]"` and the global `ValidationPipe({whitelist:true})` silently strips it → 200 UNFILTERED, no error. Supported syntaxes: repeated keys `?categoryIds=16&categoryIds=18` or a single `?categoryIds=18` (scalar→array `@Transform` added to `GetProductsQueryDto`). The storefront FE has been sending singular `categoryId`/`brandId` (never matched the DTO) — marketplace filter was a silent NO-OP; FE handoff entry written 2026-07-03 (`../.agent-local/frontend-handoff.md`). Any future array-typed query DTO field needs the same guard-and-wrap `@Transform`.
 - GHN free-text address resolution is best-effort: a garbage/placeholder address (e.g. `District 1 | Ward 1`) can resolve to a wrong-but-valid GHN location instead of failing, because short numeric master-data names match many free-text parts via containment. Real well-formed VN addresses resolve correctly. **Durable fix shipped (GHN-ADDR-01, 2026-07-23):** `POST /api/order` and `POST /api/order/shipping-fee` now accept optional `toDistrictId` (GHN DistrictID, int) + `toWardCode` (GHN WardCode, string) captured from the FE GHN dropdowns. When BOTH are present the waybill/fee-preview use the exact ids and skip free-text name resolution entirely (verified: garbage ward/district/province names + valid ids → 201, same names without ids → 400). A partial pair (one missing) is treated as absent → legacy free-text fallback, so this Known Issue only remains for callers that DON'T send the ids. FE handoff written. (Truly unresolvable free-text addresses still return 400, not 502.) **RUNTIME-VERIFIED ON PROD 2026-07-30 (4/4):** COD order created with garbage free-text ward/district/province + `toDistrictId:3440`/`toWardCode:"13010"` → 201 with `ghnOrderCode:"LARQ44"`, `shippingFee:46207`, both ids persisted; the SAME garbage address WITHOUT the ids → 201 but `ghnOrderCode:null`, `shippingFee:0` (free-text resolution fails, non-fatal) — proving the waybill came from the exact ids; `PATCH /api/order/:id/ready-to-ship` → `processing` with the waybill intact. Note: for COD the waybill is created at ORDER-CREATE time, so ready-to-ship only re-uses the existing `ghnOrderCode` (the "waybill created at ready-to-ship" note applies when it is still null). Both test orders were canceled afterwards (admin GHN cancel + buyer cancel), so prod carries no leftover test data. Minor: `toDistrictId` DTO is `@IsInt()` without `@Type(()=>Number)` — a numeric-string `"1450"` → 400 (FE must send a real number).
 - nodeB services (inventory/payments/rewards) used to silently crash after an idle period (e.g. machine sleep / broker restart): `RmqModule.registerDirectPublisher()` opened a raw amqplib connection+channel with NO `'error'`/`'close'` listeners, so an idle connection drop was thrown as an uncaught exception and killed the process (the `nest --watch` wrapper survived, masking it). FIXED 2026-06-26: the publisher now attaches error/close handlers, uses a `?heartbeat=30` URI, connects in the background (never blocks bootstrap), and auto-reconnects via a self-healing Proxy. If a nodeB service is ever found down, check whether its compiled `dist/apps/<svc>/main` process is actually running — `--watch` does NOT auto-restart a runtime crash.
@@ -902,6 +824,36 @@ apptransid=probe_diag&…&checksum=deadbeef` returned 200
 
 ## Ops / Runtime Reference
 
+- **`FRONTEND_URL` for payments is injected by pm2, not by `.env`** (PROD-PAY-01,
+  2026-08-01). `ecosystem.config.js` sets it on the `payments` app (default
+  `https://tryhavejob.ooguy.com`, override with `FRONTEND_URL=... pm2 start ...`).
+  This is deliberate: prod had the correct value in `local/nodeB/.env` yet the
+  process still read it as empty, and pm2-injected env structurally wins because
+  both `dotenv` and `@nestjs/config` only assign keys NOT already in
+  `process.env`. Payments builds the provider return URL
+  (`<FRONTEND_URL>/payment-result?order=<n>&method=<m>`) from it — a wrong value
+  makes VNPay reject the payment link at its merchant-domain check. An unset value
+  now logs a `warn` before falling back to `http://localhost:5173` instead of
+  failing silently. Changing it needs `pm2 delete payments && pm2 start
+ecosystem.config.js --env production --only payments` — a plain `pm2 restart`
+  does NOT refresh pm2's stored env snapshot. Note `FRONTEND_URL` is ALSO read
+  from `local/nodeA/.env` by the gateway for CORS; the two are independent.
+- **Prod EC2 runs on a stop/start schedule set by the user in the AWS console**
+  (confirmed 2026-08-01) — roughly up ~08:00, stopped ~18:00 server time. Every
+  boot therefore writes a recurring burst of harmless ERROR lines that is NOT a
+  fault and must not be re-diagnosed: RabbitMQ `Connection closed: 320
+(CONNECTION-FORCED) ... reason 'shutdown'` in every RMQ-connected service
+  (graceful broker stop at machine shutdown) and `[ioredis] ECONNREFUSED
+127.0.0.1:6379` / `write EPIPE` in gateway/user/product/social (NestJS starts
+  before the `restart: unless-stopped` containers are back). Both self-heal.
+  Tell-tale that it was a reboot rather than a crash: service PIDs drop back to
+  3–4 digits. Reading `pm2 logs --lines N` is misleading here — it tails the
+  `*.error-*.log` FILE, so days-old bursts look current, and `grep -i error`
+  also matches the `<svc>.error-N.log` header lines (so a clean service still
+  appears in the output and `|| echo "no errors"` never fires). Use
+  `pm2 logs --lines 200 --nostream | grep -v 'last .* lines:' | grep "$(date +%F)"`,
+  or `pm2 flush` before a deploy self-test. `redis-cli` is NOT installed on the
+  host (Redis is containerized) — use `docker exec trybuy-redis redis-cli ping`.
 - PDF invoice (2026-07-15, NO migration): `GET /api/order/:id/invoice` returns a
   production-ready A4 PDF. Access = buyer OR order's seller OR admin (else 403;
   role read from `req.user.role`, threaded to orders TCP as `requestingUserRole`).

@@ -6,6 +6,47 @@
 
 ## Completed Milestones
 
+- PROD-PAY-01 — CLOSED 2026-08-01, runtime-verified on prod (fix, NO migration).
+  After the mitigation below was deployed, prod issued URLs again but VNPay
+  rejected them: `vnp_ReturnUrl` was
+  `http://localhost:5173/payment-result?order=N&method=vnpay`, which fails VNPay's
+  merchant-domain check. So the mitigation's _predicted_ root cause was wrong in an
+  instructive way — `buildFrontendPaymentResultUrl` was not throwing on an invalid
+  `FRONTEND_URL`, it was reading the variable as **empty** and taking the silent
+  `http://localhost:5173` default. **Why the env investigation dead-ended:** every
+  probe contradicted the next. `VNP_TMN_CODE` from `local/nodeB/.env` provably
+  reached the live process (an edited TmnCode showed up in generated URLs);
+  `dotenv.parse` on that same file yielded the right `FRONTEND_URL`; a ConfigModule
+  repro run from `/opt/trybuy/api` printed the correct value; the pm2 logs proved
+  which PID served the request — yet `configuredOrigin` was falsy at runtime.
+  `/proc/<pid>/environ` showed neither key, which is expected and therefore proves
+  nothing (it only records spawn-time env, not what ConfigModule assigns later).
+  Two hypotheses were falsified by reading code rather than guessing: webpack
+  inlining `process.env.FRONTEND_URL` (the local bundle still contains the literal
+  expression) and a second `ConfigModule.forRoot` pointing at a different env file
+  (`libs/database/src/postgres-database.module.ts` uses the same
+  `./local/nodeB/.env`). One lead was never resolved: the EC2 bundle was 122,551
+  bytes against 139,257 locally for the same commit. **Fix shipped (`5387a63`)
+  is correct under every surviving hypothesis:** (1) `ecosystem.config.js` injects
+  `FRONTEND_URL` into the `payments` app's pm2 `env` — pm2-injected env wins
+  structurally, because both `dotenv` and `@nestjs/config` only assign keys NOT
+  already present in `process.env`, and unlike a `.env` file it is verifiable in
+  `/proc/<pid>/environ`; (2) the localhost fallback now logs a `warn` on both the
+  empty and the invalid-origin branch, so this failure can never again be silent.
+  Validated: `tsc --noEmit` 0, eslint 0, `npx jest apps/payments` 3 suites /
+  19 tests. **Prod self-test 2026-08-01, all green:** fresh VNPay order
+  `ord_iwL4MdBlvXb8Ckm2` → `payment-url` 200 with
+  `vnp_ReturnUrl=https://tryhavejob.ooguy.com/payment-result?order=19&method=vnpay`
+  (was localhost); fresh ZaloPay order `ord_l9caYNZDCGs6kl03` → 200 with a
+  `qcgateway.zalopay.vn/openinapp?...` URL. Note `getPaymentUrl` returns the
+  **stored** `orderUrl` once one exists, so every re-test of this needs a brand-new
+  order. Cleanup: the 7 stale prod probe orders were canceled; the 2 fresh ones
+  were left payable for the demo. Ops consequence recorded in `snapshot.md`:
+  changing `FRONTEND_URL` now requires `pm2 delete payments` + `pm2 start`, since
+  `pm2 restart` does not refresh the stored env snapshot. **Still unverified and
+  tracked separately as PROD-PAY-02:** the inbound callback leg — whether a
+  completed payment actually advances the order out of `pending` depends on
+  `VNPAY_IPN_URL` being publicly reachable.
 - PROD-PAY-01/mitigation — payment-URL issuance made non-fatal and self-healing
   (2026-07-31, fix, NO migration). Prod produced no gateway URL for EITHER
   provider: order create 201, but `GET /api/order/:id/payment-url` →
@@ -22,7 +63,7 @@
   `createPayment` making no network call, the only throw site shared by both
   providers was `buildFrontendPaymentResultUrl`: `new URL("/payment-result", "")`
   raises `ERR_INVALID_URL` when `FRONTEND_URL` is empty or scheme-less (the `??`
-  default only covered *undefined*). Changes, all in the payments service plus one
+  default only covered _undefined_). Changes, all in the payments service plus one
   gateway field: (1) the URL builder catches and falls back to a default origin
   with a warn — a misconfigured `FRONTEND_URL` can no longer abort payment
   creation; (2) `issueGatewayPaymentUrl` extracted from `processPayment` so the
@@ -220,12 +261,12 @@ GET /api/products` on an empty catalog. Root cause chain on a fresh DB: the prod
   ids → 400 (`Cannot resolve province "wwwww"`); partial pair (district only) →
   201 free-text fallback; `toDistrictId:"abc"` → 400 validation. Full order-create
   persistence leg reached the authoritative stock-reserve step (new fields accepted
-  + validated) but could not complete a 201 because this dev env's PG inventory has
-  0 availableStock for all products (pre-existing seed gap, unrelated) — the GHN
-  build-body core it would exercise at ship time is already proven by the fee-preview
-  bypass test. FE handoff (storefront checkout) written to `frontend-handoff.md`.
-  Follow-up (not scheduled): the GHN admin `update-receiver` path still rewrites
-  only the free-text head and does not update the persisted ids.
+  - validated) but could not complete a 201 because this dev env's PG inventory has
+    0 availableStock for all products (pre-existing seed gap, unrelated) — the GHN
+    build-body core it would exercise at ship time is already proven by the fee-preview
+    bypass test. FE handoff (storefront checkout) written to `frontend-handoff.md`.
+    Follow-up (not scheduled): the GHN admin `update-receiver` path still rewrites
+    only the free-text head and does not update the persisted ids.
 
 - SCALE-07 — gateway inventory-read TCP timeouts (2026-07-22): added the missing
   `.pipe(timeout(TCP_TIMEOUT_MS.READ))` (5s, pure reads) to the three
@@ -299,12 +340,12 @@ GET /api/products` on an empty catalog. Root cause chain on a fresh DB: the prod
   `/zalopay/callback`, `/vnpay/callback`, and `/socket.io/` are exempt
   (providers retry on their own schedule; sockets are long-lived). **(b)
   Upstream keepalive** — `upstream trybuy_gateway { server 127.0.0.1:3000;
-  keepalive 32; }` + `proxy_http_version 1.1` + `Connection ""` on non-WS
+keepalive 32; }` + `proxy_http_version 1.1` + `Connection ""` on non-WS
   locations (the old conf forced `Connection "upgrade"` on `/`, which killed
   reuse); `/socket.io/` keeps upgrade headers + 300s read timeout. **(c)
   gzip** — JSON/text types, level 5, min 1024, `gzip_vary` (no Node
   compression middleware needed). **(d) 5s micro-cache** — `proxy_cache_path
-  /var/cache/nginx/trybuy` (10m keys, 100m max) with `proxy_cache_lock on`
+/var/cache/nginx/trybuy` (10m keys, 100m max) with `proxy_cache_lock on`
   (stampede guard) + `proxy_cache_use_stale updating` on a regex matching
   EXACTLY the four @Public user-invariant catalog GETs: `GET /api/products`,
   `/api/products/prod_<id>`, `/api/products/brands`, `/api/products/categories`
@@ -367,7 +408,7 @@ GET /api/products` on an empty catalog. Root cause chain on a fresh DB: the prod
   `ecosystem.config.js` gateway entry now reads `GATEWAY_INSTANCES` (default 1
   → fork, identical to before); >1 switches `exec_mode:"cluster"` with that
   instance count — `GATEWAY_INSTANCES=4 pm2 start ecosystem.config.js --env
-  production`. Safe because gateway HTTP is stateless (JWT cookie) and WS
+production`. Safe because gateway HTTP is stateless (JWT cookie) and WS
   broadcast is cross-instance via the SCALE-01a Redis adapter; the gateway
   holds no SQL pool so the SCALE-02 per-service budget is unaffected.
   Verified with ×4 on the prod build: 4 workers online, 0 restarts, 0 non-2xx
@@ -506,10 +547,10 @@ GET /api/products` on an empty catalog. Root cause chain on a fresh DB: the prod
   binds violating the "only Nginx is public" rule. (1) chat hardcoded
   `host: "0.0.0.0"` on TCP 3012 → now `TCP_HOST` (`127.0.0.1`) like every other
   internal service. (2) product had a stray HTTP `app.listen(PRODUCT_TCP_PORT +
-  100)` (= 3106, all interfaces, zero HTTP routes) → removed, replaced with
+100)` (= 3106, all interfaces, zero HTTP routes) → removed, replaced with
   `app.init()` (same fix as inventory 3002 below). (3) gateway `app.listen(port)`
   bound all interfaces → now `app.listen(port, process.env.GATEWAY_HOST ||
-  "0.0.0.0")`; dev behavior unchanged, VPS must set `GATEWAY_HOST=127.0.0.1`.
+"0.0.0.0")`; dev behavior unchanged, VPS must set `GATEWAY_HOST=127.0.0.1`.
   Note: no listener on 3004 is CORRECT — rewards is RMQ-only, no TCP server.
   tsc/eslint clean; runtime-verified locally (chat on `127.0.0.1:3012`, 3106
   gone, gateway → product HTTP 200). No FE impact, no migration.
@@ -534,8 +575,8 @@ GET /api/products` on an empty catalog. Root cause chain on a fresh DB: the prod
   `publicId` now states the numeric-owner-prefix contract (`<internalId>_...`,
   `usr_...` prefixes rejected 403, omit to get a server-generated id). No service
   logic change. 3 new DTO-validation unit tests (upload suites 22/22), tsc/eslint
-  clean; runtime-verified 5/5 (usr_ userId → 201, param-less → 201 with `20_...`
-  id, foreign numeric userId ignored, usr_-prefixed publicId → 403, unauth → 401).
+  clean; runtime-verified 5/5 (usr* userId → 201, param-less → 201 with `20*...`
+  id, foreign numeric userId ignored, usr\_-prefixed publicId → 403, unauth → 401).
 
 - GHN shipping-history public-id boundary fix (2026-07-17):
   `GET /api/order/admin/ghn/orders/:orderId/history` now projects the validated
