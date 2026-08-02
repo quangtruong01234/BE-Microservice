@@ -6,6 +6,48 @@
 
 ## Completed Milestones
 
+- BUG-404-01 — `GET /api/order/:id` returned **500 instead of 404** for an
+  unknown-but-well-formed `ord_…` id. Fixed 2026-08-02 (`/sweep`, top 🔴 item).
+  Root cause: `fetchOwnedOrder` (`apps/gateway/src/order/order.service.ts`) awaited
+  its `firstValueFrom(GET_ORDER_BY_ID)` with **no** `MicroserviceErrorHandler`
+  wrapper, so the orders-service `NotFoundException` thrown by `resolveOrderId`
+  (`apps/orders/src/orders.service.ts:1914`, reached via the TCP handler at
+  `apps/orders/src/orders.controller.ts:265`) arrived at Nest as a raw
+  RpcException and was mapped to 500. Both callers were affected —
+  `getOrderById` and `getPaymentUrl` (which calls the helper OUTSIDE its own
+  try/catch). Fix: the `firstValueFrom` now sits in a try/catch whose catch calls
+  `MicroserviceErrorHandler.handleError(error, "get order", "Orders Service")`
+  (declared `: never`, so the `let order` stays definitely-assigned); the local
+  `NotFound`/`Forbidden` throws deliberately stay OUTSIDE the catch so they are
+  not re-wrapped. Minimal diff, no contract change beyond the status code.
+  **Self-test 8/8** — run against PROD (still the pre-fix build = "before") and
+  the fixed local build ("after") in one pass: PROD unknown order **500**, PROD
+  unknown payment-url **500**; local unknown order **404** `"Order
+ord_aaaaaaaaaaaaaaaa not found"`, local unknown payment-url **404** (same
+  message), numeric id still **400** at `ParsePublicIdPipe`, own order list 200,
+  own order detail 200 (payload intact), own payment-url 200, foreign order still
+  **403**, unknown order as a second user **404**. tsc 0 errors, eslint clean.
+  **Not on prod yet** — needs `npm run build` + `pm2 restart gateway`.
+  FE handoff written (storefront: 500→404 on the two routes).
+
+- Product optimistic locking — **runtime-verified on PROD 2026-08-02** after the
+  deploy of the concurrent-`PATCH` fix below. Migration
+  `nodeA-20260802-001-add-version-to-products` was applied to prod Aiven Node A
+  through the manifest runner BEFORE the code deploy (prod forces
+  `synchronize:false`); dev had auto-created the column via `synchronize:true`, so
+  `db:migrate:status` still lists it `[pending]` on the DEV database — a cosmetic
+  ledger gap only, the two Aiven databases are separate. Prod evidence (5/5 on
+  `prod_J4m6khjmFy0s31xx`, all writes replayed the product's existing values so
+  the final state matches the initial one apart from the expected `version`
+  increments): detail read exposes `version`; a PATCH carrying the matching
+  version → 200 and `version` advances; two concurrent `categoryIds` PATCHes →
+  200 + 200 (the InnoDB S→X deadlock that used to surface as 502 is gone); a
+  stale-but-DTO-valid `version` → **409** `"Product was modified by someone else
+— reload it and apply your changes again"`; two racing writers sharing one read
+  version → 200 + 409. Note `version` has `@Min(1)`, so `version - 1` on a
+  version-1 product is a 400 (DTO bound), not a 409 — test against a product whose
+  version has already grown.
+
 - Concurrent `PATCH /api/products/:id` — races found and fixed 2026-08-02,
   runtime-verified (migration `nodeA-20260802-001-add-version-to-products`).
   **Investigation first:** local probe scripts (kept outside the repo in

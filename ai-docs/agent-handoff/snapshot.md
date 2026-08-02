@@ -779,18 +779,10 @@ SCALE-06 numbers will prove or disprove.
 
 ### 🐛 Found during the 2026-07-30 prod verification (open)
 
-- [ ] **BUG-404-01 — `GET /api/order/:id` returns 500 instead of 404 for an
-      unknown order.** `fetchOwnedOrder` (`apps/gateway/src/order/order.service.ts:576`)
-      rethrows the raw RpcException from the orders service (`resolveOrderId` →
-      `NotFoundException`) with NO `MicroserviceErrorHandler.handleError` wrapper, so
-      Nest maps it to 500. Both callers — `getOrderById` (:553) and `getPaymentUrl`
-      (:928, which calls it OUTSIDE its own try/catch) — are affected. Verified live
-      on prod 2026-07-30: `GET /api/order/ord_aaaaaaaaaaaaaaaa` → 500 while every
-      real order path returns 200. FE sees a server error instead of "đơn không tồn
-      tại". Fix: wrap the `firstValueFrom` inside `fetchOwnedOrder` in try/catch →
-      `MicroserviceErrorHandler.handleError(error, "get order", "Orders Service")`,
-      keeping the local NotFound/Forbidden throws outside the catch. Add a
-      nonexistent-id test to the order self-test set.
+- [x] **BUG-404-01 — DONE 2026-08-02** (see CHANGELOG): `fetchOwnedOrder` now
+      wraps its `firstValueFrom` in try/catch → `MicroserviceErrorHandler.handleError`,
+      so an unknown order id is 404 on both callers instead of 500. **Fix is NOT on
+      prod yet** — it needs the next `npm run build` + `pm2 restart gateway`.
 
 - [ ] **PROD-PAY-02 — inbound VNPay IPN leg. Endpoint PROVEN on prod; one real
       end-to-end payment still owed.** What is already established (2026-08-01/02):
@@ -957,15 +949,17 @@ ecosystem.config.js --env production --only payments` — a plain `pm2 restart`
   A/Node B baseline files; later changes use only post-cutoff manifest
   migrations. Existing historical `schema_migrations` rows are classified as
   `baseline-absorbed`.
-- **PENDING migration (product optimistic locking, 2026-08-02):**
+- **Applied migration (product optimistic locking, 2026-08-02):**
   `nodeA-20260802-001-add-version-to-products` (`database/migrations/nodeA/20260802-001-add-version-to-products.sql`,
   additive + INFORMATION_SCHEMA-guarded) adds `products.version` INT NOT NULL
-  DEFAULT 1. Dev auto-created it (product runs `synchronize:true`); **prod forces
-  `synchronize:false`, so this MUST be applied BEFORE the code deploy** — the
-  `@VersionColumn` makes every product save write `version`, so without the
-  column every product create/update/stock-sync/risk-score write fails with
-  "Unknown column". It is inert to the currently deployed code (an extra column
-  with a default), so it can be applied ahead of time with zero downtime.
+  DEFAULT 1. Applied to prod Aiven Node A 2026-08-02 via the manifest runner,
+  BEFORE the code deploy (prod forces `synchronize:false`; the `@VersionColumn`
+  makes every product save write `version`, so the column must exist first). Dev
+  auto-created the column via `synchronize:true`, so `db:migrate:status` still
+  reports it `[pending]` on the DEV database — cosmetic ledger gap only, the dev
+  and prod Aiven databases are separate. **Runtime-verified on prod 2026-08-02**
+  (see CHANGELOG): `version` is exposed on product reads, a stale `version` → 409,
+  two racing writers → 200 + 409, concurrent `categoryIds` writes no longer 502.
 - Applied migrations (P1-03, social DB, `synchronize:false`): `database/add_product_id_to_posts.sql` (`posts.product_id INT NULL`) and `database/create_post_reports_table.sql` (`post_reports` table) — both applied to Aiven on 2026-06-25. Re-run on any fresh DB before the post-edit / report endpoints work.
 - Applied migration (P1-06, chat read-tracking, `synchronize:false`): `database/add_read_tracking_to_conversations.sql` (`conversations.user1_last_read_at` / `user2_last_read_at` DATETIME NULL) — applied to Aiven on 2026-06-26. Re-run on any fresh DB before `unreadCount` / mark-read work.
 - Applied migration (P2-02, order snapshot, `synchronize:false`): `database/add_snapshot_columns_to_order_items.sql` (`order_items.product_image` VARCHAR(2048) NULL, `order_items.sku_label` VARCHAR(512) NULL) — applied to Aiven on 2026-06-26. Re-run on any fresh DB before order-snapshot rendering works.
