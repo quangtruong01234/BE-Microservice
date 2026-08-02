@@ -99,6 +99,8 @@ export const PRODUCT_MESSAGE = {
     `SKU tierIdx ${tierIdx} index ${idx} is out of range for variation "${variationName}" (${optionCount} option(s))`,
   SKU_NOT_FOUND: (id: number | string): string => `SKU ${id} not found`,
   SKU_ALREADY_EXISTS: "Product with this SKU already exists",
+  VERSION_CONFLICT:
+    "Product was modified by someone else — reload it and apply your changes again",
   BLOCKED_PENDING_APPROVAL:
     "Product is blocked pending brand/category approval",
   CATEGORIES_NOT_FOUND: "One or more categories not found",
