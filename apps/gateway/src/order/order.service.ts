@@ -578,16 +578,27 @@ export class OrderService {
     callerId: number,
     callerRole: string,
   ): Promise<OrderResponse> {
-    const order = (await firstValueFrom(
-      this.ordersClient
-        .send(ORDER_MESSAGE_PATTERN.GET_ORDER_BY_ID, orderId)
-        .pipe(
-          timeout(TCP_TIMEOUT_MS.READ),
-          catchError((err: unknown) => {
-            throw err;
-          }),
-        ),
-    )) as OrderResponse | null;
+    let order: OrderResponse | null;
+    try {
+      order = (await firstValueFrom(
+        this.ordersClient
+          .send(ORDER_MESSAGE_PATTERN.GET_ORDER_BY_ID, orderId)
+          .pipe(
+            timeout(TCP_TIMEOUT_MS.READ),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      )) as OrderResponse | null;
+    } catch (error) {
+      // Without this the orders-service RpcException (e.g. an unresolvable
+      // public id -> NotFound) reaches Nest raw and is mapped to 500.
+      MicroserviceErrorHandler.handleError(
+        error,
+        "get order",
+        "Orders Service",
+      );
+    }
 
     if (!order) {
       throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
