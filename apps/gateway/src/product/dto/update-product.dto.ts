@@ -155,4 +155,16 @@ export class UpdateProductDto {
   @Type(() => Number)
   @Min(0)
   ratingCount?: number;
+
+  @ApiPropertyOptional({
+    description:
+      "Optimistic concurrency token — send the `version` read from the product being edited. If another save landed first the request is rejected with 409 instead of silently overwriting it. Omit to keep last-writer-wins.",
+    example: 7,
+    minimum: 1,
+  })
+  @IsOptional()
+  @IsInt()
+  @Type(() => Number)
+  @Min(1)
+  version?: number;
 }
