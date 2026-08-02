@@ -823,6 +823,33 @@ SCALE-06 numbers will prove or disprove.
 
 ## Known Issues
 
+- **Concurrent `PATCH /api/products/:id` — FIXED 2026-08-02** (see CHANGELOG for
+  the full race analysis). `updateProduct` now runs in a transaction behind
+  `SELECT … FOR UPDATE` on the product row, `products.version` is a
+  `@VersionColumn`, `ER_DUP_ENTRY` on `sku` maps to 409, and `ER_LOCK_DEADLOCK`
+  is retried once. Residual behaviour to know about:
+  - **`version` is OPT-IN.** Omit it and the endpoint keeps last-writer-wins
+    (two racing full-form saves → the later one wins, no error). Send the
+    `version` read from the product and a stale edit gets 409
+    `PRODUCT_MESSAGE.VERSION_CONFLICT` instead of silently overwriting.
+  - **Background writers bump `version` too** — every `productRepository.update`
+    does (TypeORM appends `version = version + 1` to every entity UPDATE): stock
+    sync from inventory, risk scoring finish/fail (≈2 bumps shortly after any
+    risk-relevant edit), rating recalc on review create/delete, brand/category
+    approve-reject cascades. So a 409 does not necessarily mean another human
+    edited the product. Clients must send the version from a FRESH `GET` and
+    treat 409 as "reload and re-apply", never as a hard failure.
+  - **The SCALE-04 gateway detail micro-cache (TTL 10s) can serve a stale
+    `version`.** A PATCH invalidates it, but the background writers above do
+    not — so a spurious 409 is possible for up to 10s after one of them. Same
+    remedy (reload + re-apply).
+  - A PATCH now holds a row lock for the duration of its transaction, so a
+    concurrent `updateStockQuantity` from inventory waits instead of
+    interleaving. Contention is bounded by the transaction (validation + one
+    save); `upsertSkus`, cache invalidation, Cloudinary cleanup and the risk
+    rescore all stay OUTSIDE it deliberately.
+  - Still unreproduced (theoretical): SCALE-04 micro-cache stale-repopulation,
+    where a GET commits the pre-update body after the PATCH invalidation.
 - `PATCH /api/order/:id/cancel` on a COD order that already has a GHN waybill can
   return **503 to the client even though the cancel committed** (seen once on prod
   2026-08-01, order `ord_HuypgIrmcskqq4Ny` / `LAYGKP`: first call 503, order was
@@ -930,6 +957,15 @@ ecosystem.config.js --env production --only payments` — a plain `pm2 restart`
   A/Node B baseline files; later changes use only post-cutoff manifest
   migrations. Existing historical `schema_migrations` rows are classified as
   `baseline-absorbed`.
+- **PENDING migration (product optimistic locking, 2026-08-02):**
+  `nodeA-20260802-001-add-version-to-products` (`database/migrations/nodeA/20260802-001-add-version-to-products.sql`,
+  additive + INFORMATION_SCHEMA-guarded) adds `products.version` INT NOT NULL
+  DEFAULT 1. Dev auto-created it (product runs `synchronize:true`); **prod forces
+  `synchronize:false`, so this MUST be applied BEFORE the code deploy** — the
+  `@VersionColumn` makes every product save write `version`, so without the
+  column every product create/update/stock-sync/risk-score write fails with
+  "Unknown column". It is inert to the currently deployed code (an extra column
+  with a default), so it can be applied ahead of time with zero downtime.
 - Applied migrations (P1-03, social DB, `synchronize:false`): `database/add_product_id_to_posts.sql` (`posts.product_id INT NULL`) and `database/create_post_reports_table.sql` (`post_reports` table) — both applied to Aiven on 2026-06-25. Re-run on any fresh DB before the post-edit / report endpoints work.
 - Applied migration (P1-06, chat read-tracking, `synchronize:false`): `database/add_read_tracking_to_conversations.sql` (`conversations.user1_last_read_at` / `user2_last_read_at` DATETIME NULL) — applied to Aiven on 2026-06-26. Re-run on any fresh DB before `unreadCount` / mark-read work.
 - Applied migration (P2-02, order snapshot, `synchronize:false`): `database/add_snapshot_columns_to_order_items.sql` (`order_items.product_image` VARCHAR(2048) NULL, `order_items.sku_label` VARCHAR(512) NULL) — applied to Aiven on 2026-06-26. Re-run on any fresh DB before order-snapshot rendering works.

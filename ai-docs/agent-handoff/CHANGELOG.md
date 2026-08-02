@@ -6,6 +6,73 @@
 
 ## Completed Milestones
 
+- Concurrent `PATCH /api/products/:id` — races found and fixed 2026-08-02,
+  runtime-verified (migration `nodeA-20260802-001-add-version-to-products`).
+  **Investigation first:** local probe scripts (kept outside the repo in
+  `C:\tmp\`: `lost-update-test.mjs`, `m2m-race.mjs`, `sku-race.mjs`,
+  `innodb-status.mjs`) fired concurrent PATCHes at one product. `updateProduct`
+  was an unguarded read-modify-write (`findProductById` → `Object.assign` →
+  `save`) with no row lock, no version column and no transaction. Findings:
+  - **No cross-field loss** — 7 parallel PATCHes each touching a DIFFERENT field
+    all persisted, because TypeORM `save()` emits a diff-only `UPDATE`. This is
+    why the bug stayed invisible in normal use.
+  - **Lost update IS real when the client sends the whole form** — two racing
+    full-payload saves (tab A edits price, tab B edits stock) → A's row wins
+    entirely and B's edit vanishes behind an HTTP 200.
+  - **Stale success bodies** — 8 concurrent PATCHes of the same field: 7/8
+    callers got a 200 whose body echoes a price that is not the persisted one.
+  - 🔴 **`categoryIds` races deadlocked InnoDB (5/5 rounds)** — writing the
+    `product_categories` junction takes a shared FK lock on the parent `products`
+    row, and the entity UPDATE that follows needs an exclusive one; two edits
+    deadlocked on that S→X upgrade (`SHOW ENGINE INNODB STATUS` confirmed
+    `WE ROLL BACK TRANSACTION (2)`). `ER_LOCK_DEADLOCK` escaped as **502**, and
+    the surviving category set could be a merge nobody requested (callers sent
+    `[17]`, `[20,21]`, `[15]`, `[17,20]` → DB ended `[15,17]`).
+  - 🔴 **Unique-`sku` check-then-act race (3/3 rounds)** — two products claiming
+    the same new sku concurrently both passed the `findOne({where:{sku}})` guard;
+    the loser hit the unique index and got **502** instead of the intended 409.
+    DB integrity itself was never at risk.
+  **Fix** (`apps/product/src/product.service.ts`): `updateProduct` split into a
+  transactional `applyProductUpdate` plus post-commit side effects. The
+  transaction opens with `SELECT product.id … FOR UPDATE` (id-only projection so
+  the eager `categories` relation is not locked) BEFORE the entity load, which
+  serialises every writer of the row and converts the S→X deadlock into a plain
+  wait; all validation (version, `approvalBlocked`, sku, brand, categories) and
+  the save now run inside it against the same `manager`. `runProductUpdate`
+  retries once on `ER_LOCK_DEADLOCK` (InnoDB can still pick us as the victim
+  against an unrelated writer), and `isDuplicateEntryFor` maps `ER_DUP_ENTRY`
+  naming the submitted sku to `ConflictException` — the message is checked so
+  other unique indexes keep their own error. `upsertSkus`, `invalidateSearchCache`,
+  `destroyDroppedImages` and `scheduleRiskRescore` deliberately stay outside the
+  transaction (the first opens its own tx and does a TCP round-trip).
+  **Optimistic locking:** `products.version` `@VersionColumn` on the entity + an
+  optional `version` field on both the gateway and microservice update DTOs. Send
+  it and a stale edit is rejected with 409
+  `PRODUCT_MESSAGE.VERSION_CONFLICT`; omit it and the endpoint keeps its previous
+  last-writer-wins behaviour, so the change is backward compatible.
+  **Non-obvious detail worth keeping:** the old post-commit
+  `productRepository.update(id, {riskScoringStatus:"pending", …})` had to be
+  folded INTO the transactional save — TypeORM's `UpdateQueryBuilder`
+  unconditionally appends `version = version + 1` to every entity UPDATE, so the
+  separate risk reset bumped the version a second time and made the `version`
+  returned to the caller instantly stale (isolated with a dedicated probe).
+  Conversely `save()` never enforces a version WHERE guard (optimistic mismatch
+  only comes from an explicit `setLock("optimistic")` on a SelectQueryBuilder),
+  so adding the column cannot break any other writer — confirmed by reading
+  `node_modules/typeorm/query-builder/UpdateQueryBuilder.js` +
+  `persistence/SubjectExecutor.js`.
+  **Verification:** tsc 0 errors, eslint 0 errors, prettier clean, Jest 26 suites
+  / 187 tests green. Runtime: `m2m-race.mjs` 5 rounds × 4 concurrent PATCHes →
+  20/20 HTTP 200 with the persisted category set always exactly one caller's
+  request (was 502 in 5/5 rounds, plus phantom merges); `sku-race.mjs` 3/3 rounds
+  → 409 + 200 (was 200 + 502); `version-race.mjs` → one 200 + one 409 per round
+  with `version` sent, 409 on a stale replay, and 200|200 with the field omitted;
+  the original `lost-update-test.mjs` re-run reports "junction consistent; price
+  survived". Edge legs re-checked afterwards: unknown id 404, numeric id 400,
+  `version:0` 400, unknown brand 404, unknown category 404, matching version 200
+  with the incremented version echoed back, risk-relevant edit still returns
+  `riskScoringStatus:"pending"` and the rescore worker still completes to
+  `ready`. Test products restored.
 - VNPay IPN response codes — fixed 2026-08-02, verified locally (`cef4981`, NO
   migration). Found while diagnosing PROD-PAY-02: the VNPay merchant portal's
   "Test call IPN" button kept answering `{"RspCode":"97","Message":"Checksum
