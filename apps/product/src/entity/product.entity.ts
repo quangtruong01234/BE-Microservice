@@ -10,6 +10,7 @@ import {
   JoinColumn,
   JoinTable,
   Index,
+  VersionColumn,
 } from "typeorm";
 import { decimalToNumber } from "@app/common/transformers/decimal-to-number.transformer";
 import { Brand } from "./brand.entity";
@@ -204,6 +205,12 @@ export class Product {
     select: false,
   })
   riskLastError!: string | null;
+
+  // Optimistic concurrency token. TypeORM bumps it on every entity save, so a
+  // client that echoes the version it read can be told its edit is stale (409)
+  // instead of silently overwriting a newer one.
+  @VersionColumn({ type: "int", default: 1, name: "version" })
+  version!: number;
 
   @CreateDateColumn({ type: "timestamp", name: "created_at" })
   createdAt!: Date;

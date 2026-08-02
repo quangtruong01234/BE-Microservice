@@ -1375,63 +1375,187 @@ export class ProductService {
     void this.cloudinaryService.destroyAssets(droppedUrls);
   }
 
+  // Fields whose change invalidates the stored risk score / image hashes.
+  private needsRiskRescore(updateProductDto: UpdateProductDto): boolean {
+    return (
+      updateProductDto.imageUrls !== undefined ||
+      updateProductDto.name !== undefined ||
+      updateProductDto.price !== undefined ||
+      updateProductDto.categoryIds !== undefined ||
+      updateProductDto.brandId !== undefined ||
+      updateProductDto.condition !== undefined ||
+      updateProductDto.skuList !== undefined
+    );
+  }
+
+  // TypeORM wraps driver errors in QueryFailedError; older paths put the code
+  // on the error itself, newer ones only on driverError. Check both.
+  private getDriverErrorCode(error: unknown): string | undefined {
+    if (typeof error !== "object" || error === null) return undefined;
+    const candidate = error as {
+      code?: unknown;
+      driverError?: { code?: unknown };
+    };
+    if (typeof candidate.code === "string") return candidate.code;
+    if (typeof candidate.driverError?.code === "string") {
+      return candidate.driverError.code;
+    }
+    return undefined;
+  }
+
+  // Only claim a duplicate-sku conflict when the driver message actually names
+  // the sku we tried to write — other unique indexes must keep their own error.
+  private isDuplicateEntryFor(error: unknown, sku: string): boolean {
+    if (this.getDriverErrorCode(error) !== "ER_DUP_ENTRY") return false;
+    const message =
+      error instanceof Error ? error.message : JSON.stringify(error ?? "");
+    return message.includes(sku);
+  }
+
+  // InnoDB can still pick this transaction as the deadlock victim (e.g. against
+  // an unrelated writer). One retry turns that into a normal serialized run.
+  private async runProductUpdate<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch (error: unknown) {
+      if (this.getDriverErrorCode(error) !== "ER_LOCK_DEADLOCK") {
+        throw error;
+      }
+      this.logger.warn("Product update hit a deadlock — retrying once");
+      return operation();
+    }
+  }
+
+  /**
+   * Read-modify-write of a single product, serialized against every other
+   * writer of the same row.
+   *
+   * The row lock is taken BEFORE anything else on purpose: rewriting the
+   * `product_categories` junction makes InnoDB take a shared FK lock on this
+   * same products row, and the entity UPDATE that follows needs an exclusive
+   * one — two concurrent edits used to deadlock on that S->X upgrade and
+   * surface as a 502 (plus a merged category set nobody asked for).
+   */
+  private async applyProductUpdate(
+    id: number,
+    updateProductDto: UpdateProductDto,
+  ): Promise<{ updated: Product; previousImageUrls: string[] }> {
+    return this.dataSource.transaction(async (manager) => {
+      const lockedRow = await manager
+        .createQueryBuilder(Product, "product")
+        .setLock("pessimistic_write")
+        .select("product.id")
+        .where("product.id = :id", { id })
+        .getRawOne<{ product_id: string }>();
+      if (!lockedRow) {
+        throw new NotFoundException(PRODUCT_MESSAGE.NOT_FOUND);
+      }
+
+      const product = await manager.findOne(Product, {
+        where: { id },
+        relations: ["brand", "categories", "skus"],
+      });
+      if (!product) {
+        throw new NotFoundException(PRODUCT_MESSAGE.NOT_FOUND);
+      }
+      // Capture before Object.assign overwrites imageUrls on the same instance.
+      const previousImageUrls = product.imageUrls ?? [];
+
+      if (
+        updateProductDto.version !== undefined &&
+        updateProductDto.version !== product.version
+      ) {
+        throw new ConflictException(PRODUCT_MESSAGE.VERSION_CONFLICT);
+      }
+
+      if (updateProductDto.isActive === true && product.approvalBlocked) {
+        throw new BadRequestException(PRODUCT_MESSAGE.BLOCKED_PENDING_APPROVAL);
+      }
+
+      if (updateProductDto.sku && updateProductDto.sku !== product.sku) {
+        const existingProduct = await manager.findOne(Product, {
+          where: { sku: updateProductDto.sku },
+        });
+        if (existingProduct) {
+          throw new ConflictException(PRODUCT_MESSAGE.SKU_ALREADY_EXISTS);
+        }
+      }
+
+      if (updateProductDto.brandId) {
+        const brand = await manager.findOne(Brand, {
+          where: { id: updateProductDto.brandId },
+        });
+        if (!brand) {
+          throw new NotFoundException(PRODUCT_MESSAGE.BRAND_NOT_FOUND);
+        }
+        if (brand.status !== "active") {
+          throw new BadRequestException(PRODUCT_MESSAGE.BRAND_NOT_APPROVED);
+        }
+      }
+
+      // categoryIds is applied through the relation, skuList in its own
+      // transaction after commit, and version is a read-only concurrency token.
+      const { categoryIds } = updateProductDto;
+      const rest = { ...updateProductDto };
+      delete rest.categoryIds;
+      delete rest.skuList;
+      delete rest.version;
+      Object.assign(product, rest);
+
+      if (categoryIds) {
+        const categories = await manager.findBy(Category, {
+          id: In(categoryIds),
+        });
+        if (categories.length !== categoryIds.length) {
+          throw new NotFoundException(PRODUCT_MESSAGE.CATEGORIES_NOT_FOUND);
+        }
+        const inactiveCategories = categories.filter(
+          (c) => c.status !== "active",
+        );
+        if (inactiveCategories.length > 0) {
+          throw new BadRequestException(
+            PRODUCT_MESSAGE.CATEGORIES_NOT_APPROVED(
+              inactiveCategories.map((c) => c.id).join(", "),
+            ),
+          );
+        }
+        product.categories = categories;
+      }
+
+      // Folded into the same save so a content edit costs ONE row write: a
+      // separate .update() would bump the version column a second time and make
+      // the version returned to the caller immediately stale.
+      if (this.needsRiskRescore(updateProductDto)) {
+        product.riskScoringStatus = "pending";
+        product.riskScoringAttempts = 0;
+        product.riskNextRetryAt = null;
+        product.riskLastError = null;
+      }
+
+      const updated = await manager.save(product);
+      return { updated, previousImageUrls };
+    });
+  }
+
   async updateProduct(
     id: number,
     updateProductDto: UpdateProductDto,
   ): Promise<Product> {
-    const product = await this.findProductById(id);
-    // Capture before Object.assign overwrites imageUrls on the same instance.
-    const previousImageUrls = product.imageUrls ?? [];
-
-    if (updateProductDto.isActive === true && product.approvalBlocked) {
-      throw new BadRequestException(PRODUCT_MESSAGE.BLOCKED_PENDING_APPROVAL);
-    }
-
-    if (updateProductDto.sku && updateProductDto.sku !== product.sku) {
-      const existingProduct = await this.productRepository.findOne({
-        where: { sku: updateProductDto.sku },
-      });
-      if (existingProduct) {
+    const { skuList } = updateProductDto;
+    const { updated, previousImageUrls } = await this.runProductUpdate(() =>
+      this.applyProductUpdate(id, updateProductDto),
+    ).catch((error: unknown) => {
+      // Two products can claim the same new sku at once: both pass the
+      // check-then-act guard above and the loser hits the unique index. Report
+      // the intended conflict instead of leaking a driver error as a 502.
+      if (
+        typeof updateProductDto.sku === "string" &&
+        this.isDuplicateEntryFor(error, updateProductDto.sku)
+      ) {
         throw new ConflictException(PRODUCT_MESSAGE.SKU_ALREADY_EXISTS);
       }
-    }
-
-    if (updateProductDto.brandId) {
-      const brand = await this.brandRepository.findOne({
-        where: { id: updateProductDto.brandId },
-      });
-      if (!brand) {
-        throw new NotFoundException(PRODUCT_MESSAGE.BRAND_NOT_FOUND);
-      }
-      if (brand.status !== "active") {
-        throw new BadRequestException(PRODUCT_MESSAGE.BRAND_NOT_APPROVED);
-      }
-    }
-
-    const { categoryIds, skuList, ...rest } = updateProductDto;
-    Object.assign(product, rest);
-
-    if (categoryIds) {
-      const categories = await this.categoryRepository.findBy({
-        id: In(categoryIds),
-      });
-      if (categories.length !== categoryIds.length) {
-        throw new NotFoundException(PRODUCT_MESSAGE.CATEGORIES_NOT_FOUND);
-      }
-      const inactiveCategories = categories.filter(
-        (c) => c.status !== "active",
-      );
-      if (inactiveCategories.length > 0) {
-        throw new BadRequestException(
-          PRODUCT_MESSAGE.CATEGORIES_NOT_APPROVED(
-            inactiveCategories.map((c) => c.id).join(", "),
-          ),
-        );
-      }
-      product.categories = categories;
-    }
-
-    const updated = await this.productRepository.save(product);
+      throw error;
+    });
 
     if (skuList !== undefined) {
       updated.skus = await this.upsertSkus(updated.id, skuList);
@@ -1440,22 +1564,8 @@ export class ProductService {
     await this.invalidateSearchCache();
     // SEC-M7: dropped images are orphaned on Cloudinary once the edit commits.
     this.destroyDroppedImages(previousImageUrls, updated.imageUrls ?? []);
-    if (
-      updateProductDto.imageUrls !== undefined ||
-      updateProductDto.name !== undefined ||
-      updateProductDto.price !== undefined ||
-      updateProductDto.categoryIds !== undefined ||
-      updateProductDto.brandId !== undefined ||
-      updateProductDto.condition !== undefined ||
-      updateProductDto.skuList !== undefined
-    ) {
-      await this.productRepository.update(updated.id, {
-        riskScoringStatus: "pending",
-        riskScoringAttempts: 0,
-        riskNextRetryAt: null,
-        riskLastError: null,
-      });
-      updated.riskScoringStatus = "pending";
+    // The risk state itself was already reset inside the update transaction.
+    if (this.needsRiskRescore(updateProductDto)) {
       this.scheduleRiskRescore();
     }
     return updated;
