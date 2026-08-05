@@ -13,7 +13,9 @@ export class ProductReview {
   @PrimaryGeneratedColumn()
   id!: number;
 
-  @Column({ name: "product_id", type: "int" })
+  // bigint to match products.id and the other FKs pointing at it
+  // (product_skus, wishlist_items, product_risk_feedback).
+  @Column({ name: "product_id", type: "bigint" })
   productId!: number;
 
   @Column({ name: "user_id", type: "int" })

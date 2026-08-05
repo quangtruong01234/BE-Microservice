@@ -18,7 +18,7 @@ import {
   SelectQueryBuilder,
 } from "typeorm";
 import { ClientProxy } from "@nestjs/microservices";
-import { firstValueFrom, timeout } from "rxjs";
+import { firstValueFrom, retry, timeout } from "rxjs";
 import { Channel } from "amqplib";
 import {
   CloudinaryService,
@@ -911,7 +911,11 @@ export class ProductService {
           .send<number[]>(ORDER_MESSAGE_PATTERN.GET_REFERENCED_SKU_IDS, {
             skuIds,
           })
-          .pipe(timeout(10000)),
+          // A stale TCP socket fails the first send and reconnects on the next
+          // one. Without this retry that single blip silently downgrades a hard
+          // delete into a deactivation, so a variant the seller removed lingers
+          // as an inactive row and the 200 response hides it.
+          .pipe(timeout(10000), retry({ count: 1, delay: 200 })),
       );
     } catch (err) {
       this.logger.warn(
@@ -965,6 +969,10 @@ export class ProductService {
 
     const deactivatedSkuIds: number[] = [];
     const deletedSkuIds: number[] = [];
+    // SKUs whose stock the seller actually re-declared in THIS edit. Inventory
+    // owns the authoritative number, so only a real change is pushed there —
+    // echoing the (possibly stale) product mirror back must stay a no-op.
+    const stockChangedSkuIds: number[] = [];
 
     // 5. Apply the diff atomically.
     const saved = await this.dataSource.transaction(async (manager) => {
@@ -973,6 +981,12 @@ export class ProductService {
       for (const dto of skuList) {
         const match = existingByKey.get(this.canonicalTierKey(dto.tierIdx));
         if (match) {
+          if (
+            dto.stockQuantity !== undefined &&
+            dto.stockQuantity !== match.stockQuantity
+          ) {
+            stockChangedSkuIds.push(match.id);
+          }
           // Update in place — keep id (and tierIdx) so references survive.
           match.price = dto.price;
           match.stockQuantity = dto.stockQuantity ?? match.stockQuantity;
@@ -1049,6 +1063,7 @@ export class ProductService {
                   stockQuantity: s.stockQuantity,
                 })),
                 deletedSkuIds,
+                stockChangedSkuIds,
               },
             }),
           ),
@@ -1153,7 +1168,19 @@ export class ProductService {
   async findAllProducts(
     query: GetProductsQueryDto,
   ): Promise<PaginatedResponse<Product>> {
-    const cacheKey = this.buildSearchCacheKey(query);
+    // Storefront browsing must never surface deactivated products — either
+    // hidden by their seller or blocked by the AI-02 risk scan. Without this
+    // default the filter only applied when a caller happened to pass it, so
+    // the public catalog listed products the admin UI reports as hidden.
+    // A single-seller scoped read is the one exception: that is the seller's
+    // own dashboard, which needs to see the products it hid. Any caller can
+    // still ask for a specific state explicitly via `isActive`.
+    const effectiveQuery: GetProductsQueryDto =
+      query.isActive === undefined && query.userId === undefined
+        ? { ...query, isActive: true }
+        : query;
+
+    const cacheKey = this.buildSearchCacheKey(effectiveQuery);
     try {
       const cached = await this.cachedService.get(cacheKey);
       if (cached) {
@@ -1182,7 +1209,7 @@ export class ProductService {
       userId,
       userIds,
       skuSearch,
-    } = query;
+    } = effectiveQuery;
 
     // PERF-10: filter/paginate on product ids only (no joinAndSelect), then
     // hydrate relations via In(ids). Joining brand + categories (ManyToMany)
@@ -1501,6 +1528,15 @@ export class ProductService {
       delete rest.skuList;
       delete rest.version;
       Object.assign(product, rest);
+
+      // The SKU diff runs in its own transaction after this one commits, but
+      // its tierIdx values must be coherent with the variation axes written
+      // here. Validating now keeps a bad skuList from committing new variations
+      // and then failing, which would leave the product describing axes its
+      // SKUs no longer match.
+      if (updateProductDto.skuList !== undefined) {
+        this.validateSkuTiers(product.variations, updateProductDto.skuList);
+      }
 
       if (categoryIds) {
         const categories = await manager.findBy(Category, {

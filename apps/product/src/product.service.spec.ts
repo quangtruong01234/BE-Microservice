@@ -1,4 +1,4 @@
-import { of } from "rxjs";
+import { defer, of, throwError } from "rxjs";
 import { ConflictException } from "@nestjs/common";
 import { ClientProxy } from "@nestjs/microservices";
 import { DataSource, EntityManager, Repository } from "typeorm";
@@ -134,6 +134,43 @@ describe("ProductService.upsertSkus diff (P0-05)", () => {
     expect(kept).toBeDefined();
     expect(kept?.isActive).toBe(false);
   });
+
+  it("retries the reference check once so a stale socket does not downgrade a delete", async () => {
+    skuRepository.find.mockResolvedValue([
+      existingSku(5, [0]),
+      existingSku(6, [1]),
+    ]);
+    let attempts = 0;
+    ordersClient.send.mockReturnValue(
+      defer(() => {
+        attempts += 1;
+        return attempts === 1
+          ? throwError(() => new Error("Connection closed"))
+          : of([]);
+      }),
+    );
+
+    await service.upsertSkus(1, [{ tierIdx: "[0]", price: 100 }]);
+
+    expect(attempts).toBe(2);
+    expect(deleteMock).toHaveBeenCalledTimes(1);
+    expect(savedPayload.some((s) => s.id === 6)).toBe(false);
+  });
+
+  it("falls back to treating every candidate as referenced when the retry also fails", async () => {
+    skuRepository.find.mockResolvedValue([
+      existingSku(5, [0]),
+      existingSku(6, [1]),
+    ]);
+    ordersClient.send.mockReturnValue(
+      throwError(() => new Error("orders service down")),
+    );
+
+    await service.upsertSkus(1, [{ tierIdx: "[0]", price: 100 }]);
+
+    expect(deleteMock).not.toHaveBeenCalled();
+    expect(savedPayload.find((s) => s.id === 6)?.isActive).toBe(false);
+  });
 });
 
 describe("ProductService catalog lookup cache", () => {
@@ -253,6 +290,113 @@ describe("ProductService catalog lookup cache", () => {
 
     expect(categoryRepository.save).not.toHaveBeenCalled();
     expect(cachedService.del).not.toHaveBeenCalled();
+  });
+});
+
+describe("ProductService.findAllProducts storefront visibility (BUG-B)", () => {
+  const queryBuilder = {
+    andWhere: jest.fn(),
+    leftJoin: jest.fn(),
+    getCount: jest.fn(),
+    clone: jest.fn(),
+    select: jest.fn(),
+    addSelect: jest.fn(),
+    distinct: jest.fn(),
+    orderBy: jest.fn(),
+    offset: jest.fn(),
+    limit: jest.fn(),
+    getRawMany: jest.fn(),
+  };
+  const productRepository = {
+    createQueryBuilder: jest.fn(() => queryBuilder),
+    find: jest.fn(),
+  };
+  const cachedService = { get: jest.fn(), set: jest.fn(), del: jest.fn() };
+  const ordersClient = { send: jest.fn(), connect: jest.fn() };
+
+  let service: ProductService;
+
+  /** Every `product.isActive = :isActive` value the query received. */
+  const isActiveFilters = (): unknown[] =>
+    (
+      queryBuilder.andWhere.mock.calls as unknown as [
+        string,
+        { isActive?: unknown },
+      ][]
+    )
+      .filter(([condition]) => condition === "product.isActive = :isActive")
+      .map(([, params]) => params.isActive);
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // Chainable builder: every step returns the builder itself.
+    for (const method of [
+      "andWhere",
+      "leftJoin",
+      "clone",
+      "select",
+      "addSelect",
+      "distinct",
+      "orderBy",
+      "offset",
+      "limit",
+    ] as const) {
+      queryBuilder[method].mockReturnValue(queryBuilder);
+    }
+    queryBuilder.getCount.mockResolvedValue(0);
+    queryBuilder.getRawMany.mockResolvedValue([]);
+    productRepository.find.mockResolvedValue([]);
+    cachedService.get.mockResolvedValue(null);
+    cachedService.set.mockResolvedValue("OK");
+    service = new ProductService(
+      productRepository as unknown as Repository<Product>,
+      {} as unknown as Repository<Brand>,
+      {} as unknown as Repository<Category>,
+      {} as unknown as Repository<ProductReview>,
+      {} as unknown as Repository<ProductSku>,
+      {} as unknown as Repository<WishlistItem>,
+      {} as unknown as DataSource,
+      cachedService as unknown as CachedService,
+      {} as unknown as CloudinaryService,
+      {} as unknown as ProductImageHashService,
+      null,
+      ordersClient as unknown as ClientProxy,
+    );
+  });
+
+  it("hides deactivated products from an unscoped storefront browse", async () => {
+    await service.findAllProducts({});
+
+    expect(isActiveFilters()).toEqual([true]);
+  });
+
+  it("keeps hiding them when the browse is filtered by seller province", async () => {
+    // The province filter arrives as `userIds` (plural) — that must NOT be
+    // treated as the seller's own dashboard.
+    await service.findAllProducts({ userIds: [17, 18] });
+
+    expect(isActiveFilters()).toEqual([true]);
+  });
+
+  it("returns every state for a single-seller scoped read (seller dashboard)", async () => {
+    await service.findAllProducts({ userId: 17 });
+
+    expect(isActiveFilters()).toEqual([]);
+  });
+
+  it("still honours an explicit isActive filter", async () => {
+    await service.findAllProducts({ isActive: false });
+
+    expect(isActiveFilters()).toEqual([false]);
+  });
+
+  it("caches the unscoped browse under a key that pins the default", async () => {
+    await service.findAllProducts({});
+
+    // The key must carry isActive so entries written before this default
+    // existed can never be served back to the storefront.
+    const [[cacheKey]] = cachedService.get.mock.calls as unknown as [string][];
+    expect(cacheKey).toContain('"isActive":true');
   });
 });
 
