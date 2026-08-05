@@ -590,6 +590,99 @@ describe("OrdersService.sweepStaleReservations", () => {
   });
 });
 
+describe("OrdersService.cancelOrder GHN detachment", () => {
+  const buildOrder = (): Order =>
+    ({
+      id: 1,
+      userId: 7,
+      status: OrderStatus.PROCESSING,
+      ghnOrderCode: "LAYGKP",
+      reservationKey: "reservation-1",
+      items: [{ productId: 1, quantity: 2, skuId: undefined }],
+    }) as unknown as Order;
+
+  const createService = (
+    cancelShippingOrder: jest.Mock,
+  ): { service: OrdersService; update: jest.Mock; publish: jest.Mock } => {
+    const findOne = jest.fn().mockResolvedValue(buildOrder());
+    const update = jest.fn().mockResolvedValue({ affected: 1 });
+    const publish = jest.fn();
+    const orderRepository = { findOne, update };
+
+    const service = new OrdersService(
+      { publish } as unknown as Channel,
+      {} as HttpService,
+      { send: jest.fn().mockReturnValue(of(true)) } as unknown as ClientProxy,
+      {} as ClientProxy,
+      {} as ClientProxy,
+      orderRepository as unknown as Repository<Order>,
+      {} as Repository<OrderItem>,
+      {} as Repository<ShippingHistory>,
+      {} as Repository<OrderReturnRequest>,
+      {} as Repository<Voucher>,
+      {} as Repository<VoucherRedemption>,
+      { cancelShippingOrder } as unknown as GhnService,
+    );
+
+    return { service, update, publish };
+  };
+
+  it("answers the caller without waiting for the GHN cancel to settle", async () => {
+    let releaseGhn: () => void = () => {};
+    const cancelShippingOrder = jest.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          releaseGhn = (): void => resolve(true);
+        }),
+    );
+    const { service, update, publish } = createService(cancelShippingOrder);
+
+    // Resolves even though the GHN promise is still pending — a slow GHN can no
+    // longer burn the gateway's TCP budget for an already-committed cancel.
+    const canceled = await service.cancelOrder(1, 7, "user");
+
+    expect(canceled.status).toBe(OrderStatus.CANCELED);
+    expect(update).toHaveBeenCalledWith(
+      { id: 1 },
+      { status: OrderStatus.CANCELED },
+    );
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(cancelShippingOrder).toHaveBeenCalledWith("LAYGKP");
+
+    releaseGhn();
+  });
+
+  it("retries the detached GHN cancel once before giving up", async () => {
+    const cancelShippingOrder = jest
+      .fn()
+      .mockRejectedValueOnce(new Error("GHN timeout"))
+      .mockResolvedValueOnce(true);
+    const { service } = createService(cancelShippingOrder);
+
+    const canceled = await service.cancelOrder(1, 7, "user");
+
+    expect(canceled.status).toBe(OrderStatus.CANCELED);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(cancelShippingOrder).toHaveBeenCalledTimes(2);
+  });
+
+  it("swallows a rejected GHN cancel so the detached call cannot crash the process", async () => {
+    const cancelShippingOrder = jest
+      .fn()
+      .mockRejectedValue(new Error("GHN unreachable"));
+    const { service } = createService(cancelShippingOrder);
+
+    const canceled = await service.cancelOrder(1, 7, "user");
+
+    expect(canceled.status).toBe(OrderStatus.CANCELED);
+    // Flush the microtask queue so the detached rejections are handled here; an
+    // unhandled one would fail the run.
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(cancelShippingOrder).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("OrdersService.advanceOrderStatus", () => {
   const buildOrder = (status: OrderStatus): Order =>
     ({

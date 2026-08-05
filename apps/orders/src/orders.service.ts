@@ -2042,21 +2042,44 @@ export class OrdersService {
     order.status = OrderStatus.CANCELED;
     await this.releaseReservedItems(order.items, order.reservationKey, true);
 
-    // Push the cancel to GHN so the shipping order stops too (non-fatal)
+    // Push the cancel to GHN so the shipping order stops too. Detached on
+    // purpose: the local cancel is already committed at this point, so awaiting
+    // a slow GHN call only risks blowing the caller's TCP budget and reporting a
+    // failure for work that succeeded. Same best-effort shape as the waybill
+    // create leg.
     if (order.ghnOrderCode) {
-      try {
-        await this.ghnService.cancelShippingOrder(order.ghnOrderCode);
-        this.logger.log(
-          `[ORDERS] GHN shipping order ${order.ghnOrderCode} canceled for order ${order.id}`,
-        );
-      } catch (err) {
-        this.logger.error(
-          `[ORDERS] GHN cancel failed for ${order.ghnOrderCode}: ${String(err)}`,
-        );
-      }
+      void this.cancelShippingOrderBestEffort(order.id, order.ghnOrderCode);
     }
 
     this.publishOrderCanceledEvent(order);
+  }
+
+  /**
+   * Fire-and-forget GHN cancel. Never rejects — a `void`-invoked promise that
+   * rejects would surface as an unhandled rejection and kill the process.
+   *
+   * Retried once because nothing is waiting on it: the GHN client now times out
+   * at 5s, so without a second attempt a slow-but-alive GHN would leave a live
+   * waybill on a canceled order. Exhausting both attempts is logged and left to
+   * the admin GHN cancel endpoint.
+   */
+  private async cancelShippingOrderBestEffort(
+    orderId: number,
+    ghnOrderCode: string,
+  ): Promise<void> {
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        await this.ghnService.cancelShippingOrder(ghnOrderCode);
+        this.logger.log(
+          `[ORDERS] GHN shipping order ${ghnOrderCode} canceled for order ${orderId}`,
+        );
+        return;
+      } catch (err) {
+        this.logger.error(
+          `[ORDERS] GHN cancel attempt ${attempt}/2 failed for ${ghnOrderCode}: ${String(err)}`,
+        );
+      }
+    }
   }
 
   /**
