@@ -59,6 +59,9 @@ export class ShippingFeeDto {
     example: 1450,
   })
   @IsOptional()
+  // The global pipe transforms but does not enable implicit conversion, so a
+  // JSON string id from the FE dropdown would fail @IsInt() without this.
+  @Type(() => Number)
   @IsInt()
   @Min(1)
   toDistrictId?: number;

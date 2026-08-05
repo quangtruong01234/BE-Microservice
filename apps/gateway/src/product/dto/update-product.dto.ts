@@ -8,10 +8,12 @@ import {
   IsInt,
   Min,
   Max,
+  ValidateNested,
 } from "class-validator";
 import { Type } from "class-transformer";
 import { ApiPropertyOptional } from "@nestjs/swagger";
 import { IsCloudinaryUrl } from "../../common/validators/is-cloudinary-url.validator";
+import { SkuItemDto, VariationItemDto } from "./create-product.dto";
 
 export class UpdateProductDto {
   @ApiPropertyOptional({
@@ -167,4 +169,34 @@ export class UpdateProductDto {
   @Type(() => Number)
   @Min(1)
   version?: number;
+
+  @ApiPropertyOptional({
+    description:
+      "Variation axes — send together with skuList to edit a SKU matrix product",
+    example: [
+      { name: "Color", options: ["Red", "Blue"] },
+      { name: "Size", options: ["128GB", "256GB"] },
+    ],
+    type: [VariationItemDto],
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => VariationItemDto)
+  variations?: VariationItemDto[];
+
+  @ApiPropertyOptional({
+    description:
+      "SKU combinations — the FULL desired set, not a delta. Entries matching an existing tierIdx are updated in place; omitted ones are removed (hard-deleted when never ordered, otherwise deactivated so order history keeps resolving).",
+    example: [
+      { tierIdx: "[0,0]", price: 999, stockQuantity: 50 },
+      { tierIdx: "[0,1]", price: 1099, stockQuantity: 30 },
+    ],
+    type: [SkuItemDto],
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => SkuItemDto)
+  skuList?: SkuItemDto[];
 }

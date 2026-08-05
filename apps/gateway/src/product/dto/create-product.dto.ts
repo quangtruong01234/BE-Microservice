@@ -15,7 +15,7 @@ import { Type } from "class-transformer";
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { IsCloudinaryUrl } from "../../common/validators/is-cloudinary-url.validator";
 
-class SkuItemDto {
+export class SkuItemDto {
   @ApiProperty({ description: 'Tier index e.g. "[0,0]"', example: "[0,0]" })
   @IsString()
   @Matches(/^\[\d+(,\d+)*\]$/, {
@@ -47,7 +47,7 @@ class SkuItemDto {
   isActive?: boolean;
 }
 
-class VariationItemDto {
+export class VariationItemDto {
   @ApiProperty({ description: "Variation axis name", example: "Color" })
   @IsString()
   declare name: string;
