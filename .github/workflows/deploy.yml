@@ -1,0 +1,176 @@
+# Production deploy (CD-01).
+#
+# Flow: CI must go green on `main`, then this workflow SSHes into the EC2 box and
+# runs the exact manual sequence that is already proven there:
+#   git reset --hard origin/main -> npm ci -> db migrations -> npm run build
+#   -> pm2 restart -> pm2 save -> /live health check.
+#
+# Migrations always run BEFORE the restart: every project migration is additive
+# and INFORMATION_SCHEMA-guarded, so the currently running (old) code tolerates
+# the new columns, while new code would crash on a missing one.
+#
+# Required repository secrets (no application secret ever leaves the box):
+#   EC2_HOST     public host/IP of the instance
+#   EC2_USER     ssh user (e.g. ubuntu)
+#   EC2_SSH_KEY  private key of a dedicated deploy keypair
+#                (ssh-keygen -t ed25519 -C github-deploy, public half appended
+#                 to ~/.ssh/authorized_keys on the box)
+#   EC2_PATH     absolute path of the api checkout (e.g. /home/ubuntu/MCR/api)
+#
+# Recommended repository setup:
+#   - Create an Environment named `production` and add Required reviewers, so a
+#     push to main cannot auto-deploy while the instance is in its stopped
+#     window (the box runs on a manual stop/start schedule).
+#   - `workflow_run` always executes the copy of this file that lives on the
+#     default branch, so edits only take effect once merged to `main`.
+#
+# Rollback: the previous commit sha is written to ~/.trybuy-deploy-prev-sha
+# before the reset. On failure this workflow restores it automatically; to roll
+# back later by hand:
+#   cd $EC2_PATH && git reset --hard $(cat ~/.trybuy-deploy-prev-sha) \
+#     && npm ci && npm run build && pm2 restart ecosystem.config.js --env production
+# No DB rollback is needed (migrations are additive).
+#
+# Known pm2 gotchas (see snapshot.md Ops/Runtime):
+#   - `pm2 restart` does NOT refresh pm2's stored env snapshot. After changing
+#     any env value you must `pm2 delete <app> && pm2 start ecosystem.config.js
+#     --env production --only <app>` manually; this workflow only restarts.
+#   - logs are flushed before the restart so a post-deploy log read shows only
+#     this deploy (every EC2 boot writes a benign Redis/RabbitMQ error burst).
+
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+
+    # workflow_run fires on failed CI runs too - only deploy green main builds.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          command_timeout: 25m
+          script_stop: true
+          envs: EC2_PATH
+          script: |
+            set -euo pipefail
+
+            # Non-interactive ssh does not source the login profile, so an
+            # nvm-installed node would not be on PATH. A missing nvm is fine -
+            # node may come from nodesource/apt instead.
+            export NVM_DIR="$HOME/.nvm"
+            if [ -s "$NVM_DIR/nvm.sh" ]; then
+              . "$NVM_DIR/nvm.sh"
+            fi
+
+            # Drop any marker from an earlier deploy BEFORE touching the
+            # checkout, so a failure here can never make the rollback step
+            # reset the box to a stale commit.
+            rm -f "$HOME/.trybuy-deploy-prev-sha"
+
+            cd "$EC2_PATH"
+            git rev-parse HEAD > "$HOME/.trybuy-deploy-prev-sha"
+            echo "previous sha: $(cat "$HOME/.trybuy-deploy-prev-sha")"
+
+            echo "node $(node -v) / npm $(npm -v)"
+
+            # The box must run the same Node major CI validates against.
+            node_major="$(node -p 'process.versions.node.split(".")[0]')"
+            if [ "$node_major" != "22" ]; then
+              echo "expected Node 22 on the instance (CI builds on 22), found $(node -v)"
+              exit 1
+            fi
+
+            git fetch --prune origin main
+            git reset --hard origin/main
+            echo "deploying sha: $(git rev-parse HEAD)"
+
+            npm ci
+
+            npm run db:migrate:nodeA
+            npm run db:migrate:nodeB
+
+            npm run build
+
+            pm2 flush
+            pm2 restart ecosystem.config.js --env production
+            pm2 save
+
+            # Give the gateway a moment to bind before probing liveness.
+            for attempt in 1 2 3 4 5 6 7 8 9 10; do
+              if curl -fsS --max-time 5 http://127.0.0.1:3000/live > /dev/null; then
+                echo "gateway is live (attempt $attempt)"
+                exit 0
+              fi
+              echo "gateway not live yet (attempt $attempt), retrying..."
+              sleep 5
+            done
+
+            echo "gateway did not answer /live after the restart"
+            pm2 status
+            exit 1
+        env:
+          EC2_PATH: ${{ secrets.EC2_PATH }}
+
+      - name: Roll back to the previous commit
+        if: failure()
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          command_timeout: 25m
+          script_stop: true
+          envs: EC2_PATH
+          script: |
+            set -euo pipefail
+
+            export NVM_DIR="$HOME/.nvm"
+            if [ -s "$NVM_DIR/nvm.sh" ]; then
+              . "$NVM_DIR/nvm.sh"
+            fi
+
+            prev_file="$HOME/.trybuy-deploy-prev-sha"
+            if [ ! -s "$prev_file" ]; then
+              echo "no recorded previous sha - rolling back by hand is required"
+              exit 1
+            fi
+
+            cd "$EC2_PATH"
+            prev_sha="$(cat "$prev_file")"
+            echo "rolling back to $prev_sha"
+
+            git reset --hard "$prev_sha"
+            npm ci
+            npm run build
+            pm2 restart ecosystem.config.js --env production
+            pm2 save
+
+            curl -fsS --max-time 5 http://127.0.0.1:3000/live > /dev/null
+            echo "rollback complete and gateway is live"
+        env:
+          EC2_PATH: ${{ secrets.EC2_PATH }}

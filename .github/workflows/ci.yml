@@ -93,6 +93,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Format check
+        run: npx prettier --check "apps/**/*.ts" "libs/**/*.ts"
+
       - name: Lint
         run: npm run lint:check
 
@@ -105,8 +108,29 @@ jobs:
       - name: Build
         run: npm run build
 
+      # Keeps the exact bits CI validated, so a future build-on-runner deploy
+      # (CD-03) can ship them instead of rebuilding on the box.
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ github.sha }}
+          path: dist/
+          retention-days: 7
+          if-no-files-found: error
+
       - name: Validate PM2 ecosystem config syntax
         run: node -c ecosystem.config.js
 
       - name: Validate Docker Compose config
         run: docker compose config
+
+      # Dependency audit runs last so a newly published advisory never hides the
+      # lint/test/build result. Only production dependencies block: dev/build-tool
+      # advisories (the @nestjs/cli -> @swc/cli -> @xhmikosr chain) are reported
+      # but must not turn an unrelated PR red.
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Audit all dependencies (report only)
+        continue-on-error: true
+        run: npm audit --audit-level=high
