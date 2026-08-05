@@ -28,11 +28,10 @@ Example: `/feature add product reviews`
 - [ ] Create/extend entity + migration SQL if needed
 - [ ] Implement service method in the target microservice
 - [ ] Add `@MessagePattern()` handler in the microservice controller
-- [ ] Add gateway service method (with `MicroserviceErrorHandler` + `timeout(10000)`)
-- [ ] Add gateway HTTP endpoint + DTO with `@ApiProperty()`
-- [ ] Update `shared/services/api.js` in frontend
-- [ ] Add or update component/hook in the correct feature folder
+- [ ] Add gateway service method (with `MicroserviceErrorHandler` + `timeout(TCP_TIMEOUT_MS.READ|WRITE)`)
+- [ ] Add gateway HTTP endpoint + DTO with `@ApiProperty()` (converted domains: accept/return public ids `ord_`/`usr_`/`prod_`/... — never numeric ids on HTTP)
 - [ ] Declare the new endpoint's auth zone in `ai-docs/agent-context/api.md` (Public / Cookie / Admin) before implementing the guard
+- [ ] If the change is frontend-facing: write the FE handoff entry per CLAUDE.md "Frontend handoff" (storefront vs GHN console file)
 - [ ] Run `tsc --noEmit` — zero errors before done
 
 ---

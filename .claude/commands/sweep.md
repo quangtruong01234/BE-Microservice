@@ -51,8 +51,13 @@ without re-explaining the workflow each time.
    - 1 service, clear scope → implement directly
    - > 1 file or TCP/RabbitMQ → `researcher` → implement
    - > 2 services or migration → `researcher` → `planner` → implement → `code-reviewer`
-5. Implement with minimal diff. New SQL migrations go in `database/` and must be
-   idempotent (existence-guarded) — remember social runs `synchronize:false`.
+5. Implement with minimal diff. New SQL migrations go in
+   `database/migrations/nodeA|nodeB/<YYYYMMDD-NNN-name>.sql` + an entry in
+   `database/migrations.manifest.json` (post-cutoff policy — never edit
+   `database/prod-baseline-20260717/`), and must be idempotent
+   (existence-guarded). Remember: prod forces `synchronize:false` for ALL
+   services, so a schema change must be applied there via the manifest runner
+   BEFORE deploying code that depends on it.
 6. Validate: `tsc --noEmit` + eslint zero errors (hooks enforce this too).
 7. Self-test per the Self-Test Protocol: read `../.agent-local/test-accounts.md`,
    login, curl each affected endpoint, assert status + body. Never hand curls to

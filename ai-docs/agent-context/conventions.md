@@ -2,9 +2,30 @@
 
 ## TypeScript Rules
 
-- **No `any`** — use proper types or generics everywhere
-- **No `!` non-null assertion** — except inside TypeORM entity files (where column decorators guarantee initialization)
+- **No `any`** — use proper types or generics everywhere. When the shape is unknown (e.g. external callbacks), use `unknown` then narrow with a local interface cast — never `any` in method signatures or interface params:
+
+  ```typescript
+  // ❌ Wrong
+  verifyCallback(payload: any): Promise<...>
+  // ✅ Correct
+  interface CallbackPayload { data: string; mac: string }
+  verifyCallback(payload: unknown): Promise<...> {
+    const p = payload as CallbackPayload;
+  }
+  ```
+
+- **No `!` non-null assertion** — except inside TypeORM entity files (where column decorators guarantee initialization); use optional chaining (`?.`) or an explicit null check instead
 - **Explicit return types** on all methods — `async createOrder(dto: CreateOrderDto): Promise<Order>`
+- **Typed catch blocks** — `catch (error: unknown)`, then narrow with `instanceof` before accessing properties:
+
+  ```typescript
+  catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+  }
+  ```
+
+- **No implicit `any` from untyped params** — always type function parameters explicitly
+- **DTO as source of truth** — never use raw `object` or `Record<string, any>` when a DTO exists
 - **ES modules only** — never use `require()`; always `import`
 - Run `tsc --noEmit` after every change; never mark a task done with TS errors
 

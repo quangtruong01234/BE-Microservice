@@ -23,7 +23,7 @@ WebSocket boundaries.
 - POST /api/user/register, POST /api/user/login, POST /api/user/logout
 - GET /api/products/ and all GET product endpoints
 - GET /api/products/:id/skus
-- GET /api/inventory/ (read-only)
+- GET /api/inventory/product/:productId
 - GET /api/gateway/payment-result
 - GET /api/payment/options
 - POST /zalopay/callback (ZaloPay server callback, no `/api` prefix)
@@ -38,11 +38,11 @@ WebSocket boundaries.
 - GET /api/products/price-suggestion
 - POST /api/products/risk/duplicate-check (seller `product create:own`, rate limited)
 - GET /api/products/wishlist, POST /api/products/wishlist/:productId, DELETE /api/products/wishlist/:productId
-- POST /api/products/:id/skus, PATCH /api/products/:id/skus/:skuId, DELETE /api/products/:id/skus/:skuId
 - POST /api/order/, POST /api/order/shipping-fee, GET /api/order/:id, GET /api/order/user/:id, PATCH /api/order/:id/cancel, GET /api/order/:id/invoice
 - GET /api/order/:id/payment-url
 - GET /api/order/seller, PATCH /api/order/:id/confirm, PATCH /api/order/:id/ready-to-ship
-- POST /api/inventory/, PUT /api/inventory/:id, DELETE /api/inventory/:id (product owner/admin)
+- POST /api/inventory/, PUT /api/inventory/:id (product owner/admin)
+- GET /api/inventory/low-stock (`@Roles("shop","admin")` — shop auto-scoped to own products)
 - GET /api/notifications, PATCH /api/notifications/:id/read
 - POST /api/cart, GET /api/cart, PATCH /api/cart/items/:id, DELETE /api/cart/items/:id, DELETE /api/cart
 - POST /api/social/posts, PATCH /api/social/posts/:id, DELETE /api/social/posts/:id
@@ -60,7 +60,7 @@ WebSocket boundaries.
 - POST /api/products/admin/risk/:id/rescore
 - POST /api/products/admin/risk/backfill
 - POST /api/products/admin/risk/:id/feedback
-- GET /api/user/all
+- GET /api/user (paginated `?page=&limit=`)
 - GET /api/order/admin/orders
 - GET /api/order/admin/ghn/orders
 - GET /api/order/admin/ghn/orders/:id
@@ -70,7 +70,6 @@ WebSocket boundaries.
 - PATCH /api/products/brands/:id/review
 - GET /api/products/categories/pending
 - PATCH /api/products/categories/:id/review
-- POST /api/inventory/reserve-stock, POST /api/inventory/release-stock
 
 > When adding a new endpoint: declare it in the correct zone here before implementing the guard.
 
@@ -83,7 +82,7 @@ WebSocket boundaries.
 | POST | `/api/user/register` | Public | Register new user |
 | POST | `/api/user/login` | Public | Login — sets HttpOnly JWT cookie |
 | POST | `/api/user/logout` | Public | Clears auth cookie |
-| GET | `/api/user/all` | Role: admin | Get all users |
+| GET | `/api/user` | Role: admin | Paginated users (`?page=&limit=`) |
 | GET | `/api/user/me` | Cookie | Get current authenticated user |
 | GET | `/api/user/:id` | Cookie | Get public user profile by ID (no email) |
 | PATCH | `/api/user/:id` | Cookie | Update user profile (own account only) |
@@ -102,7 +101,7 @@ WebSocket boundaries.
 `GET /api/user/:id` is a public-profile projection:
 
 ```typescript
-{ id: number; username: string; name: string | null; avatar: string | null; isActive: boolean }
+{ id: string /* "usr_..." */; username: string; name: string | null; avatar: string | null; isActive: boolean }
 ```
 
 It does not return `email`. Email remains available only in private/admin
@@ -148,9 +147,11 @@ views, and invoices.
 | GET | `/api/products/:id/with-inventory` | — | Product + stock data |
 | GET | `/api/products/:id/stock-check` | — | Stock availability check |
 | GET | `/api/products/:id/skus` | — | Get SKUs for a product |
-| POST | `/api/products/:id/skus` | Owner/admin | Add a SKU to a product |
-| PATCH | `/api/products/:id/skus/:skuId` | Owner/admin | Update a SKU |
-| DELETE | `/api/products/:id/skus/:skuId` | Owner/admin | Delete a SKU (204) |
+
+> Standalone SKU mutation routes were removed (unused-API sweep 2026-07-06).
+> SKUs are edited via `PATCH /api/products/:id` with `variations` + `skuList` —
+> `skuList` is the FULL desired set, not a delta (see
+> `ai-docs/agent-context/known-behaviors.md`).
 
 ### Query Params for GET `/api/products/`
 ```
@@ -266,18 +267,15 @@ id cannot be reconstructed.
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | POST | `/api/inventory/` | Owner/admin | Create inventory record |
-| GET | `/api/inventory/` | — | All inventory items |
-| GET | `/api/inventory/low-stock` | — | Items below minimum stock |
-| GET | `/api/inventory/product/:productId` | — | Inventory by product ID |
-| GET | `/api/inventory/sku/:sku` | — | Inventory by SKU |
-| GET | `/api/inventory/:id` | — | Inventory by ID |
-| POST | `/api/inventory/check-stock` | — | Check if stock is sufficient |
-| POST | `/api/inventory/reserve-stock` | Admin | Reserve stock manually |
-| POST | `/api/inventory/release-stock` | Admin | Release reserved stock manually |
+| GET | `/api/inventory/low-stock` | `@Roles("shop","admin")` | Low-stock rows (max 100, `availableStock ASC`, active only). Admin → all; shop → auto-scoped server-side to own products. Each row carries best-effort `productName: string \| null`. Bigint ids serialize as strings. |
+| GET | `/api/inventory/product/:productId` | Public | Inventory by product ID |
 | PUT | `/api/inventory/:id` | Owner/admin | Update inventory |
-| DELETE | `/api/inventory/:id` | Owner/admin | Delete inventory record |
 
-Stock check/reserve/release payloads accept optional `skuId` for SKU-scoped inventory; omit it for base-product inventory.
+> The former HTTP routes list / by-sku / by-id / delete / check-stock /
+> reserve-stock / release-stock were REMOVED (unused-API sweep 2026-07-06).
+> Stock check/reserve/release/consume remain as internal TCP patterns only
+> (`INVENTORY_MESSAGE_PATTERNS`) — reserve/release payloads accept optional
+> `skuId` for SKU-scoped inventory; omit it for base-product inventory.
 
 ---
 

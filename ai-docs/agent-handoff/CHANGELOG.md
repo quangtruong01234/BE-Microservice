@@ -6,6 +6,509 @@
 
 ## Completed Milestones
 
+- **AI-context audit executed end-to-end (2026-08-04, docs-only — no `.ts`
+  touched).** Follow-through on the five-part context-audit report; goal was
+  recurring-token cost reduction + stale-info removal + workflow automation.
+  - **Snapshot compaction:** `ai-docs/agent-handoff/snapshot.md` rewritten from
+    13,522 words / 1,134 lines to **1,565 words / 217 lines** (~88% smaller —
+    this file is auto-loaded EVERY session, so the saving recurs per session).
+    Nothing was deleted outright: DONE narratives stayed in this CHANGELOG, ops
+    facts moved to NEW `ai-docs/agent-context/ops-runtime.md` (2,480 words),
+    residual behaviours of shipped fixes moved to NEW
+    `ai-docs/agent-context/known-behaviors.md` (1,268 words). Both new files are
+    on-demand, registered in BOTH keyword tables (`.claude/CLAUDE.md` +
+    `AGENTS.md`).
+  - **Dedupe:** `typescript-rules.md` DELETED — its unique content merged into
+    `conventions.md` (always-loaded), keyword-table rows removed from both entry
+    points.
+  - **Stale-info fixes:** service count 7 → 10 everywhere; `timeout(10000)` →
+    `TCP_TIMEOUT_MS.READ|WRITE` tiers in CLAUDE.md Key Rules, `/review`,
+    `/feature`; `api.md` purged of removed routes (`GET /api/user/all` → paginated
+    `GET /api/user`, standalone SKU mutation routes → `PATCH /api/products/:id`
+    `skuList`, inventory table cut to the real 4-route surface with low-stock
+    roles/scoping, user projection `id` → `"usr_..."` string); `research.md`
+    port + service-owner tables completed to all 10 services; `sweep.md` step 5
+    now states the post-cutoff migration policy; `perf-audit.md` gained a
+    prior-audit dedupe section + post-cutoff migration paths; agents
+    (`code-reviewer`, `researcher`, `planner`) and `/debug` refreshed the same
+    way; `/review` gained public-id, `@Type(() => Number)`, CSRF, and
+    cookie-JWT checks.
+  - **New commands:** `/migrate` (`commands/migrate.md` — guarded SQL +
+    manifest entry + prod-owed tracking under the post-cutoff policy),
+    `/handoff` (`commands/handoff.md` — routes storefront vs GHN handoff files,
+    contract-first template), `/context-gc` (`commands/context-gc.md` —
+    periodic snapshot GC with before/after measurement). All three registered
+    in the CLAUDE.md Slash Commands section.
+
+- **Two defects closed: `toDistrictId` now accepts a numeric string, and
+  `product_reviews.product_id` widened INT → BIGINT. Runtime-verified on LOCAL
+  2026-08-04 (10/11 on the first pass; the one failure was a probe artifact,
+  re-proved 2/2 against the DB — see below).** These are the two items I listed
+  as still-active defects when the user asked "hiện còn bug nào".
+
+  - **Defect 1 — `toDistrictId` rejected `"3440"` with a 400.**
+    - **Root cause:** `create-order.dto.ts` and `shipping-fee.dto.ts` both
+      declared `@IsOptional() @IsInt() @Min(1) toDistrictId?: number` with no
+      `@Type(() => Number)`. The gateway's global `ValidationPipe`
+      (`apps/gateway/src/main.ts:82-93`) sets `transform: true` but deliberately
+      NOT `enableImplicitConversion` — so `@IsInt()` runs against the raw JSON
+      string and fails. An FE GHN district dropdown yields a string option value,
+      so the exact-id path (GHN-ADDR-01) was unreachable without a manual cast on
+      the client. Recorded as a "Minor" in the GHN-ADDR-01 Known Issue since
+      2026-07-23.
+    - **Fix:** `@Type(() => Number)` on `toDistrictId` in both DTOs (one line
+      each; `Type` was already imported in both files). `toWardCode` is
+      deliberately left `@IsString()` — GHN ward codes can carry leading zeros
+      (`"13010"`), so coercing through Number would be lossy.
+    - **Why the gateway is the right layer:** `apps/orders/src/orders.controller.ts:33-37`
+      guards the exact-id path with `typeof toDistrictId === "number" &&
+      toDistrictId > 0 && toWardCode`, treating anything else as absent →
+      free-text fallback. Coercing at the DTO is precisely what that guard needs;
+      a string would have silently degraded to free-text resolution rather than
+      erroring, which is the worse failure.
+    - **Verified (6/6), with an unresolvable free-text ward/district/province in
+      the address on purpose so a success can ONLY come from the exact ids:**
+      `POST /api/order/shipping-fee` with `toDistrictId:"3440"` → 201
+      `{shippingFee:46207}` (was 400); with `3440` → 201 (no regression); with
+      `"abc"` → 400; `POST /api/order` with `"3440"` → 201 with a real waybill
+      `ghnOrderCode:"L8Q6EX"` (proves the coerced id reached the GHN leg, not
+      just validation); with `"abc"` → 400; and the legacy no-ids free-text path
+      still 201.
+
+  - **Defect 2 — `product_reviews.product_id` was INT while `products.id` is BIGINT.**
+    - **Root cause / real shape:** the prod baseline declares the column INT,
+      matching the old entity — so the mismatch was against the PARENT
+      `products.id` BIGINT, not against the migration. Every other FK pointing at
+      `products.id` was already bigint (`product-sku.entity.ts:19`,
+      `wishlist-item.entity.ts:24`, `product-risk-feedback.entity.ts:18`);
+      `product-review.entity.ts` was the lone outlier. Latent: a product id past
+      the signed-INT ceiling 2,147,483,647 would truncate or fail on review
+      insert.
+    - **Fix:** entity column → `type: "bigint"`, plus guarded migration
+      `nodeA-20260804-001-widen-product-reviews-product-id` registered in
+      `database/migrations.manifest.json`. Widening-only, so existing values are
+      preserved and the currently-deployed code keeps working against the new
+      column. Applied to the dev Aiven Node A (a no-op ALTER there — dev's
+      `synchronize:true` had already widened it — which still proves the SQL
+      parses, runs, and writes the ledger row). **Prod still owes this migration**
+      (product forces `synchronize:false`).
+    - **Contract safety — why bigint→string does not leak:** TypeORM maps bigint
+      to a JS string, so `ProductReview.productId` is a string at runtime. The
+      gateway's `exposeProductReferences` (`apps/gateway/src/product/product.service.ts:201-258`)
+      already accepts `number | string` and rewrites any `productId` to the
+      product's `prod_` public id, and `createProductReview` returns
+      `{...review, productId}` with the public id — so HTTP never sees the raw
+      value either way.
+    - **Verified (5/5):** live dev schema confirms all five columns bigint;
+      `GET /api/products/:id/reviews` 200 paginated; `POST` review after a
+      COMPLETED order 201 (write path on the widened column); the listed review's
+      `productId` is `prod_KPriGdWjvMkFRN49`, not a bigint string; product
+      `ratingCount:1 rating:5` after create, and DB-confirmed back to `0/0` after
+      delete. tsc 0, eslint 0, Jest 199/199.
+    - **Both legs of the widened column exercised** (the change-impact concern —
+      create takes a real number off the TCP payload, delete takes the string off
+      the hydrated entity): `recalculateProductRating(dto.productId)` on create
+      and `recalculateProductRating(review.productId)` on delete
+      (`product.service.ts:1668,1683`), the latter feeding a string into
+      `productRepository.update(productId, …)`. Runtime-verified on both.
+
+  - **The one apparent failure was a probe artifact, not a defect.** B5 ("delete
+    review → ratingCount back to 0") read 1 over HTTP. Isolating it against MySQL
+    directly showed the recalculation is correct (`rating=0.00 ratingCount=0`
+    immediately after the delete) and the stale read came from the SCALE-04
+    gateway detail micro-cache: the preceding assertion's `GET /api/products/:id`
+    had warmed `gw:products:detail:<publicId>`, and a review delete is one of the
+    "background writers" that does not invalidate it. Bounded by the 10s TTL,
+    pre-existing, and already documented in the concurrent-PATCH Known Issue
+    ("rating recalc on review create/delete" is listed there by name). With a
+    cold cache the immediate HTTP read is correct.
+
+  - **Adjacent finding, deliberately NOT changed:** sibling numeric body fields
+    in the same DTOs (`skuId`, `quantity`, `weight` on the order-item DTO) also
+    lack `@Type(() => Number)`. Left alone — they are natural JSON numbers with
+    no dropdown-string origin, orders have always worked with them, and widening
+    them is scope the user did not ask for.
+
+- **Inventory 409 no longer blames the wrong thing — a `sku` collision now says
+  so. Fixed and runtime-verified on LOCAL 2026-08-03 (2/2 functional + 2/2
+  change-impact + 2 new unit tests).** Item 5️⃣ of the 2026-08-03 bug ranking,
+  recorded as a cosmetic defect while verifying the P0-03 compensation leg.
+  - **Root cause:** `InventoryService.create` (`apps/inventory/src/inventory.service.ts:80-105`)
+    mapped EVERY duplicate-key `QueryFailedError` to
+    `INVENTORY_MESSAGE.ALREADY_EXISTS_FOR_PRODUCT(data.productId)`. `sku` is the
+    only unique column on `inventory_v2` (`inventory.entity.ts:24-26`) and a
+    second row for the same product is already rejected by the explicit
+    productId pre-check at line 59 — so every conflict that actually reached the
+    catch block was a SKU collision, reported as a duplicate product. A seller
+    hitting it was told "Inventory for product ID 96 already exists" about a
+    product id that had just been created and was never the problem.
+  - **Fix:** the catch block now discriminates and throws the new
+    `INVENTORY_MESSAGE.SKU_ALREADY_EXISTS(data.sku)` ("Inventory with sku
+    `<sku>` already exists") for a sku violation, keeping
+    `ALREADY_EXISTS_FOR_PRODUCT` as the defensive fallback.
+  - **The non-obvious part — where the column name lives.** The first attempt
+    matched `error.message.includes("sku")` and changed nothing at runtime:
+    Postgres names the index after TypeORM's generated
+    `UQ_5ec10f972b1fa4f1e60d66d28bc`, so `error.message` is
+    `duplicate key value violates unique constraint "UQ_<hash>"` — the column
+    never appears in it. The column is in the driver's `detail`
+    (`Key (sku)=(PROD-95) already exists.`), so the check reads
+    `error.driverError.detail` (with the `message` check kept as a cheap
+    fallback). The pre-existing `apps/inventory/src/filters/rpc-exception.filter.ts:121`
+    sidesteps the same problem by hardcoding that constraint hash; the new code
+    does not hardcode it.
+  - **Status is unchanged:** the gateway `MicroserviceErrorHandler` maps to 409
+    by the `"already exists"` substring (`microservice-error.handler.ts:92`),
+    which the new message keeps. Verified live — still HTTP 409.
+  - **Runtime self-test (2/2)** using the documented P0-03 trigger — create a
+    product with NO `sku` (its inventory row takes `PROD-<numericId>`), read that
+    sku, then create a second product carrying it: the product row inserts fine
+    (the first product's `products.sku` is NULL) and the INVENTORY insert
+    collides. `409 "Inventory with sku PROD-97 already exists"` (was
+    `"Inventory for product ID 96 already exists"`), and the P0-03 compensation
+    still rolls the orphan product row back (0 rows survive).
+  - **Change-impact review (2/2)** — the functional test only exercised the sku
+    leg, so the untested leg was the duplicate-PRODUCT path that throws from the
+    pre-check before any insert. `POST /api/inventory` for a product that already
+    has a row, using a sku nothing else owns → still
+    `409 "Inventory for product ID 99 already exists"`, proving the pre-check
+    path is untouched and that nothing now misattributes a product duplicate to
+    a sku. Blast radius grepped: `ALREADY_EXISTS_FOR_PRODUCT` has no other
+    caller and nothing in the repo matches on the message text beyond the
+    gateway's `"already exists"` → 409 substring rule.
+  - **Regression guard:** 2 unit tests in
+    `apps/inventory/src/inventory.service.spec.ts` build the REAL Postgres error
+    shape (hash-named constraint in `message`, column in `driverError.detail`)
+    and pin both branches — so a future refactor cannot regress to matching on
+    `message` alone. Files: `apps/inventory/src/inventory.service.ts`,
+    `libs/constant/response-message.constant.ts`,
+    `apps/inventory/src/inventory.service.spec.ts`. No migration, no route or
+    status-code change. Validation: tsc 0 errors, eslint 0 errors, Jest 199/199
+    across 26 suites (was 197).
+
+- **BUG-B — deactivated products no longer appear on the public storefront.
+  Fixed and runtime-verified on LOCAL 2026-08-03 (7/7 functional + 3/3
+  change-impact + 5 new unit tests).** Found 2026-07-30 while making the prod
+  catalog tech-only: `GET /api/products` and `GET /api/products/with-inventory/all`
+  returned rows with `isActive:false, approvalBlocked:true` (2 visible on prod
+  after a category-reject cascade), so AI-02 risk-blocked products stayed on the
+  sàn even though the admin UI labels them "Đang ẩn khỏi sàn".
+  - **Root cause:** `findAllProducts` (`apps/product/src/product.service.ts:1266`)
+    applied `product.isActive = :isActive` ONLY when the caller happened to pass
+    the flag. There was no active-only default, and none of the five `@Public`
+    catalog routes passes one.
+  - **Fix (`product.service.ts:1178-1212`):** the method now derives an
+    `effectiveQuery` that defaults `isActive: true` when the caller passes
+    NEITHER `isActive` NOR `userId`, and destructures from it. Two lines of real
+    logic; the defect line itself is untouched.
+  - **Why `userId` is the exception:** the storefront seller dashboard
+    (`frontend/src/features/shop/ShopPage.tsx:256`,
+    `useProducts({userId: currentUser.id})`) uses the SAME public list route and
+    must keep seeing the products it hid. Scoping the exception to the
+    single-seller read is what let this ship WITHOUT a paired FE change — the
+    snapshot had previously recorded the fix as blocked on one.
+  - **Why `userIds` (plural) is deliberately NOT an exception:** the gateway
+    implements the province filter by resolving `sellerIdsInProvinces` via
+    `USER_MESSAGE_PATTERN.GET_USER_IDS_BY_PROVINCE` and passing them as
+    `userIds`. Including it would have left province-filtered marketplace browse
+    still leaking hidden products.
+  - **Cache correctness:** the normalization happens BEFORE
+    `buildSearchCacheKey`, so (a) "no isActive" and "isActive=true" collapse to
+    one key instead of duplicating entries, and (b) pre-fix entries keyed without
+    `isActive` can never be served back to the storefront.
+    `invalidateSearchCache` is prefix-based (`products:search:*`) so it clears
+    both key shapes. The SCALE-04 gateway micro-cache (`gw:products:list:*`,
+    TTL 10s) is keyed by query and invalidated by PATCH — unaffected.
+  - **Blast radius (verified by grep, not assumed):** the gateway is the ONLY
+    sender of `PRODUCT_FIND_ALL` / `PRODUCT_SEARCH` / `PRODUCT_FIND_BY_CATEGORY` /
+    `PRODUCT_FIND_BY_BRAND` (`apps/gateway/src/product/product.service.ts:559,
+    871, 887, 900`) — no other microservice consumes them. They back exactly five
+    HTTP routes, all `@Public()`. `getProductRisks` (`@Get("admin/risk")`) is a
+    separate method and keeps seeing hidden products.
+  - **Functional self-test 7/7** (local, anon + shop): list, `with-inventory/all`,
+    `search`, `category/:id` all hide the deactivated product while still listing
+    the active one; `?userId=<seller>` still returns the seller's hidden product;
+    `?isActive=false` still returns only deactivated products.
+  - **Change-impact review 3/3** (the legs the self-test never reached): I1
+    `brand/:id` hides it too; I2 the province/`userIds` leg hides it (required
+    temporarily giving the shop account a default address —
+    `getUserIdsByProvince` filters on `is_default = true` — then deleting it
+    again; the GHN sandbox stub province "Hà Nội 02" with zero districts forced
+    the probe to walk provinces→districts→wards until one resolved); I3 the admin
+    risk queue is unaffected. Recorded as pre-existing, NOT regressions: `GET
+/api/products/:id` still returns a deactivated product with 200, and
+    `shop/stats` still counts hidden products.
+  - **Regression guard:** `describe("ProductService.findAllProducts storefront
+visibility (BUG-B)")` in `product.service.spec.ts` — 5 tests pinning the
+    default, the `userIds` behaviour, the `userId` exception, the explicit
+    override, and that the cache key carries `"isActive":true`.
+  - **Residual, recorded in snapshot Known Issues:** `?userId=` remains an
+    anonymous shop-page leak by design. Closing it needs the FE to migrate the
+    seller dashboard onto a new authenticated route first (none exists today);
+    storefront handoff entry written.
+  - Validation: `tsc --noEmit` 0 errors, eslint 0 errors, Jest **197/197 across
+    26 suites** (was 192). All test products deleted and the temporary address
+    removed — nothing left behind on local.
+
+- **BUG-D — `PATCH /api/order/:id/cancel` no longer returns 503 for a cancel that
+  committed. Fixed and runtime-verified on LOCAL 2026-08-03 (5/5 + 4/4 + 3/3).**
+  Seen once on prod 2026-08-01 (order `ord_HuypgIrmcskqq4Ny` / waybill `LAYGKP`):
+  first call 503, the order was `canceled` afterwards, retry then 400 "Order
+  cannot be canceled". Two independent defects compounded.
+  - **D1 — GHN HTTP calls were unbounded.** `GhnModule` imported a bare
+    `HttpModule`, so `GhnService`'s axios instance inherited the axios default
+    timeout of `0` (infinite). Only the three master-data GETs passed a
+    per-request `timeout: MASTER_DATA_TIMEOUT_MS` (10000); every mutation —
+    `createShippingOrder`, `switchOrderStatus` (cancel/return), `updateOrderCod`,
+    `updateOrderReceiver`, `getOrderDetail`, `previewShippingFee` — could hang
+    until the socket died. `OrdersModule` registers
+    `HttpModule.register({timeout:5000})` but that is a different dynamic-module
+    instance and never reaches `GhnService` (module-scoped provider resolution).
+    Fixed by registering `HttpModule.register({timeout:5000, maxRedirects:5})` in
+    `GhnModule`. The master-data per-request `timeout: 10000` still wins (axios
+    merges request config over instance config) — verified at runtime.
+  - **D2 — the GHN cancel blocked the response after the commit.**
+    `finalizeCancellation` ran `updateOrderStatus` + `releaseReservedItems` (both
+    committed) and only THEN awaited `ghnService.cancelShippingOrder`. The
+    gateway's `timeout(TCP_TIMEOUT_MS.WRITE)` = 10s then fired on an
+    already-successful cancel. Fixed by detaching the GHN leg
+    (`void this.cancelShippingOrderBestEffort(...)`) — the same best-effort shape
+    the waybill-create leg already uses.
+  - **Regression caught in the change-impact review (not by a test):** the new 5s
+    cap meant a slow-but-alive GHN cancel would leave a live waybill on a canceled
+    order, whereas the old infinite timeout eventually landed it (at the cost of
+    the 503). Closed by retrying the detached call once — 2 attempts × 5s, both
+    entirely off the response path. `cancelShippingOrderBestEffort` never rejects:
+    a `void`-invoked rejecting promise becomes an unhandled rejection and can kill
+    the process.
+  - **Deliberately NOT changed:** the admin GHN cancel/return
+    (`applyAdminGhnAction` → `switchOrderStatus`) stays awaited and re-throws on
+    GHN rejection — its documented contract is 4xx/5xx to the caller plus a
+    `success:false` `shipping_history` row with the local order untouched.
+    `sweepStaleReservations` only selects `ghnOrderCode: null` orders, so the two
+    `finalizeCancellation` callers stay symmetric.
+  - **Runtime self-test (5/5)** — COD order `ord_h1rQ8uPBaIP9RMer` with waybill
+    `L8Q6MY`: created 201 with a real `ghnOrderCode`; cancel **200 in 1530ms**
+    with `status: canceled` (was 503); well inside the 10s TCP budget; the
+    detached cancel still landed at GHN (`ghnDetail.status = cancel` on
+    `GET /api/order/admin/ghn/orders/:id`); re-cancel still 400.
+  - **Change-impact review — every other GHN call site the 5s cap now bounds
+    (4/4 + 3/3):** master-data list 200/65 rows; free-text
+    `POST /api/order/shipping-fee` 201 in 788ms (real resolution, not cached);
+    awaited admin GHN cancel 201 in 1785ms → local order `canceled`;
+    `update-cod` 201 in 744ms (58207 → 15000, persisted); `update-receiver` 201
+    in 955ms (persisted into the pipe-delimited head, ward/district/province
+    preserved). `readyToShip` reuses the `createShippingOrder` proven by the
+    order-create leg.
+  - **Files:** `apps/orders/src/ghn/ghn.module.ts`,
+    `apps/orders/src/orders.service.ts`, `apps/orders/src/orders.service.spec.ts`
+    (3 new tests: caller answers while the GHN promise is still pending; the
+    detached call retries once; a rejected detached call is swallowed).
+    Validation: tsc 0 errors, eslint clean, Jest **192/192** across 26 suites.
+
+- **BUG-A — SKU edit reachable over HTTP again + the inventory leg that was
+  missing behind it. Fixed and runtime-verified on LOCAL 2026-08-03 (9/9 + 5/5).**
+  Found during the 2026-08-03 prod verification: `POST /api/products` accepted
+  `variations` + `skuList` but the gateway `UpdateProductDto` declared neither,
+  so the global `forbidNonWhitelisted` pipe rejected every SKU edit with 400
+  `"property skuList should not exist"` before the service was reached. A seller
+  could create a variant product and then never change its SKU prices/stock, and
+  the whole P0-05 diff engine was dead code from the HTTP boundary.
+  - **The fix (gateway):** `SkuItemDto`/`VariationItemDto` are now exported from
+    `create-product.dto.ts` and reused as optional `variations?`/`skuList?`
+    fields on `UpdateProductDto` (`@IsOptional() @IsArray() @ValidateNested
+({each:true}) @Type(...)` + `@ApiPropertyOptional`). No new DTO classes — the
+    create/update contract stays literally the same shape.
+  - **Tier validation moved inside the transaction.** `validateSkuTiers
+(product.variations, dto.skuList)` now runs in `applyProductUpdate`, after
+    `Object.assign`, so a bad `tierIdx` is rejected against the variations the
+    edit is actually establishing rather than the pre-edit ones — and it rolls
+    back with the rest of the product fields instead of leaving a partial write.
+  - **P0-05 assertions re-run on the now-reachable path (9/9):** matched
+    `tierIdx` updated in place (id preserved), an UNREFERENCED dropped SKU
+    hard-deleted, a REFERENCED one (present in `order_items`/`cart_items`)
+    surviving as `isActive:false`, out-of-range `tierIdx` → 400, and a
+    `{description}`-only PATCH leaving SKUs untouched. The A8 assertion was
+    validated with a negative control (deliberate break → `8/9 passed (failed:
+A8)`) after it was first found to pass spuriously off the SCALE-04 micro-cache;
+    the suite now forces an invalidating no-op PATCH before asserting.
+  - **Change-impact review found a second, deeper bug — the edit never reached
+    inventory.** `upsertSkus` emits `sku.upserted`, whose consumer called
+    `createForSku()`, which returned early when the row already existed. So a
+    SKU stock edit only moved the `product_skus.stock_quantity` MIRROR while
+    checkout kept reserving against the unchanged authoritative `inventory_v2`
+    row (probe: mirror 99, inventory still 5). Fixed by making `createForSku` an
+    upsert — but **only for SKUs whose stock the seller actually re-declared in
+    that edit**. `upsertSkus` now collects `stockChangedSkuIds` (comparing the
+    incoming value against the pre-mutation `match.stockQuantity`) and ships it
+    in the fanout; the consumer passes `syncStock` per SKU. This guard is
+    load-bearing: inventory drains as orders reserve while the product mirror is
+    never decremented, so a plain price edit echoing the stale mirror back would
+    otherwise silently restock the seller. Reserved stock is never rewritten —
+    a restock sets `available_stock` and leaves committed units alone.
+  - **Deliberately NOT done:** propagating soft-deactivated (still-referenced)
+    SKUs to inventory as `is_active:false`. `transitionReservation` and
+    `reserveStockWithLedger` both filter `inventory.isActive = true`, so that
+    would break RELEASE of in-flight reservations on exactly the SKUs that have
+    them. Only hard-deleted (by definition unreferenced) SKUs deactivate their
+    inventory row, which the existing `softDeleteSkus(deletedSkuIds)` already did.
+  - **Backward compatible mid-deploy:** `stockChangedSkuIds` is optional on the
+    consumer (an old message ⇒ create-only, the previous behavior) and
+    `syncStock` is optional on `createForSku`, whose only caller is that
+    consumer. `createProduct` passes only new SKUs, so the list is empty there.
+  - **Inventory leg verified 5/5** against local Postgres (per-SKU inventory has
+    no HTTP read path — `findByProductId` returns only the base
+    `productSkuId IS NULL` row): create seeds a row per SKU with the declared
+    stock; a 5→99 edit now reaches `inventory_v2` (this is the exact assertion
+    that failed before the fix); an untouched SKU keeps its stock; echoing a
+    stale mirror after a simulated sale leaves inventory at 60 while the price
+    change lands; a dropped SKU's row goes `is_active:false`.
+  - **Follow-up found by re-running the suite (2026-08-03): the reference check
+    was one stale socket away from downgrading a delete.** A re-run came back
+    `8/9 (failed: A4)` — an UNREFERENCED SKU deactivated instead of
+    hard-deleted — then went green again on the very next run. The orders handler
+    (`findReferencedSkuIds`, `orders.service.ts:2501`) is correct and a
+    seconds-old SKU cannot legitimately match `order_items`/`cart_items`, and
+    `referencedIds.has(...)` is the only route to deactivation, so the cause was
+    `getReferencedSkuIds`'s fail-safe catch firing on a transient TCP error:
+    a NestJS `ClientProxy` fails the first send on a dropped socket and
+    reconnects on the next. The seller saw a 200 with the variant still present
+    but greyed out. Fixed with `retry({count:1, delay:200})` on the send — the
+    fail-safe itself is unchanged (a sustained orders outage still deactivates
+    rather than risking data loss). 2 new unit tests cover both legs
+    deterministically: one transient failure ⇒ 2 attempts ⇒ hard delete, and a
+    persistent failure ⇒ every candidate treated as referenced. Jest 189/189.
+  - Validation: `tsc --noEmit` clean, eslint clean, prettier unchanged, jest
+    `apps/product apps/inventory` 22/22. Files: gateway `create-product.dto.ts`
+    (exports) + `update-product.dto.ts` (the fix), `apps/product/src/
+product.service.ts` (`stockChangedSkuIds`), `apps/inventory/src/
+inventory.controller.ts` + `inventory.service.ts` (the upsert). No migration.
+  - FE impact recorded in `../.agent-local/frontend-handoff.md` — the storefront
+    edit form can now send SKUs, and `skuList` is a FULL set, not a delta.
+- **PROD runtime self-test of the never-tested backlog items — 2026-08-03.**
+  Closed the "pending a full-stack run" debt on P0-03/P0-04/P0-05/P1-01/P1-02 by
+  driving the real prod API (`https://tryhavejob.ooguy.com`) with all five
+  `.env.seed` accounts (shop / user / admin-less buyer / logistic / shipping).
+  Test driver was a throwaway Node `fetch` script in the scratchpad (never
+  committed); every object it created was cleaned up in a `finally` block.
+  **Results — 36/37 assertions passed across two runs.**
+  - **P0-03 (atomic product+inventory create) 3/3.** `POST /api/products` → 201
+    `prod_rgw5qrBLI3xp71bP`; `GET /api/inventory/product/:id` → 200 with
+    `availableStock` 40, i.e. the cross-service saga created the inventory row.
+    The compensation branch is not forceable from outside — recorded as a
+    ⏳ PENDING RUNTIME TEST note in `snapshot.md` with the exact local steps.
+  - **P0-04 (create-order idempotency) 4/4.** Key K1 → 201 `ord_4Yi4Dat9L9LckKaH`;
+    replaying K1 → the SAME order id, no second row; K2 → a new order
+    `ord_sl7T1DRV6hm7gezL`; two concurrent K3 requests → one 201 + one 409 with a
+    single resulting order `ord_5vjl2x4BBZFDbYvw` (the Redis `SET NX` in-flight
+    lock behaving as designed).
+  - **P0-05 (SKU diff + reference protection) — CANNOT BE TESTED; real gap
+    found.** Both diff PATCHes returned 400. Root cause is not the test: the
+    gateway `UpdateProductDto` declares no `skuList`/`variations`, so
+    `forbidNonWhitelisted` rejects them (`"property skuList should not exist"`)
+    before the service is reached — while a `{description}` control PATCH on the
+    same product returned 200 and both SKUs stayed unchanged. The 2026-07-06
+    unused-API sweep removed the standalone SKU routes assuming the product PATCH
+    covered them; it never did. Logged as a 🔴 Known Issue with the fix and the
+    assertions to re-run. `PERF-12`'s "canonical SKU edit path" note was corrected.
+  - **P1-01 (seller order lifecycle) 7/7.** Buyer attempting confirm → 403; then
+    confirm → `confirmed`, ready-to-ship → `processing`, ship → `shipped`,
+    deliver → `delivering`, complete → `completed` (all 200); cancelling the
+    completed order → 400.
+  - **P1-02 (order enrichment + per-status counts) 6/6.** `status-counts` returned
+    `{all:13, pending:4, processing:1, completed:1, canceled:7, …}` with the
+    per-status values summing exactly to `all`; another user's counts → 403; order
+    items came back enriched (`productName`, `productImage`, `skuLabel`,
+    `skuTierIdx`, public `productId`/`sellerId`); the seller list paginated.
+  - **Shipping RBAC 4/4** (not previously exercised): `logistics_operator` reads
+    `GET /api/order/admin/ghn/orders` 200 but `update-cod` → 403;
+    `shipping_manager` reads 200; a plain user → 403.
+  - **ZaloPay payment-url leg 4/4**, under the user's ≤ 50 000 VND cap. First
+    attempt breached it (goods 15 000 + GHN fee 46 207 = 61 207) so the leg was
+    re-run without the GHN address ids (fee resolves to 0) → order total 15 000.
+    `GET /api/order/:id/payment-url` → 200
+    `{orderUrl:"https://qcgateway.zalopay.vn/openinapp?order=…"}`; foreign user →
+    403. No payment was ever completed. Documented the contract asymmetry in
+    `snapshot.md`: only the MULTI-seller create returns `paymentUrl`; single-seller
+    callers must use this endpoint, whose key is `orderUrl`.
+  - **Prod residue:** every test product was hard-deleted (204) and every order
+    canceled (200) except `ord_4Yi4Dat9L9LckKaH`, which the P1-01 lifecycle test
+    drove to COMPLETED — a terminal state that cannot be cancelled, so that one
+    order remains on prod permanently.
+- CD-01 + CD-02 — CI/CD pipeline, shipped 2026-08-03 (`/sweep tiep tuc CI/CD`).
+  Deploy was fully manual before this (local push → on EC2 `git pull` +
+  `npm run build` + `pm2 restart`).
+  **CD-01 — `.github/workflows/deploy.yml` (new).** One `appleboy/ssh-action@v1`
+  step with `script_stop: true` running the already-proven manual sequence:
+  record `git rev-parse HEAD` → `~/.trybuy-deploy-prev-sha` → `git fetch --prune`
+  + `git reset --hard origin/main` → `npm ci` → `npm run db:migrate:nodeA` +
+  `:nodeB` → `npm run build` → `pm2 flush` → `pm2 restart ecosystem.config.js
+--env production` → `pm2 save` → poll `http://127.0.0.1:3000/live` up to 10×5s
+  (prints `pm2 status` and fails if it never answers). Migrations deliberately
+  run BEFORE the restart: every project migration is additive and
+  INFORMATION_SCHEMA-guarded, so the running old code tolerates the new columns
+  while new code would crash on a missing one. Triggers: `workflow_run` on the
+  `CI` workflow for `main` (guarded by `conclusion == 'success'`, since
+  `workflow_run` also fires on failed runs) plus `workflow_dispatch`;
+  `concurrency: deploy-production` (no cancel-in-progress) and
+  `environment: production` so Required reviewers can hold a deploy while the
+  EC2 is inside its scheduled stopped window. A second `if: failure()` step
+  rolls back automatically: read `~/.trybuy-deploy-prev-sha` → reset → `npm ci`
+  → build → `pm2 restart` → `/live`. No DB rollback (additive migrations).
+  Two non-obvious details baked in: the script sources `~/.nvm/nvm.sh` (a
+  non-interactive SSH shell never reads the login profile, so an nvm-installed
+  node is otherwise off PATH), and it hard-fails if the box's Node major is not
+  22 — which is CD-02(d). Secrets required, none of them application secrets:
+  `EC2_HOST`, `EC2_USER`, `EC2_SSH_KEY`, `EC2_PATH`.
+  **CD-02 — `.github/workflows/ci.yml`.** (a) `npx prettier --check
+"apps/**/*.ts" "libs/**/*.ts"` before lint — the repo mandates format-on-change
+  but CI only linted (verified locally: already clean). (b) audit gate, SPLIT
+  from the original single-step plan because the assumption behind it had gone
+  stale: a blanket `npm audit --audit-level=high` was **red**, not green — three
+  new highs had landed since DEP-01 (`js-yaml` GHSA-pm4m-ph32-ghv5 via
+  `@nestjs/swagger`, `brace-expansion` GHSA-mh99-v99m-4gvg via `typeorm` and
+  several dev tools). Shipped instead: `npm audit --omit=dev --audit-level=high`
+  as the BLOCKING gate (production dependencies, a real alarm) and the all-deps
+  `--audit-level=high` run as `continue-on-error` reporting, so the permanently
+  red `@nestjs/cli → @swc/cli → @xhmikosr` build-tool chain cannot fail an
+  unrelated PR. To make the blocking gate green, two SCOPED `overrides` were
+  added to `package.json` — `@nestjs/swagger` → `js-yaml 5.2.3` and `typeorm` →
+  `brace-expansion ^2.1.3`. Scoped, not global, on purpose: `@nestjs/swagger`
+  pins `js-yaml` to exactly `5.2.1` and its latest release (11.4.6, already
+  installed) still does, so there is no upstream fix to wait for; and a global
+  `brace-expansion` override would force v2 onto `minimatch@3` consumers. Result:
+  production-scope high findings 1 → 0, total report 13 → 11 (10 moderate + 1
+  dev-only high). (c) `actions/upload-artifact@v4` of `dist/` keyed by
+  `github.sha` (7-day retention, `if-no-files-found: error`) so CD-03 can later
+  ship the exact validated bits.
+  **Validation.** Both YAML files parse (`js-yaml`), both embedded deploy scripts
+  pass `bash -n`, and every CI step was executed locally against the new
+  dependency tree: prettier check clean, `eslint` 0 errors (7 pre-existing
+  warnings), `tsc --noEmit` 0, Jest **187/187 in 26 suites**, `npm run build`
+  green with all 10 `dist/apps/<svc>/main.js` emitted, `node -c
+ecosystem.config.js` OK, `npm audit --omit=dev --audit-level=high` exit 0.
+  The override leg the build does NOT exercise was smoke-tested directly:
+  `@nestjs/swagger` loads, resolves `js-yaml` **5.2.3** from its nested folder,
+  and dump/load roundtrips an OpenAPI fragment; `typeorm` resolves
+  `brace-expansion` **2.1.4**.
+  **Change-impact review found one real gap, fixed before closing:** the
+  `if: failure()` rollback originally read `~/.trybuy-deploy-prev-sha` that the
+  deploy step wrote *after* the Node-major assertion — so a failure before that
+  write (or a failed `cd`) would have rolled the box back to a **stale sha from
+  an earlier deploy**. The marker is now `rm -f`'d before `cd` and written
+  immediately after it, so an early failure leaves no marker and the rollback
+  step aborts loudly ("no recorded previous sha") instead of resetting to the
+  wrong commit. A second suspicion — that `[ -s nvm.sh ] && . nvm.sh` under
+  `set -euo pipefail` would abort when nvm is absent — was tested and is NOT a
+  bug (bash exempts the non-final command of an `&&` list); the script uses the
+  explicit `if` form anyway for readability.
+  **Not runtime-verified, and cannot be from here:** the deploy workflow has
+  never executed. It needs the 4 repository secrets and the `production`
+  Environment, and `workflow_run` only ever runs the copy of the file on the
+  default branch — so the first real deploy happens after this merges to `main`.
+  Recorded as such in `snapshot.md` Ops/Runtime. No application code, endpoint,
+  or DB change — no FE impact, no handoff entry.
+
 - BUG-404-01 — `GET /api/order/:id` returned **500 instead of 404** for an
   unknown-but-well-formed `ord_…` id. Fixed 2026-08-02 (`/sweep`, top 🔴 item).
   Root cause: `fetchOwnedOrder` (`apps/gateway/src/order/order.service.ts`) awaited
@@ -27,8 +530,12 @@ ord_aaaaaaaaaaaaaaaa not found"`, local unknown payment-url **404** (same
   message), numeric id still **400** at `ParsePublicIdPipe`, own order list 200,
   own order detail 200 (payload intact), own payment-url 200, foreign order still
   **403**, unknown order as a second user **404**. tsc 0 errors, eslint clean.
-  **Not on prod yet** — needs `npm run build` + `pm2 restart gateway`.
-  FE handoff written (storefront: 500→404 on the two routes).
+  **Deployed and re-verified on PROD 2026-08-02** (commit `2cb3fbb`, build +
+  `pm2 restart`): unknown order **404** `"Order ord_aaaaaaaaaaaaaaaa not found"`,
+  unknown payment-url **404**, numeric id **400**, own order list 200, own order
+  detail 200, and the admin branch intact (admin on an unknown id **404**, admin
+  reading another user's order **200**). FE handoff written (storefront: 500→404
+  on the two routes).
 
 - Product optimistic locking — **runtime-verified on PROD 2026-08-02** after the
   deploy of the concurrent-`PATCH` fix below. Migration

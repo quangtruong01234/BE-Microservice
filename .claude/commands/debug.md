@@ -14,17 +14,13 @@ Example: `/debug port 3001 not listening, AggregateError`
 
 ---
 
-## Known Issues — read BEFORE debugging
+## Known behaviours — read BEFORE debugging
 
-If the symptom matches either item below, this is a **known pre-existing bug** — report it immediately instead of running a full diagnostic.
-
-### (a) MicroserviceErrorHandler maps wrong HTTP status
-
-`BadRequestException` and `ForbiddenException` from TCP microservices are not correctly mapped to 400/403 — gateway falls back to **502**. Any 502 from the gateway where the business logic looks correct should be suspected as this cause.
-
-### (b) Inventory not consuming `order_created` / `order_canceled`
-
-If `inventory.main.ts` uses `getOptions("INVENTORY_SERVICE_QUEUE")` instead of `getOptionsTopic()` with `ORDERS_EXCHANGE`, the service subscribes to the wrong queue and receives no events from Orders. Check `apps/inventory/src/main.ts` first.
+Before diagnosing, check `ai-docs/agent-context/known-behaviors.md` — several
+"bugs" are documented residual behaviours (opt-in `version` 409, `skuList` full-set
+semantics, single-seller `paymentUrl` asymmetry, `?categoryIds[]=` → 400, ...).
+For prod symptoms also see `ai-docs/agent-context/ops-runtime.md` (EC2 stop/start
+reboot noise, pm2 log-reading pitfalls, nodeB idle-crash history).
 
 ---
 
@@ -100,13 +96,16 @@ Service → Node group mapping:
 
 | Service   | Group  | Default port |
 | --------- | ------ | ------------ |
-| gateway   | Node A | 3000         |
-| orders    | Node A | 3001         |
-| inventory | Node B | 3002         |
-| user      | Node A | 3003         |
-| rewards   | Node B | 3004         |
-| payments  | Node B | 3005         |
-| product   | Node A | 3006         |
+| gateway      | Node A | 3000 (HTTP+WS) |
+| orders       | Node A | 3001         |
+| inventory    | Node B | 3002         |
+| user         | Node A | 3003         |
+| rewards      | Node B | 3004         |
+| payments     | Node B | 3005         |
+| product      | Node A | 3006         |
+| social       | Node A | 3008         |
+| notification | Node A | 3009 (TCP+RMQ only, no HTTP) |
+| chat         | Node A | 3012         |
 
 ---
 
@@ -129,12 +128,11 @@ Service → Node group mapping:
 
 ### Step 5 — Frontend fetch failing
 
-Read in this order:
-
-1. `frontend/src/api/index.ts` → is `credentials: 'include'` on the base `request()` function?
-2. Find the relevant hook in `frontend/src/hooks/` → is `queryFn` calling the right api method?
-3. `frontend/.env` → is `VITE_API_URL` pointing to `http://localhost:3000/api`?
-4. Gateway CORS config → does it allow `http://localhost:5173` with `credentials: true`?
+FE code is out of scope for this repo. Backend-side check only: gateway CORS
+(`apps/gateway/src/common/cors.ts` — `FRONTEND_URL` env, localhost bypass only in
+dev) and whether the failing route requires the HttpOnly `access_token` cookie.
+If the cause is FE-side, report it via the FE handoff files (see CLAUDE.md
+"Frontend handoff") instead of editing FE code here.
 
 ---
 
@@ -142,24 +140,21 @@ Read in this order:
 
 - Is the route marked `@Public()`? If it should be public, add the decorator from `common/decorators/public.decorator.ts`
 - Is `JwtAuthGuard` applied globally in `gateway.module.ts`?
-- Is `credentials: 'include'` on every frontend fetch request?
-- Is cookie being set? (only verifiable by user in DevTools → Application → Cookies)
+- Is the HttpOnly `access_token` cookie being sent? Verify yourself with curl: login via `POST /api/user/login -c tmpcookies_test.txt`, then repeat the failing request with `-b tmpcookies_test.txt`
 
 ---
 
 ### Step 7 — Database
 
-```bash
-docker-compose ps
-docker-compose logs db --tail=20
-```
+Databases are **external Aiven services** (no local DB container — docker runs
+only Redis + RabbitMQ; `docker-compose ps` shows just those two).
 
-Then check:
+Check:
 
 - Entity column names vs actual table columns — snake_case mismatch?
-- Has migration SQL in `api/database/*.sql` been applied to the DB?
-- DB routing: Orders/Products → MySQL. Inventory → PostgreSQL. Never cross-inject modules.
-- TypeORM sync issue? Compare entity field `name:` value with actual column name in DB (psql / mysql CLI)
+- Has the migration been applied? `npm run db:migrate:status` (post-cutoff migrations live in `database/migrations/nodeA|nodeB/` + `database/migrations.manifest.json`; baseline frozen in `database/prod-baseline-20260717/`)
+- DB routing: Node A MySQL (orders/user/product/social/notification/chat). Node B PostgreSQL (inventory/payments/rewards). Never cross-inject modules.
+- TypeORM sync issue? Prod forces `synchronize:false` — a new entity column does NOT auto-appear there; dev auto-syncs (most services), so dev-works-prod-fails often means a missing prod migration
 
 ---
 

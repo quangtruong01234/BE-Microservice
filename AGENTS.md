@@ -57,11 +57,12 @@ If a referenced context file does not exist, search nearby `ai-docs/` paths once
 | `ai-docs/agent-context/database.md` | entity / migration / column / table / schema |
 | `ai-docs/agent-context/api.md` | endpoint / route / DTO / swagger / API |
 | `ai-docs/agent-context/security.md` | payment / zalopay / vnpay / JWT / auth / cookie / guard |
-| `ai-docs/agent-context/typescript-rules.md` | tsc / type error / any / return type / eslint |
 | `ai-docs/agent-context/git-workflow.md` | commit |
 | `ai-docs/agent-context/research.md` | pre-implementation spanning more than one service |
 | `ai-docs/agent-context/performance.md` | query / list / pagination / index / cache / N+1 / slow path |
 | `ai-docs/agent-context/backend.md` | NestJS / TCP / RabbitMQ / @MessagePattern / @EventPattern detail |
+| `ai-docs/agent-context/ops-runtime.md` | deploy / pm2 / nginx / prod env / EC2 / cloudinary / GHN ops / applied migration / seed |
+| `ai-docs/agent-context/known-behaviors.md` | residual behavior / known issue / 409 version / skuList / paymentUrl / compensation |
 
 ## Auto-context (when user does not tag a context file)
 
@@ -72,10 +73,11 @@ Match keywords in the prompt → read the corresponding file with the Read tool.
 | entity, migration, column, table, schema | `ai-docs/agent-context/database.md` |
 | endpoint, route, DTO, swagger, API | `ai-docs/agent-context/api.md` |
 | payment, zalopay, vnpay, JWT, auth, cookie, guard | `ai-docs/agent-context/security.md` |
-| tsc, type error, any, return type, eslint | `ai-docs/agent-context/typescript-rules.md` |
 | commit | `ai-docs/agent-context/git-workflow.md` |
 | TCP, RabbitMQ, message pattern, event, @MessagePattern, @EventPattern | `ai-docs/agent-context/backend.md` |
 | performance, slow, N+1, index, cache, pagination, query | `ai-docs/agent-context/performance.md` |
+| deploy, pm2, nginx, prod, EC2, cloudinary, GHN ops, applied migration, seed | `ai-docs/agent-context/ops-runtime.md` |
+| known issue, residual behavior, version 409, skuList, paymentUrl, compensation | `ai-docs/agent-context/known-behaviors.md` |
 
 - No keyword match → use only the 3 always-loaded files; do not load extras.
 - Multiple keywords match → load all matching files.

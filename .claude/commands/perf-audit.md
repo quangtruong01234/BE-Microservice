@@ -25,18 +25,15 @@ Implement findings afterwards via `/feature`, `prompts/refactor.md`, or a direct
 
 ---
 
-## Known performance hotspots — read FIRST
+## Prior audit state — read FIRST
 
-If `<path>` matches one of these, start here instead of a blind scan. These are
-the high-probability suspects given the current architecture (verify before reporting):
-
-1. **Cross-DB N+1: product (MySQL) ↔ inventory (PostgreSQL).** `GET /api/products/with-inventory/all` and `POST /api/products/with-inventory/multiple` must use the batch TCP pattern `inventory.get_by_product_ids` — NOT one `inventory.find_by_product_id` per product. A per-item loop = N TCP round-trips.
-2. **Unpaginated list endpoints.** `GET /api/inventory/`, `GET /api/products/brands`, `GET /api/products/categories`, `GET /api/user/all` return unbounded rows. Slow + large payload as data grows.
-3. **Social feed N+1.** `getPosts` / `getPostsByUser` read `likeCount` from Redis per post. Per-post `GET` = N Redis round-trips → should be one `MGET`/pipeline.
-4. **ManyToMany over-fetch.** Product↔Category junction (`product_categories`): `findAll` with `relations: ['categories']` can produce a cartesian row blow-up and N+1 hydration on a paginated list.
-5. **Reply tree depth.** `getReplies` uses `findDescendantsTree` (recursive, depth 5). Expensive per post at scale; check it is not called inside `getPosts`.
-6. **Sequential gateway TCP calls.** Independent `.send()` calls awaited one-by-one instead of `Promise.all` (e.g. admin orders merging buyer info — confirm it is parallel).
-7. **Missing indexes on filtered columns.** product search (`name` LIKE / `sku`), `categoryId`/`brandId` filters, `orders.user_id`, `payments.app_trans_id` + `transaction_id` lookups, `inventory.productId`/`sku`.
+The 2026-07-02 full-project audit (PERF-01..13) is fully closed and the
+scalability items SCALE-01..05/07 are shipped — do NOT re-report those known
+patterns as new findings (batched TCP, MGET feed decoration, split-query
+pagination, order/social/chat/payments indexes, brand/category cache-aside,
+gateway micro-cache, TCP timeout tiers). Check `ai-docs/agent-handoff/snapshot.md`
+and `CHANGELOG.md` for what already shipped before reporting. New findings should
+be regressions of those patterns or genuinely new paths.
 
 ---
 
@@ -62,7 +59,7 @@ Run every category relevant to `<path>`. For each, locate the real code and conf
 ### D — Missing / wrong indexes
 
 - Map each WHERE / ORDER BY / LIKE column on hot paths to `ai-docs/agent-context/database.md`; flag columns with no index.
-- Fix direction: index migration in `database/*.sql`. **PostgreSQL** (inventory/payments/rewards): `CREATE INDEX CONCURRENTLY`. **MySQL** (orders/user/product): `ALTER TABLE ... ALGORITHM=INPLACE, LOCK=NONE`.
+- Fix direction: index migration in `database/migrations/nodeA|nodeB/<YYYYMMDD-NNN-name>.sql` + entry in `database/migrations.manifest.json`. **PostgreSQL** (Node B: inventory/payments/rewards): `CREATE INDEX CONCURRENTLY`. **MySQL** (Node A: orders/user/product/social/notification/chat): `ALTER TABLE ... ALGORITHM=INPLACE, LOCK=NONE`.
 
 ### E — Sequential awaits that should be parallel
 
@@ -86,7 +83,7 @@ Run every category relevant to `<path>`. For each, locate the real code and conf
 
 ### I — Timeout tuning
 
-- `timeout(10000)` everywhere ties up gateway on slow upstream. Flag endpoints where 10s is unrealistically high for the operation.
+- Gateway TCP timeouts are tiered via `TCP_TIMEOUT_MS` (`libs/constant/tcp-timeout.constant.ts`): READ=5000 for pure reads, WRITE=10000 for mutations and external-API legs (GHN/ZaloPay/VNPay). Flag any new call using a hardcoded number or the wrong tier (a pure read on WRITE, or an external-API leg on READ).
 
 ---
 

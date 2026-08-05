@@ -6,7 +6,7 @@ Guidance for Claude Code inside `api/`.
 
 You are a senior NestJS developer embedded in the TryBuy project.
 Your primary goal is to implement, debug, and review backend code
-across 7 microservices with zero regressions.
+across 10 microservices with zero regressions.
 
 When in doubt:
 - Prefer reading existing code over assuming
@@ -16,14 +16,14 @@ When in doubt:
 
 ## Project Overview
 
-**TryBuy** — NestJS monorepo: 7 microservices + 4 shared libs.
+**TryBuy** — NestJS monorepo: 10 microservices + 4 shared libs.
 
 - Never use `require()` — always ES module `import`.
 - Always run `tsc --noEmit` after every code change. Never mark a task complete if tsc has errors.
 
 ## Service Map & Scripts
 
-- **Node A**: gateway (3000), orders (3001), user (3003), product (3006) -> `npm run start:nodeA`
+- **Node A**: gateway (3000, HTTP+WS), orders (3001), user (3003), product (3006), social (3008), notification (3009, TCP+RMQ only), chat (3012) -> `npm run start:nodeA`
 - **Node B**: inventory (3002), payments (3005), rewards (3004) -> `npm run start:nodeB`
 
 ## Context Files
@@ -43,11 +43,12 @@ Load on demand — read with the Read tool when the task touches the relevant ar
 | `ai-docs/agent-context/database.md` | entity / migration / column / table / schema |
 | `ai-docs/agent-context/api.md` | endpoint / route / DTO / swagger / API |
 | `ai-docs/agent-context/security.md` | payment / zalopay / vnpay / JWT / auth / cookie / guard |
-| `ai-docs/agent-context/typescript-rules.md` | tsc / type error / any / return type / eslint |
 | `ai-docs/agent-context/git-workflow.md` | commit |
 | `ai-docs/agent-context/research.md` | pre-implementation spanning > 1 service |
 | `ai-docs/agent-context/performance.md` | query / list / pagination / index / cache / N+1 / slow path |
 | `ai-docs/agent-context/backend.md` | NestJS / TCP / RabbitMQ / @MessagePattern / @EventPattern detail |
+| `ai-docs/agent-context/ops-runtime.md` | deploy / pm2 / nginx / prod env / EC2 / cloudinary / GHN ops / applied migration / seed |
+| `ai-docs/agent-context/known-behaviors.md` | residual behavior / known issue / 409 version / skuList / paymentUrl / compensation |
 
 Do NOT use `@` for the on-demand group above — load them explicitly with the Read tool.
 
@@ -60,10 +61,11 @@ Match keywords in the prompt → read the corresponding file with the Read tool.
 | entity, migration, column, table, schema | `ai-docs/agent-context/database.md` |
 | endpoint, route, DTO, swagger, API | `ai-docs/agent-context/api.md` |
 | payment, zalopay, vnpay, JWT, auth, cookie, guard | `ai-docs/agent-context/security.md` |
-| tsc, type error, any, return type, eslint | `ai-docs/agent-context/typescript-rules.md` |
 | commit | `ai-docs/agent-context/git-workflow.md` |
 | TCP, RabbitMQ, message pattern, event, @MessagePattern, @EventPattern | `ai-docs/agent-context/backend.md` |
 | performance, slow, N+1, index, cache, pagination, query | `ai-docs/agent-context/performance.md` |
+| deploy, pm2, nginx, prod, EC2, cloudinary, GHN ops, applied migration, seed | `ai-docs/agent-context/ops-runtime.md` |
+| known issue, residual behavior, version 409, skuList, paymentUrl, compensation | `ai-docs/agent-context/known-behaviors.md` |
 
 - No keyword match → use only the 3 always-loaded files; do not load extras.
 - Multiple keywords match → load all matching files.
@@ -121,10 +123,10 @@ try {
 
 ## Key Rules (Summary)
 
-- **Gateway pattern**: Every TCP call needs `timeout(10000)` + `MicroserviceErrorHandler`. Every gateway DTO field needs `@ApiProperty()`.
+- **Gateway pattern**: Every TCP call needs `.pipe(timeout(TCP_TIMEOUT_MS.READ|WRITE))` (`libs/constant/tcp-timeout.constant.ts` — READ=5000 pure reads, WRITE=10000 mutations/external-API legs) + `MicroserviceErrorHandler`. Every gateway DTO field needs `@ApiProperty()`.
 - **Constants-first**: Message patterns, queue names, and ports must be in `@app/constant` or `@app/common/src/constants/`. Never hardcode inline.
 - **TypeORM entities**: Use `!` (definite assignment assertion) on all column-decorated properties, not non-null assertions.
-- **DB routing**: MySQL for Orders, Products, User. PostgreSQL for Inventory, Payments, Rewards. Never cross-inject.
+- **DB routing**: MySQL (Node A) for Orders, User, Product, Social, Notification, Chat. PostgreSQL (Node B) for Inventory, Payments, Rewards. Never cross-inject.
 - **Error handling**: Use `MicroserviceErrorHandler` in all gateway services. Microservices throw NestJS built-in exceptions.
 - **camelCase responses**: All API response fields sent to the frontend must be camelCase. Entity properties that map to snake_case DB columns must use `@Column({ name: 'snake_case' })` with a camelCase property name — never expose snake_case keys in HTTP responses.
 - **Lodash-first**: Prefer lodash (`_`) for data manipulation (groupBy, keyBy, pick, omit, chunk, uniq, merge, etc.) over hand-rolled loops, unless the operation is trivially a one-liner or lodash would introduce measurable overhead (e.g., inside a hot RabbitMQ consumer processing thousands of events per second). Import per-method to keep bundle size minimal: `import groupBy from 'lodash/groupBy'`.
@@ -140,6 +142,9 @@ When debugging, run `/debug` — full protocol in `commands/debug.md`.
 - `/debug` (`commands/debug.md`): Diagnose a failing feature.
 - `/perf-audit` (`commands/perf-audit.md`): Audit endpoints for performance issues; report fixes + side effects (read-only, does not implement).
 - `/sweep` (`commands/sweep.md`): Weekly backlog sweep — fix top snapshot item(s) end-to-end (`/sweep`, `/sweep 3`), audit-only (`/sweep audit`), or propose features (`/sweep propose`).
+- `/migrate` (`commands/migrate.md`): Create/verify/apply a schema migration under the post-cutoff manifest policy (guarded SQL + manifest entry + prod-owed tracking).
+- `/handoff` (`commands/handoff.md`): Write the FE handoff entry for a finished backend task (routes storefront vs GHN console, contract-first template).
+- `/context-gc` (`commands/context-gc.md`): Compact snapshot.md — move DONE items to CHANGELOG, ops facts to ops-runtime.md, residuals to known-behaviors.md; report before/after word counts.
 
 ## Agent Skills
 

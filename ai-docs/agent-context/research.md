@@ -30,15 +30,18 @@ Does the required entity already exist in any service? Check all `apps/*/src/ent
 
 Open `libs/constant/src/port-tcp.constant.ts`. Any new TCP port must not conflict with:
 
-| Service    | Port |
-|------------|------|
-| gateway    | 3000 |
-| orders     | 3001 |
-| inventory  | 3002 |
-| user       | 3003 |
-| rewards    | 3004 |
-| payments   | 3005 |
-| product    | 3006 |
+| Service      | Port |
+|--------------|------|
+| gateway      | 3000 |
+| orders       | 3001 |
+| inventory    | 3002 |
+| user         | 3003 |
+| rewards      | 3004 |
+| payments     | 3005 |
+| product      | 3006 |
+| social       | 3008 |
+| notification | 3009 |
+| chat         | 3012 |
 
 ## 5. Transport Type
 
@@ -52,13 +55,16 @@ Open `libs/constant/src/port-tcp.constant.ts`. Any new TCP port must not conflic
 
 | Domain | Service | Node Group |
 |---|---|---|
-| Auth, login, profile, RBAC | `user` | Node A |
-| Product, brand, category | `product` | Node A |
-| Order creation, order query | `orders` | Node A |
-| Stock management | `inventory` | Node B |
-| Payment processing | `payments` | Node B |
+| Auth, login, profile, RBAC, address book | `user` | Node A |
+| Product, brand, category, reviews, wishlist | `product` | Node A |
+| Order lifecycle, GHN shipping, vouchers, returns | `orders` | Node A |
+| Posts, comments, likes, follows, moderation | `social` | Node A |
+| In-app notifications + email mirror | `notification` | Node A (TCP+RMQ only, no HTTP) |
+| Conversations, messages (WS via gateway) | `chat` | Node A |
+| Stock management, reservations | `inventory` | Node B |
+| Payment processing (ZaloPay/VNPay) | `payments` | Node B |
 | Loyalty points | `rewards` | Node B |
-| HTTP facade, Swagger, guards | `gateway` | Node A |
+| HTTP facade, WS, Swagger, guards | `gateway` | Node A |
 
 New logic belongs in the service that owns the domain — do not add business logic to gateway.
 
