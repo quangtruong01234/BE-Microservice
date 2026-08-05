@@ -48,6 +48,8 @@ export const USER_MESSAGE = {
 export const INVENTORY_MESSAGE = {
   ALREADY_EXISTS_FOR_PRODUCT: (productId: number): string =>
     `Inventory for product ID ${productId} already exists`,
+  SKU_ALREADY_EXISTS: (sku: string): string =>
+    `Inventory with sku ${sku} already exists`,
   NOT_FOUND_BY_ID: (id: number): string => `Inventory with id ${id} not found`,
   NOT_FOUND_BY_ID_AFTER_UPDATE: (id: number): string =>
     `Inventory with id ${id} not found after update`,
