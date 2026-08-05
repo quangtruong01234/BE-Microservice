@@ -63,6 +63,16 @@
       "destructive": false,
       "manualOnly": false,
       "enabled": true
+    },
+    {
+      "id": "nodeA-20260804-001-widen-product-reviews-product-id",
+      "target": "nodeA",
+      "dialect": "mysql",
+      "file": "database/migrations/nodeA/20260804-001-widen-product-reviews-product-id.sql",
+      "category": "schema",
+      "destructive": false,
+      "manualOnly": false,
+      "enabled": true
     }
   ]
 }
