@@ -1,10 +1,73 @@
-import { Repository } from "typeorm";
+import { QueryFailedError, Repository } from "typeorm";
+import { ConflictException } from "@nestjs/common";
 import { Inventory } from "./inventory.entity";
 import {
   InventoryReservation,
   InventoryReservationStatus,
 } from "./inventory-reservation.entity";
 import { InventoryService } from "./inventory.service";
+
+describe("InventoryService create conflicts", () => {
+  /**
+   * Postgres names the unique index after TypeORM's generated `UQ_<hash>`, so
+   * the offending column never appears in `error.message` — only in the
+   * driver's `detail`. Reproduce that exact shape.
+   */
+  const duplicateSkuError = (sku: string): QueryFailedError => {
+    const error = new QueryFailedError(
+      "INSERT INTO inventory_v2 ...",
+      [],
+      new Error(
+        'duplicate key value violates unique constraint "UQ_5ec10f972b1fa4f1e60d66d28bc"',
+      ),
+    );
+    (error as unknown as { driverError: { detail: string } }).driverError = {
+      detail: `Key (sku)=(${sku}) already exists.`,
+    };
+    return error;
+  };
+
+  const buildService = (save: () => Promise<Inventory>): InventoryService => {
+    const repository = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((value: Inventory) => value),
+      save: jest.fn(save),
+    } as unknown as Repository<Inventory>;
+    return new InventoryService(repository, null);
+  };
+
+  it("reports a sku unique violation as a sku conflict, not a duplicate product", async () => {
+    const service = buildService(() =>
+      Promise.reject(duplicateSkuError("PROD-95")),
+    );
+
+    await expect(
+      service.create({ productId: 96, sku: "PROD-95", availableStock: 5 }),
+    ).rejects.toThrow(
+      new ConflictException("Inventory with sku PROD-95 already exists"),
+    );
+  });
+
+  it("keeps the product message for a duplicate that does not name the sku column", async () => {
+    const error = new QueryFailedError(
+      "INSERT INTO inventory_v2 ...",
+      [],
+      new Error(
+        'duplicate key value violates unique constraint "UQ_product_scoped"',
+      ),
+    );
+    (error as unknown as { driverError: { detail: string } }).driverError = {
+      detail: "Key (product_id)=(96) already exists.",
+    };
+    const service = buildService(() => Promise.reject(error));
+
+    await expect(
+      service.create({ productId: 96, sku: "PROD-95", availableStock: 5 }),
+    ).rejects.toThrow(
+      new ConflictException("Inventory for product ID 96 already exists"),
+    );
+  });
+});
 
 describe("InventoryService reservation ledger", () => {
   it("makes reserve and release retries idempotent", async () => {

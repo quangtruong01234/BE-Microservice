@@ -84,8 +84,23 @@ export class InventoryService {
           error.message.includes("unique constraint") ||
           error.message.includes("duplicate key")
         ) {
+          // `sku` is the only unique column on inventory_v2, and a second row
+          // for the same product is already rejected by the explicit pre-check
+          // above — so a violation naming the sku column is a SKU collision,
+          // not a duplicate product. Reporting it as the latter sent the caller
+          // chasing a product id that was never the problem. The constraint is
+          // TypeORM-generated (`UQ_<hash>`), so the column name only appears in
+          // the driver's `detail` ("Key (sku)=(...) already exists"), never in
+          // `error.message`.
+          const driverDetail = (error.driverError as { detail?: unknown })
+            ?.detail;
+          const isSkuCollision =
+            error.message.includes("sku") ||
+            (typeof driverDetail === "string" && driverDetail.includes("sku"));
           throw new ConflictException(
-            INVENTORY_MESSAGE.ALREADY_EXISTS_FOR_PRODUCT(data.productId),
+            isSkuCollision
+              ? INVENTORY_MESSAGE.SKU_ALREADY_EXISTS(data.sku)
+              : INVENTORY_MESSAGE.ALREADY_EXISTS_FOR_PRODUCT(data.productId),
           );
         }
       }
@@ -481,16 +496,35 @@ export class InventoryService {
       .getMany();
   }
 
+  /**
+   * Create the inventory row for a product SKU, or — when the seller re-declared
+   * that SKU's stock in a product edit (`syncStock`) — set the existing row's
+   * available stock to the newly declared number. Reserved stock is left alone:
+   * those units are already committed to orders, so a restock adds to what is
+   * sellable rather than rewriting outstanding reservations.
+   */
   async createForSku(data: {
     productId: number;
     skuId: number;
     sku: string | null;
     stockQuantity: number;
+    syncStock?: boolean;
   }): Promise<void> {
     const existing = await this.inventoryRepository.findOne({
       where: { productId: data.productId, productSkuId: data.skuId },
     });
-    if (existing) return;
+    if (existing) {
+      if (!data.syncStock || existing.availableStock === data.stockQuantity) {
+        return;
+      }
+      await this.inventoryRepository.update(existing.id, {
+        availableStock: data.stockQuantity,
+      });
+      this.logger.log(
+        `[INVENTORY] Product ${data.productId} SKU ${data.skuId}: available stock ${existing.availableStock} -> ${data.stockQuantity}`,
+      );
+      return;
+    }
 
     const skuValue = `product-${data.productId}-sku-${data.skuId}`;
     const inventory = this.inventoryRepository.create({

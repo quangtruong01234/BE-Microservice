@@ -223,11 +223,15 @@ export class InventoryController {
       productId: number;
       skus: { skuId: number; sku: string | null; stockQuantity: number }[];
       deletedSkuIds: number[];
+      // Absent on messages published before this field existed — an empty set
+      // then means "create only", the previous behavior.
+      stockChangedSkuIds?: number[];
     },
     @Ctx() context: RmqContext,
   ) {
+    const stockChangedSkuIds = new Set(payload.stockChangedSkuIds ?? []);
     this.logger.log(
-      `[INVENTORY] Processing sku_upserted for product ${payload.productId}: ${payload.skus.length} skus, ${payload.deletedSkuIds.length} deleted`,
+      `[INVENTORY] Processing sku_upserted for product ${payload.productId}: ${payload.skus.length} skus, ${payload.deletedSkuIds.length} deleted, ${stockChangedSkuIds.size} restocked`,
     );
 
     try {
@@ -237,6 +241,7 @@ export class InventoryController {
           skuId: sku.skuId,
           sku: sku.sku,
           stockQuantity: sku.stockQuantity,
+          syncStock: stockChangedSkuIds.has(sku.skuId),
         });
       }
       await this.inventoryService.softDeleteSkus(payload.deletedSkuIds);
