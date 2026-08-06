@@ -76,7 +76,8 @@
   permanently red). Two scoped `overrides` in `package.json` keep the blocking
   gate green — `@nestjs/swagger`→`js-yaml 5.2.3`, `typeorm`→`brace-expansion
   ^2.1.3` (drop an override once the parent ships a fixed pin).
-- **CD** (`.github/workflows/deploy.yml`, shipped 2026-08-03, NEVER RUN YET):
+- **CD** (`.github/workflows/deploy.yml`, shipped 2026-08-03, **first successful
+  production run 2026-08-06**, sha `19309f6`):
   SSHes into the EC2 and repeats the proven manual sequence — `git reset --hard
   origin/main` → `npm ci` → `db:migrate:nodeA`+`nodeB` (always BEFORE restart;
   migrations are additive) → `npm run build` → `pm2 flush` → `pm2 restart
@@ -88,11 +89,33 @@
   (reset + `npm ci` + build + restart + `/live`); the marker is deleted before
   `cd` on every run, so an early failure aborts loudly instead of resetting to a
   stale sha. Asserts Node major 22 on the box and sources `~/.nvm/nvm.sh`
-  (non-interactive SSH shell reads no login profile). **Blocked on the user**:
-  add secrets `EC2_HOST`/`EC2_USER`/`EC2_SSH_KEY` (dedicated ed25519 deploy key)/
-  `EC2_PATH` and create the `production` Environment with Required reviewers.
-  A pure `pm2 restart` does NOT refresh pm2's env snapshot — env changes still
-  need manual `pm2 delete` + `pm2 start`.
+  (non-interactive SSH shell reads no login profile). A pure `pm2 restart` does
+  NOT refresh pm2's env snapshot — env changes still need manual `pm2 delete` +
+  `pm2 start`.
+- **CD box facts** (verified 2026-08-06): checkout is `/opt/trybuy/api` (NOT
+  `~/MCR/api` — older notes are wrong), owned by `ubuntu`, which is also the
+  user pm2 runs under, so the workflow's `pm2 restart` hits the right daemon.
+  `origin` is the SSH alias `git@github-trybuy:` (deploy key in `~/.ssh/config`),
+  so `git fetch` never prompts for credentials. Node on the box is v22.23.1.
+  Repo secrets set: `EC2_HOST` = `tryhavejob.ooguy.com` (the **domain**, because
+  the instance has no Elastic IP and its public IP changes on every stop/start),
+  `EC2_USER` = `ubuntu`, `EC2_PATH` = `/opt/trybuy/api`, `EC2_SSH_KEY` =
+  `trybuy_key_prod_Mumbai` (ed25519). Security-group `sg-0e16141656b4c24a0` must
+  keep port 22 open to `0.0.0.0/0`: GitHub-hosted runners have unpredictable IPs
+  and the ~4000 CIDRs in GitHub's meta API do not fit the 60-rule SG limit.
+- **`production` Environment has NO protection rules.** GitHub only offers
+  required reviewers / wait timers for private repos on paid plans, and this repo
+  is private on Free — the section simply does not render. Consequence: any green
+  CI on `main` auto-deploys with nobody in the loop, including inside the EC2's
+  stopped window. Mitigation on the table: drop the `workflow_run` trigger so
+  `deploy.yml` is dispatch-only.
+- **Two traps the first CD run walked into** (both fixed in `19309f6`, keep in
+  mind for any future deploy script): `npm run db:migrate:*` must be called with
+  `-- --confirm-production`, because `scripts/migrate-database.mjs` refuses an
+  apply when `NODE_ENV=production` (which the box's `local/<node>/.env` sets) —
+  it never trips locally, where the env files say `development`. And any `/live`
+  probe needs the retry loop: `pm2 restart` returns before the gateway binds
+  :3000, so a single `curl` always loses the race (`curl: (7) ... after 0 ms`).
 
 ## Database migrations
 
@@ -108,11 +131,11 @@
   `db:migrate:status` reports it `[pending]` on DEV — cosmetic ledger gap only.
 - **`nodeA-20260804-001-widen-product-reviews-product-id`** — widens
   `product_reviews.product_id` INT → BIGINT to match `products.id`. Applied to
-  DEV Aiven. **⏳ STILL OWED ON PROD — must run there BEFORE the next code
-  deploy**: product forces `synchronize:false` in prod and the entity now
-  declares `type: "bigint"`; a review insert against a still-INT column would
-  silently truncate a product id past 2,147,483,647. Widening is
-  value-preserving → safe to run early, zero downtime. Runtime note: TypeORM
+  DEV Aiven, and **applied to prod Aiven 2026-08-06** by the first CD run (the
+  workflow's migration step, before the restart). Background: product forces
+  `synchronize:false` in prod and the entity declares `type: "bigint"`; a review
+  insert against a still-INT column would silently truncate a product id past
+  2,147,483,647. Widening is value-preserving → zero downtime. Runtime note: TypeORM
   maps bigint to a JS **string**, so `ProductReview.productId` is a string on
   read/delete legs — gateway rewrites it to the `prod_` public id (verified);
   `recalculateProductRating` verified on the string path.

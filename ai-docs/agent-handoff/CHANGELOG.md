@@ -6,6 +6,37 @@
 
 ## Completed Milestones
 
+- **First production deploy through CD-01 (2026-08-06, sha `19309f6`).** The
+  workflow shipped 2026-08-03 had never run; this closes it. Repo secrets set:
+  `EC2_HOST` = `tryhavejob.ooguy.com` (the DDNS domain, not an IP — the instance
+  has no Elastic IP, and its public address had already rotated across three
+  values), `EC2_USER` = `ubuntu`, `EC2_PATH` = `/opt/trybuy/api` (absolute,
+  because `cd "$EC2_PATH"` cannot expand `~`), `EC2_SSH_KEY` =
+  `trybuy_key_prod_Mumbai`. Security-group 22 opened to `0.0.0.0/0`: the SG had
+  been pinned to "My IP", and GitHub-hosted runners publish ~4000 CIDRs against a
+  60-rule SG limit, so key-only auth on an open port is the only workable option
+  short of a self-hosted runner.
+  - **Two workflow bugs found by running it, fixed in `19309f6`.** (a) The
+    migration step failed with `Refusing production apply without
+    --confirm-production` — `scripts/migrate-database.mjs:536` guards on
+    `NODE_ENV`, which the box's `local/<node>/.env` sets to `production` while
+    the dev env files say `development`, so the guard is invisible locally. Both
+    `npm run db:migrate:node{A,B}` calls now pass `-- --confirm-production`.
+    (b) The rollback step reported failure while actually succeeding: `curl: (7)
+    ... after 0 ms` because `pm2 restart` returns before the gateway binds :3000.
+    Both liveness probes are now 10×5s retry loops — proven on the green run,
+    which logged `not live yet (attempt 1)` → `live (attempt 2)`. Also dropped
+    `script_stop` from both steps (removed as an input in
+    `appleboy/ssh-action@v1`; `set -euo pipefail` already covers it).
+  - **Migration `nodeA-20260804-001-widen-product-reviews-product-id` is now
+    applied to prod** — the workflow ran it before the restart, as designed.
+  - **Verified after the run:** `/live`, `/health`, `/ready` all `status: ok`
+    with `redis.status: ok`; `GET /api/products?page=1&limit=2` → 200 with `prod_`
+    public ids and the `version` field.
+  - **`production` Environment has no protection rules** — GitHub restricts
+    required reviewers / wait timers to public repos on the Free plan, and this
+    repo is private. Follow-up tracked as CD-04 in `snapshot.md`.
+
 - **AI-context audit executed end-to-end (2026-08-04, docs-only — no `.ts`
   touched).** Follow-through on the five-part context-audit report; goal was
   recurring-token cost reduction + stale-info removal + workflow automation.

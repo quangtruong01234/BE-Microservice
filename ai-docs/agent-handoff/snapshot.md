@@ -37,13 +37,6 @@ reward_points, shipping_history, voucher_redemptions.
 
 ## Active Tasks
 
-### ⏳ Owed on PROD before next code deploy
-
-- **Migration `nodeA-20260804-001-widen-product-reviews-product-id`** —
-  `product_reviews.product_id` INT → BIGINT. Applied to DEV Aiven; prod runs
-  `synchronize:false` so it MUST run on prod BEFORE the next deploy (details in
-  `ops-runtime.md` → Database migrations).
-
 ### PROD-PAY-02 — inbound VNPay IPN: one real end-to-end payment still owed
 
 Endpoint PROVEN on prod (replayed real signed IPN → `RspCode 00`); the
@@ -63,13 +56,16 @@ ZaloPay callback leg is still unverified end-to-end.
 
 ### CI/CD
 
-- **CD-01 deploy workflow (`.github/workflows/deploy.yml`) — shipped but NEVER
-  RUN.** Blocked on the user: add repo secrets `EC2_HOST` / `EC2_USER` /
-  `EC2_SSH_KEY` / `EC2_PATH` and create the `production` Environment with
-  Required reviewers (so a push can't auto-deploy during the EC2 stopped
-  window). `workflow_run` executes the copy on `main`, so the first real deploy
-  happens only after it lands there. Full sequence + rollback in
-  `ops-runtime.md` → CI/CD.
+- **CD-01 deploy workflow is LIVE** — first successful production run 2026-08-06
+  (sha `19309f6`); it applied the owed `product_reviews.product_id` migration and
+  restarted all 10 pm2 apps. Box/secret facts + the two traps that broke run #1
+  are in `ops-runtime.md` → CI/CD.
+- **CD-04 — decide the auto-deploy trigger (open).** The `production`
+  Environment has NO protection rules, because GitHub gates required reviewers to
+  paid plans on private repos. So every green CI on `main` deploys with nobody in
+  the loop — including while the EC2 is in its stopped window, where the deploy
+  just fails on SSH. Recommended: drop the `workflow_run` trigger and keep
+  `workflow_dispatch` only.
 - **CD-03 — build-on-runner variant**: only if the EC2 gets smaller/slower
   (CI-built `dist/` rsync + `npm ci --omit=dev` + restart). Not needed while
   CD-01 works.

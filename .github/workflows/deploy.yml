@@ -15,14 +15,18 @@
 #   EC2_SSH_KEY  private key of a dedicated deploy keypair
 #                (ssh-keygen -t ed25519 -C github-deploy, public half appended
 #                 to ~/.ssh/authorized_keys on the box)
-#   EC2_PATH     absolute path of the api checkout (e.g. /home/ubuntu/MCR/api)
+#   EC2_PATH     absolute path of the api checkout (this box: /opt/trybuy/api).
+#                Must be absolute - `cd "$EC2_PATH"` cannot expand `~`.
 #
-# Recommended repository setup:
-#   - Create an Environment named `production` and add Required reviewers, so a
-#     push to main cannot auto-deploy while the instance is in its stopped
-#     window (the box runs on a manual stop/start schedule).
+# Repository setup notes:
+#   - The `production` Environment exists but carries NO protection rules:
+#     GitHub only offers Required reviewers / wait timers for private repos on
+#     paid plans. Every green CI on `main` therefore deploys unattended, even
+#     while the instance is in its stopped window. See CD-04 in snapshot.md.
 #   - `workflow_run` always executes the copy of this file that lives on the
 #     default branch, so edits only take effect once merged to `main`.
+#   - Port 22 in the security group must be open to 0.0.0.0/0 (key-only auth):
+#     GitHub-hosted runners publish ~4000 CIDRs and a SG allows 60 rules.
 #
 # Rollback: the previous commit sha is written to ~/.trybuy-deploy-prev-sha
 # before the reset. On failure this workflow restores it automatically; to roll
