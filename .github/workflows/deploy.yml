@@ -74,7 +74,6 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           command_timeout: 25m
-          script_stop: true
           envs: EC2_PATH
           script: |
             set -euo pipefail
@@ -111,8 +110,12 @@ jobs:
 
             npm ci
 
-            npm run db:migrate:nodeA
-            npm run db:migrate:nodeB
+            # The runner refuses a production apply unless the intent is
+            # explicit (scripts/migrate-database.mjs guards on NODE_ENV, which
+            # the box's local/<node>/.env sets to production). Deploying IS the
+            # explicit intent, and the manifest only allows guarded additive SQL.
+            npm run db:migrate:nodeA -- --confirm-production
+            npm run db:migrate:nodeB -- --confirm-production
 
             npm run build
 
@@ -144,7 +147,6 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           command_timeout: 25m
-          script_stop: true
           envs: EC2_PATH
           script: |
             set -euo pipefail
@@ -170,7 +172,19 @@ jobs:
             pm2 restart ecosystem.config.js --env production
             pm2 save
 
-            curl -fsS --max-time 5 http://127.0.0.1:3000/live > /dev/null
-            echo "rollback complete and gateway is live"
+            # Same grace period as the deploy step: pm2 returns before the
+            # gateway has bound :3000, so probing once always races the restart.
+            for attempt in 1 2 3 4 5 6 7 8 9 10; do
+              if curl -fsS --max-time 5 http://127.0.0.1:3000/live > /dev/null; then
+                echo "rollback complete and gateway is live (attempt $attempt)"
+                exit 0
+              fi
+              echo "gateway not live yet (attempt $attempt), retrying..."
+              sleep 5
+            done
+
+            echo "rollback restarted pm2 but the gateway did not answer /live"
+            pm2 status
+            exit 1
         env:
           EC2_PATH: ${{ secrets.EC2_PATH }}
