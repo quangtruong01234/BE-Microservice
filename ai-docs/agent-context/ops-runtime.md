@@ -82,10 +82,11 @@
   origin/main` → `npm ci` → `db:migrate:nodeA`+`nodeB` (always BEFORE restart;
   migrations are additive) → `npm run build` → `pm2 flush` → `pm2 restart
   ecosystem.config.js --env production` → `pm2 save` → poll
-  `http://127.0.0.1:3000/live` (10×5s). **Manual trigger only** since 2026-08-06
-  (CD-04) — `workflow_dispatch`, Actions tab → Deploy → Run workflow. It ships
-  whatever `origin/main` points at and does NOT check CI, so confirm CI is green
-  on that sha first. `concurrency: deploy-production`, `environment: production`. Previous sha saved to
+  `http://127.0.0.1:3000/live` (10×5s). **Triggers on CI completion for `main`**
+  (`workflow_run`; the job's `if:` drops runs whose CI conclusion is not
+  `success`), so merging a PR into `main` releases. `workflow_dispatch` remains
+  for redeploys no commit triggers — box stopped at merge time, rollback, env
+  change. `concurrency: deploy-production`, `environment: production`. Previous sha saved to
   `~/.trybuy-deploy-prev-sha` before reset; `if: failure()` step rolls back
   (reset + `npm ci` + build + restart + `/live`); the marker is deleted before
   `cd` on every run, so an early failure aborts loudly instead of resetting to a
@@ -106,9 +107,9 @@
   and the ~4000 CIDRs in GitHub's meta API do not fit the 60-rule SG limit.
 - **`production` Environment has NO protection rules.** GitHub only offers
   required reviewers / wait timers for private repos on paid plans, and this repo
-  is private on Free — the section simply does not render. That is why the
-  `workflow_run` trigger was dropped (CD-04): the human dispatching the workflow
-  IS the gate now.
+  is private on Free — the section simply does not render. Accepted (CD-04): a
+  green CI on `main` ships with nobody in the loop. If that ever needs a brake,
+  the options are a paid plan or moving the trigger to `push: tags: ['v*']`.
 - **Two traps the first CD run walked into** (both fixed in `19309f6`, keep in
   mind for any future deploy script): `npm run db:migrate:*` must be called with
   `-- --confirm-production`, because `scripts/migrate-database.mjs` refuses an

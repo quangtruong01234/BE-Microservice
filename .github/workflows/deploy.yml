@@ -1,6 +1,6 @@
 # Production deploy (CD-01).
 #
-# Flow: you dispatch this workflow by hand, and it SSHes into the EC2 box and
+# Flow: CI goes green on `main`, then this workflow SSHes into the EC2 box and
 # runs the exact manual sequence that is already proven there:
 #   git reset --hard origin/main -> npm ci -> db migrations -> npm run build
 #   -> pm2 restart -> pm2 save -> /live health check.
@@ -21,9 +21,12 @@
 # Repository setup notes:
 #   - The `production` Environment exists but carries NO protection rules:
 #     GitHub only offers Required reviewers / wait timers for private repos on
-#     paid plans. The manual trigger below is what replaces that brake.
-#   - This workflow deploys whatever is on `origin/main` at dispatch time and
-#     does NOT check CI itself - confirm CI is green on that sha before running.
+#     paid plans. Nothing holds a release back - green CI on `main` ships.
+#   - `workflow_run` always executes the copy of this file that lives on the
+#     default branch, so edits only take effect once merged to `main`.
+#   - The box runs on a manual stop/start schedule. A merge landed while it is
+#     stopped fails at the SSH step and leaves prod on the previous build; the
+#     fix is to start the instance and dispatch this workflow by hand.
 #   - Port 22 in the security group must be open to 0.0.0.0/0 (key-only auth):
 #     GitHub-hosted runners publish ~4000 CIDRs and a SG allows 60 rules.
 #
@@ -43,12 +46,19 @@
 
 name: Deploy
 
-# Manual trigger only (CD-04). Auto-deploying every green CI on `main` meant an
-# unattended production release for any commit, including docs-only ones and
-# ones pushed while the instance is in its stopped window - and GitHub does not
-# offer Required reviewers as a brake here (private repo on the Free plan).
-# Deploy is therefore a deliberate act: Actions tab -> Deploy -> Run workflow.
+# Merging a PR into `main` releases to production (CD-04, decided 2026-08-06).
+# The trigger is CI's completion rather than the push itself, so an unreviewed
+# red build can never reach the box - the `if:` on the job below drops runs where
+# CI did not end green. A direct push to `main` releases the same way; the PR is
+# a habit, not a gate the workflow enforces.
+#
+# `workflow_dispatch` stays for redeploys that no commit triggers: a box that was
+# stopped when its deploy fired, a rollback, an env change.
 on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -64,6 +74,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production
+
+    # workflow_run fires on failed CI runs too - only deploy green main builds.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
 
     steps:
       - name: Deploy over SSH

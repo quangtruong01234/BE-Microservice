@@ -60,13 +60,15 @@ ZaloPay callback leg is still unverified end-to-end.
   (sha `19309f6`); it applied the owed `product_reviews.product_id` migration and
   restarted all 10 pm2 apps. Box/secret facts + the two traps that broke run #1
   are in `ops-runtime.md` → CI/CD.
-- **Deploy is MANUAL (CD-04, decided 2026-08-06).** `deploy.yml` no longer has
-  the `workflow_run` trigger — release = Actions tab → Deploy → Run workflow.
-  Reason: the `production` Environment has no protection rules (GitHub gates
-  required reviewers to paid plans on private repos), so auto-deploy shipped
-  every green `main` commit unattended, docs-only ones included. The workflow
-  does NOT verify CI itself — check CI is green on the target sha before
-  dispatching.
+- **Merging into `main` releases to prod (CD-04, settled 2026-08-06).** Deploy
+  triggers on CI completion for `main` and runs only when CI ended green; a
+  direct push to `main` ships the same way. `workflow_dispatch` is kept for
+  redeploys no commit triggers (box was stopped, rollback, env change). Nothing
+  gates the release — the `production` Environment cannot carry protection rules
+  (GitHub gates required reviewers to paid plans on private repos). Two accepted
+  consequences: docs-only commits redeploy prod, and a merge landing inside the
+  EC2's stopped window fails at the SSH step, leaving prod on the previous build
+  until someone starts the box and dispatches manually.
 - **CD-03 — build-on-runner variant**: only if the EC2 gets smaller/slower
   (CI-built `dist/` rsync + `npm ci --omit=dev` + restart). Not needed while
   CD-01 works.
