@@ -1,6 +1,6 @@
 # Production deploy (CD-01).
 #
-# Flow: CI must go green on `main`, then this workflow SSHes into the EC2 box and
+# Flow: you dispatch this workflow by hand, and it SSHes into the EC2 box and
 # runs the exact manual sequence that is already proven there:
 #   git reset --hard origin/main -> npm ci -> db migrations -> npm run build
 #   -> pm2 restart -> pm2 save -> /live health check.
@@ -21,10 +21,9 @@
 # Repository setup notes:
 #   - The `production` Environment exists but carries NO protection rules:
 #     GitHub only offers Required reviewers / wait timers for private repos on
-#     paid plans. Every green CI on `main` therefore deploys unattended, even
-#     while the instance is in its stopped window. See CD-04 in snapshot.md.
-#   - `workflow_run` always executes the copy of this file that lives on the
-#     default branch, so edits only take effect once merged to `main`.
+#     paid plans. The manual trigger below is what replaces that brake.
+#   - This workflow deploys whatever is on `origin/main` at dispatch time and
+#     does NOT check CI itself - confirm CI is green on that sha before running.
 #   - Port 22 in the security group must be open to 0.0.0.0/0 (key-only auth):
 #     GitHub-hosted runners publish ~4000 CIDRs and a SG allows 60 rules.
 #
@@ -44,11 +43,12 @@
 
 name: Deploy
 
+# Manual trigger only (CD-04). Auto-deploying every green CI on `main` meant an
+# unattended production release for any commit, including docs-only ones and
+# ones pushed while the instance is in its stopped window - and GitHub does not
+# offer Required reviewers as a brake here (private repo on the Free plan).
+# Deploy is therefore a deliberate act: Actions tab -> Deploy -> Run workflow.
 on:
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -64,11 +64,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production
-
-    # workflow_run fires on failed CI runs too - only deploy green main builds.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
 
     steps:
       - name: Deploy over SSH

@@ -35,7 +35,16 @@
     public ids and the `version` field.
   - **`production` Environment has no protection rules** — GitHub restricts
     required reviewers / wait timers to public repos on the Free plan, and this
-    repo is private. Follow-up tracked as CD-04 in `snapshot.md`.
+    repo is private.
+
+- **CD-04 — deploy is manual only (2026-08-06).** The `workflow_run` trigger is
+  gone from `deploy.yml`; releasing is Actions tab → Deploy → Run workflow. With
+  no environment protection available (see above), auto-deploy meant every green
+  commit on `main` went to production unattended — the second CD run proved it by
+  redeploying prod for a docs-only commit — and commits pushed during the EC2's
+  stopped window produced deploys that could only fail at the SSH step. The
+  workflow does not verify CI itself, so the operator checks CI on the target sha
+  before dispatching. The `if:` guard on the job went away with the trigger.
 
 - **AI-context audit executed end-to-end (2026-08-04, docs-only — no `.ts`
   touched).** Follow-through on the five-part context-audit report; goal was
