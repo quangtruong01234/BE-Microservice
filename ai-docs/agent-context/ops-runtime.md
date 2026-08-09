@@ -7,18 +7,54 @@
 
 ## Production runtime
 
-- **`FRONTEND_URL` for payments is injected by pm2, not by `.env`** (PROD-PAY-01,
-  2026-08-01). `ecosystem.config.js` sets it on the `payments` app (default
-  `https://tryhavejob.ooguy.com`, override with `FRONTEND_URL=... pm2 start ...`).
-  Deliberate: both `dotenv` and `@nestjs/config` only assign keys NOT already in
-  `process.env`, so pm2-injected env structurally wins. Payments builds the
-  provider return URL (`<FRONTEND_URL>/payment-result?order=<n>&method=<m>`) from
-  it — a wrong value makes VNPay reject the payment link at its merchant-domain
-  check. Unset → logs a `warn`, falls back to `http://localhost:5173`. Changing it
-  needs `pm2 delete payments && pm2 start ecosystem.config.js --env production
-  --only payments` — a plain `pm2 restart` does NOT refresh pm2's stored env
-  snapshot. `FRONTEND_URL` is ALSO read from `local/nodeA/.env` by the gateway for
-  CORS; the two are independent.
+- **`FRONTEND_URL` + `AUTH_COOKIE_SAME_SITE` are injected by pm2, not by `.env`**
+  (PROD-PAY-01 2026-08-01 for payments; extended to the gateway 2026-08-08 when
+  the storefront went live on its own domain). `ecosystem.config.js` sets both on
+  `gateway` and `FRONTEND_URL` on `payments`. Deliberate: both `dotenv` and
+  `@nestjs/config` only assign keys NOT already in `process.env`, so pm2-injected
+  env structurally wins — declaring either key in `local/node{A,B}/.env` on the
+  box is a **dead key** that silently loses. Changing them = edit
+  `ecosystem.config.js` + deploy; no SSH, no `.env` edit.
+  - Prod values (both frontends, comma-separated, storefront first):
+    `FRONTEND_URL=https://fe-react-vite.quangtruong01234.workers.dev,https://web-flow-ghn.vercel.app`
+    and `AUTH_COOKIE_SAME_SITE=none`. Entry [0] = TryBuy storefront (Cloudflare
+    Workers), entry [1] = GHN shipping console (Vercel). The API is
+    `https://<PROD_API_DOMAIN>` (nginx serves the gateway only, no static root),
+    so BOTH frontends are cross-site and a `lax` cookie would be dropped on every
+    credentialed XHR.
+  - **Order matters.** Gateway `cors.ts` splits the value on `,` and allows every
+    entry; payments `payments.service.ts:368` takes entry **[0] only** and builds
+    `<origin>/payment-result?order=<pub>&method=<m>`. So the storefront must stay
+    FIRST — the GHN console never handles payments; append further origins, never
+    prepend. A wrong payments origin makes VNPay reject the link at its
+    merchant-domain check; unset → `warn` + fallback `http://localhost:5173`.
+  - **Matching is exact-string, not wildcard.** Vercel/Workers PREVIEW
+    deployments get their own subdomain (`web-flow-ghn-git-<branch>-…
+    .vercel.app`) and are CORS-rejected until listed. Verified by probe against
+    the real `cors.ts`. Do not "fix" this with a wildcard: `cors.ts` drops `*`
+    on purpose because credentials are enabled.
+  - **Verify with curl, NOT `pm2 env <id>`.** `pm2 env` prints only what pm2
+    injected at spawn; `dotenv` loads `.env` *inside* the process, so pm2 never
+    sees those values and an empty line there proves nothing about runtime.
+    Real check:
+    `curl -sI -H "Origin: <fe-origin>" https://<PROD_API_DOMAIN>/live | grep -i access-control`
+    — expect `access-control-allow-origin` + `access-control-allow-credentials: true`.
+  - **A deploy alone applies an env change — no SSH step (proven 2026-08-10).**
+    `pm2 startOrRestart ecosystem.config.js --env production --update-env` in
+    the deploy re-reads the config file, so the first release of the pm2-owned
+    keys restored CORS ~3.5 min after the push with no `pm2 delete`/`pm2 start`
+    by hand. Keep `pm2 delete <app> && pm2 start ecosystem.config.js --env
+    production --only <app> && pm2 save` as the fallback for the day
+    `--update-env` does not take, not as the standard recipe. A plain
+    `pm2 restart` still replays the spawn-time snapshot and will ignore the
+    change.
+  - Full post-deploy evidence for the 2026-08-10 release: both listed origins
+    echo back `Access-Control-Allow-Origin` + `Allow-Credentials: true` with
+    `Vary: Origin`; an unlisted origin gets none (response is still 200 — CORS
+    is enforced by the browser, not by a server-side reject, so do not expect a
+    403); `OPTIONS /api/user/login` → 204; login `Set-Cookie` is
+    `HttpOnly; Secure; SameSite=None; Path=/; Max-Age=18000` and authenticates
+    a subsequent `GET /api/user/me` → 200.
 - **Prod EC2 runs on a stop/start schedule set by the user in the AWS console**
   (confirmed 2026-08-01) — roughly up ~08:00, stopped ~18:00 server time. Every
   boot writes a recurring burst of harmless ERROR lines that must NOT be
@@ -99,7 +135,7 @@
   user pm2 runs under, so the workflow's `pm2 restart` hits the right daemon.
   `origin` is the SSH alias `git@github-trybuy:` (deploy key in `~/.ssh/config`),
   so `git fetch` never prompts for credentials. Node on the box is v22.23.1.
-  Repo secrets set: `EC2_HOST` = `tryhavejob.ooguy.com` (the **domain**, because
+  Repo secrets set: `EC2_HOST` = `<PROD_API_DOMAIN>` (the **domain**, because
   the instance has no Elastic IP and its public IP changes on every stop/start),
   `EC2_USER` = `ubuntu`, `EC2_PATH` = `/opt/trybuy/api`, `EC2_SSH_KEY` =
   `trybuy_key_prod_Mumbai` (ed25519). Security-group `sg-0e16141656b4c24a0` must
@@ -198,6 +234,16 @@ the seed script.
   zeros). When BOTH present, waybill/fee-preview use the exact ids and skip
   free-text resolution; a partial pair is treated as absent → free-text fallback.
   Runtime-verified on prod 2026-07-30 (4/4).
+- **Sandbox fees are always 0 — not a bug (probed 2026-08-07).** The dev gateway
+  (`dev-online-gateway.ghn.vn`, used by local AND prod) answers
+  `code: 200 Success` with `total_fee: 0` and every component zero on BOTH
+  `/v2/shipping-order/preview` and `/v2/shipping-order/fee`, for every
+  destination district/ward and every weight. `service_type_id: 2` ("Hàng nhẹ",
+  what `buildShippingOrderBody` sends) prices at zero; "Hàng nặng" rejects a 2 kg
+  parcel as an invalid weight. So `shippingFee: 0` on `POST /api/order/shipping-fee`
+  and on created orders is EXPECTED — it is not a missing seller origin, not a
+  same-district rule, and not a dropped item `weight`. Real fees require real GHN
+  production credentials. Do not "fix" this in code.
 - **Free-text address resolution** (fallback when ids absent,
   `apps/orders/src/ghn/ghn.service.ts`): ward/district/province resolved via
   master-data (`GET /master-data/province|district|ward`, 24h TTL cache) using

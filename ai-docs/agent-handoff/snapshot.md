@@ -18,7 +18,7 @@ Node A: gateway:3000 (HTTP+WS /chat+/notifications), orders:3001, user:3003,
 product:3006, social:3008, notification:3009 (TCP+RMQ only, no HTTP), chat:3012 (TCP).
 Node B: inventory:3002, payments:3005, rewards:3004.
 Base URL: http://localhost:3000 | Swagger: /doc
-Prod: EC2 + pm2 (compiled dist), nginx in front, https://tryhavejob.ooguy.com.
+Prod: EC2 + pm2 (compiled dist), nginx in front, https://<PROD_API_DOMAIN>.
 
 **Status:** backend is deploy-ready and deployed. All P0/P1/P2 FE-blockers,
 deploy gate G1–G5, feature roadmap F1–F7, SEC backlog, PERF backlog,
@@ -36,6 +36,58 @@ categories, vouchers (by `code`), roles/resources, inventory, payments,
 reward_points, shipping_history, voucher_redemptions.
 
 ## Active Tasks
+
+### SOCIAL-502 follow-up — roll the transport retry out beyond social (optional)
+
+`retryOnTransportError()` (`apps/gateway/src/common/exception/transport-error.ts`)
+is applied to the 7 idempotent read call sites in `social.service.ts` only. The
+same null-socket race can hit ANY gateway TCP read; the sanitizing 502 branch in
+`MicroserviceErrorHandler` already covers all 14 gateway services, so what is
+left is purely the retry. Extend it read-by-read (cart, chat, product, order,
+notification, …) — **reads only**, and always AFTER `timeout(...)` so each
+attempt keeps its own budget and an rxjs `TimeoutError` is never retried. Never
+put it on a write: a retried write can apply twice.
+
+### PRODTEST-0806 — defects found by the full prod API sweep (2026-08-06)
+
+Full workflow sweep of all 141 gateway routes on `https://<PROD_API_DOMAIN>`
+passed functionally (auth → catalog → moderation → cart → checkout → GHN →
+fulfilment → returns → social → chat/WS → notifications → admin → callbacks).
+Nine real defects, none of them blockers. The first three (duplicate register →
+500, role-entity leak, inconsistent pagination) are FIXED — see `CHANGELOG.md`
+2026-08-06. Six remain, ordered by impact:
+
+1. **GHN failures surface as opaque 500/502.** `ghn.service.ts:119`
+   `createShippingOrder()` posts via axios with no catch, so a non-2xx GHN
+   response throws AxiosError *before* the `GHN_MESSAGE.CREATE_ERROR(...)`
+   branch. Seller sees "Internal server error"; the real reason ("context
+   deadline exceeded", "Trạng thái đơn hàng không hợp lệ") is only in shipping
+   history. Fix: catch and map `response.data.message`.
+2. **Order create swallows a waybill failure**: order is created with
+   `ghnOrderCode:null`, then `ready-to-ship` hard-fails 502 and the order can
+   only be canceled. Either fail the create or make ready-to-ship re-create.
+3. **Our own address proxy can yield unshippable selections**: district 1534 /
+   ward 22306 (Huyện Nhà Bè) → GHN error → 502, reproduced 3×; district 1442 /
+   ward 20110 works. `/api/shipping/wards` should not offer what GHN rejects.
+4. **Numeric internal ids still leak on PUBID domains**: `stock-check.productId`,
+   return-request `reviewedBy`, moderation `moderatorId`/`actorId`/`submittedBy`,
+   analytics `topProducts[].productId`, wishlist `id`, review-create `userId`,
+   notification message text ("Đơn hàng #34 …"), GHN action errors ("for order
+   31"), "Post 1 not found".
+5. **Envelope inconsistency**: errors propagated from microservices report
+   `"error":"HttpException"` instead of the reason phrase ("Not Found",
+   "Conflict") that gateway-local errors return. Now also visible on the new
+   register/update 409s.
+6. **`@IsEnum([...])` with array literals** in `create-brand.dto.ts` /
+   `create-category.dto.ts` renders `"action must be one of the following
+   values: "` — empty list. Use a TS enum or `@IsIn([...])`.
+
+Observations (not defects): `/ready` reports `database:not_configured` and
+`rabbitmq:not_checked`, so readiness stays green even if RMQ is down;
+`GET /api/cart` returns `data:null` after the last item is removed (cart row is
+deleted) rather than an empty cart. The `shippingFee: 0` observation is CLOSED —
+the GHN dev gateway returns zero for every destination/weight on both fee
+endpoints; see `ops-runtime.md` → GHN.
 
 ### PROD-PAY-02 — inbound VNPay IPN: one real end-to-end payment still owed
 
@@ -69,6 +121,32 @@ ZaloPay callback leg is still unverified end-to-end.
   consequences: docs-only commits redeploy prod, and a merge landing inside the
   EC2's stopped window fails at the SSH step, leaving prod on the previous build
   until someone starts the box and dispatches manually.
+- **CD-05 env ownership — DEPLOYED AND VERIFIED 2026-08-10 (commit `6400656`)** —
+  `FRONTEND_URL` + `AUTH_COOKIE_SAME_SITE` live in `ecosystem.config.js`, not
+  `local/node*/.env`, and deploy uses `pm2 startOrRestart --env production
+  --update-env`. Two prod FE origins, storefront FIRST (payments reads entry
+  `[0]`): `https://fe-react-vite.quangtruong01234.workers.dev` (storefront) and
+  `https://web-flow-ghn.vercel.app` (GHN console).
+  - **`--update-env` is now PROVEN to be enough — no manual pm2 step.** The
+    owed-once `pm2 delete gateway payments && pm2 start …` was never run: CORS
+    came back on its own ~3.5 min after the push, purely from the deploy. Do
+    not prescribe the delete/start recipe for a future env change; it is only a
+    fallback if `--update-env` ever fails to take.
+  - Post-deploy curl evidence: both origins get
+    `Access-Control-Allow-Origin: <origin>` + `Access-Control-Allow-Credentials:
+    true` (`Vary: Origin`); an unlisted origin gets NO allow-origin (still 200,
+    the browser is what blocks); `OPTIONS /api/user/login` preflight → 204 with
+    `Allow-Methods GET,HEAD,PUT,PATCH,POST,DELETE`; login sets
+    `HttpOnly; Secure; SameSite=None; Path=/; Max-Age=18000`, and that cookie
+    authenticates a follow-up `GET /api/user/me` → 200.
+  - **Verify with curl, not `pm2 env <id>`** — pm2 prints only what it injected,
+    never what `dotenv` loads inside the process, so it cannot tell you the
+    runtime value:
+    `curl -sI -H "Origin: <fe-origin>" https://<PROD_API_DOMAIN>/live | grep -i access-control`.
+  - Ordering that caused the 2026-08-09 outage: the box `.env` `FRONTEND_URL`
+    was commented out BEFORE the pm2-injected replacement shipped, leaving the
+    allow-list empty. Change the source of truth first, deploy, then clean up
+    the old one — never the reverse. See `CHANGELOG.md` and `ops-runtime.md`.
 - **CD-03 — build-on-runner variant**: only if the EC2 gets smaller/slower
   (CI-built `dist/` rsync + `npm ci --omit=dev` + restart). Not needed while
   CD-01 works.
@@ -184,6 +262,11 @@ across ALL services; true 10k sustained likely needs a bigger VPS/Aiven tier.
   pushed on change; reference check fails safe → deactivate.
 - Checkout: single-seller `POST /api/order` has NO `paymentUrl` — client calls
   `GET /api/order/:id/payment-url` → key is `orderUrl`.
+- Payment return URL now carries `?order=ord_<16>`; payments created BEFORE
+  2026-08-07 keep a signed URL with the numeric id and cannot be rewritten.
+- `PATCH /api/products/:id`: `null` clears only the six nullable columns
+  (description, sku, brandId, sellerNotes, weight, imageUrls); `null` on any
+  other field is a 400 by design, not an oversight.
 - P0-03 compensation: trigger is an `inventory.sku` unique collision;
   discrimination reads `error.driverError.detail`, not `error.message`.
 - Product PATCH optimistic locking: `version` is opt-in; background writers

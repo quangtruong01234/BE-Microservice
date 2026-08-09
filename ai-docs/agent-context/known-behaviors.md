@@ -40,6 +40,19 @@
 
 Never write a test asserting `paymentUrl` on the single-seller shape.
 
+## Legacy payment return URLs keep the numeric order id (2026-08-07)
+
+Since 2026-08-07 the gateway redirect is
+`{FRONTEND_URL}/payment-result?order=ord_<16>&method=<gateway>` — the public id,
+so the FE deep-link resolves. Payment rows created BEFORE that change still hold
+a stored `orderUrl` whose `vnp_ReturnUrl` contains `?order=<numeric PK>`, and it
+cannot be rewritten: the VNPay signature covers `vnp_ReturnUrl`, so editing it
+invalidates the checksum. A buyer resuming an old pending order therefore lands
+on a numeric param, and `GET /api/order/<numeric>` is a PUBID 400. This is
+expected decay, not a bug — the FE guard treats a non-`ord_` `order` param as
+absent. When the order has no public id, or for multi-order ZaloPay checkouts,
+the param is omitted entirely; never emit it numeric.
+
 ## P0-03 compensation leg (verified on local 2026-08-03, 3/3)
 
 The product-create failure branch can be forced from outside the API:
@@ -154,3 +167,26 @@ risk-blocked rows.
   pre-existing, relied on by the seller's own product-edit screen.
 - 5 unit tests in `product.service.spec.ts` pin the default, `userIds`, the
   `userId` exception, the explicit override, and the cache key.
+
+## Gateway transport failures — one sanitized 502 (SOCIAL-502, fixed 2026-08-09)
+
+`MicroserviceErrorHandler.handleError` classifies a "the call never reached the
+microservice" failure BEFORE the keyword matcher, so all 14 gateway services now
+answer a dropped/refused/nulled socket with `502` +
+`COMMON_MESSAGE.SERVICE_UNAVAILABLE`. Residual behaviours:
+
+- **`"Connection closed"` moved 408 → 502.** It was never a client timeout. A
+  genuine rxjs `TimeoutError` is still `408` — it is not a transport error and
+  is deliberately never retried (pinned by a test in `transport-error.spec.ts`).
+- **The raw socket text is no longer echoed to the client.** Previously
+  `connect ECONNREFUSED 127.0.0.1:3008` reached the HTTP body, leaking the
+  internal host:port. It is now logged only. Do not assert on socket text in the
+  response body.
+- **The retry covers the momentary race, not an outage.** A service that is
+  genuinely restarting (multi-second) still returns 502 — correctly. Only
+  `retryOnTransportError()`'s single 100ms retry hides the sub-tick socket flap.
+- **Worst-case latency on a retried read** is one fast transport failure + 100ms
+  + a full `TCP_TIMEOUT_MS.READ` budget. The retry only fires on transport
+  errors, which fail fast, so this is ~5.1s, not 10s.
+- The retry is currently wired to social reads ONLY — see snapshot Active Tasks
+  for the optional rollout.

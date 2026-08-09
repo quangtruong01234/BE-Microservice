@@ -6,9 +6,255 @@
 
 ## Completed Milestones
 
+- **SOCIAL-502 — intermittent 502 on `GET /api/social/posts` root-caused and
+  fixed (2026-08-09).** FE reported a 502 followed by a 200 on the immediate
+  retry, same params/session, on a one-user dev box. **Root cause is a race in
+  `@nestjs/microservices` 11.1.19 `ClientTCP`, not our code and not load:**
+  `send()` resolves its cached `connectionPromise` in a *promise microtask*, but
+  Node drains the *nextTick* queue first — and that is where the socket `'close'`
+  listener runs `handleClose()`, which sets `this.socket = null`. `publish()`
+  then dereferences the null socket and throws
+  `TypeError: Cannot read properties of null (reading 'sendMessage')`. That
+  TypeError matched no branch in `extractStatusCode`, so it fell through to the
+  `502` default. The next request finds `connectionPromise === null`, builds a
+  fresh socket, and returns 200 — exactly the reported 502-then-200.
+  - **Reproduced deterministically** with a standalone probe (scratchpad
+    `tcp-race.js`): warm the connection, dispatch a `send()`, call
+    `handleClose()` in the same tick → the exact TypeError; the follow-up
+    request succeeds on a fresh socket.
+  - **Disproven first, so nobody re-litigates them:** social crash-loop
+    (`registerDirectPublisher` is already hardened — null-return factory,
+    heartbeat 30, error/close listeners); gateway starting before social
+    (social came up 2m12s *before* the gateway); load (25 rounds × 8 concurrent
+    feed reads → 200/200). The `logs/*.log` files are stale (Jul 19) — the dev
+    stack runs under `concurrently`, not pm2.
+  - **New `apps/gateway/src/common/exception/transport-error.ts`:**
+    `isTransportError()` (socket error codes, `"Connection closed"`, the
+    not-initialized message, and the null-socket `sendMessage` TypeError in both
+    the modern and legacy V8 phrasings) + `retryOnTransportError()`, a single
+    100ms rxjs `retry` that resubscribes the whole `send()` so the ClientProxy
+    builds a fresh socket. Business errors and rxjs `TimeoutError` are rethrown
+    untouched.
+  - **`MicroserviceErrorHandler`** gained an early transport branch before the
+    rpc unwrap: any transport failure is now one `502` +
+    `COMMON_MESSAGE.SERVICE_UNAVAILABLE`, logged in full but never echoed. This
+    fixed **two latent defects across all 14 gateway services**, not just social:
+    `connect ECONNREFUSED 127.0.0.1:3008` used to be copied verbatim into the
+    HTTP body (leaking the internal host:port, against the "never expose raw
+    errors" rule), and `"Connection closed"` used to map to a nonsensical `408`.
+    A dead branch in `extractStatusCode` was also fixed (it tested `"ETIMEDOUT"`
+    against an already-lower-cased string).
+  - **`social.service.ts`:** `retryOnTransportError()` added to the 7 idempotent
+    read call sites (`getPosts`, `getPostsByUser`, `getPostById`,
+    `getFollowingFeed`, `fetchAuthorMap`, `resolveUserId`, and the
+    `exposeReferences`/`exposeProductIds` id fan-outs), always AFTER
+    `timeout(...)` so each attempt keeps its own budget. **No write path got a
+    retry** — a retried write can apply twice.
+  - **Verified:** tsc/eslint clean; Jest **28 suites / 240 tests** green (was
+    27/224 — +1 suite, +16 tests). Live on the running stack: feed returns 200
+    unchanged; forcing a real social restart via the watcher produced 9 × 502
+    that were **all** sanitized (`"Service unavailable"`, zero `127.0.0.1` /
+    `ECONNREFUSED` in the body) and the feed recovered on its own. A regression
+    test pins that a genuine rxjs timeout is still 408.
+  - Residual behaviours in `known-behaviors.md`; optional rollout of the retry
+    to other gateway reads tracked in `snapshot.md` Active Tasks.
+
+- **CD-05 — frontend origin + cookie policy moved from `.env` into pm2, and the
+  deploy now refreshes env (2026-08-08, second origin added 2026-08-10).** Both
+  frontends went live on their own domains — storefront
+  `https://fe-react-vite.quangtruong01234.workers.dev` (Cloudflare Workers) and
+  GHN shipping console `https://web-flow-ghn.vercel.app` (Vercel) — while the API
+  stays on `https://<PROD_API_DOMAIN>` (nginx serves the gateway only, no static
+  root), so both are cross-site: a `lax` cookie is dropped on every credentialed
+  XHR and the gateway CORS allow-list must name each origin. Both values used to
+  live in `local/nodeA/.env`, which is gitignored — CD could neither update it
+  (`git reset --hard` leaves ignored files alone; there is no `git clean`) nor
+  survive the "someone edits it and nothing changes" trap. Changes:
+  - `ecosystem.config.js` now injects `FRONTEND_URL` **and**
+    `AUTH_COOKIE_SAME_SITE` into the `gateway` app (payments already got
+    `FRONTEND_URL`). pm2-injected env structurally wins over dotenv, so these are
+    now the single source of truth and are version-controlled.
+  - **Order contract documented in the config:** the two consumers read the same
+    variable differently — gateway `cors.ts` splits on `,` and allows every
+    entry; payments `payments.service.ts:368` takes entry `[0]` only to build
+    `<origin>/payment-result`. The storefront is entry `[0]` and must stay
+    first; the GHN console is `[1]` and never handles payments. Append further
+    origins, never prepend. Matching is exact-string — Vercel/Workers PREVIEW
+    subdomains are rejected until listed, and `cors.ts` drops `*` on purpose
+    because credentials are enabled.
+  - `deploy.yml` swapped `pm2 restart` for `pm2 startOrRestart ...
+    --update-env` (deploy step, rollback step, and the by-hand rollback recipe
+    in the header), so a committed env change actually reaches the process and a
+    box with deleted/missing apps still comes up. `package.json` `pm2:restart`
+    matches. The header gotcha note was rewritten accordingly.
+  - Dead-key guards: `local/nodeA/.env.production.example`,
+    `local/nodeB/.env.production.example` and `docs/deployment-runtime.md` now
+    say explicitly not to declare these two keys in `.env`.
+  - `security.md` Cookie/CSRF section updated — it previously said "do not set
+    `AUTH_COOKIE_SAME_SITE=none`", which the deployment topology now forces. It
+    records why, what still limits exposure (JSON-only body parsing defeats the
+    no-preflight form POST; strict allow-list; mutations on non-safe methods
+    only), the residual risk (a mutating route accepting an empty body), and
+    that the clean fix is topological — put both FEs on subdomains of one
+    registrable domain and revert to `lax`.
+  - Verified pre-deploy: `tsc --noEmit` 0 errors, Jest 28 suites / 240 tests
+    green, and a throwaway spec ran the REAL `cors.ts` + `auth-cookie.ts`
+    against the env `ecosystem.config.js` injects — allow-list = both origins,
+    storefront and GHN console accepted, a `*-git-<branch>.vercel.app` preview /
+    `evil.example.com` / `localhost:5173` all rejected under
+    `NODE_ENV=production`, cookie `sameSite:none` + `secure:true` +
+    `httpOnly:true`, payments return origin = the storefront.
+  - **Shipped and verified on prod 2026-08-10 (commit `6400656`).** CORS came
+    back ~3.5 min after the push. Post-deploy curls: both listed origins echo
+    `Access-Control-Allow-Origin` + `Access-Control-Allow-Credentials: true`
+    with `Vary: Origin`; an unlisted origin gets none (response still 200 — CORS
+    is browser-enforced, so do not expect a 403 when curling a rejected origin);
+    `OPTIONS /api/user/login` → 204 with
+    `Allow-Methods: GET,HEAD,PUT,PATCH,POST,DELETE`; login → `Set-Cookie:
+    access_token=…; Max-Age=18000; Path=/; HttpOnly; Secure; SameSite=None`,
+    and that cookie authenticated `GET /api/user/me` → 200.
+  - **`pm2 startOrRestart --update-env` is now PROVEN sufficient.** It was
+    listed as not verifiable off-box; the release settled it — the deploy alone
+    applied the new env with no SSH at all.
+  - **`pm2 env <id>` is the WRONG verification tool — do not repeat this.** On
+    2026-08-09 the one-time SSH below was run BEFORE the change was committed or
+    deployed, and `pm2 env 0` printed an empty `FRONTEND_URL`. That output is
+    uninformative either way: pm2 prints only what it injected at spawn, while
+    `dotenv` loads `.env` *inside* the process where pm2 cannot see it. Verify
+    from outside instead — `curl -sI -H "Origin: <fe-origin>"
+    https://<PROD_API_DOMAIN>/live | grep -i access-control`. That curl is what
+    actually diagnosed it: no `access-control-allow-origin` for ANY origin,
+    i.e. the box's allow-list was empty because the `.env` key had been commented
+    out while the new pm2-injected value had not yet shipped.
+  - **Ordering is load-bearing.** What caused the outage: the box's `.env`
+    `FRONTEND_URL` was commented out BEFORE the pm2-injected replacement
+    shipped, so the allow-list was empty in between. Change the new source of
+    truth, deploy, then remove the old one — never the reverse. The same rule
+    killed the attempted fix: the one-time SSH (`pm2 delete gateway payments &&
+    pm2 start ecosystem.config.js --env production --only gateway,payments &&
+    pm2 save`) was run BEFORE the deploy landed the new `ecosystem.config.js`,
+    so pm2 reloaded the old config and injected nothing. In the end that SSH was
+    never needed — keep it only as a fallback for the day `--update-env` does
+    not take. Changing an FE domain is now a one-line commit.
+
+- **FE-inbox batch — all four `backend-handoff.md` Open items closed (2026-08-07).**
+  `/sweep` fix mode over the FE→BE inbox; three code fixes and one investigation.
+  - **PATCH null-clear.** `PATCH /api/products/:id` now treats an explicit `null`
+    as "clear this column" for the six nullable ones (`description`, `sku`,
+    `brandId`, `sellerNotes`, `weight`, `imageUrls`). Omitting a key still means
+    "leave unchanged", so the FE's dirty-field patch is unaffected — it just
+    sends `null` instead of dropping the key. Every OTHER field rejects `null`
+    with 400 via `RejectsNull = ValidateIf((_o, v) => v !== undefined)`, so a
+    stray `null` cannot wipe `name`/`price`/`skuList`. Shape: the microservice
+    DTO is `PartialType(OmitType(CreateProductDto, CLEARABLE_FIELDS))` with the
+    six redeclared as `T | null` — Omit-then-redeclare because a subclass cannot
+    widen an inherited property type (TS2416). **Second bug found by the
+    self-test and fixed in the same diff:** the inverse case was broken too —
+    `PATCH {brandId: 28}` on a brand-less product saved `NULL`. The product is
+    loaded WITH its `brand` relation and TypeORM writes `brand_id` from the
+    relation object, so the FK column alone never decides the saved value;
+    `product.brand` is now dropped on clear and refreshed on set
+    (`apps/product/src/product.service.ts:1508-1543`). Worth remembering as a
+    general TypeORM rule, not a product-specific quirk. **Third bug, found by
+    the change-impact review after the self-test passed:** `PATCH {brandId: 0}`
+    answered 200 with a self-contradictory body (`brandId: 0` next to
+    `brand: {id:"28"}`). `0` is falsy, so the service guard
+    `if (dto.brandId)` skipped the existence check AND both relation branches —
+    the row kept its old brand while the response echoed the request. Newly
+    reachable because a client clearing a brand might send `0` rather than
+    `null`. Fixed with `@Min(1)` on `brandId` in both update DTOs (`@IsOptional`
+    still skips `null`, so the clear path is untouched): `0`/`-1` → 400
+    "brandId must not be less than 1".
+  - **Buyer order status filter.** `GET /api/order/user/:id` accepts `status` —
+    repeated keys or a comma-separated list (`status[]=` is unsupported by the
+    Express simple parser → 400; same limitation as `provinceId`). Unknown value
+    → 400 with the allowed list. Gateway forwards it only when non-empty, so the
+    unfiltered path is unchanged; `total`/`totalPages`/`hasNext` describe the
+    filtered set. A compile-time guard
+    (`type EveryStatusIsShared = OrderStatus extends OrderStatusValue ? true : never`)
+    breaks the build if the orders-service enum drifts from the DTO's list. This
+    deletes an expensive FE mitigation: the reported account (65 orders) was
+    fetching all 7 pages to surface 1 refunded row.
+  - **Payment return URL carries the public id.** The order's `publicId` is
+    threaded from the `order_created` RMQ event through `processPayment` →
+    `issueGatewayPaymentUrl` → `buildFrontendPaymentResultUrl`, covering both the
+    create path and the `GET /api/order/:id/payment-url` recovery path. Redirect
+    is now `?order=ord_<16>&method=<gateway>` — previously the numeric PK, which
+    `GET /api/order/:id` rejects with a PUBID 400, i.e. every payment deep-link
+    was dead. No public id (and multi-order ZaloPay, where no single order
+    applies) → the param is omitted, never numeric. Config also corrected in
+    `.env.example` and `local/nodeB/.env.example` (the FE report cited a
+    non-existent `apps/payments/.env.example`): `VNP_RETURN_URL` /
+    `ZALOPAY_REDIRECT_URL` pointed at the gateway's JSON-only endpoint instead of
+    the FE page, and are now documented as fallbacks — the real URL is built from
+    `FRONTEND_URL`. **Residual:** payments created
+    before this change keep a signed URL with the numeric id — the VNPay
+    signature covers `vnp_ReturnUrl`, so it cannot be rewritten
+    (`known-behaviors.md`).
+  - **GHN-ADDR-01 `shippingFee: 0` — not a defect, closed.** Probing
+    `dev-online-gateway.ghn.vn` directly: `code: 200 Success` with `total_fee: 0`
+    and every component zero, for EVERY destination district/ward, EVERY weight,
+    and BOTH `/v2/shipping-order/preview` and `/v2/shipping-order/fee`.
+    `service_type_id: 2` ("Hàng nhẹ", what we send) prices at zero on the
+    sandbox; "Hàng nặng" rejects a 2 kg parcel as an invalid weight. All three FE
+    hypotheses ruled out: seller origin IS configured (far provinces still 0),
+    same-district is not it (cross-province also 0), and explicit item weights
+    change nothing. Prod uses the same base URL, so 0 is expected there too until
+    real GHN production credentials exist. No code changed
+    (`ops-runtime.md` → GHN).
+  - **Verified:** `tsc --noEmit` and eslint clean; Jest 27 suites / 224 tests
+    green (5 new/updated payment tests + the product DTO cases). Runtime: all six
+    fields cleared and re-read on sku `XM-RBUDS5-BLK` with all eleven
+    non-clearables 400ing and the product restored to seed state afterwards;
+    `?status=refunded` → `total:1` on page 1 (was page 2), 5-status tab → 15 rows,
+    `?status=bogus` → 400; and a real order through RabbitMQ produced
+    `vnp_ReturnUrl = …/payment-result?order=ord_DdtwEyoNyBD2Foda&method=vnpay`
+    with that id resolving `GET /api/order/:id` → 200.
+
+- **PRODTEST-0806 defects #1â€“#3 fixed (2026-08-06).** The first three findings of
+  the full prod API sweep; #4â€“#9 stay open in `snapshot.md`.
+  - **#1 Duplicate register no longer 500s.** `user.service.register()` gained a
+    `assertCredentialsAvailable()` pre-check (one `find` over `username`/`email`)
+    that throws `ConflictException` with a field-specific message
+    (`USER_MESSAGE.USERNAME_TAKEN` / `EMAIL_TAKEN`), plus
+    `duplicateCredentialConflict()` which maps a racing MySQL `ER_DUP_ENTRY` on
+    save to the same 409. The pre-check alone is not race-proof â€” the catch is
+    what closes the window. It only claims the 409 when the duplicated value
+    parsed out of `sqlMessage` is the username/email we tried to write, so the
+    unique `public_id` keeps its own error. `AllRpcExceptionFilter` already
+    understood only PostgreSQL codes (`23505`), which is why the MySQL duplicate
+    fell through to "Database operation failed". Same treatment applied to
+    `updateUser()` â€” `UpdateUserDto.email` is the only other unique field it can
+    write.
+  - **#2 Role entity no longer leaks.** Two layers. (a) At the HTTP boundary,
+    gateway `exposeUser()` now runs `role` through `exposeRole()` â†’
+    `{id, name, slug}`; `generateJwtToken` still reads `rol_name`/`rol_grants`
+    off the RAW TCP payload, so grants are not lost (verified: reshaped login
+    still yields a working admin JWT). (b) In the user service, `getInfo()` and
+    `getUsersByIds()` pass `loadEagerRelations: false`. **Gotcha worth keeping:**
+    a column-level `select` does NOT suppress an `eager: true` relation, so those
+    "summary" reads had been joining and returning the whole `roles` row â€”
+    including the `rol_grants` permission matrix â€” into every cross-service user
+    embed (orders/GHN admin `buyer`/`seller`, social, chat, cart, product,
+    notification). Deliberate asymmetry left behind: `GET /api/user` (admin-only)
+    keeps `role` as the reshaped summary, while `GET /api/user/:id` (public
+    profile) now returns no `role` at all.
+  - **#3 Pagination shape unified.** `GET /api/products` returns
+    `PaginatedResponse` instead of a bare array; `GET /api/order/admin/orders`
+    goes through `PaginatedResponse.of()` so it gains `totalPages`/`hasNext`.
+    The product list cache prefix was deliberately NOT bumped â€”
+    `PUBLIC_READ_CACHE_TTL_SECONDS` is 10, so the stale-shape window after
+    deploy is 10 s.
+  - Verified locally end-to-end: duplicate username â†’ 409, duplicate email â†’
+    409, fresh register â†’ 201, login â†’ role summary + working admin JWT,
+    `PATCH /api/user/:id` duplicate email â†’ 409 while re-submitting the user's
+    OWN email â†’ 200 (no false conflict), `GET /api/products` and
+    `GET /api/order/admin/orders` â†’ full envelope, admin-orders `buyer` embed
+    and admin user list contain no `rol_` key. 26 suites / 202 tests green.
+
 - **First production deploy through CD-01 (2026-08-06, sha `19309f6`).** The
   workflow shipped 2026-08-03 had never run; this closes it. Repo secrets set:
-  `EC2_HOST` = `tryhavejob.ooguy.com` (the DDNS domain, not an IP — the instance
+  `EC2_HOST` = `<PROD_API_DOMAIN>` (the DDNS domain, not an IP — the instance
   has no Elastic IP, and its public address had already rotated across three
   values), `EC2_USER` = `ubuntu`, `EC2_PATH` = `/opt/trybuy/api` (absolute,
   because `cd "$EC2_PATH"` cannot expand `~`), `EC2_SSH_KEY` =
@@ -431,7 +677,7 @@ inventory.controller.ts` + `inventory.service.ts` (the upsert). No migration.
     edit form can now send SKUs, and `skuList` is a FULL set, not a delta.
 - **PROD runtime self-test of the never-tested backlog items — 2026-08-03.**
   Closed the "pending a full-stack run" debt on P0-03/P0-04/P0-05/P1-01/P1-02 by
-  driving the real prod API (`https://tryhavejob.ooguy.com`) with all five
+  driving the real prod API (`https://<PROD_API_DOMAIN>`) with all five
   `.env.seed` accounts (shop / user / admin-less buyer / logistic / shipping).
   Test driver was a throwaway Node `fetch` script in the scratchpad (never
   committed); every object it created was cleaned up in a `finally` block.
@@ -730,7 +976,7 @@ ord_aaaaaaaaaaaaaaaa not found"`, local unknown payment-url **404** (same
   Validated: `tsc --noEmit` 0, eslint 0, `npx jest apps/payments` 3 suites /
   19 tests. **Prod self-test 2026-08-01, all green:** fresh VNPay order
   `ord_iwL4MdBlvXb8Ckm2` → `payment-url` 200 with
-  `vnp_ReturnUrl=https://tryhavejob.ooguy.com/payment-result?order=19&method=vnpay`
+  `vnp_ReturnUrl=https://<PROD_API_DOMAIN>/payment-result?order=19&method=vnpay`
   (was localhost); fresh ZaloPay order `ord_l9caYNZDCGs6kl03` → 200 with a
   `qcgateway.zalopay.vn/openinapp?...` URL. Note `getPaymentUrl` returns the
   **stored** `orderUrl` once one exists, so every re-test of this needs a brand-new
@@ -782,7 +1028,7 @@ ord_aaaaaaaaaaaaaaaa not found"`, local unknown payment-url **404** (same
   orders were canceled, so prod holds no leftover test data.
 - DEPLOY-VERIFY-01 — 2026-07-30 prod deploy verified, after resolving PROD-INC-01
   (ops + one prod incident, NO code change). Commits `3f6e212..4d039cc` were
-  verified live against `https://tryhavejob.ooguy.com`.
+  verified live against `https://<PROD_API_DOMAIN>`.
   **PROD-INC-01 (prod outage, found + fixed same day):** right after the deploy every
   request that SELECTs the full `orders` entity failed — `GET /api/order/seller` 502,
   `GET /api/order/user/:id` 500, `POST /api/order` 502 — while partial-select routes
