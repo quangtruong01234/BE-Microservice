@@ -251,6 +251,30 @@
     OWN email â†’ 200 (no false conflict), `GET /api/products` and
     `GET /api/order/admin/orders` â†’ full envelope, admin-orders `buyer` embed
     and admin user list contain no `rol_` key. 26 suites / 202 tests green.
+  - **Deployed and re-verified on prod 2026-08-10 (commit `b0e982d`).** Worth
+    recording because the gap was the real risk: the contract was announced to
+    both frontends on 2026-08-06 and integrated by the storefront on 2026-08-07,
+    but the code sat uncommitted in the working tree until 2026-08-10 — for four
+    days prod served the OLD shape to a frontend already reading the new one.
+    Prod curls after the deploy: `GET /api/user/me` → `role:{"id":1,"name":
+    "admin","slug":"admin-001"}` (`admin1`) and `{"id":3,"name":"user","slug":
+    "user-001"}` (`user1`), no `rol_*` key anywhere; `GET /api/products?limit=2`
+    → `{data,total,page,limit,totalPages,hasNext}` with `total:21 totalPages:11
+    hasNext:true`; `GET /api/order/admin/orders?limit=2` → `total:34
+    totalPages:17 hasNext:true`, no `rol_` in the buyer/seller embeds;
+    `?status=completed` → `total:2`, only completed rows; buyer
+    `GET /api/order/user/:id?status=refunded` → `total:1 totalPages:1
+    hasNext:false` out of 23 unfiltered, `?status=bogus` → 400 listing the nine
+    statuses; `PATCH /api/products/:id {"brandId":0}` → 400 "brandId must not be
+    less than 1" and `{"brandId":null}` → 200 with `brandId:null`; duplicate
+    username → 409 "Username is already taken", duplicate email → 409 "Email is
+    already registered" (envelope `error` still reads `"HttpException"` —
+    PRODTEST defect #5, still open).
+  - **Side effect of that verification:** the duplicate-email probe was run with
+    an address that turned out NOT to be registered on prod, so it created a
+    real account (`dupprobe0810`, role `user`, `usr_kOREpdKYQq3Ivb6g`). Recorded
+    in `../.agent-local/test-accounts.md`; delete it in DB if that address is
+    ever needed for a genuine signup.
 
 - **First production deploy through CD-01 (2026-08-06, sha `19309f6`).** The
   workflow shipped 2026-08-03 had never run; this closes it. Repo secrets set:

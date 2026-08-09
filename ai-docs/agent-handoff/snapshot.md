@@ -54,7 +54,8 @@ Full workflow sweep of all 141 gateway routes on `https://<PROD_API_DOMAIN>`
 passed functionally (auth → catalog → moderation → cart → checkout → GHN →
 fulfilment → returns → social → chat/WS → notifications → admin → callbacks).
 Nine real defects, none of them blockers. The first three (duplicate register →
-500, role-entity leak, inconsistent pagination) are FIXED — see `CHANGELOG.md`
+500, role-entity leak, inconsistent pagination) are FIXED and, as of 2026-08-10
+(commit `b0e982d`), DEPLOYED AND VERIFIED ON PROD — see `CHANGELOG.md`
 2026-08-06. Six remain, ordered by impact:
 
 1. **GHN failures surface as opaque 500/502.** `ghn.service.ts:119`
