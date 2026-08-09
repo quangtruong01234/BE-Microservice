@@ -1,6 +1,7 @@
 import { HttpException, HttpStatus, Logger } from "@nestjs/common";
 import { COMMON_MESSAGE } from "libs/constant/response-message.constant";
 import { ErrorLike } from "./microservice-error.types";
+import { isTransportError } from "./transport-error";
 
 export class MicroserviceErrorHandler {
   private static readonly logger = new Logger(MicroserviceErrorHandler.name);
@@ -23,6 +24,24 @@ export class MicroserviceErrorHandler {
     const errorSummary =
       error instanceof Error ? error.constructor.name : typeof error;
     this.logger.error(`${serviceName} ${operation} failed: ${errorSummary}`);
+
+    // The call never reached the microservice (socket refused, dropped, or
+    // nulled mid-publish). Classify it as one 502 instead of letting the raw
+    // socket text fall through the keyword matcher below — "connect
+    // ECONNREFUSED 127.0.0.1:3008" would otherwise be echoed to the client,
+    // leaking the internal host:port, while "Connection closed" was mapped to
+    // a nonsensical 408.
+    if (isTransportError(error)) {
+      const detail =
+        error instanceof Error ? error.message : "non-Error transport failure";
+      this.logger.error(
+        `${serviceName} ${operation} transport failure (not reported to client): ${detail}`,
+      );
+      throw new HttpException(
+        COMMON_MESSAGE.SERVICE_UNAVAILABLE,
+        HttpStatus.BAD_GATEWAY,
+      );
+    }
 
     const err = error as ErrorLike;
     // Unwrap NestJS RpcException shape: { error: <inner>, message: '...' }
@@ -115,9 +134,10 @@ export class MicroserviceErrorHandler {
     }
 
     if (
+      // errorMessage is already lower-cased, so the code token must be too.
       errorMessage.includes("timeout") ||
       errorMessage.includes("connection") ||
-      errorMessage.includes("ETIMEDOUT")
+      errorMessage.includes("etimedout")
     ) {
       return HttpStatus.REQUEST_TIMEOUT;
     }

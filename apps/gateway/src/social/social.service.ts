@@ -7,6 +7,7 @@ import {
 } from "libs/constant/message-pattern.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
+import { retryOnTransportError } from "../common/exception/transport-error";
 import { assertCloudinaryUrlsOwnedBy } from "../common/media/cloudinary-ownership";
 import { UserInfo, UserInfoTcp } from "./social.types";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
@@ -31,7 +32,10 @@ export class SocialGatewayService {
       const users = await firstValueFrom(
         this.userClient
           .send({ cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS }, userIds)
-          .pipe(timeout(TCP_TIMEOUT_MS.READ)) as Observable<UserInfoTcp[]>,
+          .pipe(
+            timeout(TCP_TIMEOUT_MS.READ),
+            retryOnTransportError(),
+          ) as Observable<UserInfoTcp[]>,
       );
       // Map keys stay the internal numeric id (matches post.userId); the
       // embedded author `id` is the exposed opaque public id (PUBID-02).
@@ -56,7 +60,7 @@ export class SocialGatewayService {
         .send<{
           id: number;
         }>({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, { userId })
-        .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+        .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
     );
     return Number(user.id);
   }
@@ -113,7 +117,7 @@ export class SocialGatewayService {
               .send<
                 Array<{ id: number; publicId: string }>
               >(SOCIAL_MESSAGE_PATTERN.GET_POST_PUBLIC_IDS_BY_IDS, [...postIds])
-              .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
+              .pipe(timeout(TCP_TIMEOUT_MS.WRITE), retryOnTransportError()),
           ),
       commentIds.size === 0
         ? Promise.resolve([])
@@ -122,7 +126,7 @@ export class SocialGatewayService {
               .send<
                 Array<{ id: number; publicId: string }>
               >(SOCIAL_MESSAGE_PATTERN.GET_COMMENT_PUBLIC_IDS_BY_IDS, [...commentIds])
-              .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
+              .pipe(timeout(TCP_TIMEOUT_MS.WRITE), retryOnTransportError()),
           ),
       userIds.size === 0
         ? Promise.resolve(new Map<number, UserInfo>())
@@ -267,7 +271,7 @@ export class SocialGatewayService {
         .send<
           { id: number; publicId: string | null }[]
         >(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_IDS, [...productIds])
-        .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
+        .pipe(timeout(TCP_TIMEOUT_MS.WRITE), retryOnTransportError()),
     );
     const publicIdById = new Map(
       products.map((product) => [Number(product.id), product.publicId]),
@@ -328,7 +332,10 @@ export class SocialGatewayService {
             limit,
             viewerUserId: viewerUserId ?? null,
           })
-          .pipe(timeout(TCP_TIMEOUT_MS.READ)) as Observable<unknown>,
+          .pipe(
+            timeout(TCP_TIMEOUT_MS.READ),
+            retryOnTransportError(),
+          ) as Observable<unknown>,
       )) as {
         data: Array<{ userId: number }>;
         total: number;
@@ -372,7 +379,10 @@ export class SocialGatewayService {
             limit,
             viewerUserId: viewerUserId ?? null,
           })
-          .pipe(timeout(TCP_TIMEOUT_MS.READ)) as Observable<unknown>,
+          .pipe(
+            timeout(TCP_TIMEOUT_MS.READ),
+            retryOnTransportError(),
+          ) as Observable<unknown>,
       )) as {
         data: Array<{ userId: number }>;
         total: number;
@@ -411,7 +421,10 @@ export class SocialGatewayService {
             postId,
             viewerUserId: viewerUserId ?? null,
           })
-          .pipe(timeout(TCP_TIMEOUT_MS.READ)) as Observable<unknown>,
+          .pipe(
+            timeout(TCP_TIMEOUT_MS.READ),
+            retryOnTransportError(),
+          ) as Observable<unknown>,
       )) as { userId: number };
       const authorMap = await this.fetchAuthorMap([post.userId]);
       return this.exposeReferences({
@@ -736,7 +749,10 @@ export class SocialGatewayService {
             limit,
             viewerUserId: viewerUserId ?? null,
           })
-          .pipe(timeout(TCP_TIMEOUT_MS.READ)) as Observable<unknown>,
+          .pipe(
+            timeout(TCP_TIMEOUT_MS.READ),
+            retryOnTransportError(),
+          ) as Observable<unknown>,
       )) as {
         data: Array<{ userId: number }>;
         total: number;
