@@ -92,6 +92,34 @@ Before creating any new service, util, helper, constant, or dto:
 - **Format on change**: After modifying any `.ts` file, run: `npx prettier --write <file_path> && npx eslint --fix <file_path>`. Skip if unchanged.
 - **Language consistency**: Always write code comments, inline documentation, and git commit messages in English, even if the user communicates in another language.
 
+## Never Commit the Production DNS Name
+
+The production API domain (the DDNS host serving the gateway behind nginx on
+EC2) must **never** appear in anything pushed to GitHub — not in source, not in
+`.env.example`, not in workflows, not in `ai-docs/`, `docs/`, comments, tests,
+or commit messages. Not the full URL, not the bare hostname, not just the
+registrable domain. The repo is the wrong place for it: it points a reader
+straight at the live box.
+
+- **In committed files, write the placeholder `<PROD_API_DOMAIN>`** — e.g.
+  `https://<PROD_API_DOMAIN>/api/order`. Keep the placeholder greppable; do not
+  invent per-file variants.
+- **The real value lives in `../.agent-local/prod-endpoints.md`** (at the `MCR/`
+  workspace root, outside both git repos). Read it when you need the actual host
+  — for a prod curl, a deploy check, a log fetch. Never copy it into the repo.
+- **Runtime config is the exception, because it is not committed:** the GitHub
+  Actions secret `EC2_HOST`, and gitignored `local/node*/.env`. Secrets and
+  ignored env files are the correct home for the real host. `.env.example` is
+  committed, so it gets the placeholder.
+- **Before committing, verify:** read the host from
+  `../.agent-local/prod-endpoints.md` and `git grep -i` **both** the full
+  hostname and its registrable domain — a bare `example.com` in a code comment
+  is the leak that a search for the full URL misses. Both must return nothing.
+  Replace any match with the placeholder rather than committing.
+- This rule is about *new and touched* content. The domain still exists in past
+  commits; purging git history is a rewrite + force-push and requires the user's
+  explicit go-ahead — never do it unprompted.
+
 ## RabbitMQ Consumer Rules
 
 Every `@EventPattern` handler must wrap business logic in try/catch:
