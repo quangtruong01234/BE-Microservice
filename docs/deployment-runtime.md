@@ -177,10 +177,11 @@ Checklist for `.env`, `local/nodeA/.env`, and `local/nodeB/.env`:
 - `TYPEORM_SYNCHRONIZE_ALLOW_PRODUCTION=false`
 - `GHN_DEMO_ENDPOINTS_ENABLED=false`
 - `GATEWAY_PORT=3000`
-- `FRONTEND_URL` contains only exact production storefront and GHN console
-  origins.
-- `AUTH_COOKIE_SECURE=true` and `AUTH_COOKIE_SAME_SITE=lax`, unless the frontend
-  is on a different site and needs `AUTH_COOKIE_SAME_SITE=none`.
+- `FRONTEND_URL` and `AUTH_COOKIE_SAME_SITE` are NOT set in these files — pm2
+  injects both from `ecosystem.config.js` and pm2's env always wins over
+  dotenv, so a value here is a dead key. `FRONTEND_URL` must contain only exact
+  production origins, storefront FIRST (payments reads entry `[0]`).
+- `AUTH_COOKIE_SECURE=true`.
 - `JWT_SECRET` is a long random secret and matches every process that needs it.
 - `REDIS_HOST=127.0.0.1`, `REDIS_PORT=6379`, and optional `REDIS_PASSWORD`.
 - `RABBITMQ_HOST=127.0.0.1`, `RABBITMQ_PORT=5672`,

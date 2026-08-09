@@ -72,20 +72,44 @@ const MYSQL_POOL = {
 };
 const PG_POOL = { inventory: 5, payments: 4, rewards: 3 };
 
-// Public storefront origin, used by payments to build the gateway return URL
-// (`/payment-result`). Injected by PM2 so it cannot depend on the per-node
-// .env file being picked up: PROD-PAY-01 had payments issuing
+// Public frontend origins, comma-separated. Injected by PM2 so the value is
+// version-controlled and ships with a deploy, instead of living only in the
+// gitignored local/node{A,B}/.env on the box: PROD-PAY-01 had payments issuing
 // `http://localhost:5173` return URLs — which VNPay rejects — while
 // local/nodeB/.env carried the right value. PM2-injected env wins, because
 // both dotenv and @nestjs/config only assign keys not already in process.env.
+//
+// ORDER MATTERS — the two consumers read this same variable differently:
+//   - gateway  (apps/gateway/src/common/cors.ts) splits on "," and allows every
+//     entry, so EVERY browser origin must be listed (storefront, GHN console).
+//   - payments (apps/payments/src/payments.service.ts) takes entry [0] only and
+//     builds `<origin>/payment-result`, so the STOREFRONT must come first.
+// Entry [0] is the TryBuy storefront; entry [1] is the GHN shipping console,
+// which never handles payments — append further origins, never prepend.
+// Matching is exact-string, not wildcard: a Vercel/Workers PREVIEW deployment
+// gets its own subdomain and will be CORS-rejected until it is listed here.
 // Override per machine with `FRONTEND_URL=... pm2 start ecosystem.config.js`.
-const FRONTEND_URL = process.env.FRONTEND_URL || "https://tryhavejob.ooguy.com";
+const FRONTEND_URL =
+  process.env.FRONTEND_URL ||
+  [
+    "https://fe-react-vite.quangtruong01234.workers.dev",
+    "https://web-flow-ghn.vercel.app",
+  ].join(",");
+
+// The frontends (*.workers.dev, *.vercel.app) and the API (<PROD_API_DOMAIN>) are
+// different sites,
+// so a `lax` cookie is dropped by the browser on every credentialed XHR the FE
+// makes — `none` is mandatory for this split-domain deployment. It also forces
+// `secure`, which prod already sets. CSRF trade-off: security.md → Cookie and
+// CSRF Posture. Put both frontends on subdomains of one registrable domain and
+// this can go back to `lax`.
+const AUTH_COOKIE_SAME_SITE = process.env.AUTH_COOKIE_SAME_SITE || "none";
 
 module.exports = {
   apps: [
     // Node A
     {
-      ...service("gateway"),
+      ...service("gateway", { FRONTEND_URL, AUTH_COOKIE_SAME_SITE }),
       instances: gatewayInstances,
       exec_mode: gatewayInstances > 1 ? "cluster" : "fork",
     },

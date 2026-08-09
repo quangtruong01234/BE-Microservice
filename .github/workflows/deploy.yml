@@ -34,13 +34,19 @@
 # before the reset. On failure this workflow restores it automatically; to roll
 # back later by hand:
 #   cd $EC2_PATH && git reset --hard $(cat ~/.trybuy-deploy-prev-sha) \
-#     && npm ci && npm run build && pm2 restart ecosystem.config.js --env production
+#     && npm ci && npm run build \
+#     && pm2 startOrRestart ecosystem.config.js --env production --update-env
 # No DB rollback is needed (migrations are additive).
 #
 # Known pm2 gotchas (see snapshot.md Ops/Runtime):
-#   - `pm2 restart` does NOT refresh pm2's stored env snapshot. After changing
-#     any env value you must `pm2 delete <app> && pm2 start ecosystem.config.js
-#     --env production --only <app>` manually; this workflow only restarts.
+#   - A plain `pm2 restart` does NOT refresh pm2's stored env snapshot, so an
+#     env change committed to ecosystem.config.js would not reach the process.
+#     This workflow uses `startOrRestart ... --update-env` instead: it re-reads
+#     the config file's env on every deploy, and starts apps that are not in
+#     pm2's list at all (e.g. after `pm2 delete` or a fresh box). Env values
+#     living in the gitignored local/node{A,B}/.env still require an SSH edit —
+#     that is why FRONTEND_URL / AUTH_COOKIE_SAME_SITE were moved into
+#     ecosystem.config.js.
 #   - logs are flushed before the restart so a post-deploy log read shows only
 #     this deploy (every EC2 boot writes a benign Redis/RabbitMQ error burst).
 
@@ -134,7 +140,7 @@ jobs:
             npm run build
 
             pm2 flush
-            pm2 restart ecosystem.config.js --env production
+            pm2 startOrRestart ecosystem.config.js --env production --update-env
             pm2 save
 
             # Give the gateway a moment to bind before probing liveness.
@@ -183,7 +189,7 @@ jobs:
             git reset --hard "$prev_sha"
             npm ci
             npm run build
-            pm2 restart ecosystem.config.js --env production
+            pm2 startOrRestart ecosystem.config.js --env production --update-env
             pm2 save
 
             # Same grace period as the deploy step: pm2 returns before the

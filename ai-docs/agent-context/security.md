@@ -49,7 +49,8 @@ These rules apply at all times, not only during a dedicated review command or sk
 ## Cookie and CSRF Posture
 
 - TryBuy authenticates browser sessions with an HttpOnly `access_token` cookie.
-- The default cookie posture is `sameSite:lax`; production also sets `secure=true`.
-- There is no separate CSRF token today. `sameSite:lax` mitigates most cross-site POST-style attacks, so state-changing operations must stay on non-safe HTTP methods (`POST`, `PUT`, `PATCH`, or `DELETE`).
-- Never implement a mutation behind `GET` or `HEAD`, including "quick action" endpoints that cancel, sync, approve, delete, mark-read, emit, resend, or otherwise change server state.
-- Do not set `AUTH_COOKIE_SAME_SITE=none` unless a CSRF-token strategy is implemented and required by the frontend deployment model.
+- The code default is `sameSite:lax`; production also sets `secure=true`.
+- **Production runs `sameSite:none` (since 2026-08-08) and has no CSRF token.** The storefront is deployed to `*.workers.dev` and the GHN shipping console to `*.vercel.app`, while the API is on `<PROD_API_DOMAIN>` — all different sites, so a `lax` cookie is dropped on every credentialed XHR and neither frontend can authenticate at all. `none` is forced by the deployment topology, not chosen. Set in `ecosystem.config.js` (gateway app), not in `.env`.
+- What still limits CSRF exposure with `none`: mutations are all on non-safe methods; the gateway only parses JSON bodies, so a classic no-preflight HTML form POST (`application/x-www-form-urlencoded`) arrives as an empty body and fails validation; every cross-origin JSON request is preflighted against a strict `FRONTEND_URL` allow-list with no wildcard. Residual risk: any mutating route that accepts an empty/urlencoded body.
+- Never implement a mutation behind `GET` or `HEAD`, including "quick action" endpoints that cancel, sync, approve, delete, mark-read, emit, resend, or otherwise change server state. This rule is load-bearing now that `sameSite` is `none`.
+- The clean fix is topological, not a token: put both frontends on subdomains of one registrable domain (e.g. `app.example.com` + `api.example.com`) and revert `AUTH_COOKIE_SAME_SITE` to `lax`. Add a CSRF-token strategy only if the split-domain deployment becomes permanent.
