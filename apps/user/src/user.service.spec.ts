@@ -2,7 +2,8 @@ import { getRepositoryToken } from "@nestjs/typeorm";
 import { Test, TestingModule } from "@nestjs/testing";
 import { CachedService } from "@app/cached";
 import { CloudinaryService, MailerService } from "@app/common";
-import { DataSource } from "typeorm";
+import { ConflictException } from "@nestjs/common";
+import { DataSource, QueryFailedError } from "typeorm";
 import * as bcrypt from "bcryptjs";
 import { Role, RoleName, RoleStatus } from "./entity/role.entity";
 import { UserAddress } from "./entity/user-address.entity";
@@ -112,6 +113,7 @@ describe("UserService", () => {
 
   it("does not return the password hash after registration", async () => {
     roleRepository.findOne.mockResolvedValue(role);
+    userRepository.find.mockResolvedValue([]);
     userRepository.create.mockReturnValue(persistedUser);
     userRepository.save.mockResolvedValue(persistedUser);
 
@@ -122,6 +124,60 @@ describe("UserService", () => {
     });
 
     expect(user).not.toHaveProperty("password");
+  });
+
+  it("rejects a duplicate username with 409 instead of a raw DB error", async () => {
+    roleRepository.findOne.mockResolvedValue(role);
+    userRepository.find.mockResolvedValue([
+      { id: 9, username: "test-user", email: "other@example.com" },
+    ]);
+
+    await expect(
+      service.register({
+        username: "test-user",
+        password: "password123",
+        email: "new@example.com",
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(userRepository.save).not.toHaveBeenCalled();
+  });
+
+  it("rejects a duplicate email with 409 instead of a raw DB error", async () => {
+    roleRepository.findOne.mockResolvedValue(role);
+    userRepository.find.mockResolvedValue([
+      { id: 9, username: "someone-else", email: "test@example.com" },
+    ]);
+
+    await expect(
+      service.register({
+        username: "brand-new-user",
+        password: "password123",
+        email: "test@example.com",
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(userRepository.save).not.toHaveBeenCalled();
+  });
+
+  it("maps a racing ER_DUP_ENTRY on save to 409", async () => {
+    roleRepository.findOne.mockResolvedValue(role);
+    userRepository.find.mockResolvedValue([]);
+    userRepository.create.mockReturnValue(persistedUser);
+    const driverError = Object.assign(new Error("ER_DUP_ENTRY"), {
+      code: "ER_DUP_ENTRY",
+      sqlMessage:
+        "Duplicate entry 'test@example.com' for key 'users.IDX_email'",
+    });
+    userRepository.save.mockRejectedValue(
+      new QueryFailedError("INSERT", [], driverError),
+    );
+
+    await expect(
+      service.register({
+        username: "test-user",
+        password: "password123",
+        email: "test@example.com",
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
   });
 
   it("does not return the password hash after login", async () => {
@@ -167,6 +223,8 @@ describe("UserService", () => {
         avatar: true,
         isActive: true,
       },
+      // The eager `role` relation must never ride along into public embeds.
+      loadEagerRelations: false,
     });
   });
 
@@ -186,6 +244,7 @@ describe("UserService", () => {
     expect(users[0]).not.toHaveProperty("email");
     expect(userRepository.find).toHaveBeenCalledWith(
       expect.objectContaining({
+        loadEagerRelations: false,
         select: {
           id: true,
           publicId: true,
@@ -214,6 +273,7 @@ describe("UserService", () => {
         isActive: true,
         email: true,
       },
+      loadEagerRelations: false,
     });
   });
 

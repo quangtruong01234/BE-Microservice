@@ -31,6 +31,33 @@ export class UserService {
   ) {}
 
   /**
+   * The user service returns the eager-loaded `role` entity as-is (`rol_id`,
+   * `rol_slug`, `rol_grants`, `rol_created_by`, …). Those snake_case columns —
+   * and the whole permission matrix — must never reach the HTTP response, so
+   * the boundary reshapes them to a camelCase summary. Only the exposed object
+   * is trimmed: `generateJwtToken` still reads `rol_name`/`rol_grants` off the
+   * raw TCP payload.
+   */
+  private exposeRole(role: unknown): unknown {
+    if (!role || typeof role !== "object") {
+      return role;
+    }
+    const raw = role as {
+      rol_id?: unknown;
+      rol_name?: unknown;
+      rol_slug?: unknown;
+    };
+    if (raw.rol_name === undefined && raw.rol_id === undefined) {
+      return role;
+    }
+    return {
+      id: raw.rol_id ?? null,
+      name: raw.rol_name ?? null,
+      slug: raw.rol_slug ?? null,
+    };
+  }
+
+  /**
    * PUBID-02: the HTTP boundary exposes ONLY the opaque public id (`usr_...`).
    * Replaces the numeric `id` with `publicId` (stringified PK fallback for
    * rows predating the backfill) and drops the internal `publicId` copy.
@@ -39,12 +66,19 @@ export class UserService {
     if (!user || typeof user !== "object") {
       return user;
     }
-    const raw = user as { id?: unknown; publicId?: string | null };
+    const raw = user as {
+      id?: unknown;
+      publicId?: string | null;
+      role?: unknown;
+    };
     const exposed: Record<string, unknown> = {
       ...(user as Record<string, unknown>),
       id: raw.publicId ?? String(raw.id),
     };
     delete exposed.publicId;
+    if ("role" in exposed) {
+      exposed.role = this.exposeRole(raw.role);
+    }
     return exposed;
   }
 

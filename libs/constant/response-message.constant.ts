@@ -41,6 +41,8 @@ export const USER_MESSAGE = {
   INVALID_CREDENTIALS: "Invalid username or password",
   INVALID_OR_EXPIRED_VERIFICATION_CODE: "Invalid or expired verification code",
   NOT_FOUND: "User not found",
+  USERNAME_TAKEN: "Username is already taken",
+  EMAIL_TAKEN: "Email is already registered",
   ADDRESS_NOT_FOUND: "Address not found",
   CANNOT_UPDATE_ANOTHER_USER: "Cannot update another user",
 } as const;

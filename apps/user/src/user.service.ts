@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -10,7 +11,14 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { User } from "./entity/user.entity";
 import { Role, RoleName, RoleStatus } from "./entity/role.entity";
 import { UserAddress } from "./entity/user-address.entity";
-import { DataSource, FindOptionsSelect, In, Repository } from "typeorm";
+import {
+  DataSource,
+  FindOptionsSelect,
+  FindOptionsWhere,
+  In,
+  QueryFailedError,
+  Repository,
+} from "typeorm";
 import { RegisterUserDto } from "./dto/register-user.dto";
 import { LoginUserDto } from "./dto/login-user.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
@@ -87,6 +95,77 @@ export class UserService {
     );
   }
 
+  /**
+   * `username` and `email` are UNIQUE columns. Without this pre-check a taken
+   * value surfaces as a raw QueryFailedError → HTTP 500, so the client cannot
+   * tell the user WHICH field is taken. Not race-proof on its own — the write
+   * paths also map ER_DUP_ENTRY via `duplicateCredentialConflict()`.
+   */
+  private async assertCredentialsAvailable(
+    credentials: { username?: string; email?: string },
+    excludeUserId?: number,
+  ): Promise<void> {
+    const where: FindOptionsWhere<User>[] = [];
+    if (credentials.username) {
+      where.push({ username: credentials.username });
+    }
+    if (credentials.email) {
+      where.push({ email: credentials.email });
+    }
+    if (where.length === 0) {
+      return;
+    }
+    const conflicts = await this.userRepository.find({
+      where,
+      select: { id: true, username: true, email: true },
+      // Existence probe only — no need to join the eager `role` relation.
+      loadEagerRelations: false,
+    });
+    for (const conflict of conflicts) {
+      if (conflict.id === excludeUserId) {
+        continue;
+      }
+      throw new ConflictException(
+        conflict.username === credentials.username
+          ? USER_MESSAGE.USERNAME_TAKEN
+          : USER_MESSAGE.EMAIL_TAKEN,
+      );
+    }
+  }
+
+  /**
+   * Maps a MySQL duplicate-key failure on the users table to a 409, but only
+   * when the duplicated value is the username/email we just tried to write —
+   * `public_id` is unique too and must keep its own error.
+   */
+  private duplicateCredentialConflict(
+    error: unknown,
+    credentials: { username?: string; email?: string },
+  ): ConflictException | null {
+    if (!(error instanceof QueryFailedError)) {
+      return null;
+    }
+    const driverError = error.driverError as
+      | { code?: string; sqlMessage?: string }
+      | undefined;
+    if (driverError?.code !== "ER_DUP_ENTRY") {
+      return null;
+    }
+    const duplicatedValue = /Duplicate entry '(.*)' for key/.exec(
+      driverError.sqlMessage ?? error.message,
+    )?.[1];
+    if (!duplicatedValue) {
+      return null;
+    }
+    if (duplicatedValue === credentials.username) {
+      return new ConflictException(USER_MESSAGE.USERNAME_TAKEN);
+    }
+    if (duplicatedValue === credentials.email) {
+      return new ConflictException(USER_MESSAGE.EMAIL_TAKEN);
+    }
+    return null;
+  }
+
   async register(dto: RegisterUserDto): Promise<SafeUser> {
     this.logger.log(`Register user: ${dto.username}`);
     const defaultRole = await this.roleRepository.findOne({
@@ -97,6 +176,10 @@ export class UserService {
         USER_MESSAGE.DEFAULT_ROLE_NOT_FOUND,
       );
     }
+    await this.assertCredentialsAvailable({
+      username: dto.username,
+      email: dto.email,
+    });
     const hashedPassword = await bcrypt.hash(dto.password, 10);
     const user = this.userRepository.create({
       publicId: generatePublicId(PUBLIC_ID_PREFIXES.USER),
@@ -105,8 +188,19 @@ export class UserService {
       password: hashedPassword,
       role: defaultRole,
     });
-    const saved = await this.userRepository.save(user);
-    return this.toSafeUser(saved);
+    try {
+      const saved = await this.userRepository.save(user);
+      return this.toSafeUser(saved);
+    } catch (error: unknown) {
+      const conflict = this.duplicateCredentialConflict(error, {
+        username: dto.username,
+        email: dto.email,
+      });
+      if (conflict) {
+        throw conflict;
+      }
+      throw error;
+    }
   }
 
   async login(dto: LoginUserDto): Promise<SafeUser> {
@@ -241,7 +335,14 @@ export class UserService {
     if (includeEmail) {
       select.email = true;
     }
-    return await this.userRepository.findOne({ where: { id: userId }, select });
+    // `role` is an EAGER relation: a column `select` does not stop TypeORM from
+    // joining it, so without this the whole role entity (incl. `rol_grants`)
+    // rides along into every user embed built from this pattern.
+    return await this.userRepository.findOne({
+      where: { id: userId },
+      select,
+      loadEagerRelations: false,
+    });
   }
 
   async getUsersByIds(
@@ -261,9 +362,11 @@ export class UserService {
     if (includeEmail) {
       select.email = true;
     }
+    // See getInfo(): the eager `role` relation must be opted out explicitly.
     const users = await this.userRepository.find({
       where: { id: In(userIds) },
       select,
+      loadEagerRelations: false,
     });
     if (!includeProvince) return users;
     // The default address defines where the seller ships from — that province
@@ -363,10 +466,25 @@ export class UserService {
     if (!user) {
       throw new NotFoundException(USER_MESSAGE.NOT_FOUND);
     }
+    // `email` is UNIQUE — same 409-not-500 contract as register.
+    if (dto.email && dto.email !== user.email) {
+      await this.assertCredentialsAvailable({ email: dto.email }, userId);
+    }
     // Capture before Object.assign overwrites avatar on the same instance.
     const previousAvatar = user.avatar;
     Object.assign(user, dto);
-    const saved = await this.userRepository.save(user);
+    let saved: User;
+    try {
+      saved = await this.userRepository.save(user);
+    } catch (error: unknown) {
+      const conflict = this.duplicateCredentialConflict(error, {
+        email: dto.email,
+      });
+      if (conflict) {
+        throw conflict;
+      }
+      throw error;
+    }
     // SEC-M7: a replaced avatar is orphaned on Cloudinary once the update
     // commits. Fire-and-forget — destroyAssets never throws.
     if (previousAvatar && previousAvatar !== saved.avatar) {
