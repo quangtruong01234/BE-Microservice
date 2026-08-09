@@ -23,7 +23,7 @@ import {
   VOUCHER_MESSAGE,
 } from "libs/constant/response-message.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
-import { isPublicId, PaymentMethod } from "@app/common";
+import { isPublicId, PaginatedResponse, PaymentMethod } from "@app/common";
 import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 import { CreateOrderDto } from "./dto/create-order.dto";
 import { CreateVoucherDto, ValidateVoucherDto } from "./dto/voucher.dto";
@@ -45,6 +45,7 @@ import {
   UserSummary,
 } from "./order.types";
 import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
+import { OrderStatusValue } from "libs/constant/order-status.constant";
 
 export abstract class BaseAggregatorService {
   protected logger = new Logger(BaseAggregatorService.name);
@@ -786,6 +787,7 @@ export class OrderService {
     limit: number,
     callerId: number,
     callerRole: string,
+    status?: OrderStatusValue[],
   ): Promise<{
     data: unknown[];
     total: number;
@@ -802,6 +804,7 @@ export class OrderService {
           userId: internalUserId,
           page,
           limit,
+          status: status?.length ? status : undefined,
         })
         .pipe(
           timeout(TCP_TIMEOUT_MS.READ),
@@ -953,6 +956,9 @@ export class OrderService {
             // Lets payments re-issue the checkout URL when a previous attempt
             // saved the row but failed before persisting the gateway URL.
             paymentMethod: order.paymentMethod,
+            // Only the provider return URL needs it: the FE deep-links back
+            // with `?order=`, which HTTP resolves as a public id.
+            publicOrderId: order.publicId ?? null,
           })
           .pipe(
             timeout(TCP_TIMEOUT_MS.WRITE),
@@ -970,18 +976,22 @@ export class OrderService {
     }
   }
 
+  /**
+   * PRODTEST-0806: returns the standard `PaginatedResponse` envelope — it used
+   * to drop `totalPages`/`hasNext` that every sibling list route provides.
+   */
   async getAdminOrders(
     page: number,
     limit: number,
-  ): Promise<{
-    data: Record<string, unknown>[];
-    total: number;
-    page: number;
-    limit: number;
-  }> {
+    status?: OrderStatusValue[],
+  ): Promise<PaginatedResponse<Record<string, unknown>>> {
     const result = (await firstValueFrom(
       this.ordersClient
-        .send(ORDER_MESSAGE_PATTERN.GET_ALL_ORDERS, { page, limit })
+        .send(ORDER_MESSAGE_PATTERN.GET_ALL_ORDERS, {
+          page,
+          limit,
+          status: status?.length ? status : undefined,
+        })
         .pipe(
           timeout(TCP_TIMEOUT_MS.READ),
           catchError((err: unknown) => {
@@ -1040,17 +1050,16 @@ export class OrderService {
       buyer: buyerMap.get(Number(order.userId)) ?? null,
     }));
 
-    return (await this.exposeUserReferences({
-      data,
-      total: result.total,
-      page: result.page,
-      limit: result.limit,
-    })) as {
-      data: Record<string, unknown>[];
-      total: number;
-      page: number;
-      limit: number;
-    };
+    const exposedOrders = (await this.exposeUserReferences(data)) as Record<
+      string,
+      unknown
+    >[];
+    return PaginatedResponse.of(
+      exposedOrders,
+      result.total,
+      result.page ?? page,
+      result.limit ?? limit,
+    );
   }
 
   async getAdminGhnOrders(query: AdminGhnOrdersQueryDto): Promise<

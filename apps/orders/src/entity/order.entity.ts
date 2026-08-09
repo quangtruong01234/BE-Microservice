@@ -9,6 +9,7 @@ import {
 } from "typeorm";
 import { OrderItem } from "./order_item.entity";
 import { PaymentMethod, decimalToNumber } from "@app/common";
+import { OrderStatusValue } from "libs/constant/order-status.constant";
 
 export enum OrderStatus {
   PENDING = "pending",
@@ -21,6 +22,15 @@ export enum OrderStatus {
   RETURN_REQUESTED = "return_requested",
   REFUNDED = "refunded",
 }
+
+// The gateway validates status filters against ORDER_STATUS_VALUES and cannot
+// import this enum (cross-app). This resolves to `never` — and fails the build
+// — if a status is added here without being added to that list, which would
+// otherwise make the new status silently un-filterable (400 on a status the API
+// itself returns).
+type EveryStatusIsShared = OrderStatus extends OrderStatusValue ? true : never;
+const ORDER_STATUS_VALUES_ARE_COMPLETE: EveryStatusIsShared = true;
+void ORDER_STATUS_VALUES_ARE_COMPLETE;
 
 // PERF-04: hot read-path indexes — buyer list (user_id), seller list
 // (seller_id), analytics window scans + stale-reservation sweeper

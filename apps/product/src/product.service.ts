@@ -1508,6 +1508,7 @@ export class ProductService {
         }
       }
 
+      let nextBrand: Brand | undefined;
       if (updateProductDto.brandId) {
         const brand = await manager.findOne(Brand, {
           where: { id: updateProductDto.brandId },
@@ -1518,6 +1519,7 @@ export class ProductService {
         if (brand.status !== "active") {
           throw new BadRequestException(PRODUCT_MESSAGE.BRAND_NOT_APPROVED);
         }
+        nextBrand = brand;
       }
 
       // categoryIds is applied through the relation, skuList in its own
@@ -1528,6 +1530,17 @@ export class ProductService {
       delete rest.skuList;
       delete rest.version;
       Object.assign(product, rest);
+
+      // The entity was loaded with its `brand` relation, and TypeORM writes
+      // brand_id from that relation — so the FK column alone never decides the
+      // saved value. Clearing needs the relation dropped (otherwise the old
+      // brand is saved straight back), and setting needs it refreshed
+      // (otherwise a stale/null relation overwrites the new brandId).
+      if (updateProductDto.brandId === null) {
+        product.brand = undefined;
+      } else if (nextBrand) {
+        product.brand = nextBrand;
+      }
 
       // The SKU diff runs in its own transaction after this one commits, but
       // its tierIdx values must be coherent with the variation axes written

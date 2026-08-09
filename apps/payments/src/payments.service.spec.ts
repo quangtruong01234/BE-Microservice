@@ -106,7 +106,7 @@ describe("PaymentsService payment return URLs", () => {
     return { service, createPayment };
   }
 
-  it("uses the frontend result route for a single VNPay order", async () => {
+  it("deep-links the return URL with the public order id, not the PK", async () => {
     process.env.FRONTEND_URL = "https://shop.example.com";
     const { service, createPayment } = createService();
 
@@ -115,13 +115,33 @@ describe("PaymentsService payment return URLs", () => {
       3900,
       "Payment for order 111",
       PaymentMethodEnum.VNPAY,
+      "ord_abcdefghijklmnop",
     );
 
     expect(createPayment).toHaveBeenCalledWith({
       id: "111",
       total: 3900,
       returnUrl:
-        "https://shop.example.com/payment-result?order=111&method=vnpay",
+        "https://shop.example.com/payment-result?order=ord_abcdefghijklmnop&method=vnpay",
+    });
+  });
+
+  it("omits order from the return URL when the order has no public id", async () => {
+    process.env.FRONTEND_URL = "https://shop.example.com";
+    const { service, createPayment } = createService();
+
+    await service.processPayment(
+      "111",
+      3900,
+      "Payment for order 111",
+      PaymentMethodEnum.VNPAY,
+      null,
+    );
+
+    expect(createPayment).toHaveBeenCalledWith({
+      id: "111",
+      total: 3900,
+      returnUrl: "https://shop.example.com/payment-result?method=vnpay",
     });
   });
 
@@ -153,13 +173,14 @@ describe("PaymentsService payment return URLs", () => {
         3900,
         "Payment for order 111",
         PaymentMethodEnum.VNPAY,
+        "ord_abcdefghijklmnop",
       );
 
       expect(createPayment).toHaveBeenCalledWith({
         id: "111",
         total: 3900,
         returnUrl:
-          "http://localhost:5173/payment-result?order=111&method=vnpay",
+          "http://localhost:5173/payment-result?order=ord_abcdefghijklmnop&method=vnpay",
       });
     },
   );
@@ -203,9 +224,21 @@ describe("PaymentsService getPaymentUrl recovery", () => {
       orderUrl: null,
     });
 
-    const result = await service.getPaymentUrl(120, PaymentMethodEnum.VNPAY);
+    process.env.FRONTEND_URL = "https://shop.example.com";
+    const result = await service.getPaymentUrl(
+      120,
+      PaymentMethodEnum.VNPAY,
+      "ord_abcdefghijklmnop",
+    );
 
+    // The recovery path must deep-link the same way the create path does.
     expect(createPayment).toHaveBeenCalledTimes(1);
+    expect(createPayment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        returnUrl:
+          "https://shop.example.com/payment-result?order=ord_abcdefghijklmnop&method=vnpay",
+      }),
+    );
     expect(update).toHaveBeenCalledWith(
       { orderId: 120 },
       expect.objectContaining({ orderUrl: "https://gateway.example/pay" }),

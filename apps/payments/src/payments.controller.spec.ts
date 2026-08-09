@@ -73,8 +73,32 @@ describe("PaymentsController", () => {
       100,
       "Payment for order 102",
       PaymentMethod.VNPAY,
+      undefined,
     );
     expect(ack).toHaveBeenCalledTimes(1);
+  });
+
+  // The return URL deep-links the FE back to the order, and PUBID-01 only
+  // accepts the opaque id there — so the event's publicId has to reach the
+  // service, not just the numeric PK.
+  it("forwards the public order id from the order_created event", async () => {
+    await paymentsController.handleOrderCreated(
+      {
+        id: 102,
+        publicId: "ord_abcdefghijklmnop",
+        total: 100,
+        paymentMethod: PaymentMethod.VNPAY,
+      },
+      {} as RmqContext,
+    );
+
+    expect(processPayment).toHaveBeenCalledWith(
+      "102",
+      100,
+      "Payment for order 102",
+      PaymentMethod.VNPAY,
+      "ord_abcdefghijklmnop",
+    );
   });
 
   it("nacks and requeues when payment processing fails", async () => {

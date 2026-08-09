@@ -118,12 +118,19 @@ export class OrdersController {
 
   @MessagePattern("get_orders_by_user")
   async getOrdersByUser(
-    @Payload() payload: { userId: number; page: number; limit: number },
+    @Payload()
+    payload: {
+      userId: number;
+      page: number;
+      limit: number;
+      status?: OrderStatus[];
+    },
   ) {
     return await this.ordersService.getOrdersByUser(
       payload.userId,
       payload.page,
       payload.limit,
+      payload.status,
     );
   }
 
@@ -143,9 +150,13 @@ export class OrdersController {
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.GET_ALL_ORDERS)
   async getAllOrders(
-    @Payload() payload: { page: number; limit: number },
+    @Payload() payload: { page: number; limit: number; status?: OrderStatus[] },
   ): Promise<unknown> {
-    return this.ordersService.getAllOrders(payload.page, payload.limit);
+    return this.ordersService.getAllOrders(
+      payload.page,
+      payload.limit,
+      payload.status,
+    );
   }
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.ADMIN_GHN_ORDERS)

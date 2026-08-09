@@ -590,24 +590,37 @@ export class ProductService {
     return { items: enrichedProducts, total, page, limit };
   }
 
-  async getAllProducts(query: GetProductsQueryDto): Promise<unknown> {
+  /**
+   * PRODTEST-0806: this route used to return a BARE array while every sibling
+   * catalog list (`/products/category/:id`, `/products/brand/:id`, search)
+   * returned the standard envelope. It now returns `PaginatedResponse` too, so
+   * the FE reads `data`/`total`/`totalPages`/`hasNext` uniformly.
+   */
+  async getAllProducts(
+    query: GetProductsQueryDto,
+  ): Promise<PaginatedResponse<ProductData>> {
     try {
       const cacheKey = this.buildListCacheKey(query);
       const cachedResponse = await this.readPublicCache(cacheKey);
       if (cachedResponse !== null) {
-        return cachedResponse;
+        return cachedResponse as PaginatedResponse<ProductData>;
       }
 
       this.logger.log(
         `Fetching all products with query: ${JSON.stringify(query)}`,
       );
 
-      const { items } = await this.fetchProductsPage(query);
+      const { items, total, page, limit } = await this.fetchProductsPage(query);
 
       this.logger.log(`Found ${items.length} products with user info`);
-      const exposedProducts = await this.exposeProductReferences(items);
-      await this.writePublicCache(cacheKey, exposedProducts);
-      return exposedProducts;
+      const paginatedProducts = PaginatedResponse.of(
+        (await this.exposeProductReferences(items)) as ProductData[],
+        total,
+        page,
+        limit,
+      );
+      await this.writePublicCache(cacheKey, paginatedProducts);
+      return paginatedProducts;
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,

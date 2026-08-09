@@ -892,9 +892,10 @@ export class OrdersService {
     userId: number,
     page: number = 1,
     limit: number = 10,
+    status?: OrderStatus[],
   ): Promise<PaginatedResponse<Order>> {
     const [data, total] = await this.orderRepository.findAndCount({
-      where: { userId },
+      where: { userId, ...(status?.length ? { status: In(status) } : {}) },
       relations: ["items"],
       order: { createdAt: "DESC" },
       skip: (page - 1) * limit,
@@ -1106,8 +1107,10 @@ export class OrdersService {
   async getAllOrders(
     page: number = 1,
     limit: number = 10,
+    status?: OrderStatus[],
   ): Promise<PaginatedResponse<Order>> {
     const [data, total] = await this.orderRepository.findAndCount({
+      ...(status?.length ? { where: { status: In(status) } } : {}),
       relations: ["items"],
       order: { createdAt: "DESC" },
       skip: (page - 1) * limit,

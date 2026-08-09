@@ -114,19 +114,25 @@ describe("ProductService ownership", () => {
       ]),
     );
 
-    const products = (await service.getAllProducts({
+    const paginatedProducts = (await service.getAllProducts({
       page: 1,
       limit: 5,
-    })) as Array<{
-      user: Record<string, unknown> | null;
-    }>;
+    })) as unknown as {
+      data: Array<{ user: Record<string, unknown> | null }>;
+      total: number;
+      totalPages: number;
+      hasNext: boolean;
+    };
 
-    expect(products[0].user).toEqual({
+    expect(paginatedProducts.total).toBe(1);
+    expect(paginatedProducts.totalPages).toBe(1);
+    expect(paginatedProducts.hasNext).toBe(false);
+    expect(paginatedProducts.data[0].user).toEqual({
       id: "usr_1111111111111111",
       name: "Seller 20",
       avatar: "avatar.jpg",
     });
-    expect(products[0].user).not.toHaveProperty("email");
+    expect(paginatedProducts.data[0].user).not.toHaveProperty("email");
   });
 
   it("uses an explicit product SKU when creating the base inventory row", async () => {

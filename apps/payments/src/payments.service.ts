@@ -40,6 +40,7 @@ export class PaymentsService {
     amount: number,
     description: string,
     paymentMethod: PaymentMethodEnum,
+    publicOrderId?: string | null,
   ): Promise<{
     paymentUrl: string;
     transactionId: string;
@@ -69,7 +70,12 @@ export class PaymentsService {
         this.logger.warn(
           `[PAYMENTS] Duplicate orderId ${orderId} without an order URL — regenerating`,
         );
-        return this.issueGatewayPaymentUrl(orderId, amount, paymentMethod);
+        return this.issueGatewayPaymentUrl(
+          orderId,
+          amount,
+          paymentMethod,
+          publicOrderId,
+        );
       }
 
       const payment = this.paymentRepository.create({
@@ -80,7 +86,12 @@ export class PaymentsService {
       await this.paymentRepository.save(payment);
       this.logger.log("[PAYMENTS] payment record saved");
 
-      return await this.issueGatewayPaymentUrl(orderId, amount, paymentMethod);
+      return await this.issueGatewayPaymentUrl(
+        orderId,
+        amount,
+        paymentMethod,
+        publicOrderId,
+      );
     } catch (err: unknown) {
       this.logger.error("[PAYMENTS] processPayment failed", err);
       throw err;
@@ -96,6 +107,7 @@ export class PaymentsService {
     orderId: string,
     amount: number,
     paymentMethod: PaymentMethodEnum,
+    publicOrderId?: string | null,
   ): Promise<{
     paymentUrl: string;
     transactionId: string;
@@ -106,7 +118,10 @@ export class PaymentsService {
       .createPayment({
         id: orderId,
         total: amount,
-        returnUrl: this.buildFrontendPaymentResultUrl(paymentMethod, orderId),
+        returnUrl: this.buildFrontendPaymentResultUrl(
+          paymentMethod,
+          publicOrderId,
+        ),
       });
     this.logger.log("[PAYMENTS] createPayment done, appTransId=" + appTransId);
 
@@ -286,6 +301,7 @@ export class PaymentsService {
   async getPaymentUrl(
     orderId: number,
     paymentMethod?: PaymentMethodEnum,
+    publicOrderId?: string | null,
   ): Promise<{ orderUrl: string | null; status: string | null }> {
     let payment = await this.paymentRepository.findOne({
       where: { orderId },
@@ -303,6 +319,7 @@ export class PaymentsService {
           String(orderId),
           Number(payment.amount),
           paymentMethod,
+          publicOrderId,
         );
         return { orderUrl: paymentUrl, status: payment.status };
       }
@@ -337,9 +354,15 @@ export class PaymentsService {
     }));
   }
 
+  /**
+   * The `order` query param is a deep link the FE feeds straight back into
+   * `GET /api/order/:id`, which under PUBID-01 only accepts the opaque public
+   * id — a numeric one is rejected with 400. So the param carries the public
+   * id or nothing at all; never the internal PK.
+   */
   private buildFrontendPaymentResultUrl(
     paymentMethod: PaymentMethodEnum,
-    orderId?: string,
+    publicOrderId?: string | null,
   ): string {
     const configuredOrigin = (process.env.FRONTEND_URL ?? "")
       .split(",")[0]
@@ -367,8 +390,8 @@ export class PaymentsService {
       );
       url = new URL("/payment-result", DEFAULT_FRONTEND_URL);
     }
-    if (orderId) {
-      url.searchParams.set("order", orderId);
+    if (publicOrderId) {
+      url.searchParams.set("order", publicOrderId);
     }
     url.searchParams.set("method", paymentMethod);
     return url.toString();

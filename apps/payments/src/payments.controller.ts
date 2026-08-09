@@ -49,6 +49,10 @@ export class PaymentsController {
     @Payload()
     order: {
       id: number;
+      // PUBID-01: the opaque order id the FE deep-links with. Published as part
+      // of the order row in `order_created`; only the payment return URL uses
+      // it — every other payments path stays on the numeric PK.
+      publicId?: string | null;
       total: number;
       paymentMethod?: PaymentMethod;
       isMultiSellerCheckout?: boolean;
@@ -82,6 +86,7 @@ export class PaymentsController {
         order.total,
         `Payment for order ${order.id}`,
         order.paymentMethod,
+        order.publicId,
       );
       this.rmqService.ack(context);
     } catch (error: unknown) {
@@ -98,9 +103,18 @@ export class PaymentsController {
 
   @MessagePattern("get_payment_url")
   getPaymentUrl(
-    @Payload() data: { orderId: number; paymentMethod?: PaymentMethod },
+    @Payload()
+    data: {
+      orderId: number;
+      paymentMethod?: PaymentMethod;
+      publicOrderId?: string | null;
+    },
   ): Promise<{ orderUrl: string | null; status: string | null }> {
-    return this.paymentsService.getPaymentUrl(data.orderId, data.paymentMethod);
+    return this.paymentsService.getPaymentUrl(
+      data.orderId,
+      data.paymentMethod,
+      data.publicOrderId,
+    );
   }
 
   @MessagePattern(PAYMENT_MESSAGE_PATTERN.GET_PAYMENT_OPTIONS)

@@ -67,7 +67,14 @@ export class OrderController {
   async getAdminOrders(
     @Query(ValidationPipe) query: GetOrdersByUserQueryDto,
   ): Promise<unknown> {
-    return this.orderService.getAdminOrders(query.page ?? 1, query.limit ?? 20);
+    return this.orderService.getAdminOrders(
+      query.page ?? 1,
+      // Matches the DTO default — ValidationPipe fills `limit` before this
+      // runs, so a mismatched fallback here is dead code that misreads as the
+      // real default.
+      query.limit ?? 10,
+      query.status,
+    );
   }
 
   @Get("admin/ghn/orders")
@@ -653,6 +660,7 @@ export class OrderController {
       query.limit ?? 10,
       callerId,
       callerRole,
+      query.status,
     );
   }
 
