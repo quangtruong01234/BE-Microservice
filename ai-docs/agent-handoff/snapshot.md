@@ -37,6 +37,10 @@ reward_points, shipping_history, voucher_redemptions.
 
 ## Active Tasks
 
+> **Awaiting prod deploy** (done in the working tree, not yet merged to `main`):
+> RESIL-01 (GHN breaker + error mapping), RETURN-STOCK-01 (approve-return now
+> restocks). Merging to `main` releases both — see CD-04.
+
 ### SOCIAL-502 follow-up — roll the transport retry out beyond social (optional)
 
 `retryOnTransportError()` (`apps/gateway/src/common/exception/transport-error.ts`)
@@ -58,18 +62,22 @@ Nine real defects, none of them blockers. The first three (duplicate register �
 (commit `b0e982d`), DEPLOYED AND VERIFIED ON PROD — see `CHANGELOG.md`
 2026-08-06. Six remain, ordered by impact:
 
-1. **GHN failures surface as opaque 500/502.** `ghn.service.ts:119`
-   `createShippingOrder()` posts via axios with no catch, so a non-2xx GHN
-   response throws AxiosError *before* the `GHN_MESSAGE.CREATE_ERROR(...)`
-   branch. Seller sees "Internal server error"; the real reason ("context
-   deadline exceeded", "Trạng thái đơn hàng không hợp lệ") is only in shipping
-   history. Fix: catch and map `response.data.message`.
+1. ~~**GHN failures surface as opaque 500/502.**~~ FIXED 2026-08-10 by RESIL-01
+   (not yet deployed) — every GHN call is mapped: refusal → 400 with GHN's own
+   message, outage/401/403/429 → 503, plus a circuit breaker. See `CHANGELOG.md`
+   "RESIL-01".
 2. **Order create swallows a waybill failure**: order is created with
    `ghnOrderCode:null`, then `ready-to-ship` hard-fails 502 and the order can
    only be canceled. Either fail the create or make ready-to-ship re-create.
-3. **Our own address proxy can yield unshippable selections**: district 1534 /
-   ward 22306 (Huyện Nhà Bè) → GHN error → 502, reproduced 3×; district 1442 /
-   ward 20110 works. `/api/shipping/wards` should not offer what GHN rejects.
+3. ~~**Our own address proxy can yield unshippable selections**~~ — LIKELY
+   MISDIAGNOSED, re-probed 2026-08-10. The recorded reproducer (district 1534 /
+   ward 22306, Huyện Nhà Bè) now returns `201` with a fee on BOTH local and
+   **prod** (2 prod calls, different weights/prices, on the pre-RESIL-01 build),
+   so the 3 failures on 2026-08-06 were a transient GHN sandbox outage reported
+   as an opaque 502 — i.e. defect #1, not a bad ward. Do not spend time
+   filtering `/api/shipping/wards`. After RESIL-01 deploys, the same symptom
+   self-classifies: `503` ⇒ GHN was down (expected, retry), `400` + GHN's
+   message ⇒ the ward really is unshippable and only then is this a real defect.
 4. **Numeric internal ids still leak on PUBID domains**: `stock-check.productId`,
    return-request `reviewedBy`, moderation `moderatorId`/`actorId`/`submittedBy`,
    analytics `topProducts[].productId`, wishlist `id`, review-create `userId`,
@@ -89,6 +97,44 @@ Observations (not defects): `/ready` reports `database:not_configured` and
 deleted) rather than an empty cart. The `shippingFee: 0` observation is CLOSED —
 the GHN dev gateway returns zero for every destination/weight on both fee
 endpoints; see `ops-runtime.md` → GHN.
+
+### RESIL-01..03 — resilience patterns borrowed from a flash-sale reference (2026-08-10)
+
+Reviewed a high-concurrency flash-sale/seckill reference architecture against
+this codebase. Most of what it prescribes ALREADY EXISTS here — do not re-open
+these: idempotency key (`order.service.ts` Redis `SET NX`, 24h replay, 409 on
+concurrent double-submit), oversell protection (`inventory.service.ts`
+`pessimistic_write` + reservation ledger keyed by `reservationKey`), SAGA
+compensation (`releaseReservedItems()` on every failure path), rate limiting
+(`CustomRateLimitGuard`, Redis Lua window, fail-closed in prod), load-test
+baselines (`scripts/load/baseline.mjs`). Three real gaps are worth closing, in
+this order:
+
+- **RESIL-01 — circuit breaker + error mapping around GHN — DONE 2026-08-10,
+  NOT YET DEPLOYED.** See `CHANGELOG.md`. The reusable breaker now lives at
+  `libs/common/src/resilience/circuit-breaker.ts` (exported from `@app/common`);
+  it is deliberately in-process, so with multiple instances each learns an
+  outage on its own. GHN is currently its only consumer — reuse it for any other
+  outbound third-party integration rather than writing a second one.
+- **RESIL-02 — transactional outbox for `order_created`.** Publish happens
+  AFTER commit and outside any transaction (`orders.service.ts` ~:250). If RMQ
+  is down: non-COD cancels the order (correct), but **COD only logs a warn** —
+  the order exists while inventory/rewards/notification never hear about it.
+  Worse, the multi-seller path (~:660) warns for EVERY payment method, so it is
+  asymmetric with the single-seller path. Outbox table + poller fixes both.
+- **RESIL-03 — Prometheus metrics.** `prom-client` is not installed and no
+  `/metrics` route exists; only `/live` + `/ready` (and `/ready` reports
+  `database:not_configured`, so it stays green regardless). 10 services on an
+  Aiven free tier with a ~76-connection wall is flying blind.
+
+Deliberately NOT doing (decided, do not re-propose): full DDD refactor (huge
+diff, zero behaviour change); async order placement via queue (breaks the
+synchronous checkout contract the FE depends on for `paymentUrl`/`orderUrl`);
+Kafka replacing RabbitMQ (hybrid TCP/RMQ was settled 2026-06-30); stock
+bucketing. **Gated:** Redis pre-deduct stock via atomic Lua — the real seckill
+core, and the fix for reserve serializing on a hot row lock, but only if a real
+flash-sale event is planned. Second tier of local cache in front of Redis is
+also open but only safe for brand/category (multi-instance staleness).
 
 ### PROD-PAY-02 — inbound VNPay IPN: one real end-to-end payment still owed
 
@@ -272,6 +318,8 @@ across ALL services; true 10k sustained likely needs a bigger VPS/Aiven tier.
   discrimination reads `error.driverError.detail`, not `error.message`.
 - Product PATCH optimistic locking: `version` is opt-in; background writers
   bump it; 409 = "reload and re-apply".
+- Approved return restocks via `inventory.restock_returned`, NOT a release; new
+  terminal ledger state `RETURNED`; the restock is non-fatal to the refund.
 - Buyer cancel: GHN cancel is detached (2×5s); both fail → live waybill
   remains, remedy = admin GHN cancel.
 - Array query params: `?categoryIds[]=` → 400; use repeated keys or scalar.

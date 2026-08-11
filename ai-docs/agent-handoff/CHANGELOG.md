@@ -6,6 +6,114 @@
 
 ## Completed Milestones
 
+- **RETURN-STOCK-01 — approving a return never restocked inventory (2026-08-11).**
+  Reported by FE from prod: `prod_BWg2OVHUlmrlEfP5` sat at 48 units after an
+  approved return of 2 units (order `refunded`, `refundStatus: "refunded"`,
+  `reservedStock: 0`), while a cancel on the same product restocked correctly.
+  - **Root cause:** `approveReturnRequest` called `releaseReservedItems()`, which
+    routes to `transitionReservation()` in `apps/inventory/src/inventory.service.ts`.
+    That method opens with `if (reservation.status !== RESERVED) return false;`.
+    An order that reached COMPLETED has had its reservation **CONSUMED**, so the
+    release matched nothing and returned `false` — silently, because the caller
+    only logged. Cancel worked precisely because a cancelable order (PENDING/
+    CONFIRMED/PROCESSING) still holds a RESERVED row. The old code even carried a
+    comment calling the release "a safe no-op"; it was a no-op, but not safe —
+    the seller lost the units permanently.
+  - **Fix:** a distinct operation, not a widened release. New
+    `InventoryService.restockReturnedStock()` credits `availableStock` under the
+    same `pessimistic_write` lock from *whatever* state the reservation reached,
+    and stamps the row `RETURNED` so a replay cannot credit twice. From
+    `RESERVED` (return approved while DELIVERING) it also drops the hold; from
+    `RELEASED` it stamps RETURNED without crediting; from `RETURNED` it is a
+    no-op. Exposed as TCP `inventory.restock_returned`
+    (`INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESTOCK_RETURNED`) and called from a
+    new `restockReturnedItems()` in `orders.service.ts`, which is non-fatal by
+    design — a stock write must not sink an approved refund — but logs every
+    rejection/failure so a shortfall is greppable.
+  - **No migration.** `inventory_reservations.status` is a plain `VARCHAR(20)`
+    with no PG enum or CHECK constraint (see
+    `database/prod-baseline-20260717/nodeB-postgresql-baseline.sql:14`), so the
+    new `RETURNED` value needs no schema change — which is why prod can take
+    this as a code-only deploy.
+  - **Verified.** `tsc --noEmit` clean, eslint/prettier clean on all 5 changed
+    files, `npx jest` → 30 suites / 259 tests green, including 3 new ones in
+    `inventory.service.spec.ts` — one of which asserts `releaseStock` resolves
+    `false` on a consumed reservation, pinning the exact defect. End-to-end on
+    localhost against `prod_ffc7fc2281d211f1` (baseline 100/0): order
+    `ord_8Fvn64OUDUPJWICa` (3 units, COD, GHN waybill `L89XUX`) driven confirm →
+    ready-to-ship → ship → deliver → complete gave `availableStock: 97,
+    reservedStock: 0` (the exact prod state); return `rr_QuBq7lkAs17cfPBZ` →
+    approve → **`availableStock: 100`**; replay approve → 400 "already been
+    reviewed" with stock still 100; product mirror `stockQuantity: 100` (the
+    `inventory.stock_changed` fanout propagated).
+  - **Blast radius checked:** `InventoryReservationStatus` is used only inside
+    `inventory.service.ts`; a RETURNED row makes any later release/consume fail
+    safe. `cancelOrder` admits only PENDING/CONFIRMED/PROCESSING, so a REFUNDED
+    order can never re-enter the release path via `order_canceled`.
+    `sweepStaleReservations` filters on those same three statuses plus
+    `ghnOrderCode IS NULL`, so it cannot touch a returned order. Returns are
+    only openable from DELIVERING or COMPLETED — both states are covered by a
+    unit test.
+  - Residual behaviours recorded in `ai-docs/agent-context/known-behaviors.md`.
+
+- **RESIL-01 — circuit breaker + GHN error mapping (2026-08-10).** Closes
+  PRODTEST-0806 defect #1. Every outbound GHN call in `apps/orders/src/ghn/
+  ghn.service.ts` posted via axios with no catch, so a non-2xx GHN reply threw a
+  raw AxiosError *before* the `GHN_MESSAGE.*_ERROR` branch could run — the seller
+  got "Internal server error" (or a gateway 502 when the TCP timeout fired
+  first), and GHN's actual reason ("Trạng thái đơn hàng không hợp lệ", "context
+  deadline exceeded") survived only in shipping history and logs.
+  - **New shared primitive:** `libs/common/src/resilience/circuit-breaker.ts`,
+    exported from `@app/common`. Hand-rolled rather than adding `opossum` — ~150
+    lines, no new dependency, and the project rule is to search `libs/` first.
+    CLOSED → OPEN after N consecutive qualifying failures → HALF_OPEN after
+    `openDurationMs`, where exactly ONE trial call probes the dependency (the
+    trial flag is captured per-call so a CLOSED-path call cannot clear it) and
+    closes the circuit on success / reopens it on failure. In-process by design:
+    one instance per protected dependency, held as a field by the owning service.
+    With multiple instances each learns the outage independently — acceptable,
+    because the goal is shedding load, not global consensus.
+  - **Failure discrimination is the whole trick.** `isFailure` is what keeps a
+    shared integration safe: an outage is "GHN did not answer" (timeout / DNS /
+    ECONNREFUSED) or answered 5xx, **plus** the operational faults `401/403`
+    (our token is broken) and `429` (GHN is rate-limiting us) — none of which a
+    caller can fix by retrying with different input. Any other 4xx is GHN
+    rejecting THAT request (bad address, waybill in the wrong state) and must
+    NOT count, or one seller's malformed address would open the circuit for
+    every other seller.
+  - **Mapping:** `callGhn()` wraps ONLY the transport call — never the response
+    validation that follows it, so a domain rejection we raise ourselves never
+    counts toward the threshold. `toGhnDomainError()` then maps GHN refusal →
+    `400` carrying `response.data.message`, outage → `503`, and an open circuit →
+    `503 "GHN is temporarily unavailable; retry in <n>s"`. Applied to
+    `createShippingOrder`, `previewShippingFee`, `switchOrderStatus`,
+    `postOrderMutation` (updateCOD/updateReceiver — these went from always-500 to
+    400/503), `getOrderDetail`, and the three master-data getters behind the
+    public `/api/shipping/*` dropdowns. `getOrderDetail` gained an early
+    `instanceof HttpException` rethrow so an open circuit is not misreported as
+    "waybill not found". New `GHN_MESSAGE.MASTER_DATA_ERROR` / `CIRCUIT_OPEN`.
+  - **Blast radius checked:** all five other `createShippingOrder` callers
+    already catch-all (COD create, payment_completed, multi-seller) except
+    `ready-to-ship`, which deliberately propagates — that path now returns an
+    actionable 400/503 instead of an opaque 502, which also softens (not closes)
+    PRODTEST-0806 defect #2. Gateway `MicroserviceErrorHandler` passes any
+    `statusCode` through generically, so 503 reaches the client; the envelope
+    `error` field still reads `"HttpException"` (defect #5, unchanged).
+  - **Verified:** `tsc --noEmit` clean, eslint clean, 16/16 new tests
+    (`circuit-breaker.spec.ts` 7 + `ghn.service.spec.ts` 9), existing
+    `orders.service.spec.ts` 43/43 green. Live against the GHN sandbox:
+    nonexistent district/ward → `400 "GHN preview error: phường/xã người nhận
+    không tồn tại trong hệ thống"` (was a 500), happy path `1442/20110`
+    unchanged at `201`. The outage/circuit legs are covered by mocked-transport
+    tests — a real GHN outage cannot be forced against the sandbox, and
+    `local/nodeA/.env` is permission-blocked so the base URL could not be
+    pointed at a blackhole. Note the snapshot's recorded prod reproducer
+    (district 1534 / ward 22306, Huyện Nhà Bè) did NOT reproduce locally —
+    it returned a successful fee, so PRODTEST-0806 defect #3 needs re-checking
+    on prod rather than being assumed still live.
+  - FE handoff written to both `frontend-handoff.md` (checkout shipping-fee +
+    address dropdowns) and `frontend-handoff-ghn.md` (admin GHN actions).
+
 - **SOCIAL-502 — intermittent 502 on `GET /api/social/posts` root-caused and
   fixed (2026-08-09).** FE reported a 502 followed by a 200 on the immediate
   retry, same params/session, on a one-user dev box. **Root cause is a race in

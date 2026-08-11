@@ -190,3 +190,26 @@ answer a dropped/refused/nulled socket with `502` +
   errors, which fail fast, so this is ~5.1s, not 10s.
 - The retry is currently wired to social reads ONLY — see snapshot Active Tasks
   for the optional rollout.
+
+## Approved return restocks via a dedicated path (RETURN-STOCK-01, fixed 2026-08-11)
+
+Approving a return used to call `releaseReservedItems()`. A release only rewinds
+a still-`RESERVED` ledger row, and an order that reached COMPLETED already had
+its reservation `CONSUMED` — so the release was a silent no-op (returns `false`,
+never throws) and the seller's stock stayed short forever. Cancel looked fine
+because a cancelable order still holds a RESERVED row. Approve now calls
+`inventory.restock_returned`. Residual behaviours:
+
+- **`InventoryReservationStatus.RETURNED` is a new terminal state.** It is what
+  makes a replayed restock a no-op. A later release/consume on a RETURNED row
+  fails safe (`false`) — that is correct, not a bug to "fix".
+- **A restock credits `availableStock` from ANY reservation state**, unlike a
+  release. From `RESERVED` (return approved while DELIVERING) it also drops the
+  hold; from `RELEASED` (a cancel already handed the units back) it only stamps
+  RETURNED and credits nothing.
+- **Pre-ledger orders have no reservation row**: the restock still credits, logs
+  a warn, and relies on the one-shot "already reviewed" guard on the return
+  request for idempotency — there is nothing else to dedupe on.
+- **The restock is non-fatal.** A stock write must not sink an approved refund,
+  so a failure is logged (`[ORDERS] Return restock rejected/failed …`) and the
+  refund proceeds. Grep the orders log for a shortfall.
