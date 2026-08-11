@@ -15,5 +15,6 @@ export const INVENTORY_MESSAGE_PATTERNS = {
   INVENTORY_RESERVE_STOCK: "inventory.reserve_stock",
   INVENTORY_RELEASE_STOCK: "inventory.release_stock",
   INVENTORY_CONSUME_RESERVED_STOCK: "inventory.consume_reserved_stock",
+  INVENTORY_RESTOCK_RETURNED: "inventory.restock_returned",
   INVENTORY_GET_LOW_STOCK: "inventory.get_low_stock",
 } as const;
