@@ -770,6 +770,46 @@ export class OrdersService {
     );
   }
 
+  /**
+   * Credit an approved return's units back to available stock. Unlike
+   * {@link releaseReservedItems} this works whatever state the reservation
+   * reached, because the goods came back physically — a consumed reservation
+   * (any order that got as far as COMPLETED) is exactly the case a release
+   * cannot rewind. Non-fatal: a stock write must not sink the refund, but every
+   * failure is logged so the shortfall is greppable in the service log.
+   */
+  private async restockReturnedItems(
+    items: StockReservationItem[],
+    reservationKey: string,
+  ): Promise<void> {
+    for (const item of items ?? []) {
+      try {
+        const restocked = await firstValueFrom(
+          this.inventoryClient
+            .send<boolean>(
+              INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESTOCK_RETURNED,
+              {
+                productId: item.productId,
+                quantity: item.quantity,
+                skuId: item.skuId ?? undefined,
+                reservationKey,
+              },
+            )
+            .pipe(timeout(5000)),
+        );
+        if (!restocked) {
+          this.logger.error(
+            `[ORDERS] Return restock rejected for product ${item.productId} (qty ${item.quantity}, reservation ${reservationKey})`,
+          );
+        }
+      } catch (error) {
+        this.logger.error(
+          `[ORDERS] Return restock failed for product ${item.productId}: ${String(error)}`,
+        );
+      }
+    }
+  }
+
   private async releaseReservedItems(
     items: StockReservationItem[],
     reservationKey: string,
@@ -2635,7 +2675,8 @@ export class OrdersService {
     }
 
     // Create the GHN waybill BEFORE advancing. If GHN order creation fails
-    // (unresolvable address → 400, GHN unreachable → 500), let it propagate and
+    // (GHN rejects the address → 400, GHN down/unreachable → 503), let it
+    // propagate and
     // keep the order at CONFIRMED so the seller can fix the address and retry.
     // Never advance to PROCESSING without a waybill — that strands the order
     // (it would look shipped while GHN has no record and can never be synced).
@@ -2885,10 +2926,10 @@ export class OrdersService {
       }
     }
 
-    // Release reserved stock (idempotent via reservationKey). For a DELIVERING
-    // order this restores availability; for an already-consumed COMPLETED order
-    // it is a safe no-op.
-    await this.releaseReservedItems(order.items, order.reservationKey, false);
+    // Put the returned units back on the shelf. This must NOT be a reservation
+    // release: a COMPLETED order has already had its reservation consumed, so a
+    // release silently does nothing and the seller loses that stock forever.
+    await this.restockReturnedItems(order.items, order.reservationKey);
 
     // Simulated refund (DEMO — no real gateway call). COD never captured money
     // through a gateway, so it is flagged for a manual/cash settlement.
