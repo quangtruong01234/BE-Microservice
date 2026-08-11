@@ -37,27 +37,6 @@ reward_points, shipping_history, voucher_redemptions.
 
 ## Active Tasks
 
-### RETURN-STOCK-01 data repair — 2 products still short on prod (owed, needs a decision)
-
-The code fix is DEPLOYED AND VERIFIED on prod 2026-08-11 (commit `b2850ae`; see
-`CHANGELOG.md`). It does NOT repair stock lost before the deploy — those
-reservations are terminal `CONSUMED` and nothing re-triggers a restock. Full
-survey of `GET /api/order/return-requests` (5 rows total): exactly **2** approved
-returns lost stock, both approved-from-COMPLETED; **0** were approved from
-DELIVERING (that path always worked). Owed:
-
-| product | sku | current `availableStock` | owed | correct |
-|---|---|---|---|---|
-| `prod_BWg2OVHUlmrlEfP5` | PROD-29 | 48 | +2 (`rr_3Fxo2Qtmg5JiFQYn`, 2026-08-10) | 50 |
-| `prod_BhLY42iIKZOFuxG8` | E2E-PROD-0806-A | 23 | +1 (`rr_hLfL6MpDTBqGCUyw`, 2026-08-06) | 24 |
-
-Both are seed/test products, so this may not be worth repairing at all. If it
-is: adjust via the inventory update endpoint, NOT a direct Postgres UPDATE — a
-DB write skips the `inventory.stock_changed` fanout and leaves the MySQL
-`products.stockQuantity` mirror stale until the next stock write. Re-run the
-survey before adjusting (a new approve since 2026-08-11 is already correct and
-must not be double-counted).
-
 ### SOCIAL-502 follow-up — roll the transport retry out beyond social (optional)
 
 `retryOnTransportError()` (`apps/gateway/src/common/exception/transport-error.ts`)

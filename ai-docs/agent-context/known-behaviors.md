@@ -213,3 +213,31 @@ because a cancelable order still holds a RESERVED row. Approve now calls
 - **The restock is non-fatal.** A stock write must not sink an approved refund,
   so a failure is logged (`[ORDERS] Return restock rejected/failed …`) and the
   refund proceeds. Grep the orders log for a shortfall.
+- **The fix is not retroactive** — stock lost before 2026-08-11 sits on terminal
+  `CONSUMED` rows that nothing re-triggers. The three prod units owed were
+  repaired by hand on 2026-08-11; see `CHANGELOG.md`.
+
+## Manual stock adjustment needs TWO writes (Postgres + the MySQL mirror)
+
+`InventoryService.update()` (`apps/inventory/src/inventory.service.ts:183`) is
+plain CRUD — it does **not** call `emitStockChanged()`, unlike reserve / release
+/ consume / restock. Since `products.stockQuantity` (MySQL) is only ever written
+by the `inventory.stock_changed` consumer (`apps/product/src/product.controller.ts:375`
+→ `updateStockQuantity()`), a lone `PUT /api/inventory/:id` fixes the source of
+truth and leaves the storefront showing the old number until the next real stock
+movement. A direct Postgres UPDATE has the same defect, only worse.
+
+To adjust stock by hand, do both, in this order:
+
+1. `PUT /api/inventory/:id { "availableStock": N }` — **numeric** inventory id
+   (`ParseIntPipe`; inventory is deliberately not a PUBID domain).
+2. `PATCH /api/products/<publicId> { "stockQuantity": N }` — lands on the mirror
+   column through `Object.assign` (`product.service.ts:1532`) and invalidates the
+   catalog cache.
+
+Step 2 does **not** write back into inventory, so it cannot double-credit: the
+`stockQuantity` → inventory path exists only inside the `skuList` diff branch
+(`product.service.ts:985-1005`), which a base-price product (`skuId: null`) never
+enters. For a SKU-backed product, adjust through `skuList` instead and let the
+normal mirror push run. Verify with `GET /api/inventory/product/<publicId>` and
+`GET /api/products/<publicId>` — `availableStock` must equal `stockQuantity`.

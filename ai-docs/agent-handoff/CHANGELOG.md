@@ -66,8 +66,17 @@
   - **The fix is not retroactive.** Stock lost before the deploy stays lost —
     those reservations are terminal CONSUMED. Survey of all 5 prod return
     requests found exactly 2 affected (both approved-from-COMPLETED, 0 from
-    DELIVERING); the owed amounts are tabulated in `snapshot.md` and left as a
-    decision, not silently repaired.
+    DELIVERING).
+  - **Owed stock REPAIRED on prod 2026-08-11**, on the user's go-ahead:
+    `prod_BWg2OVHUlmrlEfP5` (inv 31, PROD-29) 48 → **50** (+2, `rr_3Fxo2Qtmg5JiFQYn`)
+    and `prod_BhLY42iIKZOFuxG8` (inv 29, E2E-PROD-0806-A) 23 → **24** (+1,
+    `rr_hLfL6MpDTBqGCUyw`). Done through the API, two writes per product —
+    `PUT /api/inventory/:id` then `PATCH /api/products/:publicId {stockQuantity}` —
+    because `InventoryService.update()` emits no `stock_changed` fanout and would
+    otherwise have left the MySQL mirror stale; the recipe and the reason it
+    cannot double-credit are now in `known-behaviors.md`. Verified after the
+    fact: Postgres `availableStock` == MySQL `stockQuantity` on both (50/50 and
+    24/24), `reservedStock: 0`, and the cached catalog list serves 50.
 
 - **RESIL-01 — circuit breaker + GHN error mapping (2026-08-10).** Closes
   PRODTEST-0806 defect #1. Every outbound GHN call in `apps/orders/src/ghn/
