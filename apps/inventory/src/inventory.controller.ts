@@ -134,6 +134,24 @@ export class InventoryController {
     );
   }
 
+  @MessagePattern("inventory.restock_returned")
+  async restockReturnedStock(data: {
+    productId: number;
+    quantity: number;
+    skuId?: number;
+    reservationKey?: string;
+  }) {
+    this.logger.log(
+      `[INVENTORY-TCP] Restock returned stock for product ${data.productId}, quantity ${data.quantity}`,
+    );
+    return this.inventoryService.restockReturnedStock(
+      data.productId,
+      data.quantity,
+      data.skuId,
+      data.reservationKey,
+    );
+  }
+
   @MessagePattern("inventory.get_low_stock")
   async getLowStockItems(data?: { productIds?: number[] }) {
     this.logger.log(`[INVENTORY-TCP] Get low stock items`);

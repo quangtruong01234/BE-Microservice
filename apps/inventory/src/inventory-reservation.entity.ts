@@ -12,6 +12,13 @@ export enum InventoryReservationStatus {
   RESERVED = "reserved",
   RELEASED = "released",
   CONSUMED = "consumed",
+  /**
+   * The buyer handed the goods back and an approved return put the units on
+   * the shelf again. Terminal, like RELEASED/CONSUMED — it exists so a replayed
+   * restock cannot credit the same units twice. Stored in a plain VARCHAR(20)
+   * column (no DB enum / CHECK constraint), so adding it needs no migration.
+   */
+  RETURNED = "returned",
 }
 
 @Entity("inventory_reservations")

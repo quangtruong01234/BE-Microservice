@@ -161,3 +161,139 @@ describe("InventoryService reservation ledger", () => {
     );
   });
 });
+
+/**
+ * Reported from prod 2026-08-10: approving a return on a COMPLETED order left
+ * the seller's stock permanently short. The order's reservation is CONSUMED at
+ * completion, so the release the approve path used to call could not rewind it.
+ */
+describe("InventoryService restock on approved return", () => {
+  const RESERVATION_KEY = "00000000-0000-4000-8000-000000000002";
+
+  type LedgerHarness = {
+    service: InventoryService;
+    inventory: Inventory;
+    getReservation: () => InventoryReservation | null;
+  };
+
+  const buildLedgerHarness = (availableStock: number): LedgerHarness => {
+    const inventory = {
+      id: 1,
+      productId: 10,
+      productSkuId: null,
+      availableStock,
+      reservedStock: 0,
+      isActive: true,
+    } as Inventory;
+    let reservation: InventoryReservation | null = null;
+
+    const queryBuilder = {
+      setLock: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockImplementation(() => Promise.resolve(inventory)),
+    };
+    const reservationRepository = {
+      findOne: jest.fn().mockImplementation(() => Promise.resolve(reservation)),
+      create: jest.fn(
+        (value: InventoryReservation): InventoryReservation => value,
+      ),
+      save: jest.fn(
+        (value: InventoryReservation): Promise<InventoryReservation> => {
+          reservation = value;
+          return Promise.resolve(value);
+        },
+      ),
+    };
+    const inventoryRepository = {
+      createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
+    };
+    const manager = {
+      getRepository: jest.fn((entity: unknown) =>
+        entity === Inventory ? inventoryRepository : reservationRepository,
+      ),
+      save: jest.fn((value: Inventory) => Promise.resolve(value)),
+    };
+    const repository = {
+      manager: {
+        transaction: jest.fn(
+          (callback: (value: typeof manager) => Promise<boolean>) =>
+            callback(manager),
+        ),
+      },
+    } as unknown as Repository<Inventory>;
+
+    return {
+      service: new InventoryService(repository, null),
+      inventory,
+      getReservation: () => reservation,
+    };
+  };
+
+  it("restores stock consumed by a completed order, and only once", async () => {
+    const { service, inventory, getReservation } = buildLedgerHarness(50);
+
+    await expect(
+      service.reserveStock(10, 2, undefined, RESERVATION_KEY),
+    ).resolves.toBe(true);
+    await expect(
+      service.consumeReservedStock(10, 2, undefined, RESERVATION_KEY),
+    ).resolves.toBe(true);
+    expect(inventory.availableStock).toBe(48);
+    expect(inventory.reservedStock).toBe(0);
+
+    // The old approve path: a release cannot rewind a consumed reservation,
+    // which is exactly how the units went missing.
+    await expect(
+      service.releaseStock(10, 2, undefined, RESERVATION_KEY),
+    ).resolves.toBe(false);
+    expect(inventory.availableStock).toBe(48);
+
+    await expect(
+      service.restockReturnedStock(10, 2, undefined, RESERVATION_KEY),
+    ).resolves.toBe(true);
+    expect(inventory.availableStock).toBe(50);
+    expect(getReservation()?.status).toBe(InventoryReservationStatus.RETURNED);
+
+    // Replay must not credit the same units twice.
+    await expect(
+      service.restockReturnedStock(10, 2, undefined, RESERVATION_KEY),
+    ).resolves.toBe(true);
+    expect(inventory.availableStock).toBe(50);
+  });
+
+  it("drops the hold when the return is approved before completion", async () => {
+    const { service, inventory, getReservation } = buildLedgerHarness(50);
+
+    await expect(
+      service.reserveStock(10, 2, undefined, RESERVATION_KEY),
+    ).resolves.toBe(true);
+    expect(inventory.availableStock).toBe(48);
+    expect(inventory.reservedStock).toBe(2);
+
+    await expect(
+      service.restockReturnedStock(10, 2, undefined, RESERVATION_KEY),
+    ).resolves.toBe(true);
+    expect(inventory.availableStock).toBe(50);
+    expect(inventory.reservedStock).toBe(0);
+    expect(getReservation()?.status).toBe(InventoryReservationStatus.RETURNED);
+  });
+
+  it("does not double-credit units a cancel already released", async () => {
+    const { service, inventory, getReservation } = buildLedgerHarness(50);
+
+    await expect(
+      service.reserveStock(10, 2, undefined, RESERVATION_KEY),
+    ).resolves.toBe(true);
+    await expect(
+      service.releaseStock(10, 2, undefined, RESERVATION_KEY),
+    ).resolves.toBe(true);
+    expect(inventory.availableStock).toBe(50);
+
+    await expect(
+      service.restockReturnedStock(10, 2, undefined, RESERVATION_KEY),
+    ).resolves.toBe(true);
+    expect(inventory.availableStock).toBe(50);
+    expect(getReservation()?.status).toBe(InventoryReservationStatus.RETURNED);
+  });
+});

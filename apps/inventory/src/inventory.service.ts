@@ -364,6 +364,99 @@ export class InventoryService {
     return true;
   }
 
+  /**
+   * Put physically returned units back on the shelf after a return is approved.
+   *
+   * This is deliberately NOT `releaseStock`. A release only rewinds a still
+   * RESERVED ledger row, and an order that reached COMPLETED has already had
+   * its reservation CONSUMED — so releasing it is a silent no-op and the seller
+   * loses the stock forever (the realistic return case: you return goods you
+   * received). A restock credits `availableStock` from whatever state the
+   * reservation reached, and marks the row RETURNED so a replay cannot credit
+   * the same units twice.
+   */
+  async restockReturnedStock(
+    productId: number,
+    quantity: number,
+    skuId?: number,
+    reservationKey?: string,
+  ): Promise<boolean> {
+    let availableStock: number | null = null;
+    const restocked = await this.inventoryRepository.manager.transaction(
+      async (manager): Promise<boolean> => {
+        const inventory = await manager
+          .getRepository(Inventory)
+          .createQueryBuilder("inventory")
+          .setLock("pessimistic_write")
+          .where("inventory.productId = :productId", { productId })
+          .andWhere("inventory.isActive = true")
+          .andWhere(
+            skuId === undefined
+              ? "inventory.productSkuId IS NULL"
+              : "inventory.productSkuId = :skuId",
+            skuId === undefined ? {} : { skuId },
+          )
+          .getOne();
+        if (!inventory) return false;
+
+        const reservationRepository =
+          manager.getRepository(InventoryReservation);
+        const reservation = reservationKey
+          ? await reservationRepository.findOne({
+              where: { reservationKey, inventoryId: inventory.id },
+            })
+          : null;
+
+        if (!reservation) {
+          // Pre-ledger order (or a reservation row that never landed): there is
+          // nothing to make this idempotent, so the caller's one-shot approve
+          // guard is what prevents a double credit.
+          this.logger.warn(
+            `[INVENTORY] Restocking product ${productId} (qty ${quantity}) without a reservation row for key ${reservationKey ?? "none"}`,
+          );
+          inventory.availableStock += quantity;
+          await manager.save(inventory);
+          availableStock = inventory.availableStock;
+          return true;
+        }
+
+        // Already restocked — replay, the units are on the shelf.
+        if (reservation.status === InventoryReservationStatus.RETURNED) {
+          return true;
+        }
+
+        // A cancel already handed these units back; a return on top of that
+        // must close the ledger row without crediting a second time.
+        if (reservation.status === InventoryReservationStatus.RELEASED) {
+          reservation.status = InventoryReservationStatus.RETURNED;
+          await reservationRepository.save(reservation);
+          return true;
+        }
+
+        // Returned before the order completed: the units are still held for
+        // this order, so drop the hold as well as crediting availability.
+        if (reservation.status === InventoryReservationStatus.RESERVED) {
+          inventory.reservedStock = Math.max(
+            0,
+            inventory.reservedStock - reservation.quantity,
+          );
+        }
+
+        inventory.availableStock += reservation.quantity;
+        reservation.status = InventoryReservationStatus.RETURNED;
+        await manager.save(inventory);
+        await reservationRepository.save(reservation);
+        availableStock = inventory.availableStock;
+        return true;
+      },
+    );
+
+    if (restocked && availableStock !== null) {
+      this.emitStockChanged(productId, availableStock);
+    }
+    return restocked;
+  }
+
   private async reserveStockWithLedger(
     productId: number,
     quantity: number,
