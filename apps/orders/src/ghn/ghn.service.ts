@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  HttpException,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -9,6 +10,7 @@ import {
 import { HttpService } from "@nestjs/axios";
 import { AxiosResponse } from "axios";
 import { firstValueFrom } from "rxjs";
+import { CircuitBreaker, CircuitOpenError } from "@app/common";
 import { GHN_MESSAGE } from "libs/constant/response-message.constant";
 import { Order } from "../entity/order.entity";
 import {
@@ -50,7 +52,83 @@ export class GhnService {
   >();
   private readonly wardsByDistrict = new Map<number, CacheEntry<GhnWard[]>>();
 
+  // Every outbound GHN call goes through one breaker. GHN's sandbox regularly
+  // answers "context deadline exceeded" or stops responding entirely; without a
+  // breaker each of those burns a full HTTP timeout while holding an orders-TCP
+  // worker, and the gateway's own timeout then reports an opaque 502. Only
+  // outages count toward tripping it — see isGhnOutage.
+  private readonly breaker = new CircuitBreaker({
+    name: "ghn",
+    failureThreshold: 5,
+    openDurationMs: 30_000,
+    isFailure: (error: unknown): boolean => GhnService.isGhnOutage(error),
+  });
+
   constructor(private readonly httpService: HttpService) {}
+
+  // Statuses that mean "the problem is on our side of the integration, and the
+  // caller retrying with different input cannot fix it": a broken/expired token
+  // and GHN rate-limiting us are operational faults, not this seller's bad
+  // address, so they are treated like an outage — reported as 503 and counted
+  // toward the circuit so we stop hammering GHN with calls that cannot succeed.
+  private static readonly OPERATIONAL_FAULT_STATUSES = new Set([
+    401, 403, 408, 429,
+  ]);
+
+  // An outage is "GHN did not answer" (timeout / DNS / connection refused), or
+  // answered 5xx / an operational fault. Any other 4xx is GHN rejecting THIS
+  // request — a bad address, a waybill in the wrong state — which says nothing
+  // about GHN's health, so it must not open the circuit for every other seller.
+  private static isGhnOutage(error: unknown): boolean {
+    if (error instanceof HttpException) {
+      return false;
+    }
+    const response = (error as { response?: { status?: number } } | null)
+      ?.response;
+    if (response == null) {
+      return true;
+    }
+    if (typeof response.status !== "number") {
+      return true;
+    }
+    return (
+      response.status >= 500 ||
+      GhnService.OPERATIONAL_FAULT_STATUSES.has(response.status)
+    );
+  }
+
+  // Run one GHN HTTP call under the breaker. Wrap ONLY the transport call, never
+  // the response validation that follows it: a domain rejection we raise
+  // ourselves is not a GHN failure and must not count toward the threshold.
+  private async callGhn<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await this.breaker.execute(operation);
+    } catch (error: unknown) {
+      if (error instanceof CircuitOpenError) {
+        throw new ServiceUnavailableException(
+          GHN_MESSAGE.CIRCUIT_OPEN(Math.ceil(error.retryAfterMs / 1000)),
+        );
+      }
+      throw error;
+    }
+  }
+
+  // Map a failed GHN call onto an actionable domain exception. GHN puts the real
+  // reason ("Trạng thái đơn hàng không hợp lệ", "context deadline exceeded") in
+  // response.data.message; before this, the AxiosError escaped uncaught and the
+  // seller only ever saw "Internal server error".
+  private toGhnDomainError(
+    error: unknown,
+    buildMessage: (message: string) => string,
+  ): Error {
+    if (error instanceof HttpException) {
+      return error;
+    }
+    const message = buildMessage(this.extractGhnErrorMessage(error));
+    return GhnService.isGhnOutage(error)
+      ? new ServiceUnavailableException(message)
+      : new BadRequestException(message);
+  }
 
   private buildHeaders(): Record<string, string> {
     return {
@@ -130,13 +208,20 @@ export class GhnService {
       this.toResolvedAddress(order.toDistrictId, order.toWardCode),
     );
 
-    const response = await firstValueFrom(
-      this.httpService.post<GhnResponse>(
-        `${apiUrl}/v2/shipping-order/create`,
-        body,
-        { headers: this.buildHeaders() },
-      ),
-    );
+    let response: AxiosResponse<GhnResponse>;
+    try {
+      response = await this.callGhn(() =>
+        firstValueFrom(
+          this.httpService.post<GhnResponse>(
+            `${apiUrl}/v2/shipping-order/create`,
+            body,
+            { headers: this.buildHeaders() },
+          ),
+        ),
+      );
+    } catch (error: unknown) {
+      throw this.toGhnDomainError(error, GHN_MESSAGE.CREATE_ERROR);
+    }
 
     const orderCode = response.data?.data?.order_code;
     if (orderCode) {
@@ -162,13 +247,20 @@ export class GhnService {
       resolvedIds,
     );
 
-    const response = await firstValueFrom(
-      this.httpService.post<GhnResponse>(
-        `${apiUrl}/v2/shipping-order/preview`,
-        body,
-        { headers: this.buildHeaders() },
-      ),
-    );
+    let response: AxiosResponse<GhnResponse>;
+    try {
+      response = await this.callGhn(() =>
+        firstValueFrom(
+          this.httpService.post<GhnResponse>(
+            `${apiUrl}/v2/shipping-order/preview`,
+            body,
+            { headers: this.buildHeaders() },
+          ),
+        ),
+      );
+    } catch (error: unknown) {
+      throw this.toGhnDomainError(error, GHN_MESSAGE.PREVIEW_ERROR);
+    }
 
     const data = response.data?.data;
     if (data && typeof data.total_fee === "number") {
@@ -234,13 +326,22 @@ export class GhnService {
   ): Promise<boolean> {
     const apiUrl = requireEnv("GHN_API_URL");
 
-    const response = await firstValueFrom(
-      this.httpService.post<GhnSwitchStatusResponse>(
-        `${apiUrl}/v2/switch-status/${action}`,
-        { order_codes: [ghnOrderCode] },
-        { headers: this.buildHeaders() },
-      ),
-    );
+    let response: AxiosResponse<GhnSwitchStatusResponse>;
+    try {
+      response = await this.callGhn(() =>
+        firstValueFrom(
+          this.httpService.post<GhnSwitchStatusResponse>(
+            `${apiUrl}/v2/switch-status/${action}`,
+            { order_codes: [ghnOrderCode] },
+            { headers: this.buildHeaders() },
+          ),
+        ),
+      );
+    } catch (error: unknown) {
+      throw this.toGhnDomainError(error, (message) =>
+        GHN_MESSAGE.ACTION_ERROR(action, message),
+      );
+    }
 
     const result = response.data?.data?.find(
       (r) => r.order_code === ghnOrderCode,
@@ -294,34 +395,37 @@ export class GhnService {
   // Shared driver for GHN order-mutation endpoints (updateCOD / update). GHN
   // returns HTTP 200 + { code: 200 } on success and HTTP 400 + { code, message }
   // on rejection (axios throws). Either way the GHN-supplied message is extracted
-  // and re-thrown so the caller surfaces a meaningful error to the operator.
+  // and re-thrown so the caller surfaces a meaningful error to the operator — a
+  // GHN refusal as 400, a GHN outage as 503.
   private async postOrderMutation(
     path: string,
     body: Record<string, unknown>,
     action: string,
   ): Promise<void> {
     const apiUrl = requireEnv("GHN_API_URL");
+
+    let response: AxiosResponse<GhnMutationResponse>;
     try {
-      const response = await firstValueFrom(
-        this.httpService.post<GhnMutationResponse>(`${apiUrl}${path}`, body, {
-          headers: this.buildHeaders(),
-        }),
+      response = await this.callGhn(() =>
+        firstValueFrom(
+          this.httpService.post<GhnMutationResponse>(`${apiUrl}${path}`, body, {
+            headers: this.buildHeaders(),
+          }),
+        ),
       );
-      const code = response.data?.code;
-      if (code !== undefined && code !== 200) {
-        throw new InternalServerErrorException(
-          GHN_MESSAGE.ACTION_ERROR(
-            action,
-            response.data?.message ?? "Unknown error",
-          ),
-        );
-      }
-    } catch (error) {
-      if (error instanceof InternalServerErrorException) {
-        throw error;
-      }
+    } catch (error: unknown) {
+      throw this.toGhnDomainError(error, (message) =>
+        GHN_MESSAGE.ACTION_ERROR(action, message),
+      );
+    }
+
+    const code = response.data?.code;
+    if (code !== undefined && code !== 200) {
       throw new InternalServerErrorException(
-        GHN_MESSAGE.ACTION_ERROR(action, this.extractGhnErrorMessage(error)),
+        GHN_MESSAGE.ACTION_ERROR(
+          action,
+          response.data?.message ?? "Unknown error",
+        ),
       );
     }
   }
@@ -361,14 +465,21 @@ export class GhnService {
 
     let response: AxiosResponse<GhnDetailResponse>;
     try {
-      response = await firstValueFrom(
-        this.httpService.post<GhnDetailResponse>(
-          `${apiUrl}/v2/shipping-order/detail`,
-          { order_code: ghnOrderCode },
-          { headers: this.buildHeaders() },
+      response = await this.callGhn(() =>
+        firstValueFrom(
+          this.httpService.post<GhnDetailResponse>(
+            `${apiUrl}/v2/shipping-order/detail`,
+            { order_code: ghnOrderCode },
+            { headers: this.buildHeaders() },
+          ),
         ),
       );
     } catch (error) {
+      // The circuit is open: GHN is already known to be down, so keep that
+      // reason rather than reporting this waybill as missing.
+      if (error instanceof HttpException) {
+        throw error;
+      }
       // GHN replied with a non-2xx (e.g. 400 "order not found"): the waybill is
       // no longer resolvable on GHN's side. Surface a domain 404 so the gateway
       // returns an actionable status instead of an opaque 502.
@@ -415,18 +526,31 @@ export class GhnService {
     };
   }
 
+  // Master-data reads back the public /api/shipping/* address dropdowns, so an
+  // unmapped axios rejection here surfaces to the storefront as an opaque 500.
+  // Same breaker as the waybill calls — one GHN outage, one circuit.
+  private async callMasterData<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await this.callGhn(operation);
+    } catch (error: unknown) {
+      throw this.toGhnDomainError(error, GHN_MESSAGE.MASTER_DATA_ERROR);
+    }
+  }
+
   private async getProvinces(): Promise<GhnProvince[]> {
     if (this.provincesCache && this.provincesCache.expiresAt > Date.now()) {
       return this.provincesCache.value;
     }
     const apiUrl = requireEnv("GHN_API_URL");
-    const response = await firstValueFrom(
-      this.httpService.get<GhnMasterDataResponse<GhnProvince>>(
-        `${apiUrl}/master-data/province`,
-        {
-          headers: this.buildHeaders(),
-          timeout: GhnService.MASTER_DATA_TIMEOUT_MS,
-        },
+    const response = await this.callMasterData(() =>
+      firstValueFrom(
+        this.httpService.get<GhnMasterDataResponse<GhnProvince>>(
+          `${apiUrl}/master-data/province`,
+          {
+            headers: this.buildHeaders(),
+            timeout: GhnService.MASTER_DATA_TIMEOUT_MS,
+          },
+        ),
       ),
     );
     const provinces = response.data?.data ?? [];
@@ -443,14 +567,16 @@ export class GhnService {
       return cached.value;
     }
     const apiUrl = requireEnv("GHN_API_URL");
-    const response = await firstValueFrom(
-      this.httpService.get<GhnMasterDataResponse<GhnDistrict>>(
-        `${apiUrl}/master-data/district`,
-        {
-          headers: this.buildHeaders(),
-          params: { province_id: provinceId },
-          timeout: GhnService.MASTER_DATA_TIMEOUT_MS,
-        },
+    const response = await this.callMasterData(() =>
+      firstValueFrom(
+        this.httpService.get<GhnMasterDataResponse<GhnDistrict>>(
+          `${apiUrl}/master-data/district`,
+          {
+            headers: this.buildHeaders(),
+            params: { province_id: provinceId },
+            timeout: GhnService.MASTER_DATA_TIMEOUT_MS,
+          },
+        ),
       ),
     );
     const districts = response.data?.data ?? [];
@@ -467,14 +593,16 @@ export class GhnService {
       return cached.value;
     }
     const apiUrl = requireEnv("GHN_API_URL");
-    const response = await firstValueFrom(
-      this.httpService.get<GhnMasterDataResponse<GhnWard>>(
-        `${apiUrl}/master-data/ward`,
-        {
-          headers: this.buildHeaders(),
-          params: { district_id: districtId },
-          timeout: GhnService.MASTER_DATA_TIMEOUT_MS,
-        },
+    const response = await this.callMasterData(() =>
+      firstValueFrom(
+        this.httpService.get<GhnMasterDataResponse<GhnWard>>(
+          `${apiUrl}/master-data/ward`,
+          {
+            headers: this.buildHeaders(),
+            params: { district_id: districtId },
+            timeout: GhnService.MASTER_DATA_TIMEOUT_MS,
+          },
+        ),
       ),
     );
     const wards = response.data?.data ?? [];
