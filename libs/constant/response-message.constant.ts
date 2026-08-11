@@ -279,6 +279,10 @@ export const GHN_MESSAGE = {
   ): string =>
     `Cannot resolve shipping address "${wardName}, ${districtName}, ${provinceName}" to a GHN district/ward`,
   INVALID_WEBHOOK_AUTH: "Invalid webhook authentication",
+  MASTER_DATA_ERROR: (message: string): string =>
+    `GHN address lookup error: ${message}`,
+  CIRCUIT_OPEN: (retryAfterSeconds: number): string =>
+    `GHN is temporarily unavailable; retry in ${retryAfterSeconds}s`,
 } as const;
 
 export const PAYMENT_MESSAGE = {

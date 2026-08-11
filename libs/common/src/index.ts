@@ -16,3 +16,5 @@ export * from "./cloudinary/cloudinary.module";
 export * from "./cloudinary/cloudinary.service";
 
 export * from "./public-id/public-id.util";
+
+export * from "./resilience/circuit-breaker";
