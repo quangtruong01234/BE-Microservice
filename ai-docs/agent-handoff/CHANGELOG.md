@@ -55,6 +55,19 @@
     only openable from DELIVERING or COMPLETED — both states are covered by a
     unit test.
   - Residual behaviours recorded in `ai-docs/agent-context/known-behaviors.md`.
+  - **DEPLOYED AND VERIFIED ON PROD 2026-08-11** (commit `b2850ae`, pm2 restart
+    220s after the push). Re-ran the whole flow on prod against the same product
+    the FE reported (`prod_BWg2OVHUlmrlEfP5`, at 48): COD order
+    `ord_cKieVt5oHu7ZmunL` (1 unit, waybill `L89XU8`) → 47 → confirm →
+    ready-to-ship → ship → deliver → complete → `availableStock: 47,
+    reservedStock: 0` (reservation consumed) → return `rr_oFXMsY9nPy9NdNS8` →
+    approve → **48**; replay approve → `400 "already been reviewed"` with stock
+    still 48; product mirror `stockQuantity: 48`; order `refunded`.
+  - **The fix is not retroactive.** Stock lost before the deploy stays lost —
+    those reservations are terminal CONSUMED. Survey of all 5 prod return
+    requests found exactly 2 affected (both approved-from-COMPLETED, 0 from
+    DELIVERING); the owed amounts are tabulated in `snapshot.md` and left as a
+    decision, not silently repaired.
 
 - **RESIL-01 — circuit breaker + GHN error mapping (2026-08-10).** Closes
   PRODTEST-0806 defect #1. Every outbound GHN call in `apps/orders/src/ghn/
