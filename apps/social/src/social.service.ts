@@ -107,7 +107,42 @@ export class SocialService {
     const keptUrlSet = new Set(keptUrls);
     const droppedUrls = oldUrls.filter((mediaUrl) => !keptUrlSet.has(mediaUrl));
     if (droppedUrls.length === 0) return;
-    void this.cloudinaryService.destroyAssets(droppedUrls);
+    void this.destroyUnreferencedMedia(droppedUrls);
+  }
+
+  /**
+   * `imageUrls` is client-supplied, so the same uploaded URL can legitimately
+   * sit on more than one post (a re-post, or the same photo attached twice).
+   * Destroying on the first edit/delete would then 404 the image on every other
+   * post still showing it — an asset is only orphaned once NO row references it.
+   * Callers run this after their own commit, so the edited/deleted row can no
+   * longer match itself.
+   */
+  private async destroyUnreferencedMedia(droppedUrls: string[]): Promise<void> {
+    try {
+      const stillReferenced = await Promise.all(
+        droppedUrls.map((mediaUrl) =>
+          this.postRepository
+            .createQueryBuilder("post")
+            .where("post.videoUrl = :mediaUrl", { mediaUrl })
+            .orWhere("JSON_CONTAINS(post.image_urls, JSON_QUOTE(:mediaUrl))", {
+              mediaUrl,
+            })
+            .limit(1)
+            .getCount(),
+        ),
+      );
+      const orphanedUrls = droppedUrls.filter(
+        (_, index) => stillReferenced[index] === 0,
+      );
+      if (orphanedUrls.length === 0) return;
+      await this.cloudinaryService.destroyAssets(orphanedUrls);
+    } catch (err: unknown) {
+      // Cleanup is best-effort: a failed reference check must never destroy
+      // anything, and must never surface on the mutation that triggered it.
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Skipped Cloudinary cleanup — ${message}`);
+    }
   }
 
   private get treeRepo() {
