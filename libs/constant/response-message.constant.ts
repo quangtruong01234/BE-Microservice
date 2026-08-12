@@ -219,6 +219,8 @@ export const ORDER_MESSAGE = {
     `Order cannot be marked ready-to-ship — current status: ${status}`,
   INVALID_TRANSITION: (from: string, to: string): string =>
     `Cannot transition order from ${from} to ${to}`,
+  SELLER_CANNOT_ADVANCE:
+    "Shipping status after ready-to-ship is reported by the carrier — a seller cannot set it manually",
   PAYMENT_NOT_COMPLETED: (paymentMethod: string): string =>
     `Order cannot be advanced — the ${paymentMethod} payment has not completed yet`,
   CONCURRENT_UPDATE: (orderId: number | string): string =>
@@ -283,6 +285,10 @@ export const GHN_MESSAGE = {
     provinceName: string,
   ): string =>
     `Cannot resolve shipping address "${wardName}, ${districtName}, ${provinceName}" to a GHN district/ward`,
+  DISTRICT_NOT_FOUND: (districtId: number): string =>
+    `GHN does not know district ${districtId} — pick a district from GET /api/shipping/districts`,
+  WARD_NOT_IN_DISTRICT: (wardCode: string, districtId: number): string =>
+    `Ward ${wardCode} does not belong to GHN district ${districtId} — pick a ward from GET /api/shipping/wards`,
   INVALID_WEBHOOK_AUTH: "Invalid webhook authentication",
   MASTER_DATA_ERROR: (message: string): string =>
     `GHN address lookup error: ${message}`,
