@@ -36,6 +36,7 @@ import {
   AdminGhnOrderListResult,
   BuyerInfo,
   EnrichedOrderItem,
+  OrderAnalyticsResponse,
   OrderItemDetail,
   OrderResponse,
   ProductDetailResponse,
@@ -46,6 +47,7 @@ import {
 } from "./order.types";
 import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 import { OrderStatusValue } from "libs/constant/order-status.constant";
+import { READ_ONLY_SHIPPING_ACTIONS } from "libs/constant/shipping.constant";
 
 export abstract class BaseAggregatorService {
   protected logger = new Logger(BaseAggregatorService.name);
@@ -788,6 +790,7 @@ export class OrderService {
     callerId: number,
     callerRole: string,
     status?: OrderStatusValue[],
+    q?: string,
   ): Promise<{
     data: unknown[];
     total: number;
@@ -805,6 +808,7 @@ export class OrderService {
           page,
           limit,
           status: status?.length ? status : undefined,
+          q: q?.length ? q : undefined,
         })
         .pipe(
           timeout(TCP_TIMEOUT_MS.READ),
@@ -984,6 +988,7 @@ export class OrderService {
     page: number,
     limit: number,
     status?: OrderStatusValue[],
+    q?: string,
   ): Promise<PaginatedResponse<Record<string, unknown>>> {
     const result = (await firstValueFrom(
       this.ordersClient
@@ -991,6 +996,7 @@ export class OrderService {
           page,
           limit,
           status: status?.length ? status : undefined,
+          q: q?.length ? q : undefined,
         })
         .pipe(
           timeout(TCP_TIMEOUT_MS.READ),
@@ -1062,7 +1068,35 @@ export class OrderService {
     );
   }
 
-  async getAdminGhnOrders(query: AdminGhnOrdersQueryDto): Promise<
+  /**
+   * Drop the mutating entries from `availableActions` when the caller cannot
+   * invoke them.
+   *
+   * The orders service computes the list purely from waybill state — it has no
+   * idea who is asking. `logistics_operator` holds `shipping read:any` but NOT
+   * `shipping update:any`, so without this filter the console is told it may
+   * `sync` / `cancel` / `update_cod` an order and every one of those buttons
+   * answers 403. Read-only entries always stay.
+   */
+  private filterShippingActions(
+    actions: string[] | undefined,
+    canUpdateShipping: boolean,
+  ): string[] {
+    if (!Array.isArray(actions)) {
+      return [];
+    }
+    if (canUpdateShipping) {
+      return actions;
+    }
+    return actions.filter((action) =>
+      (READ_ONLY_SHIPPING_ACTIONS as readonly string[]).includes(action),
+    );
+  }
+
+  async getAdminGhnOrders(
+    query: AdminGhnOrdersQueryDto,
+    canUpdateShipping: boolean,
+  ): Promise<
     Omit<AdminGhnOrderListResult, "data"> & {
       data: (AdminGhnOrderListItem & {
         buyer: UserSummary | null;
@@ -1106,6 +1140,10 @@ export class OrderService {
       ...result,
       data: result.data.map((order) => ({
         ...order,
+        availableActions: this.filterShippingActions(
+          order.availableActions,
+          canUpdateShipping,
+        ),
         buyer: users.get(Number(order.userId)) ?? null,
         seller: users.get(Number(order.sellerId)) ?? null,
       })),
@@ -1117,7 +1155,10 @@ export class OrderService {
     };
   }
 
-  async getAdminGhnOrderDetail(orderId: string): Promise<unknown> {
+  async getAdminGhnOrderDetail(
+    orderId: string,
+    canUpdateShipping: boolean,
+  ): Promise<unknown> {
     try {
       const detail = (await firstValueFrom(
         this.ordersClient
@@ -1129,6 +1170,7 @@ export class OrderService {
             }),
           ),
       )) as {
+        availableActions?: string[];
         localOrder?: {
           userId?: number;
           sellerId?: number;
@@ -1146,6 +1188,10 @@ export class OrderService {
       const users = await this.getUserSummaryMap(userIds);
       return this.exposeUserReferences({
         ...detail,
+        availableActions: this.filterShippingActions(
+          detail.availableActions,
+          canUpdateShipping,
+        ),
         localOrder: detail.localOrder
           ? {
               ...detail.localOrder,
@@ -1210,7 +1256,12 @@ export class OrderService {
             }),
           ),
       );
-      return history.map((row) => ({ ...row, orderId }));
+      // `actorId` is the numeric user PK on the way out of the orders service;
+      // exposeUserReferences swaps it for the opaque `usr_...` id (PUBID-02),
+      // which is what the console shows as "actioned by".
+      return (await this.exposeUserReferences(
+        history.map((row) => ({ ...row, orderId })),
+      )) as Record<string, unknown>[];
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -1447,8 +1498,60 @@ export class OrderService {
     return this.fetchAnalytics(sellerId, query, "get seller analytics");
   }
 
-  async getShippingAnalytics(query: AnalyticsQueryDto): Promise<unknown> {
-    return this.fetchAnalytics(null, query, "get shipping analytics");
+  /**
+   * The global analytics dashboard is gated on `shipping read:any`, which
+   * `logistics_operator` holds — that role runs the waybills and needs the
+   * volume figures (order counts, status mix, what is moving). It does NOT hold
+   * `order read:any`, so it has no business seeing platform revenue. Rather
+   * than 403 the whole route (which would take the operational numbers away
+   * too), the monetary fields are omitted for callers without that grant;
+   * admin and `shipping_manager` get the payload unchanged.
+   */
+  async getShippingAnalytics(
+    query: AnalyticsQueryDto,
+    canReadRevenue: boolean,
+  ): Promise<unknown> {
+    const analytics = await this.fetchAnalytics(
+      null,
+      query,
+      "get shipping analytics",
+    );
+    return canReadRevenue
+      ? analytics
+      : this.stripRevenue(analytics as OrderAnalyticsResponse);
+  }
+
+  /**
+   * Drop every money figure from an analytics payload. Omitted, not zeroed —
+   * a `0` is indistinguishable from "we really earned nothing" and the console
+   * would render it as fact.
+   */
+  private stripRevenue(analytics: OrderAnalyticsResponse): unknown {
+    if (!analytics || typeof analytics !== "object") {
+      return analytics;
+    }
+    // Rebuilt field-by-field rather than by deletion: an allow-list keeps a
+    // money field that upstream adds later from silently reaching a role that
+    // is not entitled to it.
+    const summary = analytics.summary;
+    return {
+      ...analytics,
+      summary: summary
+        ? {
+            completedOrders: summary.completedOrders,
+            totalOrders: summary.totalOrders,
+          }
+        : summary,
+      revenueOverTime: (analytics.revenueOverTime ?? []).map((point) => ({
+        period: point.period,
+        orderCount: point.orderCount,
+      })),
+      topProducts: (analytics.topProducts ?? []).map((product) => ({
+        productId: product.productId,
+        productName: product.productName,
+        quantitySold: product.quantitySold,
+      })),
+    };
   }
 
   private async fetchAnalytics(

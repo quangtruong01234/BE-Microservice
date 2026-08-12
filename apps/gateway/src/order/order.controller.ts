@@ -47,6 +47,7 @@ import {
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { CheckPermission } from "../common/decorators/check-permission.decorator";
 import { ParsePublicIdPipe } from "../common/pipes/parse-public-id.pipe";
+import { hasPermission } from "../common/rbac/has-permission.util";
 import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 
 @ApiTags("Order")
@@ -54,6 +55,17 @@ import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 @Controller("order")
 export class OrderController {
   constructor(private readonly orderService: OrderService) {}
+
+  /**
+   * True when the caller may invoke the mutating shipping endpoints
+   * (`shipping update:any` — admin and `shipping_manager`, not
+   * `logistics_operator`). The GHN reads are gated on `shipping read:any`
+   * only, so their `availableActions` must be narrowed to what THIS caller can
+   * actually do rather than to what the waybill state allows.
+   */
+  private canUpdateShipping(req: Request): boolean {
+    return hasPermission(req.user?.role, "shipping", "update:any");
+  }
 
   @Get("admin/orders")
   @UseGuards(JwtAuthGuard)
@@ -74,6 +86,7 @@ export class OrderController {
       // real default.
       query.limit ?? 10,
       query.status,
+      query.q,
     );
   }
 
@@ -88,8 +101,12 @@ export class OrderController {
   @ApiResponse({ status: 403, description: "Forbidden." })
   async getAdminGhnOrders(
     @Query(ValidationPipe) query: AdminGhnOrdersQueryDto,
+    @Req() req: Request,
   ): Promise<unknown> {
-    return this.orderService.getAdminGhnOrders(query);
+    return this.orderService.getAdminGhnOrders(
+      query,
+      this.canUpdateShipping(req),
+    );
   }
 
   @Get("admin/ghn/orders/:id/history")
@@ -120,8 +137,12 @@ export class OrderController {
   @ApiResponse({ status: 404, description: "Order not found." })
   async getAdminGhnOrderDetail(
     @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.ORDER)) id: string,
+    @Req() req: Request,
   ): Promise<unknown> {
-    return this.orderService.getAdminGhnOrderDetail(id);
+    return this.orderService.getAdminGhnOrderDetail(
+      id,
+      this.canUpdateShipping(req),
+    );
   }
 
   @Post("admin/ghn/orders/:id/sync")
@@ -455,8 +476,12 @@ export class OrderController {
   @ApiOperation({
     summary: "Global analytics dashboard (admin / shipping console)",
     description:
-      "Revenue over time, order status distribution, and top products " +
-      "across all sellers. Defaults to the last 30 days.",
+      "Order volume, status distribution, and top products across all " +
+      "sellers. Defaults to the last 30 days. Monetary fields " +
+      "(summary.totalRevenue, summary.averageOrderValue, " +
+      "revenueOverTime[].revenue, topProducts[].revenue) are included only " +
+      "for admin and shipping_manager; they are omitted for " +
+      "logistics_operator.",
   })
   @ApiResponse({ status: 200, description: "Global analytics aggregates." })
   @ApiResponse({ status: 400, description: "Invalid date range." })
@@ -464,8 +489,16 @@ export class OrderController {
   @ApiResponse({ status: 403, description: "Forbidden." })
   async getShippingAnalytics(
     @Query(ValidationPipe) query: AnalyticsQueryDto,
+    @Req() req: Request,
   ): Promise<unknown> {
-    return this.orderService.getShippingAnalytics(query);
+    // Revenue goes to whoever owns the money side (`order read:any` — admin) or
+    // runs shipping at manager level (`shipping update:any`). A
+    // `logistics_operator` holds neither: it gets the same dashboard without the
+    // money.
+    const canReadRevenue =
+      hasPermission(req.user?.role, "order", "read:any") ||
+      this.canUpdateShipping(req);
+    return this.orderService.getShippingAnalytics(query, canReadRevenue);
   }
 
   @Get("seller/:id")
@@ -661,6 +694,7 @@ export class OrderController {
       callerId,
       callerRole,
       query.status,
+      query.q,
     );
   }
 

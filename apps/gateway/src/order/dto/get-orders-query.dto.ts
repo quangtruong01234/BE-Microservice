@@ -1,6 +1,14 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
 import { Transform, Type } from "class-transformer";
-import { IsIn, IsInt, IsOptional, Max, Min } from "class-validator";
+import {
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+} from "class-validator";
 import {
   ORDER_STATUS_VALUES,
   OrderStatusValue,
@@ -57,4 +65,18 @@ export class GetOrdersByUserQueryDto {
   @Transform(toStatusList)
   @IsIn(ORDER_STATUS_VALUES, { each: true })
   status?: OrderStatusValue[];
+
+  @ApiPropertyOptional({
+    description:
+      "Search by order code — case-insensitive substring match on the order public id. The `ord_` prefix is optional (`516a` and `ord_516a` both match `ord_516a...`). Combined with `status` it ANDs, and `total`/`totalPages`/`hasNext` describe the searched set.",
+    example: "516a",
+    maxLength: 32,
+  })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }): unknown =>
+    typeof value === "string" ? value.trim() : value,
+  )
+  @IsString()
+  @MaxLength(32)
+  q?: string;
 }

@@ -3,12 +3,15 @@ import { Transform, Type } from "class-transformer";
 import {
   IsBoolean,
   IsDateString,
+  IsIn,
   IsInt,
   IsOptional,
   IsString,
   Max,
   Min,
 } from "class-validator";
+import { ORDER_STATUS_VALUES } from "libs/constant/order-status.constant";
+import { GHN_STATUS_VALUES } from "libs/constant/shipping.constant";
 
 function toOptionalBoolean(value: unknown): boolean | undefined {
   if (value === undefined || value === null || value === "") {
@@ -39,14 +42,25 @@ export class AdminGhnOrdersQueryDto {
   @Max(100)
   declare limit?: number;
 
-  @ApiPropertyOptional({ description: "Local order status filter" })
+  // Both filters used to be bare @IsString(), so a typo ("shiped", "delivered"
+  // as a LOCAL status) passed validation and filtered the query down to zero
+  // rows — a 200 with an empty list reads as "no such orders" rather than "you
+  // asked for something that does not exist". @IsIn turns it into a 400 that
+  // names the accepted values.
+  @ApiPropertyOptional({
+    description: "Local order status filter",
+    enum: ORDER_STATUS_VALUES,
+  })
   @IsOptional()
-  @IsString()
+  @IsIn(ORDER_STATUS_VALUES)
   declare status?: string;
 
-  @ApiPropertyOptional({ description: "Latest or recorded GHN status filter" })
+  @ApiPropertyOptional({
+    description: "Latest or recorded GHN status filter",
+    enum: GHN_STATUS_VALUES,
+  })
   @IsOptional()
-  @IsString()
+  @IsIn(GHN_STATUS_VALUES)
   declare ghnStatus?: string;
 
   @ApiPropertyOptional({

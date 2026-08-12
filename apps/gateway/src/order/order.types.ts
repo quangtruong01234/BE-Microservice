@@ -15,6 +15,10 @@ export interface OrderResponse {
   shippingFee?: number | null;
   discountAmount?: number | null;
   paymentMethod?: PaymentMethod | null;
+  // ORD-GUARD-01: when the money was actually collected. NULL on an online
+  // order means the buyer never completed the checkout — the FE branches on it
+  // to keep showing "THANH TOÁN NGAY" and to hide the seller's confirm action.
+  paidAt?: string | null;
   subtotal?: number;
   items: unknown[];
   createdAt: string;
@@ -124,4 +128,30 @@ export interface AdminGhnOrderListResult {
   limit: number;
   totalPages?: number;
   hasNext?: boolean;
+}
+
+/**
+ * Analytics payload as the orders service returns it. Mirrored here because the
+ * gateway must not import from another app; only the fields the gateway itself
+ * reads (the monetary ones it may have to omit) are modelled precisely.
+ */
+export interface OrderAnalyticsResponse {
+  scope: string;
+  from: string;
+  to: string;
+  interval: string;
+  summary: {
+    totalRevenue: number;
+    completedOrders: number;
+    totalOrders: number;
+    averageOrderValue: number;
+  };
+  revenueOverTime: { period: string; revenue: number; orderCount: number }[];
+  statusDistribution: Record<string, number>;
+  topProducts: {
+    productId: number | string;
+    productName: string;
+    quantitySold: number;
+    revenue: number;
+  }[];
 }
