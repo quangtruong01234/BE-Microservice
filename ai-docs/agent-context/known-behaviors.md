@@ -40,6 +40,30 @@
 
 Never write a test asserting `paymentUrl` on the single-seller shape.
 
+## Sellers cannot set shipping status by hand (ORD-RBAC-01, 2026-08-13)
+
+`PATCH /api/order/:id/{ship,deliver,complete}` is **admin-only**. Role `shop`
+(and every other non-admin role) gets a **403** *"Shipping status after
+ready-to-ship is reported by the carrier — a seller cannot set it manually"*
+before the order is even loaded — so a seller gets 403 even for an order id that
+does not exist or that they do not own. Deliberate, not an oversight:
+
+- `readyToShip` never advances to PROCESSING without a GHN waybill, so **every**
+  order those three routes could touch already has one. The carrier owns the
+  status from there; a second writer only makes the local order disagree with
+  GHN, and a hand-set terminal status makes the order deaf to the webhook that
+  follows it (`applyGhnStatus` ignores terminal orders).
+- COD stamps `paidAt` in `finalizeOrderCompletion`, so the removed path let a
+  seller certify money collected without collecting it, and start the buyer's
+  return window early.
+- Recovery for a stalled order is the shipping console, not this route:
+  `POST /api/order/admin/ghn/orders/:id/sync` (re-pull the real GHN status) and,
+  in demo mode, `POST /api/order/admin/ghn/orders/:id/demo-status`.
+- The seller's own lifecycle is unchanged: `confirm` and `ready-to-ship` still
+  accept role `shop`.
+- The guard is on the role, not the `shipping` permission — `shipping_manager`
+  and `logistics_operator` get 403 here too and use the `admin/ghn/*` routes.
+
 ## `paidAt` gates the seller transitions (ORD-GUARD-01, 2026-08-11)
 
 `orders.paid_at` is the ONLY payment fact the orders service owns — payments
@@ -52,9 +76,10 @@ completed yet"*. Consequences that are deliberate, not bugs:
 - **A genuinely paid order whose `payment_completed` was lost is now blocked for
   the seller too.** It was already stuck — the same lost event is what leaves it
   at `pending` — and the stale-reservation sweeper cancels it. The guard only
-  removes the seller's ability to walk it forward by hand while the money state
-  is unknown. There is no admin override on purpose; the remedy is fixing the
-  payment event, not stamping the column.
+  removes the ability to walk it forward by hand while the money state is
+  unknown; it applies to the admin path as well (`advanceOrderStatus` calls the
+  assert after the ORD-RBAC-01 role check), so there is no admin override on
+  purpose. The remedy is fixing the payment event, not stamping the column.
 - **The backfill treats a legacy hand-walked order as paid.** A non-COD row at
   processing/shipped/delivering/completed got `paid_at = updated_at`, which
   cannot distinguish "paid" from "a seller advanced it before the guard
@@ -168,6 +193,37 @@ accepted since 2026-08-04); `toWardCode` stays `@IsString()` on purpose — GHN
 ward codes can carry leading zeros. For COD the waybill is created at
 ORDER-CREATE time, so ready-to-ship re-uses the existing `ghnOrderCode`.
 
+## An unknown district/ward is a 400, but only on the fee endpoint (GHN-DIST-01, 2026-08-13)
+
+`buildShippingOrderBody` validates a caller-supplied `toDistrictId` +
+`toWardCode` against GHN master data before quoting or cutting a waybill,
+because GHN's own `/v2/shipping-order/preview` does **not**: it answers
+`200 { total_fee: 0 }` for `to_district_id: 999999`. Master data is strict where
+preview is lax, so one cached ward lookup (24h cache — steady-state cost is zero
+extra GHN calls) turns a silent 0 into `400 GHN_MESSAGE.DISTRICT_NOT_FOUND` /
+`WARD_NOT_IN_DISTRICT`.
+
+- **Validation is fail-open on purpose.** Only an explicit GHN `400` on the
+  master-data call rejects. An outage, a circuit-open, a timeout, or an empty
+  ward list all log a warn and let the quote through — this is an input check,
+  not a health gate, and a GHN outage must never start rejecting addresses that
+  worked yesterday.
+- **Free-text callers are unaffected** — that branch goes through
+  `resolveAddressToGhnIds`, which already only ever yields ids GHN gave us.
+- **The order-create path still swallows it.** `getShippingFeeOrZero()`
+  (`orders.service.ts`) catches every preview error and returns `0`, so
+  `POST /api/order` still accepts a bogus district at fee 0 while
+  `POST /api/order/shipping-fee` now 400s. Deliberate: the FE calls the fee
+  endpoint first, and the create-path gap is the pre-existing snapshot defect
+  PRODTEST-0806 #2 (waybill failure swallowed at create), not this one.
+- **A stale ward selection now 400s.** Changing district without re-picking the
+  ward used to quote silently; it now returns `WARD_NOT_IN_DISTRICT`.
+- Two legacy `canceled` probe orders (128/129, created 2026-07-30 by a synthetic
+  "Local Probe" address) carry district `1485` (Cầu Giấy) with ward `1A0807`
+  (Phường Mai Động, district `1490`) — mismatched hand-made data, both terminal
+  with `ghn_order_code: null`, so no live path re-validates them. Every other
+  stored pair (4 distinct, 16 orders) passes.
+
 ## Deactivated products on the storefront (BUG-B, fixed 2026-08-03)
 
 `findAllProducts` defaults `isActive: true` when the caller passes NEITHER
@@ -192,6 +248,29 @@ risk-blocked rows.
   pre-existing, relied on by the seller's own product-edit screen.
 - 5 unit tests in `product.service.spec.ts` pin the default, `userIds`, the
   `userId` exception, the explicit override, and the cache key.
+
+## Comment `author` is decorated in the gateway and may be `null` (SOCIAL-AUTHOR-01, 2026-08-13)
+
+The social service does NOT return an author on comments — it never has. The
+`author` embed on `POST /posts/:id/comments`, `GET /posts/:id/comments`,
+`POST /comments/:id/replies` and `GET /comments/:id/replies` is added by
+`attachCommentAuthors()` in `apps/gateway/src/social/social.service.ts`, exactly
+like the post path does. Consequences worth knowing before "fixing" any of them:
+
+- **`author: null` is a valid response, not a bug.** `fetchAuthorMap()` swallows
+  a user-service failure and returns an empty Map, so an unreachable user service
+  degrades to `author: null` instead of failing the comment read. A deleted user
+  resolves to `null` for the same reason. Do not make the read throw.
+- **The decoration is recursive over `children[]` AND `parent`** — the reply tree
+  from `findDescendantsTree` at any depth, plus the `parent` comment embedded in a
+  freshly created reply. A new nested comment shape needs adding to that walk.
+- **Author resolution is one batched call for the whole payload**, and
+  `exposeReferences` makes a second one for the public-id mapping. So a comment
+  request costs **2** user-service calls regardless of comment count — flat, not
+  N+1. `social-comment-author.service.spec.ts` asserts that count; if it fails
+  after a change, something started resolving authors per node.
+- Order matters: decorate BEFORE `exposeReferences`, so `author.id` leaves as the
+  opaque `usr_` id. Decorating after would emit a raw numeric id.
 
 ## Gateway transport failures — one sanitized 502 (SOCIAL-502, fixed 2026-08-09)
 
@@ -248,9 +327,10 @@ Superseding the older "do both writes" recipe: since STOCK-SYNC-01 the two stock
 stores keep each other in step, so adjust from **either** side with a single
 request.
 
-- `PATCH /api/products/<publicId> { "stockQuantity": N }` → writes the MySQL
-  mirror, then pushes `N` into the product's **base** inventory row
-  (`syncInventoryStock`, `apps/gateway/src/product/product.service.ts`).
+- `PATCH /api/products/<publicId> { "stockQuantity": N }` → resolves the base
+  inventory row first (`resolveStockSyncTarget`), writes the MySQL mirror, then
+  pushes `N` into that row (`applyStockSync`,
+  `apps/gateway/src/product/product.service.ts`).
 - `PUT /api/inventory/<numericId> { "availableStock": N }` → writes Postgres,
   then emits `inventory.stock_changed` so the MySQL mirror follows
   (`InventoryService.update()`). Inventory ids stay numeric — that domain is
@@ -268,16 +348,47 @@ Residual behaviours worth knowing, none of them bugs:
 - **A simple product with no inventory row at all is also warn-and-skip** — the
   sync does not auto-create a row. `POST /api/products` always creates the base
   row, so this only happens to rows predating that or hand-deleted ones.
-- **On an inventory failure the PATCH fails, but not atomically.** The
-  non-stock fields of that PATCH stay applied; only the stock mirror is rolled
-  back to its pre-edit value before the error surfaces. Products and inventory
-  live in different service DBs — there is no shared transaction (same
-  constraint as the `compensateProductCreate` saga).
+- **On an inventory failure the PATCH fails, but not atomically** — see
+  PATCH-ATOMIC-01 below for exactly which failure leaves what behind. Products
+  and inventory live in different service DBs, so there is no shared transaction
+  (same constraint as the `compensateProductCreate` saga).
 - **Only base rows emit.** A `PUT` on a SKU row does not touch the product
   mirror, because a variant's stock is not the product-level number.
 
 Verify either direction with `GET /api/inventory/product/<publicId>` and
 `GET /api/products/<publicId>` — `availableStock` must equal `stockQuantity`.
+
+## `PATCH /api/products/:id` is not one transaction (PATCH-ATOMIC-01, 2026-08-12)
+
+Answer to the FE question "is the PATCH atomic when the inventory step fails":
+**no, and it cannot be.** One PATCH is up to three sequential writes:
+
+1. **Product fields** — one MySQL transaction (`applyProductUpdate` inside
+   `runProductUpdate`, `apps/product/src/product.service.ts`). Atomic among
+   themselves.
+2. **`skuList`** — a *second*, separate MySQL transaction (`upsertSkus`, same
+   file). Atomic among themselves, but not with step 1.
+3. **`stockQuantity`** — a TCP write to inventory, which is a different service
+   on a different database (Postgres). It can never join a MySQL transaction.
+
+What each failure leaves behind, after the 2026-08-12 narrowing:
+
+| Fails | Product fields | `skuList` | Stock |
+|---|---|---|---|
+| step 1 | rolled back | not reached | untouched |
+| step 2 | **committed** | rolled back | untouched |
+| inventory unreachable / no base row read fails | **untouched** | untouched | untouched |
+| inventory write (step 3) | **committed** | committed | mirror restored |
+
+The narrowing: the base-inventory row is now resolved **before** the product
+write (`resolveStockSyncTarget`), so an inventory outage aborts the PATCH with
+nothing committed — previously that same outage left every product field applied
+behind a 502. Only a failure of the inventory write itself can still half-apply,
+and that leg restores the stock mirror (`restoreProductStockMirror`,
+best-effort — a failed restore only logs).
+
+Consequence for clients: a failed PATCH does **not** mean "nothing changed".
+Refetch the product on error rather than trusting the local form state.
 
 ## Order lifecycle notifications (NOTIF-LIFECYCLE-01, 2026-08-11)
 
@@ -347,7 +458,12 @@ Prefer `image` for display. `POST /api/order` does not decorate its items, so
 it returns `productImage` only — that path is not a read path and the FE
 already has the product in hand at checkout.
 
-Item `price` is a `number` on every path (entity transformer). `subtotal` is
+Item `price` is a `number` on every path (entity transformer), and since
+RET-NUM-01 (2026-08-13) so is return-request `refundAmount` — same
+`decimalToNumber` transformer on `OrderReturnRequest.refundAmount`, covering the
+list, `/mine`, and approve responses. It stays `null` while a request is pending
+or rejected; only approval sets it. Any NEW `DECIMAL` column that reaches HTTP
+needs that transformer — mysql2 hydrates DECIMAL as a string. `subtotal` is
 present on `GET /api/order/:id` and `POST /api/order` but NOT on the two seller
 PATCH responses — those return the plain order shape; recompute from `items` if
 you need it there.

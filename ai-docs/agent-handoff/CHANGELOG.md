@@ -6,6 +6,182 @@
 
 ## Completed Milestones
 
+- **SOCIAL-AUTHOR-01 — comments and replies carry `author` (2026-08-13).**
+  The FE agent reported that `GET /api/social/posts/:id/comments` and
+  `GET /api/social/comments/:id/replies` returned only `userId`, so
+  `CommentNode.tsx` rendered a literal `Người dùng #usr_xU2Q7pGhhFpduGWz` to real
+  users while the post above it showed a proper username — and it could not fix
+  this client-side without one profile fetch per comment. Posts already embed
+  `author` in the gateway (`fetchAuthorMap()`), so the fix is to run the same
+  embed over the comment payloads: new `attachCommentAuthors()` +
+  `collectCommentAuthorIds()` / `decorateCommentNodes()` in
+  `apps/gateway/src/social/social.service.ts`, wrapped around the TCP result of
+  `createComment`, `getComments`, `createReply` and `getReplies` — before
+  `exposeReferences`, so `author.id` comes out as the opaque `usr_` id like
+  everywhere else. **One** user-service call covers the entire payload: the
+  helper walks the whole reply tree collecting ids into a `Set`, then resolves
+  them in a single batched `GET_USERS_BY_IDS`, so the cost is flat in the number
+  of comments (the FE's explicit requirement). It handles all shapes the social
+  service returns — the `PaginatedResponse` envelope (decorates `data[]`, leaves
+  `total/page/limit/totalPages/hasNext` untouched), the nested tree from
+  `findDescendantsTree` (recurses `children[]` to any depth), and a single
+  freshly created node. Change-impact review found one gap the four self-test
+  curls did not: a created reply embeds the `parent` comment it answers, which
+  had the same missing `author` one level up — now decorated too (`CommentNode`
+  in `social.types.ts` carries both `children?` and `parent?`). Degrades the way
+  posts already do: `fetchAuthorMap` swallows a user-service failure and returns
+  an empty Map, so an unreachable user service yields `author: null` rather than
+  failing the comment read; a deleted author is `null` for the same reason.
+  Verified live end-to-end (create comment 201, create reply 201, list 200,
+  reply tree 200 with `author` on root + child + grandchild, and `parent.author`
+  on a created reply), plus a new spec
+  `apps/gateway/src/social/social-comment-author.service.spec.ts` (5 tests)
+  pinning list/tree/parent decoration, the *fixed* call count, and the
+  `author: null` degrade. Jest **31 suites / 281 tests**. Release class **B** —
+  purely a new field on existing items; the current FE keeps working.
+
+- **GHN-DIST-01 — an unknown district no longer prices as "free" (2026-08-13).**
+  The FE agent reported `POST /api/order/shipping-fee` answering
+  `201 { shippingFee: 0 }` for `toDistrictId: 999999`, and was explicit that this
+  is not the closed `shippingFee: 0` question (GHN-ADDR-01) but the *status code*:
+  with a 201 the storefront treats the address as shippable and lets the order
+  through, and the failure only surfaces later at waybill create. Two direct GHN
+  probes found the asymmetry that makes a fix cheap: `/v2/shipping-order/preview`
+  answers `200 total_fee: 0` for `to_district_id: 999999` (lax), while
+  `/master-data/ward?district_id=999999` answers `400 "District ID khong ton
+  tai"` (strict). So GHN *can* validate our input — just not on the endpoint we
+  were calling. New `assertLocationExists()` (`apps/orders/src/ghn/ghn.service.ts`)
+  runs one ward lookup and maps an explicit GHN 400 → `DISTRICT_NOT_FOUND`, a
+  ward missing from the district's list → `WARD_NOT_IN_DISTRICT` (both new in
+  `libs/constant/response-message.constant.ts`, both `BadRequestException`). It is
+  called from **one** place — the `resolvedIds` branch of
+  `buildShippingOrderBody` — which is the shared body builder for BOTH
+  `previewShippingFee` and `createShippingOrder`, so the fee quote and the waybill
+  agree by construction; the free-text branch needs nothing because
+  `resolveAddressToGhnIds` only ever yields ids GHN gave us. The lookup rides the
+  existing 24h ward cache, so steady state costs zero extra GHN calls.
+  **Deliberately fail-open**: only an explicit GHN 400 rejects — outage,
+  circuit-open, timeout, or an empty ward list log a warn and let the quote
+  through, because validation is an input check, not a health gate, and a GHN
+  outage must never start rejecting addresses that worked yesterday. Verified on
+  local runtime: bogus district → `400 "GHN does not know district 999999 — pick
+  a district from GET /api/shipping/districts"`; valid `1442`/`20110` control →
+  `201 {"shippingFee":0,"expectedDeliveryTime":"2026-08-13T16:59:59Z"}`;
+  cross-district ward → `400 "Ward 20308 does not belong to GHN district 1442"`.
+  tsc/eslint clean; jest 30 suites / 276 tests (+4: unknown district, cross-district
+  ward, master-data down still quotes, empty ward list still quotes — the existing
+  spec had to grow an `httpService.get` mock, since without it the new call throws
+  a `TypeError` that `isGhnOutage()` counts toward the circuit breaker).
+  **Change-impact review:** `assertLocationExists` also gates `createShippingOrder`
+  at ready-to-ship, a leg no curl reached, so every stored pair was checked against
+  GHN directly — 18 orders, 5 distinct pairs, 4 pass. The one rejecting pair
+  (district `1485` + ward `1A0807`, orders 128/129) is bad synthetic data, not a
+  false positive: both are `canceled` with `ghn_order_code: null`, created by a
+  "Local Probe" address whose free text says *Hai Bà Trưng* while `1485` is *Cầu
+  Giấy* and `1A0807` is *Phường Mai Động* in district `1490`. No live path
+  re-validates a canceled order, and no real FE selection can produce that
+  mismatch (the ward dropdown is scoped to the chosen district). Known asymmetry
+  left alone on purpose: `getShippingFeeOrZero()` still swallows this 400 so
+  `POST /api/order` books a bogus district at fee 0 — that is the pre-existing
+  PRODTEST-0806 #2 gap, not this one. Release class **B**: the FE already speaks
+  400 here (RESIL-01) and asked for it.
+
+- **RET-NUM-01 — `refundAmount` is a number (2026-08-13).** The FE agent reported
+  return requests serializing `"refundAmount": "45000.00"` while
+  `src/types/order.ts:61` declares `refundAmount: number | null` — the type was
+  lying, and the three render sites only looked right because each wraps
+  `Number(...)`. Same root cause as ORDER-SHAPE-01's `items[].price`: mysql2
+  hydrates `DECIMAL` as a string. Fix is one line —
+  `transformer: decimalToNumber` (already in `@app/common`) on
+  `OrderReturnRequest.refundAmount` (`apps/orders/src/entity/`) — which covers
+  every read path at once, since they all hydrate the same entity. Verified on
+  local runtime: `GET /api/order/return-requests` (admin) → `refundAmount 357
+  number`, `/return-requests/mine` (buyer) → `6800 number`, pending/rejected rows
+  still `null`. tsc/eslint clean. Release class **B**: `Number(45000)` and
+  `Number("45000.00")` are the same value, so the FE's existing wrappers keep
+  working through the deploy — nothing breaks in the window, and the FE can drop
+  them whenever it likes.
+
+- **ORD-RBAC-01 — the seller's manual ship/deliver/complete path is gone
+  (2026-08-13).** The FE agent asked for a 403 on
+  `PATCH /api/order/:id/{ship,deliver,complete}` for role `shop`. The open
+  question was whether removing it would strand orders whose GHN webhook never
+  fires — the reason the path existed. Reading `readyToShip` settled it: it
+  refuses to leave CONFIRMED without a GHN waybill ("never advance to PROCESSING
+  without a waybill — that strands the order"), so **every** order those three
+  routes can reach already has one, and the previously-recorded suggestion to
+  "gate the routes on `ghnOrderCode !== null` instead of on role" was a no-op —
+  that condition is always true there. With the waybill guaranteed, the carrier
+  is the only correct writer of the remaining statuses: a hand-set status makes
+  the local order disagree with GHN, and a hand-set *terminal* status makes the
+  order deaf to the webhook that follows (`applyGhnStatus` ignores terminal
+  orders). It was also a money path — COD stamps `paidAt` in
+  `finalizeOrderCompletion`, so a seller could certify collection without
+  collecting, and start the buyer's return window early. `advanceOrderStatus`
+  (`apps/orders/src/orders.service.ts`) now throws
+  `ForbiddenException(ORDER_MESSAGE.SELLER_CANNOT_ADVANCE)` when `!isAdmin`,
+  **before** loading the order (so a seller gets 403 even for a bad id — no
+  existence oracle); the ownership lookup it replaced is dropped from this path
+  only (`getSellerProductIds`/`verifySellerOwnsOrder` still serve
+  `getSellerOrderDetail`, return review, and the seller order list).
+  `SELLER_FORWARD_TRANSITIONS` → `ADMIN_FORWARD_TRANSITIONS` and the log line now
+  says "manually by admin". Stranding is covered by the shipping console the GHN
+  frontend already drives: `POST /api/order/admin/ghn/orders/:id/sync` and, in
+  demo mode, `.../demo-status`. Blast radius checked: no other caller advances an
+  order — the only other writer of COMPLETED is the GHN webhook path, untouched;
+  the three ORD-GUARD-01 specs that exercised this path as a seller now pass
+  `isAdmin: true` (they test the payment guard, not RBAC); `confirm` and
+  `ready-to-ship` still accept `shop`. Verified on local runtime: shop `test1`
+  → **403** on all three routes with the new message, admin `testadmin` → **200**
+  `status:"shipped"` on the same order. tsc clean, eslint clean, jest 30 suites /
+  272 tests (one new: "forbids a seller from advancing, without touching the
+  order"). **Release class B, not C** — the rule table calls a guard that turns
+  200 into 4xx class C, but no shipped frontend calls these routes: the storefront
+  has three dead wrappers in `src/api/orders.ts` with zero call sites and its
+  `SellerActionKind` is `'confirm' | 'ready-to-ship'`, and the GHN console only
+  uses `/admin/ghn/*`. Recorded in `frontend-handoff.md` so the storefront deletes
+  the dead wrappers.
+
+- **PATCH-ATOMIC-01 — a failed stock edit no longer half-applies a product edit
+  (2026-08-12).** The FE agent asked, as the open half of P0-03, whether
+  `PATCH /api/products/:id` is a transaction when the inventory leg fails: if it
+  is not, one bad save leaves a renamed/repriced product whose stock never moved,
+  and the form silently disagrees with the DB. It is not, and it cannot be —
+  products are MySQL, inventory is a different service on Postgres, so the two
+  writes can never share a transaction. What could be fixed is *when* the
+  inventory leg is allowed to fail. `updateProduct()`
+  (`apps/gateway/src/product/product.service.ts`) now splits the old
+  `syncInventoryStock()` into a read half (`resolveStockSyncTarget`) that runs
+  **before** the product write and a write half (`applyStockSync`) that runs
+  after. So the failures that actually happen in practice — inventory down,
+  unreachable, no base row — abort the PATCH with nothing committed, instead of
+  committing every product field and then answering 502. Only a failure of the
+  inventory write itself can still half-apply, and that leg already restores the
+  stock mirror. Behaviour otherwise identical: same status codes, same
+  warn-and-skip for SKU-matrix/row-less products, same no-op when the stock is
+  already in sync, same round-trip count.
+  - **Verified live (dev, gateway 3000).** Happy path: `PATCH` with
+    `{name, stockQuantity:73}` → 200, product 73 **and** inventory row 38 → 73.
+    Abort path: inventory process killed → same PATCH with
+    `{name:"MUST NOT PERSIST", stockQuantity:999}` → **502**, and `GET` still
+    returned the previous name and `stockQuantity:73` — nothing written.
+    Inventory restarted, values restored to `JBL Flip 6` / 70 on both sides.
+    `tsc --noEmit` clean, eslint clean, jest **30 suites / 271 tests** green
+    (+1 new regression test asserting the product write never fires when the
+    pre-flight read throws).
+  - The full failure matrix (which step leaves what behind, including the
+    separate `skuList` transaction) is documented in `known-behaviors.md` →
+    PATCH-ATOMIC-01. FE keeps its `onError` invalidate/refetch mitigation — a
+    failed PATCH still does not mean "nothing changed".
+
+- **BATCH-0811 + BATCH-0812 released to prod (2026-08-12).** Both sweep batches
+  cleared the release gate once the storefront and GHN-console agents flipped
+  their cells, and are now on `main` (`26762ca`) and deployed. Verified on prod:
+  `GET /api/order/seller` returns joined `items` with `price` as a **number**
+  and the new `paidAt` field. The `⏳ PENDING RUNTIME TEST (MEDIA-ORPHAN-01)`
+  prod sweep is closed as a no-op — `GET /api/social/posts` on prod returns
+  `total: 0`, so there are no Cloudinary URLs there to check.
+
 - **GHN console batch: the shipping console can act again, and stops leaking
   what it should not (2026-08-12).** Five items the GHN-console FE agent filed
   after testing against prod (`../.agent-local/backend-handoff.md`). All five

@@ -37,39 +37,6 @@ reward_points, shipping_history, voucher_redemptions.
 
 ## Active Tasks
 
-### 🚧 RELEASE HOLD — the working tree is class C, do not push
-
-Since CD-04, merging into `main` deploys to prod, and both frontends auto-deploy
-from their own repos. A contract change that lands before its frontend breaks
-prod for real users in the gap between the two deploys. Rule + classification
-(A standalone / B additive / C coupled) is in `.claude/CLAUDE.md` → "Release
-Gate" and, in full, `ai-docs/agent-context/git-workflow.md`. The cross-repo
-ledger is `../.agent-local/release-gate.md` (outside every repo — never commit).
-
-Current state: the 11-item sweep batch of 2026-08-11 **plus** the 5-item GHN
-console batch of 2026-08-12 (GHN-ACT-01 / RAW-01 / HIST-01 / ENUM-01 / RBAC-01)
-are committed-ready but **HELD**. Class C in the tree: ORDER-SHAPE-01
-(`items[].price` string → number), FE-INBOX-0811 (wishlist drops `publicId`,
-`id` → `prod_…`; batch-create 201 → 200), INV-CONTRACT-01 (error text no longer
-carries a numeric id), GHN-ENUM-01 (bogus `status`/`ghnStatus` 200 → 400),
-GHN-RAW-01 (`ghnDetail.raw` narrowed to an allow-list). A push ships the whole
-tree, so the class A/B items ride along and are held with them.
-**Unblocks when** BOTH FE agents flip their cell to ✅ in `release-gate.md` —
-the storefront for the 08-11 items, the GHN console for the 08-12 items. An
-urgent standalone fix must go on its own branch, not on top of this tree.
-
-### ORD-RBAC-01 — should a seller keep the manual ship/deliver/complete path? (product decision)
-
-`PATCH /api/order/:id/{ship,deliver,complete}` accepts role `shop` with no GHN
-waybill, by design: `SELLER_FORWARD_TRANSITIONS` (`orders.service.ts` ~:2699) is
-the documented fallback for a delayed or absent GHN webhook. FE asked for a 403.
-Not flipped unilaterally — with ORD-GUARD-01 in place the manual path can no
-longer move an unpaid order, so the money exploit that prompted the request is
-closed either way. Flipping it would strand every order whose webhook never
-fires (GHN sandbox does not always deliver), so it needs a call on which failure
-is preferable. If yes: gate the three routes on `ghnOrderCode !== null` rather
-than on role, so admins and webhook-driven flows are unaffected.
-
 ### SOCIAL-502 follow-up — roll the transport retry out beyond social (optional)
 
 `retryOnTransportError()` (`apps/gateway/src/common/exception/transport-error.ts`)
@@ -91,8 +58,8 @@ Nine real defects, none of them blockers. The first three (duplicate register �
 (commit `b0e982d`), DEPLOYED AND VERIFIED ON PROD — see `CHANGELOG.md`
 2026-08-06. Six remain, ordered by impact:
 
-1. ~~**GHN failures surface as opaque 500/502.**~~ FIXED 2026-08-10 by RESIL-01
-   (not yet deployed) — every GHN call is mapped: refusal → 400 with GHN's own
+1. ~~**GHN failures surface as opaque 500/502.**~~ FIXED 2026-08-10 by RESIL-01,
+   DEPLOYED 2026-08-12 — every GHN call is mapped: refusal → 400 with GHN's own
    message, outage/401/403/429 → 503, plus a circuit breaker. See `CHANGELOG.md`
    "RESIL-01".
 2. **Order create swallows a waybill failure**: order is created with
@@ -107,11 +74,13 @@ Nine real defects, none of them blockers. The first three (duplicate register �
    filtering `/api/shipping/wards`. After RESIL-01 deploys, the same symptom
    self-classifies: `503` ⇒ GHN was down (expected, retry), `400` + GHN's
    message ⇒ the ward really is unshippable and only then is this a real defect.
+   GHN-DIST-01 (2026-08-13) adds a third, earlier signal: a district/ward pair
+   GHN's master data does not know now 400s before any preview call.
 4. **Numeric internal ids still leak on PUBID domains**: `stock-check.productId`,
    return-request `reviewedBy`, moderation `moderatorId`/`submittedBy`,
    analytics `topProducts[].productId`, review-create `userId`, notification
-   message text ("Đơn hàng #34 …"), "Post 1 not found". (Fixed 2026-08-12 by
-   GHN-HIST-01, not yet deployed: shipping-history `actorId` and every GHN
+   message text ("Đơn hàng #34 …"), "Post 1 not found". (Fixed and deployed
+   2026-08-12 by GHN-HIST-01: shipping-history `actorId` and every GHN
    action/status message now carry `usr_`/`ord_`. Wishlist `id` was fixed by
    the 08-11 batch.)
 5. **Envelope inconsistency**: errors propagated from microservices report
@@ -142,7 +111,7 @@ baselines (`scripts/load/baseline.mjs`). Three real gaps are worth closing, in
 this order:
 
 - **RESIL-01 — circuit breaker + error mapping around GHN — DONE 2026-08-10,
-  NOT YET DEPLOYED.** See `CHANGELOG.md`. The reusable breaker now lives at
+  DEPLOYED 2026-08-12.** See `CHANGELOG.md`. The reusable breaker now lives at
   `libs/common/src/resilience/circuit-breaker.ts` (exported from `@app/common`);
   it is deliberately in-process, so with multiple instances each learns an
   outage on its own. GHN is currently its only consumer — reuse it for any other
@@ -256,6 +225,33 @@ error handling 401/403/404/400/500-503; 6) settings page stays read-only/mock
 yet). Auth: cookie `credentials:"include"`, roles `logistics_operator` /
 `shipping_manager` (test accounts seeded — see `../.agent-local/test-accounts.md`).
 
+### GHN-ETA-01 — persist + expose the GHN delivery ETA (planned, 1 additive migration)
+
+GHN DOES return a delivery estimate, but as an **absolute timestamp**, not a
+duration and not a distance: `expected_delivery_time` (ISO 8601 UTC) on
+`/v2/shipping-order/preview` AND on `/v2/shipping-order/create`, computed from
+`from_district/ward → to_district/ward` + `service_type_id`. There is no km or
+hours/days field. Probed on the dev sandbox 2026-08-13: fee is 0 as always but
+`expected_delivery_time` carries a REAL value, so this is not blocked on prod
+GHN credentials. GHN also has a dedicated `POST /v2/shipping-order/leadtime`
+(`{leadtime, leadtime_order:{from_estimate_date,to_estimate_date}}`) — we do not
+call it and do not need to; preview already hands us the same value for free.
+
+Already wired: `previewShippingFee` (`ghn.service.ts:408`) → `POST
+/api/order/shipping-fee` returns `{shippingFee, expectedDeliveryTime}`, and
+`getOrderDetail` (`ghn.service.ts:657-658`) maps both `expectedDeliveryTime` and
+`leadtime` into `GhnOrderDetail` for the admin GHN console.
+
+Gap: `createShippingOrder` (`ghn.service.ts:365`) reads only `order_code` and
+DROPS the `expected_delivery_time` sitting in the same response; no column on
+`orders` stores it. So the buyer sees an ETA once at checkout and never again —
+`GET /api/order/:id` has no such field.
+
+To do: `orders.expected_delivery_time DATETIME NULL` (additive), write it at
+waybill create, refresh on webhook/manual sync, expose on the order read. FE
+renders "giao trong X ngày" by diffing against now — do NOT compute a duration
+server-side. Release class **B** (current FE keeps working).
+
 ### AI-02F5 — pHash lookup scale path (gated, not calendar-scheduled)
 
 Current Hamming comparison is an O(catalog) scan — fine for the present small
@@ -315,6 +311,18 @@ gains) and re-measure `GATEWAY_INSTANCES>1` there — the dev-machine cluster
 probe was noisy/no stable gain. Aiven-free hard wall ≈ 76 conns ≈ 300 req/s
 across ALL services; true 10k sustained likely needs a bigger VPS/Aiven tier.
 
+### SOCIAL-LIKE-NTF-01 — liking a post notifies nobody (product decision, not a bug)
+
+`comment` and `reply` both notify the post owner (verified on prod 2026-08-13 —
+badge moves in realtime, no reload). Like does not: `likePost()`
+(`apps/social/src/social.service.ts:506`) only writes `post_like` + bumps the
+cached counter, emits no event, and `apps/notification/` has no `like` handler —
+it was never implemented, so do NOT go hunting for a dropped event. Adding it is
+an emit + a handler + a notification type; the open question is product-side
+(likes are high-frequency, so it likely needs batching/throttling, e.g. "X and 4
+others liked your post", rather than one notification per like). FE needs
+nothing until that is decided.
+
 ### Open questions
 
 - **OQ-2:** can GHN webhook `?token=` query auth be REMOVED entirely (header
@@ -330,6 +338,9 @@ across ALL services; true 10k sustained likely needs a bigger VPS/Aiven tier.
 > they are residual/deliberate behaviours of shipped fixes, NOT open bugs. Do
 > not re-diagnose them; do not assert the opposite contract in tests.
 
+- ORD-RBAC-01: `PATCH /api/order/:id/{ship,deliver,complete}` is admin-only —
+  role `shop` gets 403 before the order is loaded (so 403 even for a bad id).
+  `confirm` / `ready-to-ship` still accept `shop`; recovery is admin GHN sync.
 - ORD-GUARD-01: seller transitions 400 on a non-COD order with `paidAt` NULL;
   `paidAt` is exposed on every order read; the backfill treats legacy
   hand-walked orders as paid.
@@ -357,16 +368,17 @@ across ALL services; true 10k sustained likely needs a bigger VPS/Aiven tier.
 - Array query params: `?categoryIds[]=` → 400; use repeated keys or scalar.
 - GHN free-text address is best-effort; exact `toDistrictId`+`toWardCode` skip
   resolution; `toWardCode` stays a string (leading zeros).
+- GHN-DIST-01: an unknown `toDistrictId` / a ward from another district is a 400
+  on `POST /api/order/shipping-fee` and at waybill create — but validation is
+  fail-open (outage/empty list ⇒ quote anyway), and `POST /api/order` still
+  swallows it via `getShippingFeeOrZero()` and books at fee 0.
 - Storefront catalog defaults `isActive:true` unless `isActive` or single
   `userId` is passed; `?userId=` shows that seller's hidden products by design;
   `GET /api/products/:id` still returns deactivated products with 200.
-- ⏳ PENDING RUNTIME TEST (MEDIA-ORPHAN-01): the same dead-Cloudinary-URL sweep
-  was run on DEV only — prod was unreachable (EC2 in its stopped window) when
-  the fix landed. Once prod is up: `curl -s
-  'https://<PROD_API_DOMAIN>/api/social/posts?page=1&limit=50'`, collect every
-  `imageUrls[]`/`videoUrl` on `res.cloudinary.com`, GET each one, and NULL out
-  the `posts.image_urls` entries that answer 404. Prod has its own Aiven DB, so
-  the DEV cleanup did not touch it.
+- PATCH-ATOMIC-01: `PATCH /api/products/:id` is NOT one transaction — product
+  fields, `skuList`, and the inventory stock write are three sequential steps
+  across two databases. A late inventory failure rolls the stock mirror back but
+  leaves the product fields committed behind an error response.
 
 ## Ops / Runtime Reference
 
