@@ -9,7 +9,7 @@ import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
 import { retryOnTransportError } from "../common/exception/transport-error";
 import { assertCloudinaryUrlsOwnedBy } from "../common/media/cloudinary-ownership";
-import { UserInfo, UserInfoTcp } from "./social.types";
+import { CommentNode, UserInfo, UserInfoTcp } from "./social.types";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
 import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 
@@ -52,6 +52,67 @@ export class SocialGatewayService {
     } catch {
       return new Map();
     }
+  }
+
+  /**
+   * SOCIAL-AUTHOR-01 — comments and replies carried only `userId`, so the FE
+   * had nothing to render but the raw id ("Người dùng #usr_..."). Attach the
+   * same `author` embed posts already return.
+   *
+   * Every author in the payload — including the whole reply tree — is resolved
+   * in ONE user-service call, so this never becomes an N+1 over comments.
+   * Handles all three comment shapes: the paginated list, the nested tree, and
+   * a single freshly-created node.
+   */
+  private async attachCommentAuthors<T>(value: T): Promise<T> {
+    if (!value || typeof value !== "object") return value;
+    const container = value as { data?: unknown };
+    const isPaginated = Array.isArray(container.data);
+    const roots = isPaginated
+      ? (container.data as CommentNode[])
+      : [value as unknown as CommentNode];
+
+    const userIds = new Set<number>();
+    this.collectCommentAuthorIds(roots, userIds);
+    const authorMap = await this.fetchAuthorMap([...userIds]);
+    const decorated = this.decorateCommentNodes(roots, authorMap);
+
+    return (
+      isPaginated ? { ...container, data: decorated } : decorated[0]
+    ) as T;
+  }
+
+  private collectCommentAuthorIds(
+    nodes: CommentNode[],
+    into: Set<number>,
+  ): void {
+    for (const node of nodes) {
+      if (Number.isFinite(Number(node?.userId))) into.add(Number(node.userId));
+      if (Array.isArray(node?.children)) {
+        this.collectCommentAuthorIds(node.children, into);
+      }
+      // A freshly created reply embeds the comment it answers — same bug one
+      // level up if it is left undecorated.
+      if (node?.parent && typeof node.parent === "object") {
+        this.collectCommentAuthorIds([node.parent], into);
+      }
+    }
+  }
+
+  private decorateCommentNodes(
+    nodes: CommentNode[],
+    authorMap: Map<number, UserInfo>,
+  ): CommentNode[] {
+    return nodes.map((node) => ({
+      ...node,
+      author: authorMap.get(Number(node?.userId)) ?? null,
+      ...(Array.isArray(node?.children)
+        ? { children: this.decorateCommentNodes(node.children, authorMap) }
+        : {}),
+      ...(node?.parent && typeof node.parent === "object"
+        ? { parent: this.decorateCommentNodes([node.parent], authorMap)[0] }
+        : {}),
+    }));
   }
 
   private async resolveUserId(userId: string): Promise<number> {
@@ -499,14 +560,16 @@ export class SocialGatewayService {
   ): Promise<unknown> {
     try {
       return this.exposeReferences(
-        await firstValueFrom(
-          this.socialClient
-            .send(SOCIAL_MESSAGE_PATTERN.CREATE_COMMENT, {
-              postId,
-              userId,
-              content,
-            })
-            .pipe(timeout(TCP_TIMEOUT_MS.WRITE)) as Observable<unknown>,
+        await this.attachCommentAuthors(
+          await firstValueFrom(
+            this.socialClient
+              .send(SOCIAL_MESSAGE_PATTERN.CREATE_COMMENT, {
+                postId,
+                userId,
+                content,
+              })
+              .pipe(timeout(TCP_TIMEOUT_MS.WRITE)) as Observable<unknown>,
+          ),
         ),
       );
     } catch (error) {
@@ -525,10 +588,16 @@ export class SocialGatewayService {
   ): Promise<unknown> {
     try {
       return this.exposeReferences(
-        await firstValueFrom(
-          this.socialClient
-            .send(SOCIAL_MESSAGE_PATTERN.GET_COMMENTS, { postId, page, limit })
-            .pipe(timeout(TCP_TIMEOUT_MS.READ)) as Observable<unknown>,
+        await this.attachCommentAuthors(
+          await firstValueFrom(
+            this.socialClient
+              .send(SOCIAL_MESSAGE_PATTERN.GET_COMMENTS, {
+                postId,
+                page,
+                limit,
+              })
+              .pipe(timeout(TCP_TIMEOUT_MS.READ)) as Observable<unknown>,
+          ),
         ),
       );
     } catch (error) {
@@ -564,15 +633,17 @@ export class SocialGatewayService {
   ): Promise<unknown> {
     try {
       return this.exposeReferences(
-        await firstValueFrom(
-          this.socialClient
-            .send(SOCIAL_MESSAGE_PATTERN.CREATE_REPLY, {
-              postId,
-              parentCommentId,
-              userId,
-              content,
-            })
-            .pipe(timeout(TCP_TIMEOUT_MS.WRITE)) as Observable<unknown>,
+        await this.attachCommentAuthors(
+          await firstValueFrom(
+            this.socialClient
+              .send(SOCIAL_MESSAGE_PATTERN.CREATE_REPLY, {
+                postId,
+                parentCommentId,
+                userId,
+                content,
+              })
+              .pipe(timeout(TCP_TIMEOUT_MS.WRITE)) as Observable<unknown>,
+          ),
         ),
       );
     } catch (error) {
@@ -587,10 +658,12 @@ export class SocialGatewayService {
   async getReplies(commentId: string, depth?: number): Promise<unknown> {
     try {
       return this.exposeReferences(
-        await firstValueFrom(
-          this.socialClient
-            .send(SOCIAL_MESSAGE_PATTERN.GET_REPLIES, { commentId, depth })
-            .pipe(timeout(TCP_TIMEOUT_MS.READ)) as Observable<unknown>,
+        await this.attachCommentAuthors(
+          await firstValueFrom(
+            this.socialClient
+              .send(SOCIAL_MESSAGE_PATTERN.GET_REPLIES, { commentId, depth })
+              .pipe(timeout(TCP_TIMEOUT_MS.READ)) as Observable<unknown>,
+          ),
         ),
       );
     } catch (error) {
