@@ -31,6 +31,7 @@ import {
   InventoryData,
   ProductData,
   ProductWithInventory,
+  StockSyncTarget,
   UserData,
   PriceSuggestion,
   ProductRiskSummary,
@@ -718,6 +719,20 @@ export class ProductService {
       assertCloudinaryUrlsOwnedBy(dto.imageUrls, callerId);
     }
     try {
+      // Inventory lives in another database, so its write can never join the
+      // product transaction — this PATCH is two writes, not one. Resolving the
+      // target row BEFORE touching the product keeps the common failures
+      // (inventory down, unreachable, no base row) from leaving product fields
+      // committed behind an error response; only the inventory write itself can
+      // still fail late, and the mirror restore below covers that leg.
+      const stockSyncTarget =
+        dto.stockQuantity === undefined
+          ? null
+          : await this.resolveStockSyncTarget(
+              internalProductId,
+              dto.stockQuantity,
+            );
+
       const updatedProduct = await this.exposeProductReferences(
         await firstValueFrom(
           this.productClient
@@ -736,9 +751,9 @@ export class ProductService {
       // Inventory owns stock — products.stock_quantity is only a mirror the
       // inventory.stock_changed fanout refreshes. Push the edited value across
       // so it is not silently reverted by the next stock event.
-      if (dto.stockQuantity !== undefined) {
+      if (stockSyncTarget) {
         try {
-          await this.syncInventoryStock(internalProductId, dto.stockQuantity);
+          await this.applyStockSync(stockSyncTarget);
         } catch (invErr) {
           // Inventory refused or is unreachable. The product row already holds
           // the new number, so leaving it there would make the catalog claim
@@ -763,20 +778,20 @@ export class ProductService {
   }
 
   /**
-   * Mirror a seller-supplied `stockQuantity` into the inventory service, which
-   * owns stock. Without this push the edited number lived in MySQL only until
-   * the next `inventory.stock_changed` event overwrote it from Postgres, so a
-   * stock edit disappeared with no error (the PATCH still answered 200).
+   * Read half of the stock mirror: find the base inventory row a seller-supplied
+   * `stockQuantity` has to be pushed into. Runs BEFORE the product write so an
+   * unreachable inventory service aborts the PATCH with nothing committed.
    *
-   * SKU-matrix products keep one inventory row per SKU and own no base row —
-   * their stock is edited per SKU, so a missing base row is skipped rather than
-   * treated as a failure. Any transport/service error still propagates, so the
-   * seller learns the new stock did not apply instead of losing it silently.
+   * Returns null when there is nothing to push: SKU-matrix products keep one
+   * inventory row per SKU and own no base row (their stock is edited per SKU),
+   * and a value already in sync needs no write. Any transport/service error
+   * still propagates, so the seller learns the new stock did not apply instead
+   * of losing it silently.
    */
-  private async syncInventoryStock(
+  private async resolveStockSyncTarget(
     productId: number,
     availableStock: number,
-  ): Promise<void> {
+  ): Promise<StockSyncTarget | null> {
     const inventoryRows = await firstValueFrom(
       this.inventoryClient
         .send<
@@ -793,23 +808,33 @@ export class ProductService {
       this.logger.warn(
         `No base inventory row for product ${productId} — stock quantity not propagated`,
       );
-      return;
+      return null;
     }
 
     if (baseRow.availableStock === availableStock) {
-      return;
+      return null;
     }
 
+    return { productId, inventoryId: Number(baseRow.id), availableStock };
+  }
+
+  /**
+   * Write half of the stock mirror. Without this push the edited number lived in
+   * MySQL only until the next `inventory.stock_changed` event overwrote it from
+   * Postgres, so a stock edit disappeared with no error (the PATCH still
+   * answered 200).
+   */
+  private async applyStockSync(target: StockSyncTarget): Promise<void> {
     await firstValueFrom(
       this.inventoryClient
         .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_UPDATE, {
-          id: Number(baseRow.id),
-          update: { availableStock },
+          id: target.inventoryId,
+          update: { availableStock: target.availableStock },
         })
         .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
     );
     this.logger.log(
-      `Inventory available stock for product ${productId} set to ${availableStock}`,
+      `Inventory available stock for product ${target.productId} set to ${target.availableStock}`,
     );
   }
 

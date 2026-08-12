@@ -58,6 +58,16 @@ export type InventoryData = {
   [key: string]: unknown;
 };
 
+/**
+ * A resolved base-inventory write, held between the pre-flight read and the
+ * write that follows the product update on `PATCH /products/:id`.
+ */
+export type StockSyncTarget = {
+  productId: number;
+  inventoryId: number;
+  availableStock: number;
+};
+
 export type UserData = {
   id?: number | string;
   publicId?: string | null;

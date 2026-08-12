@@ -239,6 +239,22 @@ describe("ProductService ownership", () => {
       );
     });
 
+    it("never writes the product when inventory is unreachable up front", async () => {
+      mockProductUpdate();
+      inventoryClient.send.mockReturnValue(
+        throwError(() => new Error("inventory unavailable")),
+      );
+
+      await expect(
+        service.updateProduct(16, { stockQuantity: 150 }, OWNER_ID, "shop"),
+      ).rejects.toBeDefined();
+      // The pre-flight read failed, so the edit must not be half-applied.
+      expect(productClient.send).not.toHaveBeenCalledWith(
+        PRODUCT_MESSAGE_PATTERNS.PRODUCT_UPDATE,
+        expect.anything(),
+      );
+    });
+
     it("restores the product mirror when inventory refuses the new stock", async () => {
       mockProductUpdate();
       inventoryClient.send.mockImplementation((pattern: string) =>
