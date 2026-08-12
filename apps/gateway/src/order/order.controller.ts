@@ -802,7 +802,8 @@ export class OrderController {
   @Patch(":id/ship")
   @UseGuards(JwtAuthGuard)
   @ApiOperation({
-    summary: "Mark an order as shipped — processing → shipped (seller only)",
+    summary:
+      "Mark an order as shipped — processing → shipped (admin only; the GHN webhook is the normal driver)",
   })
   @ApiResponse({ status: 200, description: "Order marked as shipped." })
   @ApiResponse({
@@ -810,7 +811,11 @@ export class OrderController {
     description: "Order is not in PROCESSING status.",
   })
   @ApiResponse({ status: 401, description: "Unauthorized." })
-  @ApiResponse({ status: 403, description: "Forbidden — not the seller." })
+  @ApiResponse({
+    status: 403,
+    description:
+      "Forbidden — sellers cannot set shipping status by hand; the carrier reports it.",
+  })
   @ApiResponse({ status: 404, description: "Order not found." })
   @ApiResponse({ status: 409, description: "Order was updated concurrently." })
   async shipOrder(
@@ -831,12 +836,16 @@ export class OrderController {
   @UseGuards(JwtAuthGuard)
   @ApiOperation({
     summary:
-      "Mark an order as out for delivery — shipped → delivering (seller only)",
+      "Mark an order as out for delivery — shipped → delivering (admin only; the GHN webhook is the normal driver)",
   })
   @ApiResponse({ status: 200, description: "Order marked as delivering." })
   @ApiResponse({ status: 400, description: "Order is not in SHIPPED status." })
   @ApiResponse({ status: 401, description: "Unauthorized." })
-  @ApiResponse({ status: 403, description: "Forbidden — not the seller." })
+  @ApiResponse({
+    status: 403,
+    description:
+      "Forbidden — sellers cannot set shipping status by hand; the carrier reports it.",
+  })
   @ApiResponse({ status: 404, description: "Order not found." })
   @ApiResponse({ status: 409, description: "Order was updated concurrently." })
   async deliverOrder(
@@ -857,7 +866,7 @@ export class OrderController {
   @UseGuards(JwtAuthGuard)
   @ApiOperation({
     summary:
-      "Mark an order as completed — delivering → completed (seller only)",
+      "Mark an order as completed — delivering → completed (admin only; the GHN webhook is the normal driver)",
   })
   @ApiResponse({ status: 200, description: "Order marked as completed." })
   @ApiResponse({
@@ -865,7 +874,11 @@ export class OrderController {
     description: "Order is not in DELIVERING status.",
   })
   @ApiResponse({ status: 401, description: "Unauthorized." })
-  @ApiResponse({ status: 403, description: "Forbidden — not the seller." })
+  @ApiResponse({
+    status: 403,
+    description:
+      "Forbidden — sellers cannot set shipping status by hand; the carrier reports it.",
+  })
   @ApiResponse({ status: 404, description: "Order not found." })
   @ApiResponse({ status: 409, description: "Order was updated concurrently." })
   async completeOrder(
