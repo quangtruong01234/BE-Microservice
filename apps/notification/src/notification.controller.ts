@@ -47,26 +47,92 @@ export class NotificationController {
     );
   }
 
+  /**
+   * Order label used inside notification text. Every other field on the wire is
+   * a public id, so the message must not be the one place that leaks the
+   * internal row id. Falls back to the numeric id only for pre-PUBID rows.
+   */
+  private orderLabel(orderId: number, publicId?: string | null): string {
+    return `#${publicId ?? orderId}`;
+  }
+
+  /**
+   * Lifecycle moves that also deserve an email. The early seller-side steps
+   * (confirmed / processing) stay in-app only — mailing all five moves would be
+   * five mails per order. Shipping milestones are the ones a buyer wants in
+   * their inbox (F7 follow-up).
+   */
+  private static readonly EMAILED_STATUSES = new Set([
+    "shipped",
+    "delivering",
+    "completed",
+  ]);
+
+  /**
+   * Buyer-facing text for a lifecycle move. `null` = no notification for that
+   * status: CANCELED and the return states have their own dedicated events, and
+   * PENDING is the creation state.
+   */
+  private statusChangedMessage(status: string, label: string): string | null {
+    switch (status) {
+      case "confirmed":
+        return `Đơn hàng ${label} đã được người bán xác nhận`;
+      case "processing":
+        return `Đơn hàng ${label} đang được chuẩn bị để giao`;
+      case "shipped":
+        return `Đơn hàng ${label} đã được bàn giao cho đơn vị vận chuyển`;
+      case "delivering":
+        return `Đơn hàng ${label} đang trên đường giao đến bạn`;
+      case "completed":
+        return `Đơn hàng ${label} đã giao thành công`;
+      default:
+        return null;
+    }
+  }
+
   @EventPattern(EVENT.ORDER_CREATED_EVENT)
   async handleOrderCreated(
-    @Payload() data: { id: number; publicId?: string | null; userId: number },
+    @Payload()
+    data: {
+      id: number;
+      publicId?: string | null;
+      userId: number;
+      sellerId?: number | null;
+    },
     @Ctx() context: RmqContext,
   ): Promise<void> {
-    const { id: orderId, userId } = data;
+    const { id: orderId, userId, sellerId } = data;
     this.logger.log(
       `[NOTIFICATION] order_created received for order ${orderId}`,
     );
     try {
-      const message = `Đơn hàng #${orderId} đã được đặt thành công`;
+      const publicId = data.publicId ?? null;
+      const label = this.orderLabel(orderId, publicId);
+      const message = `Đơn hàng ${label} đã được đặt thành công`;
       await this.notificationService.saveNotification(
         userId,
         "order_created",
         orderId,
         message,
         {},
-        data.publicId ?? null,
+        publicId,
       );
       await this.sendOrderEmail(userId, message);
+      // The seller's only signal that there is work to do. Multi-seller
+      // checkout publishes one event per sub-order, so each seller is told
+      // about their own order exactly once.
+      if (sellerId != null && Number(sellerId) !== Number(userId)) {
+        const sellerMessage = `Bạn có đơn hàng mới ${label} cần xác nhận`;
+        await this.notificationService.saveNotification(
+          Number(sellerId),
+          "new_order",
+          orderId,
+          sellerMessage,
+          {},
+          publicId,
+        );
+        await this.sendOrderEmail(Number(sellerId), sellerMessage);
+      }
       this.rmqService.ack(context);
     } catch (err) {
       this.logger.error(
@@ -97,7 +163,7 @@ export class NotificationController {
       if (!order) {
         throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
       }
-      const message = `Đơn hàng #${orderId} đã thanh toán thành công`;
+      const message = `Đơn hàng ${this.orderLabel(orderId, order.publicId)} đã thanh toán thành công`;
       await this.notificationService.saveNotification(
         order.userId,
         "payment_completed",
@@ -142,7 +208,8 @@ export class NotificationController {
       if (!order) {
         throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
       }
-      const message = `Đơn hàng #${orderId} đã bị hủy`;
+      const label = this.orderLabel(orderId, order.publicId);
+      const message = `Đơn hàng ${label} đã bị hủy`;
       await this.notificationService.saveNotification(
         order.userId,
         "order_canceled",
@@ -152,6 +219,22 @@ export class NotificationController {
         order.publicId,
       );
       await this.sendOrderEmail(order.userId, message);
+      // The seller may already be preparing the parcel — tell them to stop.
+      if (
+        order.sellerId != null &&
+        Number(order.sellerId) !== Number(order.userId)
+      ) {
+        const sellerMessage = `Đơn hàng ${label} đã bị hủy, không cần chuẩn bị hàng`;
+        await this.notificationService.saveNotification(
+          Number(order.sellerId),
+          "order_canceled",
+          orderId,
+          sellerMessage,
+          {},
+          order.publicId,
+        );
+        await this.sendOrderEmail(Number(order.sellerId), sellerMessage);
+      }
       this.rmqService.ack(context);
     } catch (err) {
       this.logger.error(
@@ -166,6 +249,58 @@ export class NotificationController {
       } else {
         channel.nack(originalMsg, false, true);
       }
+    }
+  }
+
+  @EventPattern(EVENT.ORDER_STATUS_CHANGED_EVENT)
+  async handleOrderStatusChanged(
+    @Payload()
+    data: {
+      orderId: number;
+      publicId?: string | null;
+      userId: number;
+      sellerId?: number | null;
+      status: string;
+      previousStatus?: string;
+    },
+    @Ctx() context: RmqContext,
+  ): Promise<void> {
+    const { orderId, userId, status } = data;
+    this.logger.log(
+      `[NOTIFICATION] order.status_changed received for order ${orderId} → ${status}`,
+    );
+    try {
+      const publicId = data.publicId ?? null;
+      const message = this.statusChangedMessage(
+        status,
+        this.orderLabel(orderId, publicId),
+      );
+      // Statuses with their own dedicated event (canceled, returns) produce no
+      // message here — ack so the broker does not redeliver a no-op.
+      if (message === null) {
+        this.rmqService.ack(context);
+        return;
+      }
+      await this.notificationService.saveNotification(
+        Number(userId),
+        `order_${status}`,
+        orderId,
+        message,
+        {},
+        publicId,
+      );
+      if (NotificationController.EMAILED_STATUSES.has(status)) {
+        await this.sendOrderEmail(Number(userId), message);
+      }
+      this.rmqService.ack(context);
+    } catch (err) {
+      this.logger.error(
+        `[NOTIFICATION] handleOrderStatusChanged failed for order ${orderId}: ${err}`,
+      );
+      const channel = context.getChannelRef() as {
+        nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
+      };
+      channel.nack(context.getMessage(), false, true); // requeue: DB error
     }
   }
 
@@ -188,7 +323,7 @@ export class NotificationController {
         throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
       }
       // Notify the seller that a buyer opened a return request to review.
-      const message = `Đơn hàng #${orderId} có yêu cầu trả hàng cần duyệt`;
+      const message = `Đơn hàng ${this.orderLabel(orderId, order.publicId)} có yêu cầu trả hàng cần duyệt`;
       await this.notificationService.saveNotification(
         order.sellerId,
         "order_return_requested",
@@ -234,7 +369,7 @@ export class NotificationController {
         throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
       }
       // Notify the buyer that their return request was approved and refunded.
-      const message = `Yêu cầu trả hàng cho đơn #${orderId} đã được duyệt và hoàn tiền`;
+      const message = `Yêu cầu trả hàng cho đơn ${this.orderLabel(orderId, order.publicId)} đã được duyệt và hoàn tiền`;
       await this.notificationService.saveNotification(
         order.userId,
         "order_return_approved",
@@ -280,7 +415,7 @@ export class NotificationController {
         throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
       }
       // Notify the buyer that their return request was rejected.
-      const message = `Yêu cầu trả hàng cho đơn #${orderId} đã bị từ chối`;
+      const message = `Yêu cầu trả hàng cho đơn ${this.orderLabel(orderId, order.publicId)} đã bị từ chối`;
       await this.notificationService.saveNotification(
         order.userId,
         "order_return_rejected",
