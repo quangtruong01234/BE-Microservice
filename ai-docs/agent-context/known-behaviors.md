@@ -40,6 +40,31 @@
 
 Never write a test asserting `paymentUrl` on the single-seller shape.
 
+## `paidAt` gates the seller transitions (ORD-GUARD-01, 2026-08-11)
+
+`orders.paid_at` is the ONLY payment fact the orders service owns — payments
+lives on Node B and speaks to orders only through the `payment_completed`
+fanout. `confirm`, `ready-to-ship` and every `advanceOrderStatus` step call
+`assertOnlinePaymentSettled()`: COD or a non-null `paidAt` passes, anything else
+is a **400** *"Order cannot be advanced — the &lt;method&gt; payment has not
+completed yet"*. Consequences that are deliberate, not bugs:
+
+- **A genuinely paid order whose `payment_completed` was lost is now blocked for
+  the seller too.** It was already stuck — the same lost event is what leaves it
+  at `pending` — and the stale-reservation sweeper cancels it. The guard only
+  removes the seller's ability to walk it forward by hand while the money state
+  is unknown. There is no admin override on purpose; the remedy is fixing the
+  payment event, not stamping the column.
+- **The backfill treats a legacy hand-walked order as paid.** A non-COD row at
+  processing/shipped/delivering/completed got `paid_at = updated_at`, which
+  cannot distinguish "paid" from "a seller advanced it before the guard
+  existed". Stranding real paid orders mid-fulfilment was judged worse.
+- **The COD stamp happens in `finalizeOrderCompletion`, not from the fanout it
+  publishes there** — `paid_at` must not depend on RMQ being up. The stamp is a
+  conditional `WHERE paid_at IS NULL`, so hearing its own event back is a no-op.
+- `paidAt` is on every order read. NULL on a non-COD order means unpaid; NULL on
+  a COD order means "not delivered yet", not "unpaid forever".
+
 ## Legacy payment return URLs keep the numeric order id (2026-08-07)
 
 Since 2026-08-07 the gateway redirect is
@@ -217,27 +242,130 @@ because a cancelable order still holds a RESERVED row. Approve now calls
   `CONSUMED` rows that nothing re-triggers. The three prod units owed were
   repaired by hand on 2026-08-11; see `CHANGELOG.md`.
 
-## Manual stock adjustment needs TWO writes (Postgres + the MySQL mirror)
+## Manual stock adjustment — ONE write, either side (STOCK-SYNC-01, 2026-08-11)
 
-`InventoryService.update()` (`apps/inventory/src/inventory.service.ts:183`) is
-plain CRUD — it does **not** call `emitStockChanged()`, unlike reserve / release
-/ consume / restock. Since `products.stockQuantity` (MySQL) is only ever written
-by the `inventory.stock_changed` consumer (`apps/product/src/product.controller.ts:375`
-→ `updateStockQuantity()`), a lone `PUT /api/inventory/:id` fixes the source of
-truth and leaves the storefront showing the old number until the next real stock
-movement. A direct Postgres UPDATE has the same defect, only worse.
+Superseding the older "do both writes" recipe: since STOCK-SYNC-01 the two stock
+stores keep each other in step, so adjust from **either** side with a single
+request.
 
-To adjust stock by hand, do both, in this order:
+- `PATCH /api/products/<publicId> { "stockQuantity": N }` → writes the MySQL
+  mirror, then pushes `N` into the product's **base** inventory row
+  (`syncInventoryStock`, `apps/gateway/src/product/product.service.ts`).
+- `PUT /api/inventory/<numericId> { "availableStock": N }` → writes Postgres,
+  then emits `inventory.stock_changed` so the MySQL mirror follows
+  (`InventoryService.update()`). Inventory ids stay numeric — that domain is
+  deliberately not PUBID-converted.
 
-1. `PUT /api/inventory/:id { "availableStock": N }` — **numeric** inventory id
-   (`ParseIntPipe`; inventory is deliberately not a PUBID domain).
-2. `PATCH /api/products/<publicId> { "stockQuantity": N }` — lands on the mirror
-   column through `Object.assign` (`product.service.ts:1532`) and invalidates the
-   catalog cache.
+Residual behaviours worth knowing, none of them bugs:
 
-Step 2 does **not** write back into inventory, so it cannot double-credit: the
-`stockQuantity` → inventory path exists only inside the `skuList` diff branch
-(`product.service.ts:985-1005`), which a base-price product (`skuId: null`) never
-enters. For a SKU-backed product, adjust through `skuList` instead and let the
-normal mirror push run. Verify with `GET /api/inventory/product/<publicId>` and
+- **Absolute set, not a delta.** A seller PATCH writes `availableStock = N`
+  outright, so it can clobber a deduction a concurrent reservation just made
+  (same semantics `PUT /api/inventory/:id` always had). `reservedStock` is never
+  touched, so a held reservation is not lost — only the free count is rewritten.
+- **SKU-matrix products are skipped.** They own one inventory row per SKU and no
+  base row; `stockQuantity` on such a product is not the authoritative total.
+  The PATCH still returns 200 and logs a warn. Adjust those through `skuList`.
+- **A simple product with no inventory row at all is also warn-and-skip** — the
+  sync does not auto-create a row. `POST /api/products` always creates the base
+  row, so this only happens to rows predating that or hand-deleted ones.
+- **On an inventory failure the PATCH fails, but not atomically.** The
+  non-stock fields of that PATCH stay applied; only the stock mirror is rolled
+  back to its pre-edit value before the error surfaces. Products and inventory
+  live in different service DBs — there is no shared transaction (same
+  constraint as the `compensateProductCreate` saga).
+- **Only base rows emit.** A `PUT` on a SKU row does not touch the product
+  mirror, because a variant's stock is not the product-level number.
+
+Verify either direction with `GET /api/inventory/product/<publicId>` and
 `GET /api/products/<publicId>` — `availableStock` must equal `stockQuantity`.
+
+## Order lifecycle notifications (NOTIF-LIFECYCLE-01, 2026-08-11)
+
+Every order status move publishes one generic RabbitMQ event
+`order.status_changed`; the notification service decides what is worth telling
+a user. See `CHANGELOG.md` 2026-08-11 for the design.
+
+- **`order_canceled` is NOT emitted through `order.status_changed`.**
+  `applyGhnStatus` skips the publish when the mapped status is CANCELED because
+  `finalizeGhnCancellation` already publishes the dedicated `order_canceled`
+  event. Do not "fix" the guard — removing it double-notifies the buyer.
+- **A seller-leg failure can duplicate the buyer notification.** In
+  `handleOrderCreated` / `handleOrderCanceled` the buyer notification is saved
+  first and the seller notification second, both inside one try. If the seller
+  leg throws, the message is nacked with requeue and the redelivery re-saves the
+  buyer row. Chosen deliberately: a duplicate line in the buyer's list is
+  cheaper than silently losing the seller's "you have a new order" signal. The
+  status-change handler has one leg only and is not affected.
+- **Emails are gated to shipping milestones.** In-app + WS fire for all five
+  moves (`confirmed`, `processing`, `shipped`, `delivering`, `completed`);
+  email only for `shipped|delivering|completed` (`EMAILED_STATUSES`). Mailing
+  every move was rejected as spam, not overlooked.
+- **Unknown statuses ack and drop.** `statusChangedMessage()` returns `null` for
+  any status without copy (e.g. a future state), and the handler acks — it does
+  not dead-letter. A new user-visible status needs a case added there.
+- **Message text uses the public id** (`#ord_…`) via `orderLabel()`. The numeric
+  fallback fires only if a row somehow has no `publicId`.
+- **Fanout, so no binding change.** `ORDERS_EXCHANGE` is fanout: inventory,
+  payments and rewards also receive `order.status_changed`, match no
+  `@EventPattern`, and nack no-requeue. This does not accumulate (all queues
+  verified ready=0/unacked=0) — same as the existing `order.return_*` events.
+
+## `inventory_v2.sku` is a label, not a link (INV-CONTRACT-01, 2026-08-11)
+
+`PUT /api/inventory/:id` accepts `sku` and really renames the row.
+
+- **Nothing resolves inventory by sku.** `INVENTORY_FIND_BY_SKU` has a handler
+  but no caller anywhere in the monorepo; checkout, reservations and the stock
+  fanout all key on `productId` / `productSkuId` / `reservationKey`. So a
+  rename cannot break stock movement.
+- **It does NOT rename `products.sku`, and vice versa.** `inventory_v2.sku` is
+  seeded from the product's sku at create time (`buildInventorySku()`, falling
+  back to `PROD-<id>`) and the two drift freely afterwards. Deliberate: the
+  catalog sku is seller-facing copy, the inventory sku is only a warehouse
+  label. Do not "fix" the drift by syncing them without a migration plan — the
+  inventory column is `unique`, the products one is not.
+- **A colliding rename answers 409**, not 500.
+- **`POST /api/products` always creates the base inventory row** for a
+  non-`skuList` product, and compensates (deletes the product) if that fails —
+  a 201 therefore guarantees the row exists. A `skuList` product gets one row
+  per SKU asynchronously via `sku_upserted`. A client never needs to
+  `POST /api/inventory` after creating a product; doing so is a guaranteed 409.
+
+## Order item `image` vs `productImage` (ORDER-SHAPE-01, 2026-08-11)
+
+Order items on the decorated read paths (`GET /api/order/:id`, buyer list,
+seller list, seller detail, `confirm`, `ready-to-ship`) carry BOTH keys. They
+are not a duplication bug:
+
+- `productImage` is the raw purchase-time snapshot column. It is `null` on
+  orders created before the P2-02 snapshot columns existed.
+- `image` is `decorateItem()`'s resolved value: the snapshot if present, else
+  the live product's first image, else `null`. Legacy orders render only
+  because of the fallback.
+
+Prefer `image` for display. `POST /api/order` does not decorate its items, so
+it returns `productImage` only — that path is not a read path and the FE
+already has the product in hand at checkout.
+
+Item `price` is a `number` on every path (entity transformer). `subtotal` is
+present on `GET /api/order/:id` and `POST /api/order` but NOT on the two seller
+PATCH responses — those return the plain order shape; recompute from `items` if
+you need it there.
+
+## Post media cleanup is reference-counted (MEDIA-ORPHAN-01, 2026-08-11)
+
+`editPost`, `deletePost` and moderation delete drop Cloudinary assets through
+`destroyUnreferencedMedia()`, not directly. Consequences to expect:
+
+- A URL attached to more than one post is **never** destroyed until the last
+  post referencing it is gone. `imageUrls` is client-supplied, so sharing a URL
+  across posts is legal and must stay non-destructive.
+- The reference check is a `posts` query (`video_url` equality OR
+  `JSON_CONTAINS(image_urls, …)`); it runs AFTER the caller's commit, so the
+  edited/deleted row cannot match itself. Do not move it inside the transaction.
+- If the check itself fails, nothing is destroyed and a warn is logged. Cleanup
+  is best-effort and must never fail the mutation that triggered it.
+- Dead post URLs are therefore NOT evidence of an over-eager cleanup. The dev
+  cloud was purged wholesale once; leftovers with a doubled `trybuy/posts/
+  trybuy/posts/` folder or an `undefined_` prefix come from an old FE upload
+  bug. Fix such rows as data, do not re-diagnose the cleanup path.

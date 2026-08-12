@@ -6,6 +6,431 @@
 
 ## Completed Milestones
 
+- **GHN console batch: the shipping console can act again, and stops leaking
+  what it should not (2026-08-12).** Five items the GHN-console FE agent filed
+  after testing against prod (`../.agent-local/backend-handoff.md`). All five
+  are verified on dev; the tree is class C and HELD behind the release gate.
+  - **GHN-ACT-01 — every fresh order showed `availableActions:["read","history"]`,
+    so the console was read-only in practice.** Two independent causes.
+    (a) `getAvailableShippingActions()` (`apps/orders/src/orders.service.ts`
+    ~:1909) never listed `PENDING`, but the waybill is bought *during checkout*
+    — so a just-placed order sits at `pending` locally while GHN already holds
+    it at `ready_to_pick`, which is the *widest* editable window there is.
+    `PENDING` now counts everywhere `CONFIRMED` does: `cancel` and
+    `update_cod`/`update_receiver`. `sync` was already available; `return`
+    deliberately still starts at `SHIPPED`. (b) The list was role-blind, so a
+    `logistics_operator` was advertised `sync`/`cancel` and then got a 403 from
+    the guard. The gateway now narrows it per caller —
+    `filterShippingActions()` in `apps/gateway/src/order/order.service.ts` keeps
+    only `READ_ONLY_SHIPPING_ACTIONS` unless the caller holds
+    `shipping update:any`. The orders service stays purely state-based; role is
+    a gateway concern.
+  - **GHN-RAW-01 — `ghnDetail.raw` forwarded GHN's ~123-key detail verbatim.**
+    That put `shop_id`, `client_id`, every `*_warehouse_id`, `created_ip` /
+    `updated_ip`, `created_employee` / `updated_employee`, `_id`, `soc_id`,
+    `transaction_ids`, `internal_process`, `hub_designation_log`, `sort_code`,
+    `seal_code`, `*_station_id` and the pricing-config ids on a
+    browser-reachable response — `shop_id` in particular is half of what an
+    attacker needs to talk to GHN as us. `sanitizeGhnRawDetail()`
+    (`apps/orders/src/ghn/ghn.service.ts`) rebuilds `raw` from an **allow-list**
+    (not a deny-list: GHN adds fields without notice, and a new one must not
+    leak by default), and rebuilds nested `log[]`/`items[]` entry by entry
+    because they carry warehouse ids of their own. Safe at source — grep
+    confirms nothing internal reads `.raw`; the console-facing scalars
+    (`totalFee`, `codAmount`, receiver fields) are mapped at the top level of
+    `GhnOrderDetail` and untouched.
+  - **GHN-HIST-01 — the console timeline showed numeric internal ids.**
+    `actorId` now goes through the gateway's existing `exposeUserReferences`
+    (→ `usr_…`), and every persisted GHN message names the order the way HTTP
+    does (`NO_GHN_ORDER_CODE`, `GHN_ACTION_NOT_ALLOWED`,
+    `GHN_STATUS_TERMINAL_IGNORED`, `GHN_STATUS_STALE_IGNORED`,
+    `GHN_STATUS_CONCURRENT_SKIPPED` → `order.publicId ?? String(order.id)`).
+    Rows written before this change keep their numeric text — the fix is
+    forward-only, not a backfill. The 404 path needed nothing:
+    `resolveOrderId()` already reports the public id it was given.
+  - **GHN-ENUM-01 — a typo'd filter returned `200` + an empty list**, which the
+    console cannot distinguish from "no such orders". `status` and `ghnStatus`
+    on `AdminGhnOrdersQueryDto` were bare `@IsString()`; they are now `@IsIn`
+    over `ORDER_STATUS_VALUES` and the new `GHN_STATUS_VALUES`
+    (`libs/constant/shipping.constant.ts` — the gateway must not import from
+    `apps/orders`). `GHN_STATUS_VALUES` is a superset of both `mapGhnStatus()`'s
+    vocabulary and `DEMO_GHN_STATUSES`, so nothing the system can *record* is
+    rejected as a filter.
+  - **GHN-RBAC-01 — `logistics_operator` could read the money.** Option A
+    (user's call): the route still answers `200` for every shipping role, but
+    the monetary fields are **omitted** for callers holding neither
+    `order read:any` (admin) nor `shipping update:any` (`shipping_manager`) —
+    `summary.totalRevenue`, `summary.averageOrderValue`,
+    `revenueOverTime[].revenue`, `topProducts[].revenue`. Omitted, not zeroed:
+    a `0` is indistinguishable from "we really earned nothing" and the console
+    would render it as fact. `stripRevenue()` rebuilds the payload field by
+    field, so a money field added upstream later cannot leak by default. The
+    non-throwing grant check is `hasPermission()`
+    (`apps/gateway/src/common/rbac/has-permission.util.ts`), reusing the same
+    `ac` grants object `RoleAuthGuard` already imports.
+  - **Verified on dev** (`shipmgr_test` / `logistics_test` / `testadmin`; 50/50
+    jest in `orders.service.spec.ts`; tsc + eslint clean): 7 `pending` orders
+    with waybills now list `sync,cancel,update_cod,update_receiver` for a
+    manager and `read,history` for an operator on the *same* rows;
+    `POST …/update-cod` on a `pending` order → `201` (39 → 39, no value change)
+    where it used to be a 400, and the same call as `logistics_operator` → 403,
+    so the advertised list now matches enforcement; `POST …/cancel` on a
+    `pending` order → `201` `pending → canceled` with an `action` history row,
+    and the order correctly falls back to `read,history,sync`; `raw` returns 43
+    allow-listed keys with **zero** of the 15 probed leak keys; a freshly
+    written history row reads `"Ignored GHN status \"cancel\" for terminal order
+    ord_516a8c3e816611f1"` with `actorId: usr_60ccc36681c411f1`;
+    `?status=bogus` and `?ghnStatus=shiped` → `400` naming the accepted values
+    while `?ghnStatus=ready_to_pick` still returns rows; analytics for
+    `logistics_operator` has `summary` keys `completedOrders,totalOrders` and no
+    `revenue` anywhere, while manager and admin keep the full payload.
+  - **Not in scope, deliberately:** the seller manual ship/deliver/complete path
+    (ORD-RBAC-01 — an open product decision, see `snapshot.md`), and
+    `topProducts[].productId`, which is still numeric (PRODTEST-0806 defect #4).
+
+- **MEDIA-ORPHAN-01: post media cleanup only destroys an asset no row still
+  references, and the dead dev post URLs are gone (2026-08-11).** FE reported
+  four post rows whose `imageUrls` pointed at Cloudinary assets that answer
+  **404** — a broken image plus a wasted request and a console error on every
+  feed load — and asked whether SEC-M7's orphan cleanup had destroyed assets
+  that were still in use.
+  - **Answer: no, SEC-M7 was not the cause.** The only destroy path is
+    `destroyDroppedMedia()`, and it only ever passed URLs that the *saved or
+    deleted row itself* no longer carried. Evidence: all five dead URLs were
+    still referenced by their own live posts (so nothing had "dropped" them),
+    and the Cloudinary Admin API listed exactly **one** asset under
+    `trybuy/posts` — the dev cloud had been purged wholesale at some point. The
+    URL shapes confirm it independently: `trybuy/posts/trybuy/posts/…` (doubled
+    folder), `undefined_6OyymN8jZY.png`, and a hand-written `17_mine.jpg` are
+    artifacts of an old FE upload bug and of manual seeding, not of a destroy.
+    Nothing in `scripts/seed/` or `database/` references them.
+  - **A real (narrow) hazard did exist, and is now closed.** `imageUrls` is
+    client-supplied, so the same uploaded URL can legitimately sit on more than
+    one post (a re-post, or the same photo attached twice). Editing or deleting
+    *one* of those posts would have destroyed the asset out from under every
+    other post still showing it. `apps/social/src/social.service.ts` now routes
+    all three call sites (`editPost`, `deletePost`, moderation delete) through
+    `destroyDroppedMedia()` → `destroyUnreferencedMedia()`, which re-queries
+    `posts` for each dropped URL (`post.videoUrl = :url` OR
+    `JSON_CONTAINS(post.image_urls, JSON_QUOTE(:url))`, `LIMIT 1`) and destroys
+    only the URLs with **zero** remaining references. It runs after the caller's
+    own commit, so the edited/deleted row can no longer match itself, and it is
+    wrapped so a failed reference check logs a warn and destroys **nothing** —
+    cleanup stays best-effort and can never surface on the mutation.
+  - **Live proof of both branches** (real 1×1 PNG uploaded through the signed
+    flow as user 17 → `trybuy/posts/17_OwtPJaTdAJ`, attached to two posts):
+    delete the first post → delivery URL still **200** (shared asset preserved —
+    this is the case that previously destroyed it); delete the second post →
+    Cloudinary Admin API `404 Resource not found` (true orphan destroyed).
+  - **Data half (DEV):** 5 dead URLs across posts 5, 6, 7 (two) and 14 were
+    verified 404 one by one, then their `posts.image_urls` set to `NULL` (all
+    four rows had no surviving image). Re-probe of every Cloudinary URL in the
+    `posts` table now returns a single row — post 15's `20_4u4glh7.png`, **200**.
+    No 404-bound post media remains on dev.
+  - **Prod not swept** — the EC2 was in its stopped window and both `/live` and
+    the posts endpoint timed out. Prod runs a separate Aiven DB, so it needs its
+    own pass; recorded as `⏳ PENDING RUNTIME TEST (MEDIA-ORPHAN-01)` in
+    `snapshot.md` with the exact steps.
+  - Validation: `tsc --noEmit` clean, prettier + eslint clean, jest 30 suites /
+    270 tests green.
+
+- **ORDER-SHAPE-01: order items are the same shape on every path — `confirm`
+  returns them, `price` is always a `number`, and the seller list stops
+  reporting `items: []` (2026-08-11).** FE reported that
+  `PATCH /api/order/:id/confirm` answered with `"items": []` on an order that
+  had one item, while `PATCH /api/order/:id/ready-to-ship` returned
+  `items[0].price` as the **string** `"15000.00"` where `POST /api/order`
+  returned the **number** `15000` for the same row.
+  - **`confirmOrder` now loads `relations: ["items"]`**
+    (`apps/orders/src/orders.service.ts` ~:2728). It was the only lifecycle
+    transition that did not — `readyToShip`, `advanceOrderStatus` and
+    `getSellerOrderDetail` all did. An empty `items` array reads as "this order
+    lost its items", which is worse than omitting the key.
+  - **`OrderItem.price` got `transformer: decimalToNumber`**
+    (`apps/orders/src/entity/order_item.entity.ts`). The order entity already
+    used that transformer on `total`/`codAmount`/`shippingFee`/`discountAmount`;
+    the item price was the one money column left raw, so mysql2 hydrated it as
+    `"15000.00"` on **every** read path (GET order, buyer/seller list, seller
+    detail, ready-to-ship) while `POST /api/order` — which returns the in-memory
+    entity it just saved — returned a real number. One transformer fixes all of
+    them at once. Writes are unaffected (`to` passes the value through) and the
+    arithmetic callers were already `Number()`-guarded.
+  - **The seller order list joins its items.** `getOrdersBySeller()` built its
+    query without `leftJoinAndSelect("order.items")`, so `GET /api/order/seller`
+    returned `items: []` for every row — and the gateway's product-image/SKU
+    enrichment for that list (`buildProductMap` + `decorateItem`) was dead code.
+    The buyer list (`getOrdersByUser`) always loaded items; this closes the
+    asymmetry. Verified the join does not break pagination: 32 orders, 32 unique
+    ids, 3 of them multi-item, `total` unchanged.
+  - **`image` alongside `productImage` is deliberate, not a duplicate** — see
+    `known-behaviors.md`. `productImage` is the raw purchase-time snapshot
+    (null on pre-P2-02 orders); `image` is that snapshot with a live-product
+    fallback, so they only *look* identical on recent orders.
+  - Verified live: `POST /api/order` → `price: 299` (number) →
+    `PATCH …/confirm` → 200 with one decorated item, `price` number →
+    `PATCH …/ready-to-ship` → 200, `price` number, waybill `L89XNE`;
+    `GET /api/order/:id`, `GET /api/order/seller/:id` and
+    `GET /api/order/seller` all report `typeof price === "number"`.
+    tsc + eslint clean, jest 30 suites / 270 tests green.
+
+- **INV-CONTRACT-01: `PUT /api/inventory/:id` accepts `sku`, and the inventory
+  error messages stop leaking the numeric product id (2026-08-11).** FE's
+  product-listing flow issued three requests after `POST /products` and two of
+  them failed: `POST /api/inventory` → 409 `"Inventory for product ID 30
+  already exists"` and `PUT /api/inventory/:id {sku, availableStock}` → 400
+  `"property sku should not exist"`. The seller saw "tạo thất bại" over a
+  product that had in fact been created.
+  - **`sku` is now an optional, updatable field** on `UpdateInventoryDto`
+    (gateway DTO + `apps/inventory/src/inventory.types.ts`), `@IsNotEmpty`
+    `@MaxLength(100)` to match the column. Rejecting the very field the
+    resource's own `GET` returns was the defect; accepting it makes the
+    read-modify-write round trip work. `inventory_v2.sku` is `unique`, so
+    `update()` now catches the constraint violation and answers **409**
+    `SKU_ALREADY_EXISTS` instead of letting the driver error surface as a 500.
+  - **Numeric product id no longer leaks.** `INVENTORY_MESSAGE
+    .ALREADY_EXISTS_FOR_PRODUCT` / `.NOT_FOUND_BY_PRODUCT` were widened to
+    `number | string`, and the gateway's `hideInternalProductId()` re-renders
+    exactly those two messages with the `prod_…` id the caller sent. It matches
+    the **exact rendered string** rather than regex-replacing digits, so no
+    other message — and no other number inside one — is touched. Applied to
+    `create()` and `findByProductId()`, the two paths that resolve a public id
+    to an internal one. The inventory service itself keeps building messages
+    from the numeric id: it has no other id to use.
+  - **Contract answer for FE (no code change):** `POST /api/products` **always**
+    creates the base inventory row for a non-`skuList` product, and rolls the
+    product back if that fails — so a 201 guarantees the row exists and FE's
+    `POST /inventory` + `PUT /inventory` pair is pure overhead. A `skuList`
+    product gets one row per SKU asynchronously via `sku_upserted`.
+  - **Verified.** tsc/eslint clean; Jest 30 suites / 270 tests green. Live:
+    `PUT /api/inventory/47 {sku:"SNY-WF1000XM5", availableStock:59}` → 200 (was
+    400); rename to `SNY-WF1000XM5-TMP` → 200 with the new value, restored
+    after; rename onto another row's sku → **409** `"Inventory with sku
+    XM-RBUDS5-BLK already exists"`; `POST /api/inventory` on an existing
+    product → **409** `"Inventory for product ID prod_ffc7fb1381d211f1 already
+    exists"`; `GET /api/inventory/product/prod_ffc802c681d211f1` (product with
+    no row) → **404** `"Inventory for product prod_ffc802c681d211f1 not
+    found"`.
+
+- **NOTIF-LIFECYCLE-01: sellers now hear about orders, buyers now hear about
+  every status move, and all order notifications carry the public id
+  (2026-08-11).** FE filed two 🔴/🟡 reports: a seller got NO notification when
+  an order arrived or was canceled (the seller dashboard had nothing to react
+  to), and a buyer got nothing between `order_created` and the terminal
+  `payment_completed` — `confirm` and `ready-to-ship` were silent. A third
+  report noted the message text embedded the internal `#38` while every other
+  field on the payload was a `ord_` public id.
+  - **New event** `EVENT.ORDER_STATUS_CHANGED_EVENT = "order.status_changed"`
+    (`libs/common/src/constants/event.ts`). One generic event, not one per
+    status — the consumer decides what is worth telling a user. Payload
+    `{orderId, publicId, userId, sellerId, status, previousStatus}` carries
+    everything the notification service needs, so it makes no TCP round trip
+    back to orders. `ORDERS_EXCHANGE` is a **fanout**, so no binding change was
+    needed; the three consumers with no matching `@EventPattern`
+    (inventory/payments/rewards) nack no-requeue and discard, exactly as they
+    already do for `order.return_requested` (verified: every queue
+    ready=0/unacked=0 after the full lifecycle run).
+  - **Emitted from the four transition choke points** (`orders.service.ts`
+    `publishOrderStatusChangedEvent()`): `confirmOrder` (PENDING→CONFIRMED),
+    `readyToShip` (CONFIRMED→PROCESSING), `advanceOrderStatus` (the manual
+    seller path) and `applyGhnStatus` (the GHN webhook). Publish is
+    best-effort — null-channel warn + try/catch — so a broker outage can never
+    fail a transition that already committed. `applyGhnStatus` is guarded by
+    `if (mappedStatus !== OrderStatus.CANCELED)` because
+    `finalizeGhnCancellation` publishes `order_canceled` itself; without the
+    guard a GHN cancel would notify the buyer twice. `advanceOrderStatus`
+    publishes **after** `finalizeOrderCompletion`, matching the webhook path, so
+    the buyer is never told "delivered" before the COD payment is recorded.
+  - **Consumer** (`apps/notification/src/notification.controller.ts`).
+    `handleOrderCreated` and `handleOrderCanceled` each gained a seller leg
+    (`new_order` "Bạn có đơn hàng mới … cần xác nhận" / `order_canceled` "…
+    không cần chuẩn bị hàng"), skipped when `sellerId === userId`. New
+    `handleOrderStatusChanged` maps status → Vietnamese message for
+    `confirmed|processing|shipped|delivering|completed` and returns `null` for
+    anything else (unknown statuses ack and drop rather than dead-letter).
+    Notification `type` is `order_<status>`, so the FE gets
+    `order_confirmed`/`order_processing`/`order_shipped`/`order_delivering`/
+    `order_completed` alongside the existing types. The gateway WS push
+    controller has no type filter, so all of these push live with no FE change.
+  - **Email volume** was the one thing the Change-Impact Review changed after
+    the fact: mailing all five moves is spam. `EMAILED_STATUSES` gates email to
+    `shipped|delivering|completed` — in-app + WS still fire for all five. That
+    also closes the **F7 follow-up** (shipping-milestone emails), which was
+    waiting on exactly these events.
+  - **Public id in message text.** New `orderLabel(orderId, publicId)` renders
+    `#${publicId ?? orderId}`; every order notification (`order_created`,
+    `payment_completed`, `order_canceled`, the three return handlers and all
+    five new ones) now emits `#ord_…`. The numeric fallback only applies if a
+    pre-PUBID order somehow lacks a public id.
+  - **Verified.** tsc/eslint clean; Jest 30 suites / 270 tests green — three
+    `toHaveBeenCalledTimes(1)` publish assertions in `orders.service.spec.ts`
+    were replaced with a `publishedEventNames()` helper asserting
+    `[payment_completed, order.status_changed]` in order, which is what caught
+    the pre-settlement ordering bug. Live on local: `ord_Gb1S3URe7EylR3Un`
+    walked confirm → ready-to-ship → ship → deliver → complete (all 200) and
+    produced, newest-first, `payment_completed`, `order_completed`,
+    `order_delivering`, `order_shipped`, `order_processing`, `order_confirmed`,
+    `order_created`, every message carrying `#ord_Gb1S3URe7EylR3Un`; a buyer
+    cancel produced the seller "không cần chuẩn bị hàng" line and exactly ONE
+    buyer `order_canceled` (proving the CANCELED guard).
+  - Residual (deliberate) behaviour recorded in `known-behaviors.md`: if the
+    seller leg throws, the requeue can re-deliver and duplicate the buyer
+    notification.
+
+- **STOCK-SYNC-01: `PATCH /products/:id` now propagates `stockQuantity` to
+  inventory, and a direct inventory edit now refreshes the product mirror
+  (2026-08-11).** FE reported a silent data loss: editing stock on a product
+  returned `200 {stockQuantity:150}` while `inventory.availableStock` stayed at
+  100, and the seller's number was then overwritten back to 100 by the next
+  `inventory.stock_changed` fanout.
+  - **Cause.** Inventory owns stock; `products.stock_quantity` is only a mirror
+    that the fanout refreshes (one-way, inventory → product). `updateProduct`
+    wrote the mirror and nothing else, so the write was doomed from the moment
+    it succeeded. `createProduct` already pushed the other way (it creates the
+    base inventory row), so the update path was the odd one out.
+  - **Fix, gateway side** (`apps/gateway/src/product/product.service.ts`).
+    After the product row is updated, `syncInventoryStock()` reads the product's
+    inventory rows (`inventory.get_by_product_ids` — the non-throwing batch
+    read), picks the **base row** (`productSkuId == null`, the single row a
+    simple product owns), and issues `inventory.update
+    {id, update:{availableStock}}` when the value actually differs. A
+    SKU-matrix product has no base row: it is logged at warn and skipped, since
+    its stock lives per SKU and is maintained by `sku_upserted`.
+  - **Rollback on failure.** If inventory refuses or is unreachable, the product
+    row already holds the new number — leaving it there would recreate the exact
+    desync. `restoreProductStockMirror()` writes the pre-edit value back
+    (best-effort, never rethrows) and the original error surfaces, so the seller
+    is told the stock did not apply instead of getting a 200 over a split state.
+    Propagation runs **after** the product update, not before: a validation
+    failure (duplicate SKU 409) is far likelier than an inventory outage, and
+    propagating first would move stock while the seller believes the PATCH
+    failed. `assertProductMutationAccess()` now returns the `ProductData` it
+    already fetched (was `Promise<number>`) so the pre-edit stock is available
+    without a second round trip; `deleteProduct`, the only other caller, was
+    adapted.
+  - **Fix, reverse direction** (`apps/inventory/src/inventory.service.ts`
+    `update()`). `PUT /api/inventory/:id` never emitted `stock_changed`, so a
+    direct stock edit left the catalog showing the old quantity until an order
+    happened to move stock. It now emits — base rows only (a SKU row's stock is
+    one variant's, not the product total) and only when the value changed. The
+    PG `bigint` `product_id` arrives as a string, so it is `Number()`-normalized
+    to match every other emitter.
+  - **`InventoryData.productSkuId`** added to `product.types.ts` — the field the
+    base-row check needs.
+  - **Verified.** tsc/eslint clean; Jest 30 suites / 270 tests green including 4
+    new ones (push, skip-when-in-sync, SKU-matrix left alone, mirror restored on
+    inventory failure). Live on local against dev Aiven: PATCH 150 →
+    `availableStock:150` with `reservedStock:3` untouched; PATCH 0 →
+    `OUT_OF_STOCK`; PATCH 77 → 77/77; a non-stock PATCH issues no inventory
+    write; `PUT /inventory/47 {availableStock:155}` → product mirror 155, and
+    the public `GET /api/products/:id` returned the new number on the first read
+    (no stale micro-cache window); SKU-matrix PATCH → 200 with SKU stocks 5/7
+    unchanged; foreign seller → 403; delete probe → 204 then 404.
+
+- **FE-inbox batch: public-id leaks, batch-read status, order-code search
+  (2026-08-11).** Four FE-reported contract defects fixed in one sweep, plus one
+  answered question.
+  - **WISHLIST-ID-01** — `GET /api/products/wishlist` was the only catalog list
+    returning `{"id":"29","publicId":"prod_…","userId":"1"}`, so the FE rendered
+    `/product/29` and the detail route 400'd on it. Cause was not a missing
+    mapper but a branch that bypassed the existing one: `getWishlist`
+    (`apps/gateway/src/product/product.service.ts` ~:1433) took an early return
+    for the enriched `data` envelope and skipped `exposeProductReferences()` —
+    the helper that swaps `id` for the public id, drops `publicId`, and maps
+    `userId` → `usr_`. Both branches now go through it.
+  - **REVIEW-ID-01** — `POST /api/products/:id/reviews` returned `userId` as the
+    internal number while `GET` on the same row returned `usr_…`. Same class:
+    the POST hand-built its response instead of exposing it. Now routed through
+    `exposeProductReferences`; POST and GET are byte-identical in shape.
+    `product_reviews.id` stays numeric — that domain is deliberately not
+    PUBID-converted.
+  - **Batch read answers 200, not 201** — `POST /products/with-inventory/multiple`
+    is a batch lookup (POST only because the id list is too long for a query
+    string); `@HttpCode(HttpStatus.OK)` added. Also resolved the FE's side note:
+    an empty batch is NOT rejected — `{"productIds":[]}` → `200 []`. Their 400
+    came from sending `{"ids":[]}`; the field is `productIds`
+    (`GetProductsWithInventoryDto` has no `@ArrayNotEmpty`).
+  - **Order-code search `?q=`** — `GET /api/order/user/:userId?q=` now filters
+    server-side on `Order.publicId` with `Like(%term%)`, ANDed with `status`,
+    with `total`/`totalPages`/`hasNext` describing the searched set. The `ord_`
+    prefix is optional (substring match), matching is case-insensitive (MySQL
+    `*_ci` collation), input is trimmed and capped at 32 chars, and a new
+    module-level `escapeLikeTerm()` neutralizes `\ % _` so a buyer typing `%`
+    gets zero rows instead of a full scan (TypeORM's `Like()` emits no `ESCAPE`
+    clause; MySQL's default escape char is backslash, so this is sufficient).
+  - **Found by the change-impact review, not the self-test:** `getAdminOrders`
+    shares `GetOrdersByUserQueryDto`, so adding `q` there advertised a Swagger
+    param that silently returned unfiltered rows. `q` is now wired through the
+    admin path too (`GET_ALL_ORDERS` → `getAllOrders`), with the same helper.
+  - **Social rate-limit question answered (no code change).** The FE's recorded
+    "60 req/60s" was never the number. `GET /api/social/posts` carries no
+    explicit `@RateLimit`, so it uses `RATE_LIMIT_DEFAULT_LIMIT` —
+    120/60s in `.env.example` and in `local/nodeA/.env.production.example`. On
+    **prod** the route is not counted at all: `RATE_LIMIT_SKIP_PUBLIC_GET=true`
+    skips the Redis counter for `@Public` GETs without an explicit decorator, so
+    only nginx `limit_req 30r/s burst 60` per IP applies. The 9-then-429 the FE
+    measured is a **dev-box-only** artifact: `local/nodeA/.env` still carries
+    `RATE_LIMIT_DEFAULT_LIMIT=10`, left over from a limiter test. The window is
+    fixed (not sliding), which is why it stayed hot for the rest of the minute.
+  - **Verified live** on local against dev Aiven: wishlist row returns
+    `id: "prod_ffc802c681d211f1"` with no `publicId` and `userId: "usr_…"`;
+    review POST returns `userId: "usr_60ccb4be81c411f1"` identical to the GET;
+    batch read → 200 (and `[]` → 200); `?q=` on 73 orders → `c2AD`, `ord_c2AD`
+    and `C2ad` each return exactly `ord_c2ADeae1qObLgh8I`, `%`/`_`/empty/blank
+    return the unfiltered 73 or 0 correctly, 33 chars → 400, `q` + `status=pending`
+    → 0 while `q` + `status=completed` → 1; admin list 142 → 1 with the same `q`.
+    tsc/eslint clean, `orders.service.spec.ts` 50/50 green.
+
+- **ORD-GUARD-01 — a seller could fulfil (and get refunded on) an order nobody
+  paid for (2026-08-11).** Reported by FE from prod: a `vnpay` order the buyer
+  abandoned at the gateway stayed `pending`, yet the seller could `confirm` →
+  `ready-to-ship` → `ship` → `deliver` → `complete` it, the buyer could then
+  request a return, and approving it "refunded" 90.000 đ that was never
+  collected. The FE could not defend itself — the order payload carried no
+  payment fact at all.
+  - **Root cause:** orders owns no payment state. Payments lives on Node B and
+    reaches orders only through the `payment_completed` fanout, which claims the
+    row `PENDING|CONFIRMED → PROCESSING`. Every seller transition checked only
+    `status`, and `status` alone cannot distinguish "paid, claimed, then
+    advanced" from "seller clicked confirm on an unpaid order".
+  - **Fix — one local fact, not a cross-node call.** New `orders.paid_at`
+    (`DATETIME NULL`), stamped by `markOrderPaid()` — a conditional
+    `UPDATE … WHERE paid_at IS NULL` so a replayed event never rewrites the
+    original timestamp. Stamped from `handlePaymentCompleted` before any early
+    return (money is in, whatever the order does next) and, for COD, inside
+    `finalizeOrderCompletion` where the cash actually changes hands — deliberately
+    NOT via the fanout it publishes there, so `paid_at` does not depend on RMQ
+    being up. New `assertOnlinePaymentSettled()` (COD or `paidAt` ⇒ pass, else
+    `400`) guards `confirmOrder`, `readyToShip` and `advanceOrderStatus`. A
+    payments TCP call was rejected: orders has no payments client, it would be a
+    cross-node hop, and the seller list would N+1 it.
+  - **Same column answers the FE's ask.** `paidAt` is exposed on every order read
+    (`exposeOrder` spreads the entity) so the FE can hide the seller's confirm
+    button and keep showing "THANH TOÁN NGAY" without guessing. The transition
+    responses mirror the fresh stamp onto the in-memory entity, so a completion
+    response never reports `paidAt:null` while a refetch disagrees.
+  - **Migration** `nodeA-20260811-001-add-paid-at-to-orders` (additive,
+    INFORMATION_SCHEMA-guarded, NULL-only backfill: non-COD at
+    processing/shipped/delivering/completed and COD at completed get
+    `updated_at`). Known imprecision, deliberate: a row a seller had already
+    hand-walked before the guard existed is indistinguishable from a genuinely
+    paid one and is treated as paid — the alternative strands real paid orders
+    mid-fulfilment.
+  - **Verified.** `tsc --noEmit` clean; eslint/prettier clean on all 7 changed
+    files; `orders.service.spec.ts` 50/50 green with 7 new cases (unpaid vnpay →
+    400 on confirm/ready-to-ship/advance, no waybill bought; paid online passes;
+    COD never blocked; conditional stamp; in-memory mirror). Runtime on local
+    nodeA: unpaid `vnpay` `ord_UwCSkjSDvunAk1uC` → `confirm` **400** *"Order
+    cannot be advanced — the vnpay payment has not completed yet"*, same on
+    `ready-to-ship`; COD `ord_nenUbkIGHpCbCZuS` confirmed 200 and walked to
+    `completed` with `paidAt` persisted; COD `ord_c2ADeae1qObLgh8I` returned
+    `paidAt` on the completion response itself.
+  - **Not changed, on purpose:** `PATCH /api/order/:id/{ship,deliver,complete}`
+    still accepts role `shop` without a GHN waybill —
+    `SELLER_FORWARD_TRANSITIONS` is a documented fallback for a delayed/absent
+    GHN webhook. The money exploit the FE reported is closed by the payment
+    guard regardless; whether the manual path should also be revoked is a
+    product decision, recorded in `snapshot.md`.
+
 - **RETURN-STOCK-01 — approving a return never restocked inventory (2026-08-11).**
   Reported by FE from prod: `prod_BWg2OVHUlmrlEfP5` sat at 48 units after an
   approved return of 2 units (order `refunded`, `refundStatus: "refunded"`,

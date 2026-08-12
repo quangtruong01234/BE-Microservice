@@ -229,6 +229,43 @@ A task is complete only when ALL of these pass:
   1. First read the matching FE backlog (storefront: `../frontend/.ai/agent-handoff/snapshot.md`) to find the matching FE-waiting item (e.g. `P1-06`, `P2-02`) so the note closes a real open thread and reuses its id.
   2. Append a contract-first entry (route, method, request/response shape, status codes) to the chosen handoff file under **Open**, using the template in that file.
   - Both handoff files live at the `MCR/` workspace root, outside both git repos — never copy them into the repo or commit them. If the task has no FE impact, skip this step.
+- **Release gate**: classify the change (A/B/C below) and, if it is class C, record it in `../.agent-local/release-gate.md` and do NOT push until every involved repo is ready. See "Release Gate" below.
+
+## Release Gate — do not ship a contract change ahead of the frontend
+
+Merging into `main` deploys straight to prod (CD-04), and both frontends have
+their own auto-deploy. There is no window in which "push now, FE catches up
+later" is safe: between the two deploys, real users hit a backend whose contract
+the shipped frontend does not speak.
+
+Classify every finished task as exactly one of:
+
+- **A — standalone**: nothing FE-visible (internal fix, data cleanup, logging,
+  perf, resilience, refactor). **Push freely.**
+- **B — additive**: FE-visible but the *current* FE still behaves correctly (new
+  optional field, new endpoint, new query param, looser validation, clearer error
+  text, new event/notification type). **Push alone**; the FE picks it up later.
+- **C — coupled**: the current FE breaks, or the new FE cannot work without this
+  (changed type of an existing field, renamed/removed field, changed status code,
+  new required request field, changed meaning of a value, a guard that turns a
+  200 into a 4xx). **HOLD** — push only when every involved repo is ready.
+
+Tie-breaker when unsure: *if the backend deploys at 10:00 and the frontend at
+10:30, does a user see something wrong in between?* Yes ⇒ C. No ⇒ B.
+
+Mechanics:
+- The cross-repo ledger is `../.agent-local/release-gate.md` (at the `MCR/` root,
+  outside all repos — never copy or commit it). It carries one entry per held
+  item with a per-repo ✅/⏳ status; the FE agent flips its own cell when done.
+- A class C item goes into that file's **Holding** section with `api: ✅ ready`,
+  and you tell the user the push is blocked and on what.
+- **The working tree cannot be split at push time, so a tree mixing classes takes
+  the highest class present** — one class C item holds the whole batch. Isolate
+  an urgent standalone fix on its own branch instead of pushing the mix.
+- When all cells are ✅: push BE first, FE immediately after, in the same
+  session. For anything risky, make the backend accept both the old and new
+  shapes so the gap between the two deploys is harmless.
+
 
 ## Test Accounts
 

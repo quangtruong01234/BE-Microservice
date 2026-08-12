@@ -37,6 +37,39 @@ reward_points, shipping_history, voucher_redemptions.
 
 ## Active Tasks
 
+### 🚧 RELEASE HOLD — the working tree is class C, do not push
+
+Since CD-04, merging into `main` deploys to prod, and both frontends auto-deploy
+from their own repos. A contract change that lands before its frontend breaks
+prod for real users in the gap between the two deploys. Rule + classification
+(A standalone / B additive / C coupled) is in `.claude/CLAUDE.md` → "Release
+Gate" and, in full, `ai-docs/agent-context/git-workflow.md`. The cross-repo
+ledger is `../.agent-local/release-gate.md` (outside every repo — never commit).
+
+Current state: the 11-item sweep batch of 2026-08-11 **plus** the 5-item GHN
+console batch of 2026-08-12 (GHN-ACT-01 / RAW-01 / HIST-01 / ENUM-01 / RBAC-01)
+are committed-ready but **HELD**. Class C in the tree: ORDER-SHAPE-01
+(`items[].price` string → number), FE-INBOX-0811 (wishlist drops `publicId`,
+`id` → `prod_…`; batch-create 201 → 200), INV-CONTRACT-01 (error text no longer
+carries a numeric id), GHN-ENUM-01 (bogus `status`/`ghnStatus` 200 → 400),
+GHN-RAW-01 (`ghnDetail.raw` narrowed to an allow-list). A push ships the whole
+tree, so the class A/B items ride along and are held with them.
+**Unblocks when** BOTH FE agents flip their cell to ✅ in `release-gate.md` —
+the storefront for the 08-11 items, the GHN console for the 08-12 items. An
+urgent standalone fix must go on its own branch, not on top of this tree.
+
+### ORD-RBAC-01 — should a seller keep the manual ship/deliver/complete path? (product decision)
+
+`PATCH /api/order/:id/{ship,deliver,complete}` accepts role `shop` with no GHN
+waybill, by design: `SELLER_FORWARD_TRANSITIONS` (`orders.service.ts` ~:2699) is
+the documented fallback for a delayed or absent GHN webhook. FE asked for a 403.
+Not flipped unilaterally — with ORD-GUARD-01 in place the manual path can no
+longer move an unpaid order, so the money exploit that prompted the request is
+closed either way. Flipping it would strand every order whose webhook never
+fires (GHN sandbox does not always deliver), so it needs a call on which failure
+is preferable. If yes: gate the three routes on `ghnOrderCode !== null` rather
+than on role, so admins and webhook-driven flows are unaffected.
+
 ### SOCIAL-502 follow-up — roll the transport retry out beyond social (optional)
 
 `retryOnTransportError()` (`apps/gateway/src/common/exception/transport-error.ts`)
@@ -75,10 +108,12 @@ Nine real defects, none of them blockers. The first three (duplicate register �
    self-classifies: `503` ⇒ GHN was down (expected, retry), `400` + GHN's
    message ⇒ the ward really is unshippable and only then is this a real defect.
 4. **Numeric internal ids still leak on PUBID domains**: `stock-check.productId`,
-   return-request `reviewedBy`, moderation `moderatorId`/`actorId`/`submittedBy`,
-   analytics `topProducts[].productId`, wishlist `id`, review-create `userId`,
-   notification message text ("Đơn hàng #34 …"), GHN action errors ("for order
-   31"), "Post 1 not found".
+   return-request `reviewedBy`, moderation `moderatorId`/`submittedBy`,
+   analytics `topProducts[].productId`, review-create `userId`, notification
+   message text ("Đơn hàng #34 …"), "Post 1 not found". (Fixed 2026-08-12 by
+   GHN-HIST-01, not yet deployed: shipping-history `actorId` and every GHN
+   action/status message now carry `usr_`/`ord_`. Wishlist `id` was fixed by
+   the 08-11 batch.)
 5. **Envelope inconsistency**: errors propagated from microservices report
    `"error":"HttpException"` instead of the reason phrase ("Not Found",
    "Conflict") that gateway-local errors return. Now also visible on the new
@@ -221,12 +256,6 @@ error handling 401/403/404/400/500-503; 6) settings page stays read-only/mock
 yet). Auth: cookie `credentials:"include"`, roles `logistics_operator` /
 `shipping_manager` (test accounts seeded — see `../.agent-local/test-accounts.md`).
 
-### F7 follow-up (not scheduled)
-
-Shipping-milestone emails (SHIPPED/DELIVERING/DELIVERED) need new
-orders-service events — the GHN webhook updates status without emitting
-per-status events today.
-
 ### AI-02F5 — pHash lookup scale path (gated, not calendar-scheduled)
 
 Current Hamming comparison is an O(catalog) scan — fine for the present small
@@ -301,8 +330,15 @@ across ALL services; true 10k sustained likely needs a bigger VPS/Aiven tier.
 > they are residual/deliberate behaviours of shipped fixes, NOT open bugs. Do
 > not re-diagnose them; do not assert the opposite contract in tests.
 
+- ORD-GUARD-01: seller transitions 400 on a non-COD order with `paidAt` NULL;
+  `paidAt` is exposed on every order read; the backfill treats legacy
+  hand-walked orders as paid.
 - SKU edit: `skuList` is the FULL desired set (not a delta); mirror stock only
   pushed on change; reference check fails safe → deactivate.
+- STOCK-SYNC-01: stock now syncs BOTH ways (product PATCH → base inventory row;
+  `PUT /inventory/:id` → mirror via `stock_changed`). Absolute set, not a delta;
+  SKU-matrix / row-less products are warn-and-skip; on an inventory failure the
+  PATCH fails with only the stock mirror rolled back.
 - Checkout: single-seller `POST /api/order` has NO `paymentUrl` — client calls
   `GET /api/order/:id/payment-url` → key is `orderUrl`.
 - Payment return URL now carries `?order=ord_<16>`; payments created BEFORE
@@ -324,6 +360,13 @@ across ALL services; true 10k sustained likely needs a bigger VPS/Aiven tier.
 - Storefront catalog defaults `isActive:true` unless `isActive` or single
   `userId` is passed; `?userId=` shows that seller's hidden products by design;
   `GET /api/products/:id` still returns deactivated products with 200.
+- ⏳ PENDING RUNTIME TEST (MEDIA-ORPHAN-01): the same dead-Cloudinary-URL sweep
+  was run on DEV only — prod was unreachable (EC2 in its stopped window) when
+  the fix landed. Once prod is up: `curl -s
+  'https://<PROD_API_DOMAIN>/api/social/posts?page=1&limit=50'`, collect every
+  `imageUrls[]`/`videoUrl` on `res.cloudinary.com`, GET each one, and NULL out
+  the `posts.image_urls` entries that answer 404. Prod has its own Aiven DB, so
+  the DEV cleanup did not touch it.
 
 ## Ops / Runtime Reference
 

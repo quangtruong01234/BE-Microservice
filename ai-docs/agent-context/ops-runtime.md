@@ -177,6 +177,15 @@
   read/delete legs — gateway rewrites it to the `prod_` public id (verified);
   `recalculateProductRating` verified on the string path.
 
+- **`nodeA-20260811-001-add-paid-at-to-orders`** — `orders.paid_at` DATETIME NULL
+  (additive, guarded) + a NULL-only backfill (non-COD at processing/shipped/
+  delivering/completed, COD at completed → `updated_at`). **Applied to DEV Aiven
+  2026-08-11. OWED ON PROD** — the CD workflow migrates before it restarts, so
+  the push that ships ORD-GUARD-01 applies it; no manual step is needed unless
+  that run is skipped. Code that depends on it: `assertOnlinePaymentSettled()`
+  in `orders.service.ts` (prod forces `synchronize:false`, so the column will
+  not appear on its own).
+
 ### Pre-cutoff applied-migration history (fresh-DB reference only)
 
 All absorbed into the 2026-07-17 baseline; listed for context on WHY columns
