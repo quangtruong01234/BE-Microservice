@@ -5,6 +5,7 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
 } from "typeorm";
+import { decimalToNumber } from "@app/common";
 
 export enum ReturnRequestStatus {
   PENDING_REVIEW = "pending_review",
@@ -74,6 +75,9 @@ export class OrderReturnRequest {
   })
   previousOrderStatus!: string | null;
 
+  // RET-NUM-01 — DECIMAL is hydrated as a string by mysql2 ("45000.00"), which
+  // leaked out of every return-request read path and made the FE's declared
+  // `refundAmount: number` a lie. Same fix as OrderItem.price (ORDER-SHAPE-01).
   @Column({
     name: "refund_amount",
     type: "decimal",
@@ -81,6 +85,7 @@ export class OrderReturnRequest {
     scale: 2,
     nullable: true,
     default: null,
+    transformer: decimalToNumber,
   })
   refundAmount!: number | null;
 
