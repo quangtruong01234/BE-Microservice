@@ -1,4 +1,10 @@
-import { ForbiddenException, Injectable, Inject, Logger } from "@nestjs/common";
+import {
+  ForbiddenException,
+  HttpException,
+  Injectable,
+  Inject,
+  Logger,
+} from "@nestjs/common";
 import { ClientProxy } from "@nestjs/microservices";
 import { firstValueFrom, timeout, catchError } from "rxjs";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
@@ -91,6 +97,35 @@ export class InventoryService {
     return expose(value);
   }
 
+  /**
+   * The inventory service builds its product-scoped messages from the numeric
+   * product id — the one id the public contract never exposes. Re-render those
+   * two messages with the id the caller actually sent. Matching on the exact
+   * rendered string (not a regex over digits) keeps every other message, and
+   * any other number inside it, untouched.
+   */
+  private hideInternalProductId(
+    error: unknown,
+    internalProductId: number,
+    publicProductId: number | string,
+  ): unknown {
+    if (!(error instanceof HttpException)) return error;
+    const rewrites = new Map<string, string>([
+      [
+        INVENTORY_MESSAGE.ALREADY_EXISTS_FOR_PRODUCT(internalProductId),
+        INVENTORY_MESSAGE.ALREADY_EXISTS_FOR_PRODUCT(publicProductId),
+      ],
+      [
+        INVENTORY_MESSAGE.NOT_FOUND_BY_PRODUCT(internalProductId),
+        INVENTORY_MESSAGE.NOT_FOUND_BY_PRODUCT(publicProductId),
+      ],
+    ]);
+    const rewritten = rewrites.get(error.message);
+    return rewritten === undefined
+      ? error
+      : new HttpException(rewritten, error.getStatus());
+  }
+
   async create(
     data: Omit<CreateInventoryDto, "productId"> & {
       productId: number | string;
@@ -128,17 +163,26 @@ export class InventoryService {
         ),
       );
     } catch (error) {
-      MicroserviceErrorHandler.handleError(
-        error,
-        "create inventory",
-        "Inventory Service",
-      );
+      try {
+        MicroserviceErrorHandler.handleError(
+          error,
+          "create inventory",
+          "Inventory Service",
+        );
+      } catch (mapped: unknown) {
+        throw this.hideInternalProductId(
+          mapped,
+          internalProductId,
+          data.productId,
+        );
+      }
     }
   }
 
   async findByProductId(productId: string): Promise<unknown> {
+    let internalProductId: number | null = null;
     try {
-      const internalProductId = await this.resolveProductId(productId);
+      internalProductId = await this.resolveProductId(productId);
       return this.exposeProductReferences(
         await firstValueFrom(
           this.inventoryClient
@@ -155,11 +199,17 @@ export class InventoryService {
         ),
       );
     } catch (error) {
-      MicroserviceErrorHandler.handleError(
-        error,
-        `find inventory by product ID: ${productId}`,
-        "Inventory Service",
-      );
+      try {
+        MicroserviceErrorHandler.handleError(
+          error,
+          `find inventory by product ID: ${productId}`,
+          "Inventory Service",
+        );
+      } catch (mapped: unknown) {
+        throw internalProductId === null
+          ? mapped
+          : this.hideInternalProductId(mapped, internalProductId, productId);
+      }
     }
   }
 

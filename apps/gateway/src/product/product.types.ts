@@ -47,7 +47,10 @@ export type ProductData = {
 };
 
 export type InventoryData = {
+  id?: number;
   productId?: number;
+  // NULL on the single row a simple product owns; set on each SKU-matrix row.
+  productSkuId?: number | null;
   availableStock?: number;
   reservedStock?: number;
   minimumStock?: number;

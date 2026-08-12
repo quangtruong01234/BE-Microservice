@@ -1,7 +1,28 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { IsOptional, IsInt, IsString, Min, IsBoolean } from "class-validator";
+import {
+  IsOptional,
+  IsInt,
+  IsString,
+  IsNotEmpty,
+  MaxLength,
+  Min,
+  IsBoolean,
+} from "class-validator";
 
 export class UpdateInventoryDto {
+  @ApiProperty({
+    description:
+      "Inventory SKU. Accepted so a client can send back the row it just read; must stay unique across inventory rows.",
+    example: "IPHONE15-BK-128",
+    maxLength: 100,
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
+  sku?: string;
+
   @ApiProperty({
     description: "Available stock quantity",
     example: 75,

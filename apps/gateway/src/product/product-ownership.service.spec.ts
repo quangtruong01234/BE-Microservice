@@ -1,6 +1,6 @@
 import { ForbiddenException } from "@nestjs/common";
 import { ClientProxy } from "@nestjs/microservices";
-import { of } from "rxjs";
+import { of, throwError } from "rxjs";
 import { INVENTORY_MESSAGE_PATTERNS } from "libs/constant/message-pattern-inventory.constant";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
 import { ProductService } from "./product.service";
@@ -159,6 +159,104 @@ describe("ProductService ownership", () => {
         minimumStock: 0,
       },
     );
+  });
+
+  describe("stock sync on update", () => {
+    const OWNER_ID = 20;
+    const stockOwnerProduct = {
+      id: 16,
+      userId: OWNER_ID,
+      stockQuantity: 52,
+      categories: [],
+    };
+
+    const mockProductUpdate = (): void => {
+      productClient.send.mockImplementation((pattern: string) =>
+        of(
+          pattern === PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_ID
+            ? stockOwnerProduct
+            : { ...stockOwnerProduct, stockQuantity: 150 },
+        ),
+      );
+      userClient.send.mockReturnValue(
+        of([{ id: OWNER_ID, publicId: "usr_1111111111111111" }]),
+      );
+    };
+
+    it("pushes an edited stockQuantity into the base inventory row", async () => {
+      mockProductUpdate();
+      inventoryClient.send.mockImplementation((pattern: string) =>
+        of(
+          pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_GET_BY_PRODUCT_IDS
+            ? [
+                {
+                  id: 47,
+                  productId: 16,
+                  productSkuId: null,
+                  availableStock: 52,
+                },
+              ]
+            : { id: 47, availableStock: 150 },
+        ),
+      );
+
+      await service.updateProduct(16, { stockQuantity: 150 }, OWNER_ID, "shop");
+
+      expect(inventoryClient.send).toHaveBeenCalledWith(
+        INVENTORY_MESSAGE_PATTERNS.INVENTORY_UPDATE,
+        { id: 47, update: { availableStock: 150 } },
+      );
+    });
+
+    it("skips the inventory write when the stock is already in sync", async () => {
+      mockProductUpdate();
+      inventoryClient.send.mockReturnValue(
+        of([
+          { id: 47, productId: 16, productSkuId: null, availableStock: 150 },
+        ]),
+      );
+
+      await service.updateProduct(16, { stockQuantity: 150 }, OWNER_ID, "shop");
+
+      expect(inventoryClient.send).not.toHaveBeenCalledWith(
+        INVENTORY_MESSAGE_PATTERNS.INVENTORY_UPDATE,
+        expect.anything(),
+      );
+    });
+
+    it("leaves a SKU-matrix product alone — it owns no base inventory row", async () => {
+      mockProductUpdate();
+      inventoryClient.send.mockReturnValue(
+        of([{ id: 48, productId: 16, productSkuId: 83, availableStock: 5 }]),
+      );
+
+      await expect(
+        service.updateProduct(16, { stockQuantity: 150 }, OWNER_ID, "shop"),
+      ).resolves.toBeDefined();
+      expect(inventoryClient.send).not.toHaveBeenCalledWith(
+        INVENTORY_MESSAGE_PATTERNS.INVENTORY_UPDATE,
+        expect.anything(),
+      );
+    });
+
+    it("restores the product mirror when inventory refuses the new stock", async () => {
+      mockProductUpdate();
+      inventoryClient.send.mockImplementation((pattern: string) =>
+        pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_GET_BY_PRODUCT_IDS
+          ? of([
+              { id: 47, productId: 16, productSkuId: null, availableStock: 52 },
+            ])
+          : throwError(() => new Error("inventory unavailable")),
+      );
+
+      await expect(
+        service.updateProduct(16, { stockQuantity: 150 }, OWNER_ID, "shop"),
+      ).rejects.toBeDefined();
+      expect(productClient.send).toHaveBeenCalledWith(
+        PRODUCT_MESSAGE_PATTERNS.PRODUCT_UPDATE,
+        { id: 16, updateProductDto: { stockQuantity: 52 } },
+      );
+    });
   });
 
   it("generates a base inventory SKU when the product SKU is omitted", async () => {

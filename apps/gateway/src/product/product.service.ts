@@ -706,7 +706,12 @@ export class ProductService {
     callerId: number,
     callerRole: string,
   ): Promise<unknown> {
-    await this.assertProductMutationAccess(id, callerId, callerRole);
+    const existingProduct = await this.assertProductMutationAccess(
+      id,
+      callerId,
+      callerRole,
+    );
+    const internalProductId = Number(existingProduct.id);
     // Admins may edit another seller's product, whose images belong to that
     // seller — only enforce media ownership for a non-admin (the owner).
     if (dto.imageUrls?.length && callerRole !== "admin") {
@@ -728,6 +733,24 @@ export class ProductService {
             ),
         ),
       );
+      // Inventory owns stock — products.stock_quantity is only a mirror the
+      // inventory.stock_changed fanout refreshes. Push the edited value across
+      // so it is not silently reverted by the next stock event.
+      if (dto.stockQuantity !== undefined) {
+        try {
+          await this.syncInventoryStock(internalProductId, dto.stockQuantity);
+        } catch (invErr) {
+          // Inventory refused or is unreachable. The product row already holds
+          // the new number, so leaving it there would make the catalog claim
+          // stock inventory never accepted — the exact desync this sync exists
+          // to prevent. Put the mirror back before surfacing the failure.
+          await this.restoreProductStockMirror(
+            id,
+            existingProduct.stockQuantity,
+          );
+          throw invErr;
+        }
+      }
       await this.invalidatePublicProductCache(id);
       return updatedProduct;
     } catch (error) {
@@ -739,15 +762,94 @@ export class ProductService {
     }
   }
 
+  /**
+   * Mirror a seller-supplied `stockQuantity` into the inventory service, which
+   * owns stock. Without this push the edited number lived in MySQL only until
+   * the next `inventory.stock_changed` event overwrote it from Postgres, so a
+   * stock edit disappeared with no error (the PATCH still answered 200).
+   *
+   * SKU-matrix products keep one inventory row per SKU and own no base row —
+   * their stock is edited per SKU, so a missing base row is skipped rather than
+   * treated as a failure. Any transport/service error still propagates, so the
+   * seller learns the new stock did not apply instead of losing it silently.
+   */
+  private async syncInventoryStock(
+    productId: number,
+    availableStock: number,
+  ): Promise<void> {
+    const inventoryRows = await firstValueFrom(
+      this.inventoryClient
+        .send<
+          InventoryData[]
+        >(INVENTORY_MESSAGE_PATTERNS.INVENTORY_GET_BY_PRODUCT_IDS, [productId])
+        .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
+    );
+
+    const baseRow = Array.isArray(inventoryRows)
+      ? inventoryRows.find((row) => row.productSkuId == null)
+      : undefined;
+
+    if (baseRow?.id == null) {
+      this.logger.warn(
+        `No base inventory row for product ${productId} — stock quantity not propagated`,
+      );
+      return;
+    }
+
+    if (baseRow.availableStock === availableStock) {
+      return;
+    }
+
+    await firstValueFrom(
+      this.inventoryClient
+        .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_UPDATE, {
+          id: Number(baseRow.id),
+          update: { availableStock },
+        })
+        .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
+    );
+    this.logger.log(
+      `Inventory available stock for product ${productId} set to ${availableStock}`,
+    );
+  }
+
+  /**
+   * Best-effort rollback of the product-side stock mirror after inventory
+   * rejected the edit. Best-effort on purpose: the caller is already about to
+   * report the inventory failure, and a failed rollback must not replace that
+   * message with a second, less useful one.
+   */
+  private async restoreProductStockMirror(
+    id: number | string,
+    previousStockQuantity: unknown,
+  ): Promise<void> {
+    if (typeof previousStockQuantity !== "number") {
+      return;
+    }
+    try {
+      await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_UPDATE, {
+            id,
+            updateProductDto: { stockQuantity: previousStockQuantity },
+          })
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
+      );
+    } catch (err) {
+      this.logger.error(
+        `Could not restore stock mirror for product ${String(id)} to ${previousStockQuantity}`,
+        err instanceof Error ? err.stack : String(err),
+      );
+    }
+  }
+
   async deleteProduct(
     id: number | string,
     callerId: number,
     callerRole: string,
   ): Promise<unknown> {
-    const internalProductId = await this.assertProductMutationAccess(
-      id,
-      callerId,
-      callerRole,
+    const internalProductId = Number(
+      (await this.assertProductMutationAccess(id, callerId, callerRole)).id,
     );
     let result: unknown;
     try {
@@ -844,16 +946,21 @@ export class ProductService {
     }
   }
 
+  /**
+   * Ownership gate for product mutations. Returns the product it already had to
+   * read, so a caller needing its pre-edit state (internal id, current stock)
+   * does not pay for a second round trip.
+   */
   private async assertProductMutationAccess(
     productId: number | string,
     callerId: number,
     callerRole: string,
-  ): Promise<number> {
+  ): Promise<ProductData> {
     const product = await this.fetchProductForAccess(productId);
     if (callerRole !== "admin" && Number(product.userId) !== callerId) {
       throw new ForbiddenException(PRODUCT_MESSAGE.CANNOT_MODIFY_ANOTHER_USER);
     }
-    return Number(product.id);
+    return product;
   }
 
   private async fetchProductForAccess(
@@ -1436,10 +1543,15 @@ export class ProductService {
         Array.isArray((withCategoryIds as { data?: unknown }).data)
       ) {
         const envelope = withCategoryIds as { data: ProductData[] };
-        return {
-          ...withCategoryIds,
+        // WISHLIST-ID-01: the enriched envelope must still go through
+        // exposeProductReferences — it is what swaps `id` for the `prod_` public
+        // id, drops `publicId`, and maps `userId` to `usr_`. Returning the
+        // enriched rows directly leaked numeric ids here while every sibling
+        // catalog list exposed them, so wishlist links pointed at `/product/29`.
+        return await this.exposeProductReferences({
+          ...envelope,
           data: await this.enrichProductsWithUserInfo(envelope.data),
-        };
+        });
       }
 
       return this.exposeProductReferences(withCategoryIds);
@@ -1482,7 +1594,10 @@ export class ProductService {
           })
           .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
       )) as Record<string, unknown>;
-      return { ...review, productId };
+      // REVIEW-ID-01: same exposure as the GET on this resource, so the created
+      // row reports `userId: "usr_..."` rather than the internal numeric id.
+      // `productId` is already the opaque id here and is left untouched.
+      return await this.exposeProductReferences({ ...review, productId });
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,

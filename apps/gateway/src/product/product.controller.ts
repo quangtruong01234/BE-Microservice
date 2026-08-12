@@ -607,6 +607,9 @@ export class ProductController {
 
   @Post("with-inventory/multiple")
   @Public()
+  // POST is only the transport here (the id list is too long for a query
+  // string); nothing is created, so this answers 200, not 201.
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: "Get multiple products with inventory by product IDs",
   })
