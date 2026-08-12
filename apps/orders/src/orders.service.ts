@@ -16,6 +16,7 @@ import {
   In,
   IsNull,
   LessThan,
+  Like,
   Repository,
 } from "typeorm";
 import { Order, OrderStatus } from "./entity/order.entity";
@@ -82,6 +83,15 @@ import {
   GhnStatusApplyResult,
   ReturnRequestView,
 } from "./orders.types";
+
+/**
+ * Neutralize the SQL LIKE wildcards in user input so a buyer typing `_` or `%`
+ * in the order-code search box gets a literal match instead of a wildcard scan.
+ * MySQL's default LIKE escape character is a backslash, so no ESCAPE clause is
+ * needed (TypeORM's `Like()` does not emit one).
+ */
+const escapeLikeTerm = (term: string): string =>
+  term.replace(/[\\%_]/g, (character) => `\\${character}`);
 
 @Injectable()
 export class OrdersService {
@@ -928,14 +938,26 @@ export class OrdersService {
     return this.ghnService.listWards(districtId);
   }
 
+  /**
+   * Buyer order history. `q` is an order-code search: a case-insensitive
+   * substring match on the order public id, ANDed with `status` so the returned
+   * `total` describes the searched set (the FE search box paginates on it).
+   * The `ord_` prefix is optional in the input because buyers paste fragments.
+   */
   async getOrdersByUser(
     userId: number,
     page: number = 1,
     limit: number = 10,
     status?: OrderStatus[],
+    q?: string,
   ): Promise<PaginatedResponse<Order>> {
+    const term = q?.trim();
     const [data, total] = await this.orderRepository.findAndCount({
-      where: { userId, ...(status?.length ? { status: In(status) } : {}) },
+      where: {
+        userId,
+        ...(status?.length ? { status: In(status) } : {}),
+        ...(term ? { publicId: Like(`%${escapeLikeTerm(term)}%`) } : {}),
+      },
       relations: ["items"],
       order: { createdAt: "DESC" },
       skip: (page - 1) * limit,
@@ -1144,13 +1166,24 @@ export class OrdersService {
     return { fromDate, toDate };
   }
 
+  /**
+   * Admin list. Shares the `q` order-code search with `getOrdersByUser` because
+   * both are driven by the same gateway query DTO — leaving it unwired here
+   * would advertise a `?q=` in Swagger that silently returns unfiltered rows.
+   */
   async getAllOrders(
     page: number = 1,
     limit: number = 10,
     status?: OrderStatus[],
+    q?: string,
   ): Promise<PaginatedResponse<Order>> {
+    const term = q?.trim();
+    const where = {
+      ...(status?.length ? { status: In(status) } : {}),
+      ...(term ? { publicId: Like(`%${escapeLikeTerm(term)}%`) } : {}),
+    };
     const [data, total] = await this.orderRepository.findAndCount({
-      ...(status?.length ? { where: { status: In(status) } } : {}),
+      ...(Object.keys(where).length ? { where } : {}),
       relations: ["items"],
       order: { createdAt: "DESC" },
       skip: (page - 1) * limit,
@@ -1327,7 +1360,9 @@ export class OrdersService {
       throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
     }
     if (!order.ghnOrderCode) {
-      throw new BadRequestException(ORDER_MESSAGE.NO_GHN_ORDER_CODE(orderId));
+      throw new BadRequestException(
+        ORDER_MESSAGE.NO_GHN_ORDER_CODE(order.publicId ?? String(order.id)),
+      );
     }
 
     const previousStatus = order.status ?? OrderStatus.PENDING;
@@ -1488,11 +1523,17 @@ export class OrdersService {
       throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
     }
     if (!order.ghnOrderCode) {
-      throw new BadRequestException(ORDER_MESSAGE.NO_GHN_ORDER_CODE(orderId));
+      throw new BadRequestException(
+        ORDER_MESSAGE.NO_GHN_ORDER_CODE(order.publicId ?? String(order.id)),
+      );
     }
     if (!this.getAvailableShippingActions(order).includes(action)) {
       throw new BadRequestException(
-        ORDER_MESSAGE.GHN_ACTION_NOT_ALLOWED(action, orderId, order.status),
+        ORDER_MESSAGE.GHN_ACTION_NOT_ALLOWED(
+          action,
+          order.publicId ?? String(order.id),
+          order.status,
+        ),
       );
     }
 
@@ -1745,11 +1786,17 @@ export class OrdersService {
       throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
     }
     if (!order.ghnOrderCode) {
-      throw new BadRequestException(ORDER_MESSAGE.NO_GHN_ORDER_CODE(orderId));
+      throw new BadRequestException(
+        ORDER_MESSAGE.NO_GHN_ORDER_CODE(order.publicId ?? String(order.id)),
+      );
     }
     if (!this.getAvailableShippingActions(order).includes(action)) {
       throw new BadRequestException(
-        ORDER_MESSAGE.GHN_ACTION_NOT_ALLOWED(action, orderId, order.status),
+        ORDER_MESSAGE.GHN_ACTION_NOT_ALLOWED(
+          action,
+          order.publicId ?? String(order.id),
+          order.status,
+        ),
       );
     }
     return order;
@@ -1870,8 +1917,14 @@ export class OrdersService {
     const isTerminal =
       status === OrderStatus.CANCELED || status === OrderStatus.COMPLETED;
     if (!isTerminal) {
+      // PENDING counts everywhere CONFIRMED does: the waybill is created during
+      // checkout, so a brand-new order sits at `pending` locally while GHN
+      // already holds it at `ready_to_pick` — the widest editable window there
+      // is. Omitting it here left every freshly placed order with no mutating
+      // action at all, which is what made the console read-only in practice.
       // Cancel: valid while the parcel has not yet entered active delivery.
       if (
+        status === OrderStatus.PENDING ||
         status === OrderStatus.CONFIRMED ||
         status === OrderStatus.PROCESSING ||
         status === OrderStatus.SHIPPED
@@ -1886,6 +1939,7 @@ export class OrdersService {
       // before the parcel is picked up. GHN rejects edits once in active
       // delivery; we surface that as an error rather than pre-blocking here.
       if (
+        status === OrderStatus.PENDING ||
         status === OrderStatus.CONFIRMED ||
         status === OrderStatus.PROCESSING
       ) {
@@ -1988,6 +2042,26 @@ export class OrdersService {
     this.logger.log(`[ORDERS] Order ${orderId} status updated to ${status}`);
   }
 
+  /**
+   * Stamp the moment money was actually collected (ORD-GUARD-01). Conditional on
+   * paid_at IS NULL so a replayed payment_completed — or the COD path stamping
+   * locally and then hearing its own fanout event — never rewrites the original
+   * timestamp. This column is what the seller transitions read; it is the only
+   * payment fact orders owns, since payments lives on the other node.
+   */
+  private async markOrderPaid(orderId: number): Promise<Date | null> {
+    const paidAt = new Date();
+    const result = await this.orderRepository.update(
+      { id: orderId, paidAt: IsNull() },
+      { paidAt },
+    );
+    if (result.affected !== 1) {
+      return null;
+    }
+    this.logger.log(`[ORDERS] Order ${orderId} marked paid`);
+    return paidAt;
+  }
+
   async handlePaymentCompleted(orderId: number): Promise<void> {
     const order = await this.orderRepository.findOne({
       where: { id: orderId },
@@ -2000,6 +2074,10 @@ export class OrdersService {
       );
       throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
     }
+
+    // Before any early return: this event means the money is in, whatever the
+    // method and whatever the order does next.
+    await this.markOrderPaid(orderId);
 
     // COD orders: payment_completed is emitted by GHN webhook on delivery,
     // status is already COMPLETED at that point — nothing to do here
@@ -2296,9 +2374,11 @@ export class OrdersService {
       currentStatus === OrderStatus.CANCELED ||
       currentStatus === OrderStatus.COMPLETED
     ) {
+      // PUBID: this message is persisted to shipping_history and rendered in
+      // the console timeline, so it must name the order the way HTTP does.
       const message = ORDER_MESSAGE.GHN_STATUS_TERMINAL_IGNORED(
         ghnStatus,
-        order.id,
+        order.publicId ?? String(order.id),
         currentStatus,
       );
       this.logger.warn(`[GHN] ${message}`);
@@ -2324,7 +2404,7 @@ export class OrdersService {
     if (statusRank[mappedStatus] <= statusRank[currentStatus]) {
       const message = ORDER_MESSAGE.GHN_STATUS_STALE_IGNORED(
         ghnStatus,
-        order.id,
+        order.publicId ?? String(order.id),
         currentStatus,
       );
       this.logger.log(`[GHN] ${message}`);
@@ -2342,7 +2422,7 @@ export class OrdersService {
     );
     if (updateResult.affected !== 1) {
       const message = ORDER_MESSAGE.GHN_STATUS_CONCURRENT_SKIPPED(
-        order.id,
+        order.publicId ?? String(order.id),
         ghnStatus,
       );
       this.logger.log(`[GHN] ${message}`);
@@ -2362,6 +2442,11 @@ export class OrdersService {
       await this.finalizeOrderCompletion(order);
     } else if (mappedStatus === OrderStatus.CANCELED) {
       await this.finalizeGhnCancellation(order);
+    }
+    if (mappedStatus !== OrderStatus.CANCELED) {
+      // finalizeGhnCancellation publishes order_canceled itself — publishing
+      // here too would notify the buyer twice for the same move.
+      this.publishOrderStatusChangedEvent(order, currentStatus);
     }
 
     return {
@@ -2425,6 +2510,13 @@ export class OrdersService {
     }
 
     if (order.paymentMethod === PaymentMethod.COD) {
+      // COD money changes hands at delivery. Stamp it here rather than relying
+      // on the fanout below coming back to us — the channel can be unavailable,
+      // and paid_at must not depend on RMQ being up.
+      // Mirror onto the in-memory entity too: this same object is what the
+      // seller's complete/deliver response returns, and it must not report
+      // paidAt:null for an order this call just marked paid.
+      order.paidAt = (await this.markOrderPaid(order.id)) ?? order.paidAt;
       if (this.fanoutChannel) {
         this.fanoutChannel.publish(
           EXCHANGE.PAYMENTS_EXCHANGE,
@@ -2614,8 +2706,12 @@ export class OrdersService {
       return PaginatedResponse.of([], 0, page, limit);
     }
 
+    // Items are joined so the seller list carries the same rows the buyer list
+    // does — the gateway already enriches them with product images and SKU
+    // labels, and without the join every order rendered as `items: []`.
     const qb = this.orderRepository
       .createQueryBuilder("order")
+      .leftJoinAndSelect("order.items", "items")
       .where(
         `order.id IN (SELECT DISTINCT order_id FROM order_items WHERE product_id IN (:...productIds))`,
         { productIds },
@@ -2633,6 +2729,22 @@ export class OrdersService {
     return PaginatedResponse.of(data, total, page, limit);
   }
 
+  /**
+   * A vnpay/zalopay order may not move down the fulfilment path until its money
+   * has actually been collected (ORD-GUARD-01). Without this a seller could
+   * confirm → ready-to-ship → … → complete an order the buyer abandoned at the
+   * payment gateway, and a return on that order would then "refund" money that
+   * was never taken. COD is exempt by definition — it is collected on delivery.
+   */
+  private assertOnlinePaymentSettled(order: Order): void {
+    if (order.paymentMethod === PaymentMethod.COD || order.paidAt) {
+      return;
+    }
+    throw new BadRequestException(
+      ORDER_MESSAGE.PAYMENT_NOT_COMPLETED(order.paymentMethod),
+    );
+  }
+
   async confirmOrder(orderId: number, sellerId: number): Promise<Order> {
     const productIds = await this.getSellerProductIds(sellerId);
     const owns = await this.verifySellerOwnsOrder(orderId, productIds);
@@ -2640,18 +2752,25 @@ export class OrdersService {
       throw new ForbiddenException(ORDER_MESSAGE.ACCESS_DENIED);
     }
 
+    // Items are loaded so the confirm response carries the same order shape as
+    // ready-to-ship and GET /order/:id — an empty `items` array reads as "this
+    // order lost its items" to a client.
     const order = await this.orderRepository.findOne({
       where: { id: orderId },
+      relations: ["items"],
     });
     if (!order) {
       throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
     }
+    this.assertOnlinePaymentSettled(order);
     if (order.status !== OrderStatus.PENDING) {
       throw new BadRequestException(ORDER_MESSAGE.CANNOT_CONFIRM(order.status));
     }
 
     order.status = OrderStatus.CONFIRMED;
-    return this.orderRepository.save(order);
+    const confirmed = await this.orderRepository.save(order);
+    this.publishOrderStatusChangedEvent(confirmed, OrderStatus.PENDING);
+    return confirmed;
   }
 
   async readyToShip(orderId: number, sellerId: number): Promise<Order> {
@@ -2668,6 +2787,7 @@ export class OrdersService {
     if (!order) {
       throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
     }
+    this.assertOnlinePaymentSettled(order);
     if (order.status !== OrderStatus.CONFIRMED) {
       throw new BadRequestException(
         ORDER_MESSAGE.CANNOT_READY_TO_SHIP(order.status),
@@ -2687,7 +2807,9 @@ export class OrdersService {
     }
 
     order.status = OrderStatus.PROCESSING;
-    return this.orderRepository.save(order);
+    const processing = await this.orderRepository.save(order);
+    this.publishOrderStatusChangedEvent(processing, OrderStatus.CONFIRMED);
+    return processing;
   }
 
   /**
@@ -2762,6 +2884,8 @@ export class OrdersService {
       }
     }
 
+    this.assertOnlinePaymentSettled(order);
+
     const currentStatus = order.status ?? OrderStatus.PENDING;
     const expected = OrdersService.SELLER_FORWARD_TRANSITIONS[currentStatus];
     if (expected !== targetStatus) {
@@ -2785,6 +2909,9 @@ export class OrdersService {
     if (targetStatus === OrderStatus.COMPLETED) {
       await this.finalizeOrderCompletion(order);
     }
+    // Announced after settlement so the buyer is never told "delivered" before
+    // the COD payment is recorded — same ordering as the GHN webhook path.
+    this.publishOrderStatusChangedEvent(order, currentStatus);
     return order;
   }
 
@@ -3061,6 +3188,50 @@ export class OrdersService {
    * publishOrderCanceledEvent: ORDERS_EXCHANGE fanout + a `pattern` field so the
    * @EventPattern consumer can route it.
    */
+  /**
+   * Announce a buyer-visible lifecycle move so the notification service can tell
+   * the buyer without polling. Best-effort by design: a status transition must
+   * never fail because the broker is unavailable — the order state is already
+   * committed and the buyer can still read it from the order detail.
+   * CANCELED is deliberately NOT published here; it has its own
+   * `order_canceled` event and would otherwise notify twice.
+   */
+  private publishOrderStatusChangedEvent(
+    order: Order,
+    previousStatus: OrderStatus,
+  ): void {
+    const eventName = EVENT.ORDER_STATUS_CHANGED_EVENT;
+    if (!this.fanoutChannel) {
+      this.logger.warn(
+        `[ORDERS] RMQ channel unavailable — ${eventName} event not published for order ${order.id}`,
+      );
+      return;
+    }
+    try {
+      this.fanoutChannel.publish(
+        EXCHANGE.ORDERS_EXCHANGE,
+        eventName,
+        Buffer.from(
+          JSON.stringify({
+            pattern: eventName,
+            data: {
+              orderId: Number(order.id),
+              publicId: order.publicId ?? null,
+              userId: Number(order.userId),
+              sellerId: order.sellerId == null ? null : Number(order.sellerId),
+              status: order.status,
+              previousStatus,
+            },
+          }),
+        ),
+      );
+    } catch (error) {
+      this.logger.warn(
+        `[ORDERS] Failed to publish ${eventName} for order ${order.id}: ${String(error)}`,
+      );
+    }
+  }
+
   private publishOrderReturnEvent(eventName: string, orderId: number): void {
     if (this.fanoutChannel) {
       this.fanoutChannel.publish(

@@ -7,6 +7,7 @@ import {
   Index,
 } from "typeorm";
 import { Order } from "./order.entity";
+import { decimalToNumber } from "@app/common";
 
 // PERF-04: analytics joins (seller_id) + top-products grouping (product_id).
 // order_id is already indexed by the ManyToOne FK constraint.
@@ -50,7 +51,15 @@ export class OrderItem {
   @Column({ type: "int" })
   quantity!: number;
 
-  @Column({ type: "decimal", precision: 12, scale: 2 })
+  // The transformer keeps this a real `number` on every read path. Without it
+  // mysql2 hydrates the DECIMAL as `"15000.00"`, so an order read back from the
+  // DB disagreed with the one POST /api/order returns (built in memory).
+  @Column({
+    type: "decimal",
+    precision: 12,
+    scale: 2,
+    transformer: decimalToNumber,
+  })
   price!: number;
 
   @Column({ type: "int", nullable: true, default: null, name: "weight" })

@@ -36,6 +36,145 @@ function requireEnv(key: string): string {
   return value.trim();
 }
 
+/**
+ * The GHN detail keys `GhnOrderDetail.raw` is allowed to carry.
+ *
+ * GHN answers `/shipping-order/detail` with ~123 keys, and forwarding that
+ * verbatim put our merchant identity and GHN's internals on a browser-reachable
+ * response: `shop_id`, `client_id`, every `*_warehouse_id`, `created_ip` /
+ * `updated_ip`, `created_employee` / `updated_employee`, `created_client` /
+ * `updated_client`, `_id`, `soc_id`, `transaction_ids`, `internal_process`,
+ * `hub_designation_log`, `sort_code`, `seal_code`, `*_station_id`, the
+ * `*_config_fee_id` / `*_extra_cost_id` pricing ids. None of it is actionable
+ * for a shipping operator, and `shop_id` in particular is half of what an
+ * attacker needs to talk to GHN as us.
+ *
+ * An allow-list rather than a deny-list on purpose: GHN adds fields without
+ * notice, and a new one must not leak by default. Anything the console turns
+ * out to need is one line here.
+ */
+const GHN_RAW_ALLOWED_KEYS: readonly string[] = [
+  "order_code",
+  "status",
+  "content",
+  "note",
+  "required_note",
+  "tag",
+  // Money
+  "cod_amount",
+  "cod_collect_date",
+  "cod_transfer_date",
+  "cod_failed_amount",
+  "cod_failed_collect_date",
+  "insurance_value",
+  "total_fee",
+  "service_fee",
+  "payment_type_id",
+  "service_id",
+  "service_type_id",
+  "is_cod_collected",
+  "is_cod_transferred",
+  // Parcel
+  "weight",
+  "converted_weight",
+  "length",
+  "width",
+  "height",
+  // Timeline
+  "order_date",
+  "pickup_time",
+  "leadtime",
+  "finish_date",
+  "created_date",
+  "updated_date",
+  // Receiver / sender / return, as GHN currently holds them
+  "to_name",
+  "to_phone",
+  "to_address",
+  "to_ward_code",
+  "to_district_id",
+  "from_name",
+  "from_phone",
+  "from_address",
+  "from_ward_code",
+  "from_district_id",
+  "return_name",
+  "return_phone",
+  "return_address",
+  "return_ward_code",
+  "return_district_id",
+];
+
+/** Per-entry keys kept from `raw.log[]` (GHN's status timeline). */
+const GHN_RAW_LOG_KEYS: readonly string[] = [
+  "status",
+  "updated_date",
+  "trip_code",
+  "payment_type_id",
+];
+
+/** Per-entry keys kept from `raw.items[]` — drops `current_warehouse_id`. */
+const GHN_RAW_ITEM_KEYS: readonly string[] = [
+  "name",
+  "code",
+  "quantity",
+  "price",
+  "category",
+  "status",
+  "item_order_code",
+  "weight",
+  "length",
+  "width",
+  "height",
+];
+
+function pickKeys(
+  source: Record<string, unknown>,
+  allowed: readonly string[],
+): Record<string, unknown> {
+  const picked: Record<string, unknown> = {};
+  for (const key of allowed) {
+    if (key in source) {
+      picked[key] = source[key];
+    }
+  }
+  return picked;
+}
+
+function pickFromEntries(
+  value: unknown,
+  allowed: readonly string[],
+): Record<string, unknown>[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  return value.map((entry) =>
+    typeof entry === "object" && entry !== null
+      ? pickKeys(entry as Record<string, unknown>, allowed)
+      : {},
+  );
+}
+
+/**
+ * Reduce a raw GHN detail payload to the allow-listed fields. Nested `log[]`
+ * and `items[]` are rebuilt entry by entry — they carry warehouse ids of their
+ * own, so copying either wholesale would defeat the top-level filter.
+ */
+export function sanitizeGhnRawDetail(
+  data: Record<string, unknown>,
+): Record<string, unknown> {
+  const sanitized = pickKeys(data, GHN_RAW_ALLOWED_KEYS);
+  const log = pickFromEntries(data.log, GHN_RAW_LOG_KEYS);
+  if (log) {
+    sanitized.log = log;
+  }
+  const items = pickFromEntries(data.items, GHN_RAW_ITEM_KEYS);
+  if (items) {
+    sanitized.items = items;
+  }
+  return sanitized;
+}
+
 @Injectable()
 export class GhnService {
   private readonly logger = new Logger(GhnService.name);
@@ -522,7 +661,8 @@ export class GhnService {
       toAddress: this.readString(data, "to_address"),
       fromName: this.readString(data, "from_name"),
       fromPhone: this.readString(data, "from_phone"),
-      raw: data,
+      // Allow-listed, not the verbatim GHN body — see sanitizeGhnRawDetail.
+      raw: sanitizeGhnRawDetail(data),
     };
   }
 

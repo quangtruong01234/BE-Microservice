@@ -124,6 +124,7 @@ export class OrdersController {
       page: number;
       limit: number;
       status?: OrderStatus[];
+      q?: string;
     },
   ) {
     return await this.ordersService.getOrdersByUser(
@@ -131,6 +132,7 @@ export class OrdersController {
       payload.page,
       payload.limit,
       payload.status,
+      payload.q,
     );
   }
 
@@ -150,12 +152,19 @@ export class OrdersController {
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.GET_ALL_ORDERS)
   async getAllOrders(
-    @Payload() payload: { page: number; limit: number; status?: OrderStatus[] },
+    @Payload()
+    payload: {
+      page: number;
+      limit: number;
+      status?: OrderStatus[];
+      q?: string;
+    },
   ): Promise<unknown> {
     return this.ordersService.getAllOrders(
       payload.page,
       payload.limit,
       payload.status,
+      payload.q,
     );
   }
 

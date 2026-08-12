@@ -8,7 +8,7 @@ import { HttpService } from "@nestjs/axios";
 import { ClientProxy } from "@nestjs/microservices";
 import { Channel } from "amqplib";
 import { of } from "rxjs";
-import { Repository } from "typeorm";
+import { FindOperator, Repository } from "typeorm";
 import { INVENTORY_MESSAGE_PATTERNS } from "libs/constant/message-pattern-inventory.constant";
 import { Order, OrderStatus } from "./entity/order.entity";
 import { OrderItem } from "./entity/order_item.entity";
@@ -21,6 +21,12 @@ import {
 } from "./entity/shipping-history.entity";
 import { GhnService } from "./ghn/ghn.service";
 import { OrdersService } from "./orders.service";
+import { EVENT } from "@app/common/constants/event";
+
+// Names of the events published through the raw amqplib channel, in call
+// order — publish(exchange, eventName, payload).
+const publishedEventNames = (publish: jest.Mock): string[] =>
+  publish.mock.calls.map((call: unknown[]) => String(call[1]));
 
 describe("OrdersService.handleGhnWebhook", () => {
   const createOrder = (status: OrderStatus): Order =>
@@ -117,7 +123,10 @@ describe("OrdersService.handleGhnWebhook", () => {
       { id: 1, status: OrderStatus.DELIVERING },
       { status: OrderStatus.COMPLETED },
     );
-    expect(publish).toHaveBeenCalledTimes(1);
+    expect(publishedEventNames(publish)).toEqual([
+      EVENT.PAYMENT_COMPLETED_EVENT,
+      EVENT.ORDER_STATUS_CHANGED_EVENT,
+    ]);
   });
 
   it("does not emit when another callback wins the atomic update", async () => {
@@ -176,7 +185,10 @@ describe("OrdersService.handleGhnWebhook", () => {
       { id: 1, status: OrderStatus.DELIVERING },
       { status: OrderStatus.COMPLETED },
     );
-    expect(publish).toHaveBeenCalledTimes(1);
+    expect(publishedEventNames(publish)).toEqual([
+      EVENT.PAYMENT_COMPLETED_EVENT,
+      EVENT.ORDER_STATUS_CHANGED_EVENT,
+    ]);
     expect(historySave).toHaveBeenCalledTimes(1);
   });
 });
@@ -779,7 +791,10 @@ describe("OrdersService.advanceOrderStatus", () => {
       INVENTORY_MESSAGE_PATTERNS.INVENTORY_CONSUME_RESERVED_STOCK,
       expect.objectContaining({ productId: 1, quantity: 2 }),
     );
-    expect(publish).toHaveBeenCalledTimes(1);
+    expect(publishedEventNames(publish)).toEqual([
+      EVENT.PAYMENT_COMPLETED_EVENT,
+      EVENT.ORDER_STATUS_CHANGED_EVENT,
+    ]);
   });
 });
 
@@ -793,11 +808,21 @@ describe("OrdersService payment completion idempotency", () => {
       items: [],
     } as unknown as Order;
     const findOne = jest.fn().mockResolvedValue(order);
+    // Discriminate by the patch, not by call order: ORD-GUARD-01 added a
+    // conditional paid_at stamp before the claim, and both racers may reach it.
+    // Only the status claim decides who owns the waybill.
+    let claims = 0;
     const update = jest
       .fn()
-      .mockResolvedValueOnce({ affected: 1 })
-      .mockResolvedValueOnce({ affected: 0 })
-      .mockResolvedValue({ affected: 1 });
+      .mockImplementation(
+        (_criteria: unknown, patch: Record<string, unknown>) => {
+          if ("status" in patch) {
+            claims += 1;
+            return Promise.resolve({ affected: claims === 1 ? 1 : 0 });
+          }
+          return Promise.resolve({ affected: 1 });
+        },
+      );
     const createShippingOrder = jest.fn().mockResolvedValue("GHN-98");
     const service = new OrdersService(
       null,
@@ -834,6 +859,8 @@ describe("OrdersService.readyToShip GHN waybill gating", () => {
     const order = {
       id: 50,
       status: OrderStatus.CONFIRMED,
+      // COD, so the ORD-GUARD-01 payment guard is not what is under test here.
+      paymentMethod: PaymentMethod.COD,
       ghnOrderCode: null,
       items: [{ productId: 1, quantity: 1 }],
     } as unknown as Order;
@@ -1250,5 +1277,151 @@ describe("OrdersService.getAdminGhnOrderDetail (demo-mode GHN status)", () => {
     const detail = await service.getAdminGhnOrderDetail(62);
 
     expect(detail.ghnDetail?.status).toBe("ready_to_pick");
+  });
+});
+
+describe("OrdersService ORD-GUARD-01 — unpaid online orders cannot be fulfilled", () => {
+  const buildOrder = (overrides: Partial<Order> = {}): Order =>
+    ({
+      id: 77,
+      status: OrderStatus.PENDING,
+      paymentMethod: PaymentMethod.VNPAY,
+      paidAt: null,
+      total: 90000,
+      reservationKey: "reservation-77",
+      items: [{ productId: 1, quantity: 1, skuId: null }],
+      ...overrides,
+    }) as unknown as Order;
+
+  const createService = (
+    order: Order,
+  ): {
+    service: OrdersService;
+    save: jest.Mock;
+    update: jest.Mock;
+    createShippingOrder: jest.Mock;
+  } => {
+    const save = jest.fn().mockImplementation((toSave: Order) => toSave);
+    const update = jest.fn().mockResolvedValue({ affected: 1 });
+    const createShippingOrder = jest.fn().mockResolvedValue("GHN-77");
+    // The seller owns the order in every case here — the guard, not ownership,
+    // is what must reject.
+    const productClient = { send: () => of([1]) } as unknown as ClientProxy;
+    const service = new OrdersService(
+      null,
+      {} as HttpService,
+      { send: () => of(true) } as unknown as ClientProxy,
+      {} as ClientProxy,
+      productClient,
+      {
+        findOne: jest.fn().mockResolvedValue(order),
+        save,
+        update,
+      } as unknown as Repository<Order>,
+      {
+        count: jest.fn().mockResolvedValue(1),
+      } as unknown as Repository<OrderItem>,
+      {} as Repository<ShippingHistory>,
+      {} as Repository<OrderReturnRequest>,
+      {} as Repository<Voucher>,
+      {} as Repository<VoucherRedemption>,
+      { createShippingOrder } as unknown as GhnService,
+    );
+    return { service, save, update, createShippingOrder };
+  };
+
+  it("refuses to confirm a vnpay order whose payment never completed", async () => {
+    const { service, save } = createService(buildOrder());
+
+    await expect(service.confirmOrder(77, 3)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("refuses ready-to-ship on an unpaid online order, so no waybill is bought", async () => {
+    const { service, createShippingOrder } = createService(
+      buildOrder({ status: OrderStatus.CONFIRMED }),
+    );
+
+    await expect(service.readyToShip(77, 3)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(createShippingOrder).not.toHaveBeenCalled();
+  });
+
+  it("refuses to advance an unpaid online order down the fulfilment path", async () => {
+    const { service, update } = createService(
+      buildOrder({ status: OrderStatus.PROCESSING }),
+    );
+
+    await expect(
+      service.advanceOrderStatus(77, 3, false, OrderStatus.SHIPPED),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("lets a paid online order through", async () => {
+    const { service, update } = createService(
+      buildOrder({ status: OrderStatus.PROCESSING, paidAt: new Date() }),
+    );
+
+    const result = await service.advanceOrderStatus(
+      77,
+      3,
+      false,
+      OrderStatus.SHIPPED,
+    );
+
+    expect(result.status).toBe(OrderStatus.SHIPPED);
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it("never blocks COD, which is collected at delivery", async () => {
+    const { service, save } = createService(
+      buildOrder({ paymentMethod: PaymentMethod.COD }),
+    );
+
+    const confirmed = await service.confirmOrder(77, 3);
+
+    expect(confirmed.status).toBe(OrderStatus.CONFIRMED);
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns the fresh paidAt on the response that completes a COD order", async () => {
+    const { service } = createService(
+      buildOrder({
+        status: OrderStatus.DELIVERING,
+        paymentMethod: PaymentMethod.COD,
+      }),
+    );
+
+    const completed = await service.advanceOrderStatus(
+      77,
+      3,
+      false,
+      OrderStatus.COMPLETED,
+    );
+
+    // The entity was loaded before the stamp; without the in-memory mirror the
+    // seller would get paidAt:null and a refetch would disagree with it.
+    expect(completed.paidAt).toBeInstanceOf(Date);
+  });
+
+  it("stamps paid_at once, conditionally, when payment_completed arrives", async () => {
+    const order = buildOrder({ status: OrderStatus.PENDING });
+    const { service, update } = createService(order);
+
+    await service.handlePaymentCompleted(77);
+
+    const [criteria, patch] = update.mock.calls[0] as [
+      { id: number; paidAt: unknown },
+      { paidAt: unknown },
+    ];
+    expect(criteria.id).toBe(77);
+    // IsNull() — the stamp only lands on a row that has none, so a replayed
+    // payment_completed cannot rewrite the original timestamp.
+    expect(criteria.paidAt).toBeInstanceOf(FindOperator);
+    expect(patch.paidAt).toBeInstanceOf(Date);
   });
 });

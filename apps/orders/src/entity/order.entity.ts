@@ -168,6 +168,18 @@ export class Order {
   })
   discountAmount!: number | null;
 
+  // When the money was actually collected (ORD-GUARD-01). Stamped from the
+  // payment_completed event for vnpay/zalopay, and at delivery for COD. NULL =
+  // nothing collected yet, which is what blocks a seller from walking an unpaid
+  // online order down the fulfilment path.
+  @Column({
+    name: "paid_at",
+    type: "datetime",
+    nullable: true,
+    default: null,
+  })
+  paidAt!: Date | null;
+
   @CreateDateColumn({ name: "created_at", type: "datetime" })
   createdAt!: Date;
 
