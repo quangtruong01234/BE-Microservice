@@ -73,6 +73,16 @@
       "destructive": false,
       "manualOnly": false,
       "enabled": true
+    },
+    {
+      "id": "nodeA-20260811-001-add-paid-at-to-orders",
+      "target": "nodeA",
+      "dialect": "mysql",
+      "file": "database/migrations/nodeA/20260811-001-add-paid-at-to-orders.sql",
+      "category": "schema",
+      "destructive": false,
+      "manualOnly": false,
+      "enabled": true
     }
   ]
 }
