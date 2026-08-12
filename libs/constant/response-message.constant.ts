@@ -48,14 +48,17 @@ export const USER_MESSAGE = {
 } as const;
 
 export const INVENTORY_MESSAGE = {
-  ALREADY_EXISTS_FOR_PRODUCT: (productId: number): string =>
+  // `productId` is widened to accept the public id too: the inventory service
+  // only knows the numeric id, so the gateway re-renders these two messages
+  // with the `prod_…` id before they reach the client.
+  ALREADY_EXISTS_FOR_PRODUCT: (productId: number | string): string =>
     `Inventory for product ID ${productId} already exists`,
   SKU_ALREADY_EXISTS: (sku: string): string =>
     `Inventory with sku ${sku} already exists`,
   NOT_FOUND_BY_ID: (id: number): string => `Inventory with id ${id} not found`,
   NOT_FOUND_BY_ID_AFTER_UPDATE: (id: number): string =>
     `Inventory with id ${id} not found after update`,
-  NOT_FOUND_BY_PRODUCT: (productId: number): string =>
+  NOT_FOUND_BY_PRODUCT: (productId: number | string): string =>
     `Inventory for product ${productId} not found`,
   NOT_FOUND_BY_SKU: (sku: string): string =>
     `Inventory with sku ${sku} not found`,
@@ -216,6 +219,8 @@ export const ORDER_MESSAGE = {
     `Order cannot be marked ready-to-ship — current status: ${status}`,
   INVALID_TRANSITION: (from: string, to: string): string =>
     `Cannot transition order from ${from} to ${to}`,
+  PAYMENT_NOT_COMPLETED: (paymentMethod: string): string =>
+    `Order cannot be advanced — the ${paymentMethod} payment has not completed yet`,
   CONCURRENT_UPDATE: (orderId: number | string): string =>
     `Order ${orderId} was updated concurrently; please retry`,
   RETURN_FORBIDDEN:
