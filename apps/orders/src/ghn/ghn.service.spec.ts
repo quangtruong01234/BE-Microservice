@@ -22,11 +22,16 @@ describe("GhnService — GHN failure mapping", () => {
     { productName: "test", quantity: 1, price: 100000, weight: 500 },
   ];
 
-  let httpService: { post: jest.Mock };
+  let httpService: { post: jest.Mock; get: jest.Mock };
   let service: GhnService;
 
   const preview = (): Promise<unknown> =>
     service.previewShippingFee(address, 0, items, resolvedIds);
+
+  // GHN-DIST-01 validates the caller's district/ward against master data before
+  // it quotes anything, so every preview now also reads `/master-data/ward`.
+  const wardsResponse = (wards: { WardCode: string }[]): unknown =>
+    of({ data: { data: wards } });
 
   // Shapes an axios rejection the way axios itself does: a network failure has
   // no `response` at all, an HTTP error carries status + GHN's body.
@@ -37,7 +42,10 @@ describe("GhnService — GHN failure mapping", () => {
   });
 
   beforeEach(() => {
-    httpService = { post: jest.fn() };
+    httpService = { post: jest.fn(), get: jest.fn() };
+    httpService.get.mockReturnValue(
+      wardsResponse([{ WardCode: resolvedIds.wardCode }]),
+    );
     service = new GhnService(httpService as unknown as HttpService);
     process.env.GHN_API_URL = "http://ghn.test/shiip/public-api";
     process.env.GHN_API_TOKEN = "test-token";
@@ -112,6 +120,60 @@ describe("GhnService — GHN failure mapping", () => {
       await expect(preview()).rejects.toBeInstanceOf(BadRequestException);
     }
     expect(httpService.post).toHaveBeenCalledTimes(10);
+  });
+
+  // GHN-DIST-01 — GHN's preview endpoint answers 200 { total_fee: 0 } for a
+  // district id it does not know, so the storefront read an unshippable address
+  // as "quoted successfully, free". Master data is strict where preview is lax.
+  describe("unknown district / ward (GHN-DIST-01)", () => {
+    it("rejects a district GHN does not know with 400, without pricing it", async () => {
+      httpService.get.mockReturnValue(
+        throwError(() => httpError(400, "District ID khong ton tai")),
+      );
+
+      await expect(preview()).rejects.toBeInstanceOf(BadRequestException);
+      await expect(preview()).rejects.toThrow(/does not know district 1442/);
+      expect(httpService.post).not.toHaveBeenCalled();
+    });
+
+    it("rejects a ward that belongs to another district with 400", async () => {
+      httpService.get.mockReturnValue(
+        wardsResponse([{ WardCode: "99999" }, { WardCode: "88888" }]),
+      );
+
+      await expect(preview()).rejects.toThrow(
+        /Ward 20110 does not belong to GHN district 1442/,
+      );
+      expect(httpService.post).not.toHaveBeenCalled();
+    });
+
+    it("still quotes when master data itself is down — validation is not a health gate", async () => {
+      httpService.get.mockReturnValue(throwError(() => networkError()));
+      httpService.post.mockReturnValue(
+        of({
+          data: { data: { total_fee: 22000, expected_delivery_time: null } },
+        }),
+      );
+
+      await expect(preview()).resolves.toEqual({
+        shippingFee: 22000,
+        expectedDeliveryTime: null,
+      });
+    });
+
+    it("does not reject when GHN returns an empty ward list for the district", async () => {
+      httpService.get.mockReturnValue(wardsResponse([]));
+      httpService.post.mockReturnValue(
+        of({
+          data: { data: { total_fee: 22000, expected_delivery_time: null } },
+        }),
+      );
+
+      await expect(preview()).resolves.toEqual({
+        shippingFee: 22000,
+        expectedDeliveryTime: null,
+      });
+    });
   });
 
   it("keeps serving after GHN recovers", async () => {

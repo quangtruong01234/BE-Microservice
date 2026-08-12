@@ -301,6 +301,7 @@ export class GhnService {
     if (resolvedIds) {
       districtId = resolvedIds.districtId;
       wardCode = resolvedIds.wardCode;
+      await this.assertLocationExists(districtId, wardCode);
     } else {
       if (!to_ward_name || !to_district_name || !to_province_name) {
         throw new BadRequestException(GHN_MESSAGE.ADDRESS_MISSING_PARTS);
@@ -827,6 +828,57 @@ export class GhnService {
       return { districtId, wardCode };
     }
     return undefined;
+  }
+
+  /**
+   * GHN-DIST-01 — verify a caller-supplied `toDistrictId` + `toWardCode` really
+   * exist before quoting a fee or cutting a waybill for them.
+   *
+   * GHN's own `/shipping-order/preview` does NOT validate this: it answers
+   * `200 { total_fee: 0 }` for `to_district_id: 999999`, so an address nobody
+   * can ship to reads to the storefront as "quoted successfully, free" and the
+   * failure only surfaces later at waybill create. The master-data endpoint is
+   * strict where preview is lax (`400 "District ID khong ton tai"`), so one
+   * cached ward lookup turns that silent 0 into an actionable 400.
+   *
+   * Deliberately fail-open on anything that is not an explicit GHN rejection:
+   * this is an input check, not a health gate, and a GHN outage must not start
+   * blocking addresses that were fine yesterday.
+   */
+  private async assertLocationExists(
+    districtId: number,
+    wardCode: string,
+  ): Promise<void> {
+    let wards: GhnWard[];
+    try {
+      wards = await this.getWards(districtId);
+    } catch (error: unknown) {
+      if (error instanceof BadRequestException) {
+        throw new BadRequestException(
+          GHN_MESSAGE.DISTRICT_NOT_FOUND(districtId),
+        );
+      }
+      this.logger.warn(
+        `[GHN] District ${districtId} could not be validated, proceeding unvalidated: ${String(error)}`,
+      );
+      return;
+    }
+
+    // An empty list is "GHN has no data for this district", not "this id is
+    // wrong" — GHN already answers 400 for a wrong id. Do not reject on it.
+    if (wards.length === 0) {
+      this.logger.warn(
+        `[GHN] District ${districtId} returned no wards — ward ${wardCode} left unvalidated`,
+      );
+      return;
+    }
+
+    const target = wardCode.trim();
+    if (!wards.some((ward) => ward.WardCode?.trim() === target)) {
+      throw new BadRequestException(
+        GHN_MESSAGE.WARD_NOT_IN_DISTRICT(target, districtId),
+      );
+    }
   }
 
   private async resolveAddressToGhnIds(
