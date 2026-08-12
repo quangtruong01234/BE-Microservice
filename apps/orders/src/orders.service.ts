@@ -2813,12 +2813,13 @@ export class OrdersService {
   }
 
   /**
-   * Seller-driven forward transitions after PROCESSING. The GHN webhook is the
-   * primary driver for these; this map lets a seller advance manually when a
-   * webhook is delayed or unavailable. Only single-step forward moves are
-   * allowed — no skipping and no backward moves.
+   * Forward transitions after PROCESSING. The GHN webhook is the driver; the
+   * map exists so an admin can still advance an order by hand when the webhook
+   * is unavailable. Only single-step forward moves are allowed — no skipping
+   * and no backward moves. Sellers are NOT allowed here (ORD-RBAC-01) — see
+   * `advanceOrderStatus`.
    */
-  private static readonly SELLER_FORWARD_TRANSITIONS: Partial<
+  private static readonly ADMIN_FORWARD_TRANSITIONS: Partial<
     Record<OrderStatus, OrderStatus>
   > = {
     [OrderStatus.PROCESSING]: OrderStatus.SHIPPED,
@@ -2856,10 +2857,11 @@ export class OrdersService {
   }
 
   /**
-   * Advance an order one step along the seller lifecycle
-   * (processing → shipped → delivering → completed). Concurrency-safe: the
-   * status guard on the UPDATE prevents a race with the GHN webhook driving the
-   * same transition, so completion side effects run at most once (P1-01).
+   * Advance an order one step along the shipping lifecycle
+   * (processing → shipped → delivering → completed). Admin-only: the carrier
+   * reports these states, not the shop. Concurrency-safe — the status guard on
+   * the UPDATE prevents a race with the GHN webhook driving the same
+   * transition, so completion side effects run at most once (P1-01).
    */
   async advanceOrderStatus(
     orderId: number,
@@ -2867,6 +2869,16 @@ export class OrdersService {
     isAdmin: boolean,
     targetStatus: OrderStatus,
   ): Promise<Order> {
+    // ORD-RBAC-01 — the seller's responsibility ends at ready-to-ship, which
+    // always leaves a GHN waybill behind (see `readyToShip`). From there GHN
+    // owns the status: letting the shop set it by hand makes the local order
+    // disagree with the carrier, and a hand-set terminal status makes the order
+    // deaf to the webhook that follows it. A stalled order is recovered from
+    // the shipping console (admin GHN sync / demo-status), not by hand here.
+    if (!isAdmin) {
+      throw new ForbiddenException(ORDER_MESSAGE.SELLER_CANNOT_ADVANCE);
+    }
+
     const order = await this.orderRepository.findOne({
       where: { id: orderId },
       relations: ["items"],
@@ -2874,20 +2886,11 @@ export class OrdersService {
     if (!order) {
       throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
     }
-    if (!isAdmin) {
-      const productIds = await this.getSellerProductIds(sellerId);
-      const owns =
-        productIds.length > 0 &&
-        (await this.verifySellerOwnsOrder(orderId, productIds));
-      if (!owns) {
-        throw new ForbiddenException(ORDER_MESSAGE.ACCESS_DENIED);
-      }
-    }
 
     this.assertOnlinePaymentSettled(order);
 
     const currentStatus = order.status ?? OrderStatus.PENDING;
-    const expected = OrdersService.SELLER_FORWARD_TRANSITIONS[currentStatus];
+    const expected = OrdersService.ADMIN_FORWARD_TRANSITIONS[currentStatus];
     if (expected !== targetStatus) {
       throw new BadRequestException(
         ORDER_MESSAGE.INVALID_TRANSITION(currentStatus, targetStatus),
@@ -2903,7 +2906,7 @@ export class OrdersService {
     }
     order.status = targetStatus;
     this.logger.log(
-      `[ORDERS] Order ${order.id} advanced to ${targetStatus} by seller ${sellerId}`,
+      `[ORDERS] Order ${order.id} advanced to ${targetStatus} manually by admin ${sellerId}`,
     );
 
     if (targetStatus === OrderStatus.COMPLETED) {

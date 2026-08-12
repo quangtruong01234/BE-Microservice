@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   ServiceUnavailableException,
 } from "@nestjs/common";
 import { PaymentMethod } from "@app/common";
@@ -779,6 +780,21 @@ describe("OrdersService.advanceOrderStatus", () => {
     ).rejects.toBeInstanceOf(ConflictException);
   });
 
+  // ORD-RBAC-01 — after ready-to-ship the carrier owns the status. A seller
+  // hand-setting it would let the local order disagree with GHN, and a hand-set
+  // terminal status makes the order deaf to the webhook that follows.
+  it("forbids a seller from advancing, without touching the order", async () => {
+    const { service, update } = createService(
+      buildOrder(OrderStatus.PROCESSING),
+      1,
+    );
+
+    await expect(
+      service.advanceOrderStatus(7, 3, false, OrderStatus.SHIPPED),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it("finalizes COD completion exactly once on delivering → completed", async () => {
     const { service, inventorySend, publish } = createService(
       buildOrder(OrderStatus.DELIVERING),
@@ -1356,7 +1372,7 @@ describe("OrdersService ORD-GUARD-01 — unpaid online orders cannot be fulfille
     );
 
     await expect(
-      service.advanceOrderStatus(77, 3, false, OrderStatus.SHIPPED),
+      service.advanceOrderStatus(77, 3, true, OrderStatus.SHIPPED),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(update).not.toHaveBeenCalled();
   });
@@ -1369,7 +1385,7 @@ describe("OrdersService ORD-GUARD-01 — unpaid online orders cannot be fulfille
     const result = await service.advanceOrderStatus(
       77,
       3,
-      false,
+      true,
       OrderStatus.SHIPPED,
     );
 
@@ -1399,7 +1415,7 @@ describe("OrdersService ORD-GUARD-01 — unpaid online orders cannot be fulfille
     const completed = await service.advanceOrderStatus(
       77,
       3,
-      false,
+      true,
       OrderStatus.COMPLETED,
     );
 
