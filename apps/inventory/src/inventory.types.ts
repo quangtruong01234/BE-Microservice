@@ -8,6 +8,7 @@ export interface CreateInventoryDto {
 }
 
 export interface UpdateInventoryDto {
+  sku?: string;
   availableStock?: number;
   reservedStock?: number;
   minimumStock?: number;

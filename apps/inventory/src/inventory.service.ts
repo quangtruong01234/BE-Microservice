@@ -186,11 +186,43 @@ export class InventoryService {
       throw new NotFoundException(INVENTORY_MESSAGE.NOT_FOUND_BY_ID(id));
     }
 
-    await this.inventoryRepository.update(id, data);
+    try {
+      await this.inventoryRepository.update(id, data);
+    } catch (error: unknown) {
+      // `sku` is the only unique column on inventory_v2, so a constraint
+      // violation here can only be a SKU already taken by another row. Report
+      // it as a 409 instead of letting the driver error surface as a 500.
+      if (
+        error instanceof QueryFailedError &&
+        (error.message.includes("unique constraint") ||
+          error.message.includes("duplicate key"))
+      ) {
+        throw new ConflictException(
+          INVENTORY_MESSAGE.SKU_ALREADY_EXISTS(data.sku ?? inventory.sku),
+        );
+      }
+      throw error;
+    }
     const updatedInventory = await this.findOne(id);
     if (!updatedInventory) {
       throw new NotFoundException(
         INVENTORY_MESSAGE.NOT_FOUND_BY_ID_AFTER_UPDATE(id),
+      );
+    }
+    // A direct stock edit (PUT /api/inventory/:id) has to reach the product
+    // mirror too, otherwise the catalog keeps showing the old quantity until an
+    // order happens to move stock. Base rows only: a SKU row's stock is one
+    // variant's, and the product mirror holds the simple-product total.
+    if (
+      data.availableStock !== undefined &&
+      updatedInventory.productSkuId == null &&
+      updatedInventory.availableStock !== inventory.availableStock
+    ) {
+      // PG serializes the bigint product_id as a string — normalize it so the
+      // event carries the same numeric id every other emitter publishes.
+      this.emitStockChanged(
+        Number(updatedInventory.productId),
+        updatedInventory.availableStock,
       );
     }
     return updatedInventory;
