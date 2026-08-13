@@ -6,6 +6,51 @@
 
 ## Completed Milestones
 
+- **SOCIAL-502-ROLLOUT — the transport retry now covers every idempotent gateway
+  read (2026-08-14).** Release class **A** (internal resilience; no route, field
+  or status code changed). `retryOnTransportError()` had been wired to the 7
+  social reads only, but the null-socket race it defends against
+  (`ClientTCP.publish()` dereferencing a socket that `handleClose()` nulled on
+  the nextTick queue before `connect()`'s cached promise resolved on the
+  microtask queue) can hit ANY gateway TCP read. The sanitizing 502 branch in
+  `MicroserviceErrorHandler` already covered all 14 services, so only the retry
+  was missing.
+  - **92 call sites** across `cart`, `chat`, `inventory`, `notification`,
+    `order`, `payment-options`, `product`, `shipping`, `social`, `user`. The
+    operator itself is unchanged — this is purely a rollout.
+  - **Classification rule: message-pattern semantics, not the timeout
+    constant.** Several pure id→publicId lookups use `TCP_TIMEOUT_MS.WRITE` and
+    still qualify as reads; conversely nothing that creates, updates, deletes,
+    reserves, releases or consumes carries the retry, since a retried write can
+    apply twice. Ambiguous patterns (`INVENTORY_CHECK_STOCK`,
+    `PRODUCT_PRICE_SUGGESTION`, `GET_ORDER_INVOICE`) were verified against the
+    microservice handler to be side-effect-free before conversion.
+  - **Deliberately skipped:** GHN and payment-provider legs (`ghn-webhook`,
+    `payment-callback`) — those are writes and already have their own circuit
+    breaker from RESIL-01 — and `PRODUCT_DUPLICATE_IMAGE_CHECK`, which downloads
+    the image from Cloudinary and runs an O(catalog) pHash scan, far too
+    expensive to retry. `SHIPPING_PROVINCES/DISTRICTS/WARDS` ARE included: they
+    are cached, idempotent, side-effect-free master-data reads.
+  - **Placement is enforced, not assumed** — a script over the whole gateway
+    tree confirmed all 92 sites put `retryOnTransportError()` AFTER `timeout(…)`
+    in the same `.pipe()`, so every attempt keeps its own budget and an rxjs
+    `TimeoutError` is never retried. The only 3 sites without a preceding
+    `timeout` are in `transport-error.spec.ts`, by design.
+  - **No latency regression.** Transport errors fail fast, and `TimeoutError` is
+    explicitly not retried, so a slow service still costs one budget, not two.
+  - Two type casts (`order.service.ts` `GET_ORDER_BY_ID` →
+    `OrderResponse | null`, `user.service.ts` `getUserPublicId` →
+    `{ publicId?: string | null }`) were dropped during the mechanical
+    conversion and restored — `send()` without a generic is `Observable<any>`,
+    which trips `no-unsafe-assignment`/`no-unsafe-return`.
+  - **Verified:** `tsc --noEmit` clean; eslint clean on all 9 files; jest 32
+    suites / 298 tests pass, including the 16 pinning specs in
+    `transport-error.spec.ts`; 26 endpoints curl-tested across all touched
+    services as `shop` and `admin` — all expected 200s, and the business-error
+    paths still answer correctly (`GET /api/inventory/product/:id` → a real 404,
+    `GET /api/products/1` → 400 for a numeric id), proving the retry does not
+    swallow or re-issue a non-transport failure.
+
 - **RESIL-03 — Prometheus metrics on the gateway (2026-08-14).** Release class
   **A** (a new ops-only surface; no existing route, field or status code
   changed). Ten services on an Aiven free tier had `/live` + `/ready` and

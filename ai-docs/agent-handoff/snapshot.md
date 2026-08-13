@@ -37,19 +37,6 @@ reward_points, shipping_history, voucher_redemptions.
 
 ## Active Tasks
 
-> ⏳ IN-PROGRESS (sweep): SOCIAL-502 rollout — step: researching
-
-### SOCIAL-502 follow-up — roll the transport retry out beyond social (optional)
-
-`retryOnTransportError()` (`apps/gateway/src/common/exception/transport-error.ts`)
-is applied to the 7 idempotent read call sites in `social.service.ts` only. The
-same null-socket race can hit ANY gateway TCP read; the sanitizing 502 branch in
-`MicroserviceErrorHandler` already covers all 14 gateway services, so what is
-left is purely the retry. Extend it read-by-read (cart, chat, product, order,
-notification, …) — **reads only**, and always AFTER `timeout(...)` so each
-attempt keeps its own budget and an rxjs `TimeoutError` is never retried. Never
-put it on a write: a retried write can apply twice.
-
 ### PRODTEST-0806 — defects found by the full prod API sweep (2026-08-06)
 
 Full workflow sweep of all 141 gateway routes on `https://<PROD_API_DOMAIN>`

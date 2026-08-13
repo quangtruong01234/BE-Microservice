@@ -349,8 +349,21 @@ answer a dropped/refused/nulled socket with `502` +
 - **Worst-case latency on a retried read** is one fast transport failure + 100ms
   + a full `TCP_TIMEOUT_MS.READ` budget. The retry only fires on transport
   errors, which fail fast, so this is ~5.1s, not 10s.
-- The retry is currently wired to social reads ONLY — see snapshot Active Tasks
-  for the optional rollout.
+- **The retry now covers every idempotent gateway read (SOCIAL-502-ROLLOUT,
+  2026-08-14)** — 92 call sites across cart, chat, inventory, notification,
+  order, payment-options, product, shipping, social, user. Rules that were
+  applied and must hold for any new call site:
+  - **Reads only.** No `CREATE`/`UPDATE`/`DELETE`/`RESERVE`/`RELEASE`/`CONSUME`
+    pattern carries it — a retried write can apply twice.
+  - **Always AFTER `timeout(...)`** in the same `.pipe()`, so each attempt keeps
+    its own budget and the rxjs `TimeoutError` is never retried.
+  - Read/write is decided by the **message-pattern semantics, not the timeout
+    constant** — several pure lookups use `TCP_TIMEOUT_MS.WRITE` and still
+    qualify as reads.
+  - **Skipped deliberately:** legs that call out to GHN or a payment provider
+    (they have their own circuit breaker, RESIL-01), and
+    `PRODUCT_DUPLICATE_IMAGE_CHECK` (downloads from Cloudinary + O(catalog)
+    pHash scan — too expensive to retry).
 
 ## Approved return restocks via a dedicated path (RETURN-STOCK-01, fixed 2026-08-11)
 
