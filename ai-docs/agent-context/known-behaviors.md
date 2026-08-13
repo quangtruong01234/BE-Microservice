@@ -193,7 +193,7 @@ accepted since 2026-08-04); `toWardCode` stays `@IsString()` on purpose — GHN
 ward codes can carry leading zeros. For COD the waybill is created at
 ORDER-CREATE time, so ready-to-ship re-uses the existing `ghnOrderCode`.
 
-## An unknown district/ward is a 400, but only on the fee endpoint (GHN-DIST-01, 2026-08-13)
+## An unknown district/ward is a 400 (GHN-DIST-01, 2026-08-13; extended to order create by GHN-CREATE-01)
 
 `buildShippingOrderBody` validates a caller-supplied `toDistrictId` +
 `toWardCode` against GHN master data before quoting or cutting a waybill,
@@ -210,12 +210,11 @@ extra GHN calls) turns a silent 0 into `400 GHN_MESSAGE.DISTRICT_NOT_FOUND` /
   worked yesterday.
 - **Free-text callers are unaffected** — that branch goes through
   `resolveAddressToGhnIds`, which already only ever yields ids GHN gave us.
-- **The order-create path still swallows it.** `getShippingFeeOrZero()`
-  (`orders.service.ts`) catches every preview error and returns `0`, so
-  `POST /api/order` still accepts a bogus district at fee 0 while
-  `POST /api/order/shipping-fee` now 400s. Deliberate: the FE calls the fee
-  endpoint first, and the create-path gap is the pre-existing snapshot defect
-  PRODTEST-0806 #2 (waybill failure swallowed at create), not this one.
+- **The order-create path propagates it too, since GHN-CREATE-01 (2026-08-13).**
+  `getShippingFeeOrZero()` used to catch every preview error and return `0`, so
+  `POST /api/order` accepted a bogus district at fee 0 while the fee endpoint
+  400s. It now rethrows `BadRequestException` only — see the GHN-CREATE-01
+  section below for the refusal-vs-outage split.
 - **A stale ward selection now 400s.** Changing district without re-picking the
   ward used to quote silently; it now returns `WARD_NOT_IN_DISTRICT`.
 - Two legacy `canceled` probe orders (128/129, created 2026-07-30 by a synthetic
@@ -223,6 +222,64 @@ extra GHN calls) turns a silent 0 into `400 GHN_MESSAGE.DISTRICT_NOT_FOUND` /
   (Phường Mai Động, district `1490`) — mismatched hand-made data, both terminal
   with `ghn_order_code: null`, so no live path re-validates them. Every other
   stored pair (4 distinct, 16 orders) passes.
+
+## Order create rejects an undeliverable address, but still places on a GHN outage (GHN-CREATE-01, 2026-08-13)
+
+`POST /api/order` prices shipping through `getShippingFeeOrZero()`
+(`orders.service.ts`), which used to swallow **every** GHN preview error and fall
+back to `0`. That booked orders for addresses GHN can never deliver to: the
+buyer paid no shipping, `createShippingOrder` then failed silently
+(`ghnOrderCode: null`), and the seller's `ready-to-ship` — which shares the same
+`buildShippingOrderBody` validation — rejected the order forever, leaving cancel
+as the only exit.
+
+The catch now splits the two failure classes:
+
+| GHN said | Exception | `POST /api/order` |
+|---|---|---|
+| refusal — unknown district, ward from another district, unresolvable free-text, non-operational 4xx | `BadRequestException` | **400**, GHN's own message, nothing reserved or committed |
+| outage — down, timeout, 5xx/401/403/429, circuit open | `ServiceUnavailableException` / `InternalServerErrorException` | **201** at fee 0 (unchanged); `readyToShip` cuts the waybill later |
+
+- **The refusal is deterministic, which is what makes rejecting safe.** Preview
+  and waybill create share one body builder, so an address that fails here could
+  never have produced a waybill. This is not a health gate: a GHN outage never
+  starts blocking addresses (see GHN-DIST-01 fail-open above).
+- **Nothing to compensate.** The fee is priced before `reserveOrderItems()` and
+  before the order transaction, on both the single-seller and multi-seller
+  paths — a rejected checkout leaves zero reserved stock and zero rows.
+- **`POST /api/order` and `POST /api/order/shipping-fee` now agree.** Same
+  address ⇒ same status ⇒ same message. Before, the fee endpoint 400s and create
+  answered 201.
+- **Free-text callers (`toDistrictId`/`toWardCode` omitted) can now 400** where
+  they used to get a fee-0 order — only when `resolveAddressToGhnIds` cannot
+  match the province/district/ward. Not reachable from the storefront: saved
+  addresses (`user_addresses`) carry NOT NULL `district_id` + `ward_code`, so
+  checkout always sends ids. A valid free-text address still resolves and is
+  still quoted (verified: real non-zero fee + live waybill).
+- **The COD waybill catch at create is untouched** and still swallows: after
+  this gate the only failures reaching it are transient, and `readyToShip`
+  re-creates the missing waybill (`orders.service.ts` — `if (!order.ghnOrderCode)`).
+
+## The envelope `error` label is derived from the status (ENVELOPE-01, 2026-08-13)
+
+`HttpExceptionFilter` no longer reports an exception class name in the `error`
+field. Deliberate consequences — do not "restore" any of them:
+
+- **`error` is always the HTTP reason phrase for `statusCode`** (`404` →
+  `"Not Found"`, `409` → `"Conflict"`), whatever threw and whether or not the
+  error crossed a TCP hop. Before, anything propagated from a microservice
+  reported `"HttpException"`, because `MicroserviceErrorHandler` rebuilds it as
+  a bare `new HttpException(message, status)` and the filter fell back to
+  `exception.constructor.name`.
+- **An upstream `error` label is accepted only when it is already a phrase.**
+  Anything ending in `Exception` or `Error` is dropped (`normalizeErrorLabel`)
+  in favour of the status phrase, so an internal class name can never reach a
+  client — including a raw `TypeError` from an unhandled gateway bug.
+- **Prod and dev agree.** The production 500 override still sanitizes the
+  *message* to `"Internal server error"`, but its label is the same phrase dev
+  emits (it used to be the unspaced `"InternalServerError"`).
+- No FE reads this field — the storefront client reads `message` + HTTP status,
+  the GHN console branches on status. It is a debugging aid, not a contract.
 
 ## Deactivated products on the storefront (BUG-B, fixed 2026-08-03)
 

@@ -56,15 +56,21 @@ fulfilment → returns → social → chat/WS → notifications → admin → ca
 Nine real defects, none of them blockers. The first three (duplicate register →
 500, role-entity leak, inconsistent pagination) are FIXED and, as of 2026-08-10
 (commit `b0e982d`), DEPLOYED AND VERIFIED ON PROD — see `CHANGELOG.md`
-2026-08-06. Six remain, ordered by impact:
+2026-08-06. Of the six that remained, five are now closed (#1 RESIL-01, #2
+GHN-CREATE-01, #3 misdiagnosed, #5 ENVELOPE-01, #6 ENUM-MSG-01); the only live
+work is the two class-C sub-items under #4. Kept in full for the audit trail:
 
 1. ~~**GHN failures surface as opaque 500/502.**~~ FIXED 2026-08-10 by RESIL-01,
    DEPLOYED 2026-08-12 — every GHN call is mapped: refusal → 400 with GHN's own
    message, outage/401/403/429 → 503, plus a circuit breaker. See `CHANGELOG.md`
    "RESIL-01".
-2. **Order create swallows a waybill failure**: order is created with
-   `ghnOrderCode:null`, then `ready-to-ship` hard-fails 502 and the order can
-   only be canceled. Either fail the create or make ready-to-ship re-create.
+2. ~~**Order create swallows a waybill failure**~~ FIXED 2026-08-13 (GHN-CREATE-01)
+   — `POST /api/order` now propagates a deterministic GHN refusal (unknown
+   district, cross-district ward, unresolvable free-text) as a 400 from the fee
+   preview, before anything is reserved or committed, instead of booking an
+   unshippable order at fee 0. A GHN *outage* still fails open (fee 0, order
+   placed) and `readyToShip` already re-creates the missing waybill. See
+   `CHANGELOG.md` 2026-08-13.
 3. ~~**Our own address proxy can yield unshippable selections**~~ — LIKELY
    MISDIAGNOSED, re-probed 2026-08-10. The recorded reproducer (district 1534 /
    ward 22306, Huyện Nhà Bè) now returns `201` with a fee on BOTH local and
@@ -76,20 +82,29 @@ Nine real defects, none of them blockers. The first three (duplicate register �
    message ⇒ the ward really is unshippable and only then is this a real defect.
    GHN-DIST-01 (2026-08-13) adds a third, earlier signal: a district/ward pair
    GHN's master data does not know now 400s before any preview call.
-4. **Numeric internal ids still leak on PUBID domains**: `stock-check.productId`,
-   return-request `reviewedBy`, moderation `moderatorId`/`submittedBy`,
-   analytics `topProducts[].productId`, review-create `userId`, notification
-   message text ("Đơn hàng #34 …"), "Post 1 not found". (Fixed and deployed
-   2026-08-12 by GHN-HIST-01: shipping-history `actorId` and every GHN
-   action/status message now carry `usr_`/`ord_`. Wishlist `id` was fixed by
-   the 08-11 batch.)
-5. **Envelope inconsistency**: errors propagated from microservices report
-   `"error":"HttpException"` instead of the reason phrase ("Not Found",
-   "Conflict") that gateway-local errors return. Now also visible on the new
-   register/update 409s.
-6. **`@IsEnum([...])` with array literals** in `create-brand.dto.ts` /
-   `create-category.dto.ts` renders `"action must be one of the following
-   values: "` — empty list. Use a TS enum or `@IsIn([...])`.
+4. **Numeric internal ids still leak on PUBID domains** — MOSTLY FIXED
+   2026-08-13 (IDLEAK-01, class B): `stock-check.productId`, return-request
+   `reviewedBy`, moderation `moderatorId`, and the social `"Post 1 not found"` /
+   `"Comment 1 not found"` messages all carry a public id (or no id) now. Two
+   sub-items were verified ALREADY FIXED earlier and are stale in this list:
+   review-create `userId` (REVIEW-ID-01) and the notification message text
+   (`orderLabel` is publicId-safe). **Still open, and deliberately deferred as
+   release class C** — both have a live FE consumer typed `number`, so backend
+   and FE must ship together:
+   - `submittedBy` on pending brands/categories — rendered as `#{submittedBy}`
+     in `PendingBrandsPage.tsx:101` / `PendingCategoriesPage.tsx:101`, typed
+     `submittedBy: number` in `frontend/src/types/catalog.ts`.
+   - `topProducts[].productId` on the analytics response.
+   (Fixed and deployed 2026-08-12 by GHN-HIST-01: shipping-history `actorId`
+   and every GHN action/status message now carry `usr_`/`ord_`. Wishlist `id`
+   was fixed by the 08-11 batch.)
+5. ~~**Envelope inconsistency**~~ FIXED 2026-08-13 (ENVELOPE-01) — the gateway
+   filter no longer falls back to the exception class name; `error` is the
+   status-derived reason phrase in every branch and in both environments. See
+   `CHANGELOG.md` 2026-08-13.
+6. ~~**`@IsEnum([...])` with array literals**~~ FIXED 2026-08-13 (ENUM-MSG-01)
+   — both review DTOs use `@IsIn([...])`, so the 400 now reads `action must be
+   one of the following values: approve, reject`.
 
 Observations (not defects): `/ready` reports `database:not_configured` and
 `rabbitmq:not_checked`, so readiness stays green even if RMQ is down;
@@ -369,9 +384,9 @@ nothing until that is decided.
 - GHN free-text address is best-effort; exact `toDistrictId`+`toWardCode` skip
   resolution; `toWardCode` stays a string (leading zeros).
 - GHN-DIST-01: an unknown `toDistrictId` / a ward from another district is a 400
-  on `POST /api/order/shipping-fee` and at waybill create — but validation is
-  fail-open (outage/empty list ⇒ quote anyway), and `POST /api/order` still
-  swallows it via `getShippingFeeOrZero()` and books at fee 0.
+  on `POST /api/order/shipping-fee`, on `POST /api/order` (GHN-CREATE-01) and at
+  waybill create — but validation is fail-open (outage/empty list ⇒ quote and
+  place the order anyway).
 - Storefront catalog defaults `isActive:true` unless `isActive` or single
   `userId` is passed; `?userId=` shows that seller's hidden products by design;
   `GET /api/products/:id` still returns deactivated products with 200.

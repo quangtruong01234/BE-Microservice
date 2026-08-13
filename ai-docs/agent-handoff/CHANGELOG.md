@@ -6,6 +6,109 @@
 
 ## Completed Milestones
 
+- **IDLEAK-01 / ENVELOPE-01 / ENUM-MSG-01 — the last three cosmetic-but-real
+  defects from the prod sweep (2026-08-13).** One batch, three independent
+  fixes, all release class **B** (no current FE reads any of the three).
+  - **IDLEAK-01 (PRODTEST-0806 #4)** — four places still shipped an internal
+    numeric row id on a PUBID domain. `GET /api/products/:id/stock-check`
+    returned inventory's echo of the numeric `productId` it was queried with;
+    it now returns the opaque id the caller asked about
+    (`{...stock, productId}`, `product.service.ts`). Return-request
+    `reviewedBy` and risk-feedback `moderatorId` were simply missing from the
+    two `exposeUserReferences` key sets — the return-request column is
+    `reviewedBy`, not the `reviewerId` that was listed, so adding one key fixed
+    all four return-request paths at once (create / mine / managed / review).
+    `SOCIAL_MESSAGE.POST_NOT_FOUND` and `COMMENT_NOT_FOUND` stopped being
+    interpolating functions: the social service only ever sees the internal
+    numeric id (the gateway resolves `post_…`/`cmt_…` before the TCP hop), so
+    the id in the message text was a leak by construction and the text carries
+    no id at all now (14 call sites). Two items on the snapshot list were
+    verified already fixed and were stale, not re-fixed: review-create `userId`
+    (REVIEW-ID-01) and the notification message text (`orderLabel` is
+    publicId-safe). Two more — `submittedBy` on pending brands/categories and
+    analytics `topProducts[].productId` — are **deliberately deferred**: both
+    have a live FE consumer typed `number` (`PendingBrandsPage.tsx:101` renders
+    `#{submittedBy}`), which makes them release class **C**, and shipping them
+    inside this batch would have held the whole tree.
+  - **ENVELOPE-01 (#5)** — `HttpExceptionFilter` fell back to
+    `exception.constructor.name` for the envelope's `error` label. Because
+    `MicroserviceErrorHandler` rebuilds a propagated error as a bare
+    `new HttpException(message, status)`, every error crossing a TCP hop
+    reported `"error":"HttpException"` while the identical gateway-local error
+    reported `"Not Found"`. The filter now derives the label from the status
+    itself (`HttpStatus[404]` → `NOT_FOUND` → `Not Found`) and accepts an
+    upstream label only when it is already a reason phrase — a class name
+    (`…Exception`/`…Error`) is an internal detail and gets dropped. The
+    production 500 override was unified onto the same phrase so prod and dev no
+    longer disagree (`"InternalServerError"` vs `"Internal Server Error"`); it
+    had no consumer in either repo.
+  - **ENUM-MSG-01 (#6)** — `@IsEnum(["approve","reject"])` on the brand and
+    category review DTOs rendered `"action must be one of the following
+    values: "` with an empty list, because `class-validator` reads enum
+    *values* off an object, not an array literal. Swapped to `@IsIn([...])`.
+  Verified at runtime against the local gateway (admin cookie): stock-check →
+  `"productId":"prod_ffc802c681d211f1"`; `GET /api/order/return-requests` → all
+  four rows `"reviewedBy":"usr_…"`; risk feedback → `"moderatorId":"usr_…"`;
+  `GET /api/social/posts/post_0000000000000000` (and its `/comments`) →
+  `"Post not found"`; propagated 404 → `"error":"Not Found"`, gateway-local 400
+  → `"Bad Request"`, duplicate register → `"Conflict"`; brand review with
+  `action:"bogus"` → `action must be one of the following values: approve,
+  reject`. Change-impact review: `SOCIAL_MESSAGE` has no caller outside
+  `social.service.ts`; `reviewedBy` exists only on return-requests and
+  `moderatorId` only on risk feedback, so neither key-set addition can rewrite
+  an unrelated field; `checkProductStock` has exactly one caller; the storefront
+  API client reads only `message` + HTTP status from an error body and the GHN
+  console never reads `error` either, so the filter change is invisible to both.
+  `tsc --noEmit` clean, eslint clean, Jest 31 suites / 284 tests green.
+
+- **GHN-CREATE-01 — order create no longer books an undeliverable address
+  (2026-08-13).** Closes PRODTEST-0806 defect #2 and the hole GHN-DIST-01 left
+  open on purpose. `POST /api/order` priced shipping through
+  `getShippingFeeOrZero()` (`apps/orders/src/orders.service.ts`), which caught
+  **every** GHN preview error and returned `0`. So an address GHN cannot deliver
+  to produced a `201`: the buyer was charged no shipping, the COD
+  `createShippingOrder` leg then failed into a swallowed `logger.error`
+  (`ghnOrderCode: null`), and the seller's `ready-to-ship` — which runs the same
+  `buildShippingOrderBody` validation — rejected that order forever. Cancel was
+  the only exit, and the buyer only found out after paying attention to a stuck
+  order. The fix is three lines: rethrow `BadRequestException`, keep swallowing
+  everything else. That split is exactly the refusal/outage classification
+  RESIL-01 already built into `toGhnDomainError` — a refusal (unknown district,
+  ward from another district, unresolvable free-text, non-operational 4xx) is
+  **deterministic**, because preview and waybill create share one body builder,
+  so an address that fails here could never have produced a waybill; an outage
+  (down, timeout, 5xx/401/403/429, circuit open → 503/500) says nothing about
+  the order, so it stays fail-open at fee 0 and `readyToShip` cuts the waybill
+  on retry (`if (!order.ghnOrderCode)` — that recovery path already existed,
+  which is why only the create half needed fixing). Placement matters and was
+  verified, not assumed: the fee is priced **before** `reserveOrderItems()` and
+  before the order transaction on both the single-seller and the multi-seller
+  path, so a rejected checkout leaves zero reserved stock and zero rows —
+  nothing to compensate. Side effect worth having: `POST /api/order` and
+  `POST /api/order/shipping-fee` now return the same status and the same message
+  for the same address, instead of the fee endpoint 400ing while create answered
+  201. Blast radius checked at runtime rather than reasoned about: free-text
+  callers (ids omitted) can now 400 where they used to get a fee-0 order, but
+  only when `resolveAddressToGhnIds` matches nothing — and that is unreachable
+  from the storefront, since `user_addresses` carries NOT NULL `district_id` +
+  `ward_code`, so checkout always sends ids; a *valid* free-text address still
+  resolves, still gets quoted (real non-zero fee `46207`) and still gets a live
+  waybill. **Verified (local, dev Aiven + live GHN sandbox):** unknown district
+  `999999` → **400** `"GHN does not know district 999999 …"`; ward `20308` under
+  district `1442` → **400** `"Ward 20308 does not belong to GHN district 1442 …"`;
+  unresolvable free-text → **400** `"Cannot resolve province …"`; control
+  `1442`/`20110` → **201** with `ghnOrderCode: "L8V7XL"`; valid free-text → **201**
+  with `ghnOrderCode: "L8V7XF"` and `shippingFee: 46207`; multi-seller (2 sellers)
+  with the bad district → **400**. Stock proves the no-compensation claim:
+  115 → 113 across the batch, exactly the two successful orders, and the
+  multi-seller products stayed at 98/30 after their rejection — no reservation
+  leaked, no phantom order in the buyer's list. tsc/eslint clean, Jest **31
+  suites / 284 tests** (+3: refusal aborts before reserve, outage still places
+  the order, multi-seller refusal aborts before reserve). Class **B** — the
+  current FE already handles a 400 at checkout and already gets one from the fee
+  endpoint it calls first, so no deploy window shows a user anything wrong.
+  Recorded in `frontend-handoff.md` (GHN-CREATE-01) and `known-behaviors.md`.
+
 - **SOCIAL-AUTHOR-01 — comments and replies carry `author` (2026-08-13).**
   The FE agent reported that `GET /api/social/posts/:id/comments` and
   `GET /api/social/comments/:id/replies` returned only `userId`, so
