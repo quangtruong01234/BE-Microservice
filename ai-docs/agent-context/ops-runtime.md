@@ -85,6 +85,18 @@
   `RATE_LIMIT_SKIP_PUBLIC_GET=true` in the gateway prod env (ONLY behind nginx;
   skips the Redis rate-limit counter for @Public GETs without explicit
   `@RateLimit`).
+- **Metrics scrape (RESIL-03, 2026-08-14)**: `GET /metrics` on the gateway
+  serves Prometheus text (default process metrics + `http_requests_total` /
+  `http_request_duration_seconds` / `http_requests_in_flight`, labelled with the
+  route pattern). It is **open in dev** and **404 in production unless
+  `METRICS_TOKEN` is set** in `local/nodeA/.env`; when set, scrape with
+  `Authorization: Bearer $METRICS_TOKEN`. nginx `location /` proxies it, so the
+  token is the only gate — if a remote Prometheus is ever added, consider an
+  `allow/deny` block on `location = /metrics` as well. No Prometheus/Grafana is
+  deployed yet; the endpoint is scrapeable by hand
+  (`curl -H "Authorization: Bearer …" https://<PROD_API_DOMAIN>/metrics`).
+  Only the gateway is instrumented, and the registry is per-process — do not set
+  `GATEWAY_INSTANCES>1` and expect whole-gateway numbers.
 - **nodeB idle-crash (FIXED 2026-06-26, keep the check)**: inventory/payments/
   rewards used to die silently after machine sleep / broker restart —
   `registerDirectPublisher()` opened a raw amqplib connection with no

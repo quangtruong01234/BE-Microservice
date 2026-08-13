@@ -37,6 +37,8 @@ reward_points, shipping_history, voucher_redemptions.
 
 ## Active Tasks
 
+> ⏳ IN-PROGRESS (sweep): SOCIAL-502 rollout — step: researching
+
 ### SOCIAL-502 follow-up — roll the transport retry out beyond social (optional)
 
 `retryOnTransportError()` (`apps/gateway/src/common/exception/transport-error.ts`)
@@ -136,11 +138,19 @@ this order:
   the migration `nodeA-20260813-001-add-order-outbox` is **owed on prod** (the
   CD workflow applies it before the restart, so the push that ships this covers
   it); and the fix included the missing `await app.init()` in
-  `apps/orders/src/main.ts` — see Known Issues.
-- **RESIL-03 — Prometheus metrics.** `prom-client` is not installed and no
-  `/metrics` route exists; only `/live` + `/ready` (and `/ready` reports
-  `database:not_configured`, so it stays green regardless). 10 services on an
-  Aiven free tier with a ~76-connection wall is flying blind.
+  `apps/orders/src/main.ts` — see Known Issues. Follow-up (2026-08-14): that
+  `init()` also started running `OrdersService.onModuleInit()`, whose eager
+  `client.connect()` calls crashed the process when a peer was not listening
+  yet — orders and product each refused to boot while the other was down. Both
+  warmups are best-effort now (warn + lazy connect on first send).
+- **RESIL-03 — Prometheus metrics — DONE 2026-08-14, NOT YET DEPLOYED.** See
+  `CHANGELOG.md`. `GET /metrics` on the gateway (default process metrics +
+  `http_requests_total` / `http_request_duration_seconds` /
+  `http_requests_in_flight`, labelled with the ROUTE PATTERN, unmatched paths
+  collapsed). Prod needs `METRICS_TOKEN` in `local/nodeA/.env` — unset means the
+  route 404s in production. Only the gateway is instrumented; the other 9
+  services still have no metrics surface, and the registry is per-process, so
+  `GATEWAY_INSTANCES>1` would need `prom-client`'s cluster aggregator.
 
 Deliberately NOT doing (decided, do not re-propose): full DDD refactor (huge
 diff, zero behaviour change); async order placement via queue (breaks the

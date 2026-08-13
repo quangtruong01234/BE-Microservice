@@ -6,6 +6,63 @@
 
 ## Completed Milestones
 
+- **RESIL-03 — Prometheus metrics on the gateway (2026-08-14).** Release class
+  **A** (a new ops-only surface; no existing route, field or status code
+  changed). Ten services on an Aiven free tier had `/live` + `/ready` and
+  nothing else — and `/ready` reports `database:not_configured`, so it stays
+  green whatever happens. There was no way to answer "which route is slow",
+  "what is the error rate" or "how many requests are in flight".
+  - `GET /metrics` (`apps/gateway/src/metrics/`, `prom-client`) renders a
+    **dedicated** `Registry` — not the global one, so a second consumer cannot
+    collide with it — carrying `collectDefaultMetrics()` (process CPU/RSS/heap,
+    event-loop lag, handles) plus three HTTP series: `http_requests_total`
+    (counter), `http_request_duration_seconds` (histogram, buckets 10ms→10s)
+    and `http_requests_in_flight` (gauge).
+  - **Labels are the matched route PATTERN**, read from `req.route.path` +
+    `req.baseUrl` after the response finishes (`/api/products/:id`, never the
+    concrete id), and anything that matched no route at all — 404s, scanner
+    traffic — collapses into a single `route="unmatched"` series. Cardinality is
+    therefore bounded by the route table, not by traffic.
+  - The gauge is decremented on `finish` **or** `close` (client hang-up),
+    guarded so it records exactly once; otherwise an aborted request would leak
+    in-flight count forever.
+  - **Access:** `@Public()` and excluded from the `api` global prefix
+    (Prometheus convention is a bare `/metrics`). Open in dev. In production it
+    is **404 unless `METRICS_TOKEN` is set** (fail-closed, and the 404 hides
+    that the route exists at all); when set, the scrape must send
+    `Authorization: Bearer <token>` and the comparison is `timingSafeEqual`
+    with a length pre-check. `METRICS_TOKEN` is documented in both nodeA env
+    examples. nginx's `location /` proxies `/metrics` too, so on prod the token
+    is the only thing standing in front of it.
+  - `/metrics` is exempt from the SCALE-05c backpressure shed (like `/live` and
+    the payment callbacks): shedding the scrape would blind the dashboards
+    exactly during the incident they exist for. It is also excluded from its own
+    middleware — and that exclusion **must name the method**:
+    `exclude("metrics")` defaults to `RequestMethod.ALL`, which does not match
+    the `{ path: "metrics", method: GET }` entry in `setGlobalPrefix`'s exclude
+    list, so Nest prefixed it to `/api/metrics` and the real `/metrics` stayed
+    instrumented — caught at runtime because the gauge never read 0.
+  - **Known limits (deliberate):** only the gateway is instrumented, the other 9
+    services have no metrics surface; the registry is per-process, so
+    `GATEWAY_INSTANCES>1` (pm2 cluster) would hand a scraper one random worker's
+    numbers and needs `prom-client`'s cluster aggregator first. Default is 1.
+  - Verified on the running dev stack: `200 text/plain; version=0.0.4`;
+    `http_requests_total{route="/api/user/me",status_code="200"}` after an
+    authenticated call, `route="unmatched"` for a bogus path, no `/metrics`
+    series, `http_requests_in_flight 0` between scrapes. 32 suites / 298 tests.
+
+- **Boot-time TCP warmup is best-effort now (2026-08-14, follow-up to
+  RESIL-02).** Adding the missing `await app.init()` to orders also started
+  running `OrdersService.onModuleInit()` for the first time, and it eagerly
+  `await client.connect()`s inventory/user/product. An `ECONNREFUSED` there is
+  an unhandled rejection → the process dies at boot. Product does the same thing
+  towards orders, so the two deadlocked: whichever was down first kept the other
+  from ever starting (seen live — both were down, and each crashed on the
+  other's port). Both warmups are wrapped now: a failure logs a warn and the
+  `ClientProxy` connects lazily on the first send, which is what it does anyway.
+  This matters beyond dev — pm2 starts all 10 apps at once, and a repeated
+  crash-on-boot can park an app in pm2's `errored` state.
+
 - **PROD-PAY-02 — inbound VNPay IPN closed (2026-08-13).** Confirmed done by the
   user: the merchant portal was switched back to **SHA512** (the backend has
   always verified SHA512) and a sandbox payment completed end to end, so the
