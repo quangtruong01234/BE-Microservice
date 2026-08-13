@@ -13,6 +13,40 @@ import { isProduction } from "../security";
 export class HttpExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(HttpExceptionFilter.name);
 
+  /**
+   * The HTTP reason phrase for a status, derived from the `HttpStatus` enum
+   * key (`404` → `NOT_FOUND` → `Not Found`). Keeps `error` uniform whatever
+   * threw: gateway-local exceptions, errors propagated from a microservice,
+   * and bare JS errors all report the same label for the same status.
+   */
+  private static reasonPhrase(status: number): string {
+    const key: unknown = (HttpStatus as unknown as Record<number, string>)[
+      status
+    ];
+    if (typeof key !== "string") {
+      return "Error";
+    }
+    return key
+      .toLowerCase()
+      .split("_")
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" ");
+  }
+
+  /**
+   * Accept an upstream `error` label only when it is already a reason phrase.
+   * A class name (`NotFoundException`) is an internal detail and gets dropped
+   * so the status-derived phrase is used instead.
+   */
+  private normalizeErrorLabel(label: unknown): string | null {
+    if (typeof label !== "string" || label.length === 0) {
+      return null;
+    }
+    return label.endsWith("Exception") || label.endsWith("Error")
+      ? null
+      : label;
+  }
+
   catch(exception: unknown, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
@@ -20,7 +54,13 @@ export class HttpExceptionFilter implements ExceptionFilter {
 
     let status: number = HttpStatus.INTERNAL_SERVER_ERROR;
     let message: string | string[] = "Internal server error";
-    let error: string = "UnknownError";
+    // `null` = "nothing better than the status itself" — resolved to the HTTP
+    // reason phrase once the status is final. Never fall back to the exception
+    // class name: an error propagated from a microservice is rebuilt as a bare
+    // `HttpException`, so the envelope reported `"error":"HttpException"` where
+    // a gateway-local one reported `"Not Found"` (PRODTEST-0806 #5) — and a raw
+    // `TypeError` name is an internal detail the client should never see.
+    let error: string | null = null;
 
     if (exception instanceof HttpException) {
       // Handle NestJS HTTP exceptions
@@ -29,7 +69,6 @@ export class HttpExceptionFilter implements ExceptionFilter {
 
       if (typeof exceptionResponse === "string") {
         message = exceptionResponse;
-        error = exception.constructor.name;
       } else if (
         typeof exceptionResponse === "object" &&
         exceptionResponse !== null
@@ -39,16 +78,14 @@ export class HttpExceptionFilter implements ExceptionFilter {
           error?: string;
         };
         message = body.message ?? exception.message;
-        error = body.error ?? exception.constructor.name;
+        error = this.normalizeErrorLabel(body.error);
       } else {
         message = exception.message;
-        error = exception.constructor.name;
       }
     } else if (exception instanceof Error) {
       // Handle generic JavaScript errors
       status = HttpStatus.INTERNAL_SERVER_ERROR;
       message = exception.message || "Internal server error";
-      error = exception.constructor.name;
     } else if (typeof exception === "object" && exception !== null) {
       // Handle microservice error objects
       const errorObj = exception as {
@@ -67,7 +104,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
       }
 
       message = errorObj.message ?? errorObj.error ?? "Internal server error";
-      error = errorObj.error ?? "MicroserviceError";
+      error = this.normalizeErrorLabel(errorObj.error);
 
       this.logger.error(
         `Microservice error: Status=${status}`,
@@ -78,7 +115,6 @@ export class HttpExceptionFilter implements ExceptionFilter {
       // Handle completely unknown exceptions
       status = HttpStatus.INTERNAL_SERVER_ERROR;
       message = "Internal server error";
-      error = "UnknownError";
     }
 
     // Log raw exception — warn for 4xx (expected), error for 5xx (unexpected)
@@ -108,7 +144,10 @@ export class HttpExceptionFilter implements ExceptionFilter {
 
     if (isProduction() && status >= 500) {
       message = "Internal server error";
-      error = "InternalServerError";
+      // Sanitize the message, but keep the label the status-derived phrase so
+      // prod and dev report the same `error` for the same status
+      // (PRODTEST-0806 #5).
+      error = HttpExceptionFilter.reasonPhrase(status);
     } else if (isProduction() && status === 401) {
       message = "Unauthorized";
       error = "Unauthorized";
@@ -118,7 +157,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const errorResponse = {
       statusCode: status,
       status: "error",
-      error: error,
+      error: error ?? HttpExceptionFilter.reasonPhrase(status),
       message: Array.isArray(message) ? message.join(", ") : message,
       data: null,
       timestamp: new Date().toISOString(),
