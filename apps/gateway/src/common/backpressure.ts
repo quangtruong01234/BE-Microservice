@@ -8,9 +8,11 @@ import { parseBooleanEnv, resolvePositiveIntegerEnv } from "./security";
  * shedding excess load early with a cheap 503 + Retry-After keeps the process
  * responsive for the requests it can still serve.
  *
- * Payment/GHN callbacks and health probes are exempt: external providers
- * retry on their own schedule and a shed callback could lose a real payment
- * confirmation, while health endpoints must answer even under load.
+ * Payment/GHN callbacks, health probes and the Prometheus scrape are exempt:
+ * external providers retry on their own schedule and a shed callback could lose
+ * a real payment confirmation, while health and metrics endpoints must answer
+ * even under load — shedding /metrics would blind the dashboards exactly during
+ * the incident they exist for.
  */
 
 const EXEMPT_PATHS = new Set([
@@ -21,6 +23,7 @@ const EXEMPT_PATHS = new Set([
   "/live",
   "/ready",
   "/health",
+  "/metrics",
 ]);
 
 export interface BackpressureOptions {

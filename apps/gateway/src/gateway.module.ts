@@ -26,6 +26,7 @@ import { JwtModule } from "@nestjs/jwt";
 import { JwtAuthGuard } from "./common/guards/jwt-auth.guard";
 import { RoleAuthGuard } from "./common/guards/role-auth.guard";
 import { HealthModule } from "./health/health.module";
+import { MetricsModule } from "./metrics/metrics.module";
 
 @Module({
   imports: [
@@ -119,6 +120,7 @@ import { HealthModule } from "./health/health.module";
     ShippingModule,
     PaymentCallbackModule,
     HealthModule,
+    MetricsModule,
   ],
   controllers: [GatewayController],
   providers: [

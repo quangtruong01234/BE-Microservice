@@ -75,7 +75,7 @@ describe("backpressureMiddleware", () => {
     });
   });
 
-  it("never sheds payment callbacks, webhooks, or health probes", () => {
+  it("never sheds payment callbacks, webhooks, health probes, or the metrics scrape", () => {
     const middleware = backpressureMiddleware({
       maxEventLoopDelayMs: 500,
       sampleIntervalMs: 0,
@@ -89,6 +89,7 @@ describe("backpressureMiddleware", () => {
       "/live",
       "/ready",
       "/health",
+      "/metrics",
     ]) {
       const mock = createMockResponse();
       const next = jest.fn();

@@ -110,6 +110,9 @@ async function bootstrap() {
       { path: "live", method: RequestMethod.GET },
       { path: "ready", method: RequestMethod.GET },
       { path: "health", method: RequestMethod.GET },
+      // Prometheus convention is a bare /metrics; it is an ops surface, not
+      // part of the `api` contract.
+      { path: "metrics", method: RequestMethod.GET },
     ],
   });
   if (isSwaggerEnabled()) {
