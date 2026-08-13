@@ -16,6 +16,7 @@ import { TypeOrmModule } from "@nestjs/typeorm";
 import { resolveTypeOrmSynchronize } from "@app/database";
 import { OrderItem } from "./entity/order_item.entity";
 import { Order } from "./entity/order.entity";
+import { OrderOutbox } from "./entity/order-outbox.entity";
 import { ShippingHistory } from "./entity/shipping-history.entity";
 import { OrderReturnRequest } from "./entity/order-return-request.entity";
 import { Voucher } from "./entity/voucher.entity";
@@ -80,6 +81,7 @@ import { GhnModule } from "./ghn/ghn.module";
       entities: [
         Order,
         OrderItem,
+        OrderOutbox,
         Cart,
         CartItem,
         ShippingHistory,
@@ -96,6 +98,7 @@ import { GhnModule } from "./ghn/ghn.module";
     TypeOrmModule.forFeature([
       Order,
       OrderItem,
+      OrderOutbox,
       Cart,
       CartItem,
       ShippingHistory,

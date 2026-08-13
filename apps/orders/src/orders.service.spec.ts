@@ -12,6 +12,7 @@ import { of } from "rxjs";
 import { FindOperator, Repository } from "typeorm";
 import { INVENTORY_MESSAGE_PATTERNS } from "libs/constant/message-pattern-inventory.constant";
 import { Order, OrderStatus } from "./entity/order.entity";
+import { OrderOutbox } from "./entity/order-outbox.entity";
 import { OrderItem } from "./entity/order_item.entity";
 import { OrderReturnRequest } from "./entity/order-return-request.entity";
 import { Voucher } from "./entity/voucher.entity";
@@ -28,6 +29,44 @@ import { EVENT } from "@app/common/constants/event";
 // order — publish(exchange, eventName, payload).
 const publishedEventNames = (publish: jest.Mock): string[] =>
   publish.mock.calls.map((call: unknown[]) => String(call[1]));
+
+// RESIL-02 outbox repository: only the post-commit bookkeeping (mark delivered
+// / record the failure / discard on cancel) goes through it — the row itself is
+// written with the transaction manager. The mocks are handed back separately so
+// assertions never touch an unbound repository method.
+interface OutboxRepositoryMock {
+  repository: Repository<OrderOutbox>;
+  update: jest.Mock;
+  remove: jest.Mock;
+  find: jest.Mock;
+}
+
+const createOutboxRepository = (): OutboxRepositoryMock => {
+  const update = jest.fn().mockResolvedValue({ affected: 1 });
+  const remove = jest.fn().mockResolvedValue({ affected: 1 });
+  const find = jest.fn().mockResolvedValue([]);
+  return {
+    repository: {
+      update,
+      delete: remove,
+      find,
+    } as unknown as Repository<OrderOutbox>,
+    update,
+    remove,
+    find,
+  };
+};
+
+// The outbox row `placeOrder` hands to the publisher after the transaction.
+const outboxRow = (orderId: number): OrderOutbox =>
+  ({
+    id: orderId * 10,
+    eventName: EVENT.ORDER_CREATED_EVENT,
+    exchange: "orders_exchange",
+    orderId,
+    payload: JSON.stringify({ pattern: EVENT.ORDER_CREATED_EVENT, data: {} }),
+    attempts: 0,
+  }) as unknown as OrderOutbox;
 
 describe("OrdersService.handleGhnWebhook", () => {
   const createOrder = (status: OrderStatus): Order =>
@@ -71,13 +110,14 @@ describe("OrdersService.handleGhnWebhook", () => {
     };
 
     const service = new OrdersService(
-      { publish } as unknown as Channel,
+      { publish, connection: {} } as unknown as Channel,
       {} as HttpService,
       {} as ClientProxy,
       {} as ClientProxy,
       {} as ClientProxy,
       orderRepository as unknown as Repository<Order>,
       {} as Repository<OrderItem>,
+      createOutboxRepository().repository,
       shippingHistoryRepository as unknown as Repository<ShippingHistory>,
       {} as Repository<OrderReturnRequest>,
       {} as Repository<Voucher>,
@@ -203,18 +243,20 @@ describe("OrdersService stock reservation", () => {
     sellerId: 20,
   };
 
-  function createService(): {
+  function createService(options: { isBrokerLive?: boolean } = {}): {
     service: OrdersService;
     inventorySend: jest.Mock;
     transaction: jest.Mock;
     publish: jest.Mock;
     update: jest.Mock;
     ghnPreview: jest.Mock;
+    outbox: OutboxRepositoryMock;
   } {
     const inventorySend = jest.fn();
     const transaction = jest.fn();
     const publish = jest.fn();
     const update = jest.fn();
+    const outbox = createOutboxRepository();
     const orderRepository = {
       manager: { transaction },
       update,
@@ -226,13 +268,19 @@ describe("OrdersService stock reservation", () => {
       }),
     };
     const service = new OrdersService(
-      { publish } as unknown as Channel,
+      {
+        publish,
+        // The real handle is a proxy whose `connection` disappears while the
+        // broker is down — that is how the service detects an outage.
+        connection: options.isBrokerLive === false ? undefined : {},
+      } as unknown as Channel,
       {} as HttpService,
       { send: inventorySend } as unknown as ClientProxy,
       {} as ClientProxy,
       {} as ClientProxy,
       orderRepository as unknown as Repository<Order>,
       {} as Repository<OrderItem>,
+      outbox.repository,
       {} as Repository<ShippingHistory>,
       {} as Repository<OrderReturnRequest>,
       {} as Repository<Voucher>,
@@ -247,6 +295,7 @@ describe("OrdersService stock reservation", () => {
       publish,
       update,
       ghnPreview: ghnService.previewShippingFee,
+      outbox,
     };
   }
 
@@ -255,10 +304,12 @@ describe("OrdersService stock reservation", () => {
     inventorySend: jest.Mock;
     transaction: jest.Mock;
     update: jest.Mock;
+    outbox: OutboxRepositoryMock;
   } {
     const inventorySend = jest.fn();
     const transaction = jest.fn();
     const update = jest.fn().mockResolvedValue({ affected: 1 });
+    const outbox = createOutboxRepository();
     const orderRepository = {
       manager: { transaction },
       update,
@@ -277,6 +328,7 @@ describe("OrdersService stock reservation", () => {
       {} as ClientProxy,
       orderRepository as unknown as Repository<Order>,
       {} as Repository<OrderItem>,
+      outbox.repository,
       {} as Repository<ShippingHistory>,
       {} as Repository<OrderReturnRequest>,
       {} as Repository<Voucher>,
@@ -284,7 +336,7 @@ describe("OrdersService stock reservation", () => {
       ghnService as unknown as GhnService,
     );
 
-    return { service, inventorySend, transaction, update };
+    return { service, inventorySend, transaction, update, outbox };
   }
 
   function mockStock(
@@ -377,9 +429,12 @@ describe("OrdersService stock reservation", () => {
     const { service, inventorySend, transaction } = createService();
     mockStock(inventorySend, [true]);
     transaction.mockResolvedValue({
-      id: 1,
-      paymentMethod: PaymentMethod.VNPAY,
-      items: [],
+      savedOrder: {
+        id: 1,
+        paymentMethod: PaymentMethod.VNPAY,
+        items: [],
+      },
+      outbox: outboxRow(1),
     });
 
     await service.placeOrder(18, PaymentMethod.VNPAY, "address", [item]);
@@ -389,14 +444,17 @@ describe("OrdersService stock reservation", () => {
   });
 
   it("cancels the saved online-payment order and releases stock when payment event cannot publish", async () => {
-    const { service, inventorySend, transaction, update } =
+    const { service, inventorySend, transaction, update, outbox } =
       createServiceWithoutPublisher();
     mockStock(inventorySend, [true]);
     transaction.mockResolvedValue({
-      id: 1,
-      paymentMethod: PaymentMethod.VNPAY,
-      reservationKey: "reservation-1",
-      items: [item],
+      savedOrder: {
+        id: 1,
+        paymentMethod: PaymentMethod.VNPAY,
+        reservationKey: "reservation-1",
+        items: [item],
+      },
+      outbox: outboxRow(1),
     });
 
     await expect(
@@ -414,6 +472,98 @@ describe("OrdersService stock reservation", () => {
         reservationKey: "reservation-1",
       }),
     );
+    // RESIL-02: the order is gone, so the owed event must go with it — the
+    // poller must never resurrect `order_created` for a canceled order.
+    expect(outbox.remove).toHaveBeenCalledWith(10);
+  });
+
+  // RESIL-02 — the defect this replaced: a COD order survived a broker outage
+  // while inventory / rewards / notification never heard about it, because the
+  // publish failure was only a `logger.warn`.
+  it("keeps a COD order and leaves the event owed in the outbox when the broker is down", async () => {
+    const { service, inventorySend, transaction, update, outbox } =
+      createServiceWithoutPublisher();
+    mockStock(inventorySend, [true]);
+    transaction.mockResolvedValue({
+      savedOrder: {
+        id: 1,
+        paymentMethod: PaymentMethod.COD,
+        reservationKey: "reservation-1",
+        items: [item],
+      },
+      outbox: outboxRow(1),
+    });
+
+    await expect(
+      service.placeOrder(18, PaymentMethod.COD, "address", [item]),
+    ).resolves.toEqual(expect.objectContaining({ id: 1 }));
+
+    expect(update).not.toHaveBeenCalledWith(1, {
+      status: OrderStatus.CANCELED,
+    });
+    expect(outbox.remove).not.toHaveBeenCalled();
+    // Row stays unpublished, with the failure recorded for the poller.
+    expect(outbox.update).toHaveBeenCalledWith(
+      10,
+      expect.objectContaining({ attempts: 1 }),
+    );
+  });
+
+  it("delivers the owed event on the next poller tick and marks it published", async () => {
+    const { service, publish, outbox } = createService();
+    const pending = outboxRow(1);
+    pending.attempts = 2;
+    outbox.find.mockResolvedValue([pending]);
+
+    await service.drainOrderOutbox();
+
+    expect(publishedEventNames(publish)).toEqual([EVENT.ORDER_CREATED_EVENT]);
+    const [markedId, patch] = outbox.update.mock.calls[0] as [
+      number,
+      Partial<OrderOutbox>,
+    ];
+    expect(markedId).toBe(10);
+    expect(patch.publishedAt).toBeInstanceOf(Date);
+  });
+
+  // The publisher handle is a self-healing proxy: while the broker is down it
+  // still answers publish() with a no-op returning false instead of throwing.
+  // Trusting that answer would mark the row published and lose the very event
+  // the outbox exists to keep.
+  it("leaves the event owed when the publisher proxy is disconnected", async () => {
+    const { service, inventorySend, transaction, publish, update, outbox } =
+      createService({ isBrokerLive: false });
+    mockStock(inventorySend, [true]);
+    transaction.mockResolvedValue({
+      savedOrder: {
+        id: 1,
+        paymentMethod: PaymentMethod.COD,
+        reservationKey: "reservation-1",
+        items: [item],
+      },
+      outbox: outboxRow(1),
+    });
+
+    await expect(
+      service.placeOrder(18, PaymentMethod.COD, "address", [item]),
+    ).resolves.toEqual(expect.objectContaining({ id: 1 }));
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalledWith(1, {
+      status: OrderStatus.CANCELED,
+    });
+    expect(outbox.update).toHaveBeenCalledWith(
+      10,
+      expect.objectContaining({ attempts: 1 }),
+    );
+  });
+
+  it("skips the poller tick entirely while the publisher proxy is disconnected", async () => {
+    const { service, outbox } = createService({ isBrokerLive: false });
+
+    await service.drainOrderOutbox();
+
+    expect(outbox.find).not.toHaveBeenCalled();
   });
 
   // PRODTEST-0806 #2 — a GHN refusal at fee preview is deterministic: the same
@@ -446,9 +596,12 @@ describe("OrdersService stock reservation", () => {
       new ServiceUnavailableException("GHN unavailable"),
     );
     transaction.mockResolvedValue({
-      id: 1,
-      paymentMethod: PaymentMethod.VNPAY,
-      items: [],
+      savedOrder: {
+        id: 1,
+        paymentMethod: PaymentMethod.VNPAY,
+        items: [],
+      },
+      outbox: outboxRow(1),
     });
 
     await expect(
@@ -564,13 +717,14 @@ describe("OrdersService.sweepStaleReservations", () => {
     const orderRepository = { find, update };
 
     const service = new OrdersService(
-      { publish } as unknown as Channel,
+      { publish, connection: {} } as unknown as Channel,
       {} as HttpService,
       { send: inventorySend } as unknown as ClientProxy,
       {} as ClientProxy,
       {} as ClientProxy,
       orderRepository as unknown as Repository<Order>,
       {} as Repository<OrderItem>,
+      createOutboxRepository().repository,
       {} as Repository<ShippingHistory>,
       {} as Repository<OrderReturnRequest>,
       {} as Repository<Voucher>,
@@ -622,6 +776,18 @@ describe("OrdersService.sweepStaleReservations", () => {
     expect(where).toHaveProperty("ghnOrderCode");
     expect(where).toHaveProperty("status");
     expect(where).toHaveProperty("createdAt");
+  });
+
+  it("caps how many stale orders one tick cancels", async () => {
+    const { service, find } = createService([]);
+
+    await service.sweepStaleReservations();
+
+    const calls = find.mock.calls as unknown as Array<
+      [{ take?: number; order?: Record<string, string> }]
+    >;
+    expect(calls[0][0].take).toBe(25);
+    expect(calls[0][0].order).toEqual({ id: "ASC" });
   });
 
   it("does nothing when no stale orders exist", async () => {
@@ -695,13 +861,14 @@ describe("OrdersService.cancelOrder GHN detachment", () => {
     const orderRepository = { findOne, update };
 
     const service = new OrdersService(
-      { publish } as unknown as Channel,
+      { publish, connection: {} } as unknown as Channel,
       {} as HttpService,
       { send: jest.fn().mockReturnValue(of(true)) } as unknown as ClientProxy,
       {} as ClientProxy,
       {} as ClientProxy,
       orderRepository as unknown as Repository<Order>,
       {} as Repository<OrderItem>,
+      createOutboxRepository().repository,
       {} as Repository<ShippingHistory>,
       {} as Repository<OrderReturnRequest>,
       {} as Repository<Voucher>,
@@ -796,13 +963,14 @@ describe("OrdersService.advanceOrderStatus", () => {
       update,
     };
     const service = new OrdersService(
-      { publish } as unknown as Channel,
+      { publish, connection: {} } as unknown as Channel,
       {} as HttpService,
       { send: inventorySend } as unknown as ClientProxy,
       {} as ClientProxy,
       {} as ClientProxy,
       orderRepository as unknown as Repository<Order>,
       {} as Repository<OrderItem>,
+      createOutboxRepository().repository,
       {} as Repository<ShippingHistory>,
       {} as Repository<OrderReturnRequest>,
       {} as Repository<Voucher>,
@@ -920,6 +1088,7 @@ describe("OrdersService payment completion idempotency", () => {
       {} as ClientProxy,
       { findOne, update } as unknown as Repository<Order>,
       {} as Repository<OrderItem>,
+      createOutboxRepository().repository,
       {} as Repository<ShippingHistory>,
       {} as Repository<OrderReturnRequest>,
       {} as Repository<Voucher>,
@@ -967,6 +1136,7 @@ describe("OrdersService.readyToShip GHN waybill gating", () => {
       productClient,
       { findOne, update, save } as unknown as Repository<Order>,
       { count } as unknown as Repository<OrderItem>,
+      createOutboxRepository().repository,
       {} as Repository<ShippingHistory>,
       {} as Repository<OrderReturnRequest>,
       {} as Repository<Voucher>,
@@ -1051,13 +1221,14 @@ describe("OrdersService admin GHN actions (cancel / return)", () => {
       save,
     };
     const service = new OrdersService(
-      { publish } as unknown as Channel,
+      { publish, connection: {} } as unknown as Channel,
       {} as HttpService,
       { send: inventorySend } as unknown as ClientProxy,
       {} as ClientProxy,
       {} as ClientProxy,
       orderRepository as unknown as Repository<Order>,
       {} as Repository<OrderItem>,
+      createOutboxRepository().repository,
       shippingHistoryRepository as unknown as Repository<ShippingHistory>,
       {} as Repository<OrderReturnRequest>,
       {} as Repository<Voucher>,
@@ -1302,13 +1473,14 @@ describe("OrdersService.getAdminGhnOrderDetail (demo-mode GHN status)", () => {
       raw: {},
     });
     const service = new OrdersService(
-      { publish: jest.fn() } as unknown as Channel,
+      { publish: jest.fn(), connection: {} } as unknown as Channel,
       {} as HttpService,
       {} as ClientProxy,
       {} as ClientProxy,
       {} as ClientProxy,
       orderRepository as unknown as Repository<Order>,
       {} as Repository<OrderItem>,
+      createOutboxRepository().repository,
       shippingHistoryRepository as unknown as Repository<ShippingHistory>,
       {} as Repository<OrderReturnRequest>,
       {} as Repository<Voucher>,
@@ -1409,6 +1581,7 @@ describe("OrdersService ORD-GUARD-01 — unpaid online orders cannot be fulfille
       {
         count: jest.fn().mockResolvedValue(1),
       } as unknown as Repository<OrderItem>,
+      createOutboxRepository().repository,
       {} as Repository<ShippingHistory>,
       {} as Repository<OrderReturnRequest>,
       {} as Repository<Voucher>,

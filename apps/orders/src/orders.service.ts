@@ -20,6 +20,7 @@ import {
   Repository,
 } from "typeorm";
 import { Order, OrderStatus } from "./entity/order.entity";
+import { OrderOutbox } from "./entity/order-outbox.entity";
 import {
   PaymentMethod,
   PaginatedResponse,
@@ -93,6 +94,15 @@ import {
 const escapeLikeTerm = (term: string): string =>
   term.replace(/[\\%_]/g, (character) => `\\${character}`);
 
+/** How many owed events one outbox tick drains before yielding (RESIL-02). */
+const ORDER_OUTBOX_BATCH_SIZE = 50;
+
+/** How long a delivered outbox row is kept as an audit trail before pruning. */
+const ORDER_OUTBOX_RETENTION_DAYS = 7;
+
+/** How many abandoned orders one stale-reservation sweep tick cancels. */
+const ORDER_STALE_SWEEP_BATCH_SIZE = 25;
+
 @Injectable()
 export class OrdersService {
   private readonly logger = new Logger(OrdersService.name);
@@ -112,6 +122,8 @@ export class OrdersService {
     private readonly orderRepository: Repository<Order>,
     @InjectRepository(OrderItem)
     private readonly orderItemRepository: Repository<OrderItem>,
+    @InjectRepository(OrderOutbox)
+    private readonly outboxRepository: Repository<OrderOutbox>,
     @InjectRepository(ShippingHistory)
     private readonly shippingHistoryRepository: Repository<ShippingHistory>,
     @InjectRepository(OrderReturnRequest)
@@ -207,8 +219,9 @@ export class OrdersService {
     await this.reserveOrderItems(items, reservationKey);
 
     let order: Order;
+    let outboxRow: OrderOutbox;
     try {
-      order = await this.orderRepository.manager.transaction(
+      const created = await this.orderRepository.manager.transaction(
         async (manager) => {
           const savedOrder = await manager.save(
             manager.create(Order, {
@@ -248,29 +261,31 @@ export class OrdersService {
             );
           }
           savedOrder.items = orderItems;
-          return savedOrder;
+          // RESIL-02: the event commits with the order, so a broker outage can
+          // no longer leave a live order that nobody downstream heard about.
+          const outbox = await this.enqueueOrderCreatedEvent(
+            manager,
+            savedOrder,
+          );
+          return { savedOrder, outbox };
         },
       );
+      order = created.savedOrder;
+      outboxRow = created.outbox;
     } catch (error) {
       await this.releaseReservedItems(items, reservationKey);
       throw error;
     }
 
-    const routingKey = EVENT.ORDER_CREATED_EVENT;
-    try {
-      this.publishOrderCreatedEvent(order);
-    } catch (error) {
-      this.logger.warn(
-        `[ORDERS] Failed to publish ${EVENT.ORDER_CREATED_EVENT} for order ${order.id}: ${String(error)}`,
-      );
-      if (order.paymentMethod !== PaymentMethod.COD) {
-        await this.cancelOrderAfterPaymentInitializationFailure(order);
-        throw new ServiceUnavailableException(
-          ORDER_MESSAGE.PAYMENT_INIT_UNAVAILABLE,
-        );
-      }
-      this.logger.warn(
-        `[ORDERS] RMQ channel unavailable — ${routingKey} event not published for order ${order.id}`,
+    const isPublished = await this.tryPublishOutboxRow(outboxRow);
+    if (!isPublished && order.paymentMethod !== PaymentMethod.COD) {
+      // An online payment needs the downstream leg NOW — the client asks for
+      // `paymentUrl` immediately after this call, so a poller retry 30s later
+      // is not good enough. Cancel and drop the owed event with it.
+      await this.discardOutboxRow(outboxRow.id);
+      await this.cancelOrderAfterPaymentInitializationFailure(order);
+      throw new ServiceUnavailableException(
+        ORDER_MESSAGE.PAYMENT_INIT_UNAVAILABLE,
       );
     }
 
@@ -604,6 +619,7 @@ export class OrdersService {
     }
 
     const createdOrders: Order[] = [];
+    const outboxRowByOrderId = new Map<number, OrderOutbox>();
 
     try {
       await this.orderRepository.manager.transaction(async (manager) => {
@@ -653,6 +669,14 @@ export class OrdersService {
           await manager.save(OrderItem, orderItems);
 
           order.items = orderItems;
+          // RESIL-02: same durability as the single-seller path — previously
+          // this leg only warned on a broker outage, for EVERY payment method.
+          outboxRowByOrderId.set(
+            order.id,
+            await this.enqueueOrderCreatedEvent(manager, order, {
+              isMultiSellerCheckout: true,
+            }),
+          );
           createdOrders.push(order);
         }
       });
@@ -666,27 +690,13 @@ export class OrdersService {
       throw error;
     }
 
-    // Emit ORDER_CREATED_EVENT per sub-order after transaction commits
+    // Emit ORDER_CREATED_EVENT per sub-order after transaction commits. A
+    // failure here is no longer terminal: the row stays in the outbox and the
+    // poller delivers it.
     for (const order of createdOrders) {
-      if (this.fanoutChannel) {
-        this.fanoutChannel.publish(
-          EXCHANGE.ORDERS_EXCHANGE,
-          EVENT.ORDER_CREATED_EVENT,
-          Buffer.from(
-            JSON.stringify({
-              pattern: EVENT.ORDER_CREATED_EVENT,
-              data: {
-                ...order,
-                paymentMethod: order.paymentMethod,
-                isMultiSellerCheckout: true,
-              },
-            }),
-          ),
-        );
-      } else {
-        this.logger.warn(
-          `[ORDERS] RMQ channel unavailable — ${EVENT.ORDER_CREATED_EVENT} event not published for order ${order.id}`,
-        );
+      const outboxRow = outboxRowByOrderId.get(order.id);
+      if (outboxRow) {
+        await this.tryPublishOutboxRow(outboxRow);
       }
 
       if (paymentMethod === PaymentMethod.COD) {
@@ -740,30 +750,187 @@ export class OrdersService {
     }
   }
 
-  private publishOrderCreatedEvent(
+  private buildOrderCreatedEnvelope(
     order: Order,
     extraData: Record<string, unknown> = {},
-  ): void {
-    if (!this.fanoutChannel) {
+  ): string {
+    return JSON.stringify({
+      pattern: EVENT.ORDER_CREATED_EVENT,
+      data: {
+        ...order,
+        paymentMethod: order.paymentMethod,
+        ...extraData,
+      },
+    });
+  }
+
+  /**
+   * Record the event in the outbox using the CALLER's transaction manager, so
+   * the order and the event it owes commit together (RESIL-02). Returns the
+   * saved row so the post-commit publish can mark it delivered.
+   */
+  private async enqueueOrderCreatedEvent(
+    manager: EntityManager,
+    order: Order,
+    extraData: Record<string, unknown> = {},
+  ): Promise<OrderOutbox> {
+    return manager.save(
+      manager.create(OrderOutbox, {
+        eventName: EVENT.ORDER_CREATED_EVENT,
+        exchange: EXCHANGE.ORDERS_EXCHANGE,
+        orderId: order.id,
+        payload: this.buildOrderCreatedEnvelope(order, extraData),
+      }),
+    );
+  }
+
+  /**
+   * The injected channel is the self-healing proxy from
+   * `RmqModule.registerDirectPublisher()`: while the broker is down it keeps
+   * answering `publish()` with a no-op that returns `false`, and every other
+   * property with `undefined`. So `connection` is the only honest liveness
+   * signal — without checking it, an outage would mark every outbox row
+   * published and lose exactly the events this table exists to protect.
+   */
+  private isFanoutChannelLive(): boolean {
+    const connection: unknown = this.fanoutChannel?.connection;
+    return connection !== undefined && connection !== null;
+  }
+
+  /**
+   * Publish an outbox row and mark it delivered. Throws if the broker is
+   * unavailable — the row then stays pending for `drainOrderOutbox()`.
+   */
+  private async publishOutboxRow(
+    id: number,
+    exchange: string,
+    eventName: string,
+    payload: string,
+  ): Promise<void> {
+    if (!this.fanoutChannel || !this.isFanoutChannelLive()) {
       throw new ServiceUnavailableException(
         ORDER_MESSAGE.RMQ_PUBLISHER_UNAVAILABLE,
       );
     }
-
-    this.fanoutChannel.publish(
-      EXCHANGE.ORDERS_EXCHANGE,
-      EVENT.ORDER_CREATED_EVENT,
-      Buffer.from(
-        JSON.stringify({
-          pattern: EVENT.ORDER_CREATED_EVENT,
-          data: {
-            ...order,
-            paymentMethod: order.paymentMethod,
-            ...extraData,
-          },
-        }),
-      ),
+    const isWritten = this.fanoutChannel.publish(
+      exchange,
+      eventName,
+      Buffer.from(payload),
     );
+    if (!isWritten) {
+      // The channel is live, so this is amqplib back-pressure only: the frame
+      // is buffered and still goes out. Retrying would duplicate the event.
+      this.logger.warn(
+        `[ORDERS] ${eventName} for order ${id} buffered by amqplib back-pressure`,
+      );
+    }
+    await this.outboxRepository.update(id, {
+      publishedAt: new Date(),
+      lastError: null,
+    });
+  }
+
+  /**
+   * Best-effort immediate delivery. A failure is NOT fatal: the row is still
+   * in the outbox, so the poller will deliver it. Returns whether it went out,
+   * because the single-seller online-payment path has to react synchronously.
+   */
+  private async tryPublishOutboxRow(row: OrderOutbox): Promise<boolean> {
+    try {
+      await this.publishOutboxRow(
+        row.id,
+        row.exchange,
+        row.eventName,
+        row.payload,
+      );
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.outboxRepository.update(row.id, {
+        attempts: 1,
+        lastError: message.slice(0, 500),
+      });
+      this.logger.warn(
+        `[ORDERS] ${row.eventName} not published inline for order ${row.orderId} — left in the outbox for the poller: ${message}`,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Drop an owed event whose order is being canceled in the same breath, so the
+   * poller cannot resurrect `order_created` for an order that no longer exists
+   * as far as the buyer is concerned.
+   */
+  private async discardOutboxRow(id: number): Promise<void> {
+    try {
+      await this.outboxRepository.delete(id);
+    } catch (error) {
+      this.logger.error(
+        `[ORDERS] Failed to discard outbox row ${id}: ${String(error)}`,
+      );
+    }
+  }
+
+  /**
+   * Drain whatever the inline publish could not deliver. Runs on every orders
+   * instance; consumers are idempotent by `orderId`/`reservationKey`, so a
+   * double delivery after a crash between publish and mark is harmless — a
+   * lost event is not, which is the failure this exists to prevent.
+   */
+  @Cron(CronExpression.EVERY_30_SECONDS)
+  async drainOrderOutbox(): Promise<void> {
+    if (!this.isFanoutChannelLive()) return;
+    const pending = await this.outboxRepository.find({
+      where: { publishedAt: IsNull() },
+      order: { id: "ASC" },
+      take: ORDER_OUTBOX_BATCH_SIZE,
+    });
+    if (pending.length === 0) return;
+
+    for (const row of pending) {
+      try {
+        await this.publishOutboxRow(
+          row.id,
+          row.exchange,
+          row.eventName,
+          row.payload,
+        );
+        this.logger.log(
+          `[ORDERS] Outbox delivered ${row.eventName} for order ${row.orderId} after ${row.attempts} failed attempt(s)`,
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await this.outboxRepository.update(row.id, {
+          attempts: row.attempts + 1,
+          lastError: message.slice(0, 500),
+        });
+        this.logger.error(
+          `[ORDERS] Outbox delivery failed for ${row.eventName} order ${row.orderId} (attempt ${row.attempts + 1}): ${message}`,
+        );
+        // The broker is down for this whole tick — stop hammering it.
+        return;
+      }
+    }
+  }
+
+  /**
+   * Keep the table from growing forever. Delivered rows are only kept as a
+   * short audit trail; anything still pending is never touched.
+   */
+  @Cron(CronExpression.EVERY_DAY_AT_3AM)
+  async pruneOrderOutbox(): Promise<void> {
+    const cutoff = new Date(
+      Date.now() - ORDER_OUTBOX_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+    );
+    const result = await this.outboxRepository.delete({
+      publishedAt: LessThan(cutoff),
+    });
+    if (result.affected) {
+      this.logger.log(
+        `[ORDERS] Pruned ${result.affected} delivered outbox row(s) older than ${ORDER_OUTBOX_RETENTION_DAYS}d`,
+      );
+    }
   }
 
   private async cancelOrderAfterPaymentInitializationFailure(
@@ -2306,6 +2473,13 @@ export class OrdersService {
           createdAt: LessThan(cutoff),
         },
         relations: ["items"],
+        order: { id: "ASC" },
+        // Bounded per tick: each sweep costs an inventory release (TCP) plus a
+        // cancel event (RMQ) per order, so an accumulated backlog must drain
+        // over several hours instead of firing as one burst against the
+        // connection-capped databases. Runs hourly, so the backlog still
+        // clears quickly.
+        take: ORDER_STALE_SWEEP_BATCH_SIZE,
       });
 
       if (staleOrders.length === 0) return;

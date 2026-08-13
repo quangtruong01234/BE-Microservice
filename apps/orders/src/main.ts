@@ -39,6 +39,11 @@ async function bootstrap() {
   );
 
   await app.startAllMicroservices();
+  // Orders is TCP/RMQ-only, so nothing here calls app.listen() — and without an
+  // explicit init() the application lifecycle hooks never run, which silently
+  // leaves every @Cron in this service unscheduled (outbox drain, stale
+  // reservation sweep). Same pattern as chat/inventory/notification/product.
+  await app.init();
   console.log(
     `Orders service running: TCP :${PORT_TCP.ORDERS_TCP_PORT} + RMQ ${EXCHANGE.PAYMENTS_EXCHANGE}`,
   );
