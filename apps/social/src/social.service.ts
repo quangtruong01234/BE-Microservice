@@ -58,7 +58,7 @@ export class SocialService {
       select: ["id"],
     });
     if (!post) {
-      throw new NotFoundException(SOCIAL_MESSAGE.POST_NOT_FOUND(postId));
+      throw new NotFoundException(SOCIAL_MESSAGE.POST_NOT_FOUND);
     }
     return post.id;
   }
@@ -70,7 +70,7 @@ export class SocialService {
       select: ["id"],
     });
     if (!comment) {
-      throw new NotFoundException(SOCIAL_MESSAGE.COMMENT_NOT_FOUND(commentId));
+      throw new NotFoundException(SOCIAL_MESSAGE.COMMENT_NOT_FOUND);
     }
     return comment.id;
   }
@@ -354,9 +354,7 @@ export class SocialService {
       where: { id: payload.postId },
     });
     if (!post) {
-      throw new NotFoundException(
-        SOCIAL_MESSAGE.POST_NOT_FOUND(payload.postId),
-      );
+      throw new NotFoundException(SOCIAL_MESSAGE.POST_NOT_FOUND);
     }
     if (post.userId !== payload.userId) {
       throw new ForbiddenException(SOCIAL_MESSAGE.EDIT_OWN_POSTS_ONLY);
@@ -385,9 +383,7 @@ export class SocialService {
       where: { id: payload.postId },
     });
     if (!post) {
-      throw new NotFoundException(
-        SOCIAL_MESSAGE.POST_NOT_FOUND(payload.postId),
-      );
+      throw new NotFoundException(SOCIAL_MESSAGE.POST_NOT_FOUND);
     }
     if (post.userId === payload.reporterId) {
       throw new BadRequestException(SOCIAL_MESSAGE.CANNOT_REPORT_OWN_POST);
@@ -478,7 +474,7 @@ export class SocialService {
   > {
     const post = await this.postRepository.findOne({ where: { id: postId } });
     if (!post || post.isHidden) {
-      throw new NotFoundException(SOCIAL_MESSAGE.POST_NOT_FOUND(postId));
+      throw new NotFoundException(SOCIAL_MESSAGE.POST_NOT_FOUND);
     }
     const cacheKey = `post:like_count:${postId}`;
     const cached = await this.cachedService.get(cacheKey);
@@ -564,9 +560,7 @@ export class SocialService {
       where: { id: payload.postId },
     });
     if (!post) {
-      throw new NotFoundException(
-        SOCIAL_MESSAGE.POST_NOT_FOUND(payload.postId),
-      );
+      throw new NotFoundException(SOCIAL_MESSAGE.POST_NOT_FOUND);
     }
     if (post.userId !== payload.userId) {
       throw new ForbiddenException(SOCIAL_MESSAGE.DELETE_OWN_POSTS_ONLY);
@@ -586,9 +580,7 @@ export class SocialService {
       where: { id: payload.postId },
     });
     if (!post) {
-      throw new NotFoundException(
-        SOCIAL_MESSAGE.POST_NOT_FOUND(payload.postId),
-      );
+      throw new NotFoundException(SOCIAL_MESSAGE.POST_NOT_FOUND);
     }
     const comment = this.commentRepository.create({
       publicId: generatePublicId(PUBLIC_ID_PREFIXES.COMMENT),
@@ -657,9 +649,7 @@ export class SocialService {
       where: { id: payload.commentId },
     });
     if (!comment) {
-      throw new NotFoundException(
-        SOCIAL_MESSAGE.COMMENT_NOT_FOUND(payload.commentId),
-      );
+      throw new NotFoundException(SOCIAL_MESSAGE.COMMENT_NOT_FOUND);
     }
     if (comment.userId !== payload.userId) {
       throw new ForbiddenException(SOCIAL_MESSAGE.DELETE_OWN_COMMENTS_ONLY);
@@ -678,9 +668,7 @@ export class SocialService {
       where: { id: payload.parentCommentId },
     });
     if (!parentComment) {
-      throw new NotFoundException(
-        SOCIAL_MESSAGE.COMMENT_NOT_FOUND(payload.parentCommentId),
-      );
+      throw new NotFoundException(SOCIAL_MESSAGE.COMMENT_NOT_FOUND);
     }
     const saved = await this.treeRepo.save(
       this.commentRepository.create({
@@ -730,9 +718,7 @@ export class SocialService {
       where: { id: payload.commentId },
     });
     if (!comment) {
-      throw new NotFoundException(
-        SOCIAL_MESSAGE.COMMENT_NOT_FOUND(payload.commentId),
-      );
+      throw new NotFoundException(SOCIAL_MESSAGE.COMMENT_NOT_FOUND);
     }
     return this.treeRepo.findDescendantsTree(comment, {
       depth: payload.depth ?? 5,
@@ -958,9 +944,7 @@ export class SocialService {
       where: { id: payload.postId },
     });
     if (!post) {
-      throw new NotFoundException(
-        SOCIAL_MESSAGE.POST_NOT_FOUND(payload.postId),
-      );
+      throw new NotFoundException(SOCIAL_MESSAGE.POST_NOT_FOUND);
     }
     post.isHidden = true;
     post.hiddenAt = new Date();
@@ -984,9 +968,7 @@ export class SocialService {
       where: { id: payload.postId },
     });
     if (!post) {
-      throw new NotFoundException(
-        SOCIAL_MESSAGE.POST_NOT_FOUND(payload.postId),
-      );
+      throw new NotFoundException(SOCIAL_MESSAGE.POST_NOT_FOUND);
     }
     post.isHidden = false;
     post.hiddenAt = null;
@@ -1002,9 +984,7 @@ export class SocialService {
       where: { id: payload.postId },
     });
     if (!post) {
-      throw new NotFoundException(
-        SOCIAL_MESSAGE.POST_NOT_FOUND(payload.postId),
-      );
+      throw new NotFoundException(SOCIAL_MESSAGE.POST_NOT_FOUND);
     }
     const result = await this.postReportRepository.update(
       { postId: payload.postId, status: "pending" },
@@ -1024,9 +1004,7 @@ export class SocialService {
       where: { id: payload.postId },
     });
     if (!post) {
-      throw new NotFoundException(
-        SOCIAL_MESSAGE.POST_NOT_FOUND(payload.postId),
-      );
+      throw new NotFoundException(SOCIAL_MESSAGE.POST_NOT_FOUND);
     }
     const removedMediaUrls = this.collectPostMediaUrls(post);
     await this.dataSource.transaction(async (manager) => {

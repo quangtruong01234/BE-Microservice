@@ -67,10 +67,11 @@ export const INVENTORY_MESSAGE = {
 } as const;
 
 export const SOCIAL_MESSAGE = {
-  POST_NOT_FOUND: (postId: number | string): string =>
-    `Post ${postId} not found`,
-  COMMENT_NOT_FOUND: (commentId: number | string): string =>
-    `Comment ${commentId} not found`,
+  // No id in the text: the social service only ever sees the internal numeric
+  // row id (the gateway resolves `post_...`/`cmt_...` before the TCP hop), so
+  // interpolating it leaked that id straight to the client (PRODTEST-0806 #4).
+  POST_NOT_FOUND: "Post not found",
+  COMMENT_NOT_FOUND: "Comment not found",
   EDIT_OWN_POSTS_ONLY: "You can only edit your own posts",
   DELETE_OWN_POSTS_ONLY: "You can only delete your own posts",
   DELETE_OWN_COMMENTS_ONLY: "You can only delete your own comments",
