@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsBoolean, IsEnum } from "class-validator";
+import { IsString, IsOptional, IsBoolean, IsIn } from "class-validator";
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 
 export class CreateBrandDto {
@@ -33,7 +33,7 @@ export class ReviewBrandDto {
     enum: ["approve", "reject"],
     example: "approve",
   })
-  @IsEnum(["approve", "reject"])
+  @IsIn(["approve", "reject"])
   declare action: "approve" | "reject";
 
   @ApiPropertyOptional({
