@@ -135,10 +135,35 @@ export class OrdersService {
     private readonly ghnService: GhnService,
   ) {}
 
-  async onModuleInit() {
-    await this.inventoryClient.connect();
-    await this.userClient.connect();
-    await this.productClient.connect();
+  async onModuleInit(): Promise<void> {
+    // Warm the outbound TCP sockets so the first checkout does not pay the
+    // connect cost. Best-effort by design: a peer that is not listening YET
+    // (parallel boot, rolling restart, pm2 starting all 10 apps at once) must
+    // not take this service down — ClientProxy reconnects lazily on the first
+    // send anyway. This matters since RESIL-02 added the missing app.init():
+    // before it, this hook never ran at all, so an unhandled ECONNREFUSED here
+    // would be a brand-new crash-on-boot with a mutual product<->orders
+    // deadlock (each refuses to start while the other is down).
+    await Promise.all([
+      this.warmTcpClient("inventory", this.inventoryClient),
+      this.warmTcpClient("user", this.userClient),
+      this.warmTcpClient("product", this.productClient),
+    ]);
+  }
+
+  private async warmTcpClient(
+    serviceName: string,
+    client: ClientProxy,
+  ): Promise<void> {
+    try {
+      await client.connect();
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : "unknown transport error";
+      this.logger.warn(
+        `Could not pre-connect to the ${serviceName} service (${message}) — connecting lazily on the first call instead.`,
+      );
+    }
   }
 
   async placeOrder(
