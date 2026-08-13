@@ -7,6 +7,7 @@ import {
 } from "libs/constant/message-pattern.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
+import { retryOnTransportError } from "../common/exception/transport-error";
 import {
   ChatConversationTcp,
   ChatMessageTcp,
@@ -33,7 +34,7 @@ export class ChatGatewayService {
         .send<{
           id: number;
         }>({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, { userId })
-        .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+        .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
     );
     return Number(user.id);
   }
@@ -48,7 +49,7 @@ export class ChatGatewayService {
         .send<
           Array<{ id: number; publicId?: string | null }>
         >({ cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS }, { userIds: uniqueUserIds })
-        .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+        .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
     );
     return new Map(
       users
@@ -103,9 +104,10 @@ export class ChatGatewayService {
       const conversations = await firstValueFrom(
         this.chatClient
           .send(CHAT_MESSAGE_PATTERN.CHAT_GET_CONVERSATIONS, { userId })
-          .pipe(timeout(TCP_TIMEOUT_MS.READ)) as Observable<
-          ChatConversationTcp[]
-        >,
+          .pipe(
+            timeout(TCP_TIMEOUT_MS.READ),
+            retryOnTransportError(),
+          ) as Observable<ChatConversationTcp[]>,
       );
       const users = await this.getUserPublicIdMap(
         conversations.flatMap((conversation) => [
@@ -144,7 +146,10 @@ export class ChatGatewayService {
             page,
             limit,
           })
-          .pipe(timeout(TCP_TIMEOUT_MS.READ)) as Observable<ChatPaginatedTcp>,
+          .pipe(
+            timeout(TCP_TIMEOUT_MS.READ),
+            retryOnTransportError(),
+          ) as Observable<ChatPaginatedTcp>,
       );
       const users = await this.getUserPublicIdMap(
         messagesPage.data.map((message) => message.senderId),

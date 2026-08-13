@@ -15,6 +15,7 @@ import { firstValueFrom, timeout, catchError } from "rxjs";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { USER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
+import { retryOnTransportError } from "../common/exception/transport-error";
 import { assertCloudinaryUrlsOwnedBy } from "../common/media/cloudinary-ownership";
 import { JwtService } from "@nestjs/jwt";
 import { UserData } from "./user.types";
@@ -103,7 +104,7 @@ export class UserService {
     const user = (await firstValueFrom(
       this.userClient
         .send({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, { userId })
-        .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+        .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
     )) as { publicId?: string | null };
     return user.publicId ?? null;
   }
@@ -218,6 +219,7 @@ export class UserService {
             .send({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, { userId })
             .pipe(
               timeout(TCP_TIMEOUT_MS.READ),
+              retryOnTransportError(),
               catchError((err: unknown) => {
                 throw err;
               }),
@@ -243,6 +245,7 @@ export class UserService {
           )
           .pipe(
             timeout(TCP_TIMEOUT_MS.READ),
+            retryOnTransportError(),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -268,6 +271,7 @@ export class UserService {
           .send({ cmd: USER_MESSAGE_PATTERN.GET_FEATURED_SELLERS }, { limit })
           .pipe(
             timeout(TCP_TIMEOUT_MS.READ),
+            retryOnTransportError(),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -293,6 +297,7 @@ export class UserService {
             .send({ cmd: USER_MESSAGE_PATTERN.GET_ME }, { userId })
             .pipe(
               timeout(TCP_TIMEOUT_MS.READ),
+              retryOnTransportError(),
               catchError((err: unknown) => {
                 throw err;
               }),
@@ -347,6 +352,7 @@ export class UserService {
           .send({ cmd: USER_MESSAGE_PATTERN.ADDRESS_LIST }, { userId })
           .pipe(
             timeout(TCP_TIMEOUT_MS.READ),
+            retryOnTransportError(),
             catchError((err: unknown) => {
               throw err;
             }),

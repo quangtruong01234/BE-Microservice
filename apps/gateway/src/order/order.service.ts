@@ -23,6 +23,7 @@ import {
   VOUCHER_MESSAGE,
 } from "libs/constant/response-message.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
+import { retryOnTransportError } from "../common/exception/transport-error";
 import { isPublicId, PaginatedResponse, PaymentMethod } from "@app/common";
 import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 import { CreateOrderDto } from "./dto/create-order.dto";
@@ -185,7 +186,7 @@ export class OrderService {
             PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_ID,
             productId,
           )
-          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE), retryOnTransportError()),
       ).catch((err: unknown) =>
         MicroserviceErrorHandler.handleError(
           err,
@@ -216,7 +217,7 @@ export class OrderService {
                 PRODUCT_MESSAGE_PATTERNS.SKU_FIND_BY_ID,
                 item.skuId,
               )
-              .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
+              .pipe(timeout(TCP_TIMEOUT_MS.WRITE), retryOnTransportError()),
           ).catch((err: unknown) =>
             MicroserviceErrorHandler.handleError(
               err,
@@ -588,6 +589,7 @@ export class OrderService {
           .send(ORDER_MESSAGE_PATTERN.GET_ORDER_BY_ID, orderId)
           .pipe(
             timeout(TCP_TIMEOUT_MS.READ),
+            retryOnTransportError(),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -639,7 +641,7 @@ export class OrderService {
         .send<{
           id: number;
         }>({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, { userId })
-        .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+        .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
     );
     return Number(user.id);
   }
@@ -816,6 +818,7 @@ export class OrderService {
         })
         .pipe(
           timeout(TCP_TIMEOUT_MS.READ),
+          retryOnTransportError(),
           catchError((err: unknown) => {
             throw err;
           }),
@@ -871,6 +874,7 @@ export class OrderService {
           .send(ORDER_MESSAGE_PATTERN.GET_ORDER_STATUS_COUNTS, internalUserId)
           .pipe(
             timeout(TCP_TIMEOUT_MS.READ),
+            retryOnTransportError(),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -933,6 +937,7 @@ export class OrderService {
           })
           .pipe(
             timeout(TCP_TIMEOUT_MS.WRITE),
+            retryOnTransportError(),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1004,6 +1009,7 @@ export class OrderService {
         })
         .pipe(
           timeout(TCP_TIMEOUT_MS.READ),
+          retryOnTransportError(),
           catchError((err: unknown) => {
             throw err;
           }),
@@ -1023,6 +1029,7 @@ export class OrderService {
             )
             .pipe(
               timeout(TCP_TIMEOUT_MS.READ),
+              retryOnTransportError(),
               catchError((err: unknown) => {
                 throw err;
               }),
@@ -1124,6 +1131,7 @@ export class OrderService {
           })
           .pipe(
             timeout(TCP_TIMEOUT_MS.WRITE),
+            retryOnTransportError(),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1255,6 +1263,7 @@ export class OrderService {
           >(ORDER_MESSAGE_PATTERN.ADMIN_GHN_HISTORY, { orderId })
           .pipe(
             timeout(TCP_TIMEOUT_MS.WRITE),
+            retryOnTransportError(),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1426,6 +1435,7 @@ export class OrderService {
           )
           .pipe(
             timeout(TCP_TIMEOUT_MS.READ),
+            retryOnTransportError(),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1460,6 +1470,7 @@ export class OrderService {
           })
           .pipe(
             timeout(TCP_TIMEOUT_MS.READ),
+            retryOnTransportError(),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1575,6 +1586,7 @@ export class OrderService {
           })
           .pipe(
             timeout(TCP_TIMEOUT_MS.READ),
+            retryOnTransportError(),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1651,6 +1663,7 @@ export class OrderService {
           })
           .pipe(
             timeout(TCP_TIMEOUT_MS.READ),
+            retryOnTransportError(),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1717,7 +1730,7 @@ export class OrderService {
           .send<
             ProductDetailResponse[]
           >(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_IDS, uniqueProductIds)
-          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE), retryOnTransportError()),
       );
       if (Array.isArray(products)) {
         products.forEach((product) => {
@@ -1881,6 +1894,7 @@ export class OrderService {
           })
           .pipe(
             timeout(TCP_TIMEOUT_MS.READ),
+            retryOnTransportError(),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -1923,6 +1937,7 @@ export class OrderService {
           })
           .pipe(
             timeout(TCP_TIMEOUT_MS.READ),
+            retryOnTransportError(),
             catchError((err: unknown) => {
               throw err;
             }),

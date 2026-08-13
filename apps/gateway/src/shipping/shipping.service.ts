@@ -4,6 +4,7 @@ import { firstValueFrom, timeout, catchError } from "rxjs";
 import { ORDER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
+import { retryOnTransportError } from "../common/exception/transport-error";
 import { ShippingLocation } from "./shipping.types";
 import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 
@@ -29,6 +30,7 @@ export class ShippingService {
           >(ORDER_MESSAGE_PATTERN.SHIPPING_PROVINCES, {})
           .pipe(
             timeout(TCP_TIMEOUT_MS.WRITE),
+            retryOnTransportError(),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -52,6 +54,7 @@ export class ShippingService {
           })
           .pipe(
             timeout(TCP_TIMEOUT_MS.WRITE),
+            retryOnTransportError(),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -75,6 +78,7 @@ export class ShippingService {
           })
           .pipe(
             timeout(TCP_TIMEOUT_MS.WRITE),
+            retryOnTransportError(),
             catchError((err: unknown) => {
               throw err;
             }),

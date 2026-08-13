@@ -10,6 +10,7 @@ import {
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
 import { PRODUCT_MESSAGE } from "libs/constant/response-message.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
+import { retryOnTransportError } from "../common/exception/transport-error";
 import { AddToCartDto } from "./dto/cart.dto";
 import { ProductResponse, ProductSkuResponse } from "./cart.types";
 import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
@@ -55,7 +56,7 @@ export class CartGatewayService {
         .send<
           Array<{ id: number; publicId?: string | null }>
         >({ cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS }, { userIds: [...userIds] })
-        .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
+        .pipe(timeout(TCP_TIMEOUT_MS.WRITE), retryOnTransportError()),
     );
     const publicIdById = new Map(
       users.map((user) => [Number(user.id), user.publicId ?? null]),
@@ -101,7 +102,7 @@ export class CartGatewayService {
         .send<
           { id: number; publicId: string | null }[]
         >(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_IDS, [...productIds])
-        .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
+        .pipe(timeout(TCP_TIMEOUT_MS.WRITE), retryOnTransportError()),
     );
     const publicIdById = new Map(
       products.map((product) => [Number(product.id), product.publicId]),
@@ -133,6 +134,7 @@ export class CartGatewayService {
         )
         .pipe(
           timeout(TCP_TIMEOUT_MS.WRITE),
+          retryOnTransportError(),
           catchError((err: unknown) => {
             throw err;
           }),
@@ -149,6 +151,7 @@ export class CartGatewayService {
           )
           .pipe(
             timeout(TCP_TIMEOUT_MS.WRITE),
+            retryOnTransportError(),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -216,6 +219,7 @@ export class CartGatewayService {
           .send<unknown>(CART_MESSAGE_PATTERN.CART_GET, { userId })
           .pipe(
             timeout(TCP_TIMEOUT_MS.READ),
+            retryOnTransportError(),
             catchError((err: unknown) => {
               throw err;
             }),

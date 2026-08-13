@@ -4,6 +4,7 @@ import { firstValueFrom, Observable, timeout } from "rxjs";
 import { PAYMENT_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
+import { retryOnTransportError } from "../common/exception/transport-error";
 import { PaymentOption } from "./payment-options.types";
 import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 
@@ -19,7 +20,10 @@ export class PaymentOptionsService {
       const options = await firstValueFrom(
         this.paymentsClient
           .send(PAYMENT_MESSAGE_PATTERN.GET_PAYMENT_OPTIONS, {})
-          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)) as Observable<PaymentOption[]>,
+          .pipe(
+            timeout(TCP_TIMEOUT_MS.WRITE),
+            retryOnTransportError(),
+          ) as Observable<PaymentOption[]>,
       );
       return { options };
     } catch (error) {

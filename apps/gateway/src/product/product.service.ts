@@ -11,6 +11,7 @@ import {
 } from "libs/constant/message-pattern.constant";
 import { CreateReviewDto } from "./dto/review.dto";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
+import { retryOnTransportError } from "../common/exception/transport-error";
 import { assertCloudinaryUrlsOwnedBy } from "../common/media/cloudinary-ownership";
 import {
   CreateProductDto,
@@ -181,7 +182,7 @@ export class ProductService {
           { cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS },
           { userIds: [...userIds] },
         )
-        .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
+        .pipe(timeout(TCP_TIMEOUT_MS.WRITE), retryOnTransportError()),
     )) as Array<{ id: number; publicId?: string | null }>;
     const publicIdById = new Map(
       users.map((user) => [Number(user.id), user.publicId ?? null]),
@@ -234,7 +235,7 @@ export class ProductService {
         .send<
           ProductData[]
         >(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_IDS, [...productIds])
-        .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
+        .pipe(timeout(TCP_TIMEOUT_MS.WRITE), retryOnTransportError()),
     );
     const publicIdById = new Map(
       products.map((product) => [Number(product.id), product.publicId ?? null]),
@@ -273,7 +274,7 @@ export class ProductService {
         .send<{
           id: number;
         }>({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, { userId })
-        .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+        .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
     );
     return { ...queryWithoutUserId, userId: Number(user.id) };
   }
@@ -289,7 +290,7 @@ export class ProductService {
       return (await firstValueFrom(
         this.productClient
           .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_PRICE_SUGGESTION, query)
-          .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+          .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
       )) as PriceSuggestion;
     } catch (error) {
       MicroserviceErrorHandler.handleError(
@@ -306,7 +307,7 @@ export class ProductService {
         await firstValueFrom(
           this.productClient
             .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_ADMIN_RISK_LIST, query)
-            .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+            .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
         ),
       );
     } catch (error) {
@@ -551,7 +552,7 @@ export class ProductService {
             { cmd: USER_MESSAGE_PATTERN.GET_USER_IDS_BY_PROVINCE },
             { provinceIds },
           )
-          .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+          .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
       )) as number[];
       if (!sellerIdsInProvinces || sellerIdsInProvinces.length === 0) {
         return { items: [], total: 0, page, limit };
@@ -568,6 +569,7 @@ export class ProductService {
         )
         .pipe(
           timeout(TCP_TIMEOUT_MS.READ),
+          retryOnTransportError(),
           catchError((err: unknown) => {
             throw err;
           }),
@@ -649,6 +651,7 @@ export class ProductService {
           .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_ID, id)
           .pipe(
             timeout(TCP_TIMEOUT_MS.READ),
+            retryOnTransportError(),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -690,6 +693,7 @@ export class ProductService {
           .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_SKU, sku)
           .pipe(
             timeout(TCP_TIMEOUT_MS.READ),
+            retryOnTransportError(),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -801,7 +805,7 @@ export class ProductService {
         .send<
           InventoryData[]
         >(INVENTORY_MESSAGE_PATTERNS.INVENTORY_GET_BY_PRODUCT_IDS, [productId])
-        .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
+        .pipe(timeout(TCP_TIMEOUT_MS.WRITE), retryOnTransportError()),
     );
 
     const baseRow = Array.isArray(inventoryRows)
@@ -961,6 +965,7 @@ export class ProductService {
           .send(PRODUCT_MESSAGE_PATTERNS.SKU_FIND_BY_PRODUCT, productId)
           .pipe(
             timeout(TCP_TIMEOUT_MS.READ),
+            retryOnTransportError(),
             catchError((err: unknown) => {
               throw err;
             }),
@@ -999,7 +1004,7 @@ export class ProductService {
       return (await firstValueFrom(
         this.productClient
           .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_ID, productId)
-          .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+          .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
       )) as ProductData;
     } catch (error) {
       MicroserviceErrorHandler.handleError(
@@ -1021,7 +1026,7 @@ export class ProductService {
           categoryId,
           query: resolvedQuery,
         })
-        .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+        .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
     )) as unknown;
     return this.exposeProductReferences(this.withCategoryIds(response));
   }
@@ -1037,7 +1042,7 @@ export class ProductService {
           brandId,
           query: resolvedQuery,
         })
-        .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+        .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
     )) as unknown;
     return this.exposeProductReferences(this.withCategoryIds(response));
   }
@@ -1047,7 +1052,7 @@ export class ProductService {
     const response = (await firstValueFrom(
       this.productClient
         .send(PRODUCT_MESSAGE_PATTERNS.PRODUCT_SEARCH, resolvedQuery)
-        .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+        .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
     )) as unknown;
     return this.exposeProductReferences(this.withCategoryIds(response));
   }
@@ -1079,7 +1084,7 @@ export class ProductService {
     return (await firstValueFrom(
       this.productClient
         .send(PRODUCT_MESSAGE_PATTERNS.BRAND_FIND_ALL, {})
-        .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+        .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
     )) as unknown;
   }
 
@@ -1087,7 +1092,7 @@ export class ProductService {
     return (await firstValueFrom(
       this.productClient
         .send(PRODUCT_MESSAGE_PATTERNS.BRAND_FIND_ALL, { status: "pending" })
-        .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+        .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
     )) as unknown;
   }
 
@@ -1115,7 +1120,7 @@ export class ProductService {
     return (await firstValueFrom(
       this.productClient
         .send(PRODUCT_MESSAGE_PATTERNS.BRAND_FIND_BY_ID, id)
-        .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+        .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
     )) as unknown;
   }
 
@@ -1151,7 +1156,7 @@ export class ProductService {
       const result = (await firstValueFrom(
         this.productClient
           .send(PRODUCT_MESSAGE_PATTERNS.CATEGORY_FIND_ALL, {})
-          .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+          .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
       )) as unknown as unknown[];
       this.logger.log(`Found ${result?.length ?? 0} categories`);
       return result;
@@ -1165,7 +1170,7 @@ export class ProductService {
     return (await firstValueFrom(
       this.productClient
         .send(PRODUCT_MESSAGE_PATTERNS.CATEGORY_FIND_ALL, { status: "pending" })
-        .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+        .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
     )) as unknown;
   }
 
@@ -1193,7 +1198,7 @@ export class ProductService {
     return (await firstValueFrom(
       this.productClient
         .send(PRODUCT_MESSAGE_PATTERNS.CATEGORY_FIND_BY_ID, id)
-        .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+        .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
     )) as unknown;
   }
 
@@ -1215,7 +1220,7 @@ export class ProductService {
             INVENTORY_MESSAGE_PATTERNS.INVENTORY_FIND_BY_PRODUCT_ID,
             internalProductId,
           )
-          .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+          .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
       ).catch((err: unknown) => {
         this.logger.warn(
           `Inventory service error for product ID ${productId}: ${err instanceof Error ? err.message : String(err)}`,
@@ -1294,7 +1299,7 @@ export class ProductService {
       const productIds = (await firstValueFrom(
         this.productClient
           .send(PRODUCT_MESSAGE_PATTERNS.GET_PRODUCT_IDS_BY_SELLER, sellerId)
-          .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+          .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
       )) as number[];
 
       if (!productIds || productIds.length === 0) {
@@ -1307,7 +1312,7 @@ export class ProductService {
             INVENTORY_MESSAGE_PATTERNS.INVENTORY_GET_BY_PRODUCT_IDS,
             productIds,
           )
-          .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+          .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
       )) as InventoryData[];
 
       let totalStock = 0;
@@ -1357,7 +1362,7 @@ export class ProductService {
           .send<
             ProductData[]
           >(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_IDS, productIds)
-          .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+          .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
       ).catch((err: unknown) => {
         this.logger.warn(
           `Product service error for IDs [${productIds.join(", ")}]: ${err instanceof Error ? err.message : String(err)}`,
@@ -1370,7 +1375,7 @@ export class ProductService {
           .send<
             InventoryData[]
           >(INVENTORY_MESSAGE_PATTERNS.INVENTORY_GET_BY_PRODUCT_IDS, internalProductIds)
-          .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+          .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
       ).catch((err: unknown) => {
         this.logger.warn(
           `Inventory service error for product IDs [${productIds.join(", ")}]: ${err instanceof Error ? err.message : String(err)}`,
@@ -1457,7 +1462,7 @@ export class ProductService {
             INVENTORY_MESSAGE_PATTERNS.INVENTORY_GET_BY_PRODUCT_IDS,
             productIds,
           )
-          .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+          .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
       )) as unknown as InventoryData[];
 
       // Create inventory map
@@ -1509,7 +1514,7 @@ export class ProductService {
             productId: Number(product.id),
             quantity,
           })
-          .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+          .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
       )) as Record<string, unknown>;
       // Inventory echoes back the internal numeric productId it was queried
       // with; hand the caller back the opaque id it asked about instead
@@ -1566,7 +1571,7 @@ export class ProductService {
             page: query.page ?? 1,
             limit: query.limit ?? 20,
           })
-          .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+          .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
       )) as unknown;
       const withCategoryIds = this.withCategoryIds(response);
 
@@ -1615,7 +1620,7 @@ export class ProductService {
             userId,
             productId: internalProductId,
           })
-          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE), retryOnTransportError()),
       );
       const review = (await firstValueFrom(
         this.productClient
@@ -1669,7 +1674,7 @@ export class ProductService {
             page,
             limit,
           })
-          .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+          .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
       );
       return this.exposeProductReferences(reviews);
     } catch (error) {
@@ -1710,6 +1715,7 @@ export class ProductService {
           .send({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, userId)
           .pipe(
             timeout(TCP_TIMEOUT_MS.WRITE),
+            retryOnTransportError(),
             catchError((err: unknown) => {
               this.logger.warn(
                 `Failed to fetch user info for userId: ${userId}`,
@@ -1778,6 +1784,7 @@ export class ProductService {
           )
           .pipe(
             timeout(TCP_TIMEOUT_MS.WRITE),
+            retryOnTransportError(),
             catchError((err: unknown) => {
               this.logger.warn(
                 `Failed to fetch users by ids: ${JSON.stringify(userIds)}`,
