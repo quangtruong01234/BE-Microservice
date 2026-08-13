@@ -147,6 +147,10 @@ export class ProductService {
       "sellerId",
       "submittedBy",
       "reviewerId",
+      // Risk-feedback rows carry the admin who judged the duplicate as
+      // `moderatorId`; it was the one moderation id still leaving raw
+      // (PRODTEST-0806 #4).
+      "moderatorId",
       "resolvedBy",
     ]);
     const userIds = new Set<number>();
@@ -1499,14 +1503,18 @@ export class ProductService {
   ): Promise<unknown> {
     try {
       const product = await this.fetchProductForAccess(productId);
-      return (await firstValueFrom(
+      const stock = (await firstValueFrom(
         this.inventoryClient
           .send(INVENTORY_MESSAGE_PATTERNS.INVENTORY_CHECK_STOCK, {
             productId: Number(product.id),
             quantity,
           })
           .pipe(timeout(TCP_TIMEOUT_MS.READ)),
-      )) as unknown;
+      )) as Record<string, unknown>;
+      // Inventory echoes back the internal numeric productId it was queried
+      // with; hand the caller back the opaque id it asked about instead
+      // (PRODTEST-0806 #4).
+      return { ...stock, productId };
     } catch (error) {
       this.logger.error(
         `Error checking stock for product ${productId}:`,

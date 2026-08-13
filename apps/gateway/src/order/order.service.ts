@@ -649,6 +649,10 @@ export class OrderService {
       "userId",
       "sellerId",
       "reviewerId",
+      // The return-request column is `reviewedBy`, not `reviewerId` — without
+      // it the moderator's internal row id shipped raw on all four
+      // return-request paths (PRODTEST-0806 #4).
+      "reviewedBy",
       "requestedBy",
       "resolvedBy",
       "actorId",
