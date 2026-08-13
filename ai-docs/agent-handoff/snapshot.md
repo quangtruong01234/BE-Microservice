@@ -131,12 +131,12 @@ this order:
   it is deliberately in-process, so with multiple instances each learns an
   outage on its own. GHN is currently its only consumer — reuse it for any other
   outbound third-party integration rather than writing a second one.
-- **RESIL-02 — transactional outbox for `order_created`.** Publish happens
-  AFTER commit and outside any transaction (`orders.service.ts` ~:250). If RMQ
-  is down: non-COD cancels the order (correct), but **COD only logs a warn** —
-  the order exists while inventory/rewards/notification never hear about it.
-  Worse, the multi-seller path (~:660) warns for EVERY payment method, so it is
-  asymmetric with the single-seller path. Outbox table + poller fixes both.
+- **RESIL-02 — transactional outbox for `order_created` — DONE 2026-08-13, NOT
+  YET DEPLOYED.** See `CHANGELOG.md`. Two things a future session must know:
+  the migration `nodeA-20260813-001-add-order-outbox` is **owed on prod** (the
+  CD workflow applies it before the restart, so the push that ships this covers
+  it); and the fix included the missing `await app.init()` in
+  `apps/orders/src/main.ts` — see Known Issues.
 - **RESIL-03 — Prometheus metrics.** `prom-client` is not installed and no
   `/metrics` route exists; only `/live` + `/ready` (and `/ready` reports
   `database:not_configured`, so it stays green regardless). 10 services on an
@@ -151,22 +151,11 @@ core, and the fix for reserve serializing on a hot row lock, but only if a real
 flash-sale event is planned. Second tier of local cache in front of Redis is
 also open but only safe for brand/category (multi-instance staleness).
 
-### PROD-PAY-02 — inbound VNPay IPN: one real end-to-end payment still owed
+### PROD-PAY-01 — ZaloPay callback leg still unverified end-to-end
 
-Endpoint PROVEN on prod (replayed real signed IPN → `RspCode 00`); the
-`verifyCallback` bug is fixed (commit `cef4981`) and IS deployed. Remaining —
-both are user actions:
-1. In the VNPay merchant portal set `Kiểu mã hóa` back to **SHA512** (backend
-   verifies SHA512; portal currently SHA256). Portal edit page:
-   `sandbox.vnpayment.vn/merchantv2/Account/TerminalEdit.htm` (reachable by
-   direct URL). `VNPAY_IPN_URL` in env is dead code — VNPay reads the IPN URL
-   from the portal only.
-2. Pay a sandbox order for real, **close the tab immediately** (so the
-   browser-return leg can't mask the result), poll `GET /api/order/:id` until
-   `status` leaves `pending`. No payments pm2 log entry ⇒ provider never
-   reached us (portal URL/nginx); a rejection entry ⇒ checksum/config mismatch.
-
-ZaloPay callback leg is still unverified end-to-end.
+VNPay IPN is CLOSED (PROD-PAY-02, 2026-08-13 — see `CHANGELOG.md`). The ZaloPay
+callback has never been exercised by a real sandbox payment; the handler itself
+is unchanged and untested against a live provider call.
 
 ### CI/CD
 
@@ -390,6 +379,21 @@ nothing until that is decided.
 - Storefront catalog defaults `isActive:true` unless `isActive` or single
   `userId` is passed; `?userId=` shows that seller's hidden products by design;
   `GET /api/products/:id` still returns deactivated products with 200.
+- ORD-CRON-01: orders `@Cron`s were NEVER scheduled before 2026-08-13 —
+  `main.ts` called neither `listen()` nor `init()`, so no lifecycle hook ran.
+  Consequence of the fix: `sweepStaleReservations()` starts running hourly for
+  the first time and has a backlog to clear (58 sweepable orders on DEV; prod
+  count unknown), canceling abandoned PENDING/CONFIRMED/PROCESSING orders with
+  no GHN code older than `ORDER_STALE_RESERVATION_TTL_HOURS` (24) and releasing
+  their stock. Capped at 25 orders/tick, so a backlog drains over hours, not in
+  one burst. Buyers of those orders get a cancel notification — expected, but
+  it will look like a wave on the first day after deploy.
+- OUTBOX-SCOPE-01: RESIL-02 covers `order_created` ONLY. The other publish
+  sites in `orders.service.ts` (`payment_completed`, `order.status_changed`)
+  still guard with a plain `if (this.fanoutChannel)` truthiness check, which
+  the self-healing publisher proxy always passes — during a broker outage they
+  silently no-op and the event is lost. Use `isFanoutChannelLive()` if/when
+  those are made durable too.
 - PATCH-ATOMIC-01: `PATCH /api/products/:id` is NOT one transaction — product
   fields, `skuList`, and the inventory stock write are three sequential steps
   across two databases. A late inventory failure rolls the stock mirror back but

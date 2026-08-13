@@ -186,6 +186,15 @@
   in `orders.service.ts` (prod forces `synchronize:false`, so the column will
   not appear on its own).
 
+- **`nodeA-20260813-001-add-order-outbox`** — creates `order_outbox` (+ index
+  `idx_order_outbox_pending`) for RESIL-02; additive, guarded, no backfill.
+  Dev auto-created the table via `synchronize:true`, so `db:migrate:status`
+  reports it `[pending]` on DEV — cosmetic ledger gap only. **OWED ON PROD**:
+  prod forces `synchronize:false`, and the orders service writes an outbox row
+  inside every order-create transaction, so checkout FAILS there until the
+  table exists. The CD workflow migrates before it restarts, so the push that
+  ships RESIL-02 applies it; only a skipped/manual run needs the SQL run by hand.
+
 ### Pre-cutoff applied-migration history (fresh-DB reference only)
 
 All absorbed into the 2026-07-17 baseline; listed for context on WHY columns

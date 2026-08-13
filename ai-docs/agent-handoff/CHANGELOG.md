@@ -6,6 +6,64 @@
 
 ## Completed Milestones
 
+- **PROD-PAY-02 — inbound VNPay IPN closed (2026-08-13).** Confirmed done by the
+  user: the merchant portal was switched back to **SHA512** (the backend has
+  always verified SHA512) and a sandbox payment completed end to end, so the
+  order left `pending` from the IPN leg rather than the browser return. The
+  `verifyCallback` fix (`cef4981`) was already deployed. No code change in this
+  entry — it closes the last owed manual verification. The ZaloPay callback leg
+  is still unverified end to end and is NOT covered by this.
+
+- **RESIL-02 — transactional outbox for `order_created` (2026-08-13).** Release
+  class **A** (nothing FE-visible). Publishing happened AFTER the create
+  transaction committed and outside any transaction, so an RMQ outage dropped
+  the event: a non-COD order was canceled (correct), but a **COD order only
+  logged a warn** — the order existed while inventory, rewards and notification
+  never heard about it. The multi-seller path was worse: it warned for EVERY
+  payment method, so the two paths disagreed.
+  - New `order_outbox` table (`nodeA-20260813-001-add-order-outbox`, additive +
+    INFORMATION_SCHEMA-guarded) + `OrderOutbox` entity. The row is written with
+    the caller's `EntityManager` **inside** the order transaction, so the order
+    and the event it owes commit together or not at all.
+  - After commit, `tryPublishOutboxRow()` publishes inline and marks the row
+    delivered. A failure is no longer terminal — the row stays pending and
+    `drainOrderOutbox()` (`@Cron` every 30s, batch 50, stops the tick on the
+    first failure instead of hammering a down broker) delivers it. Delivered
+    rows are pruned daily after 7 days. Consumers are idempotent by
+    `orderId`/`reservationKey`, so a duplicate delivery is harmless; a lost
+    event is not.
+  - Single-seller **online payment keeps failing fast**: the client asks for
+    `paymentUrl` immediately, so a poller retry 30s later is useless — that
+    path still cancels the order, discards the owed row, and returns 503. Only
+    the COD and multi-seller legs now defer to the poller.
+  - **`publish()`'s return value cannot be trusted on its own.**
+    `RmqModule.registerDirectPublisher()` hands back a self-healing Proxy that,
+    while the broker is down, answers `publish()` with a no-op returning
+    `false` and every other property with `undefined`. Marking rows published
+    on that would have lost exactly the events the table exists to protect, so
+    `isFanoutChannelLive()` probes `channel.connection` instead; a `false` from
+    a *live* channel is amqplib back-pressure (frame buffered, still sent) and
+    is only logged.
+  - **`apps/orders/src/main.ts` never called `app.init()`** — the root cause
+    found while the owed event refused to drain. Orders is TCP/RMQ-only and
+    calls neither `listen()` nor `init()`, so the Nest lifecycle hooks never
+    ran and `@nestjs/schedule` mounted **no** `@Cron` in this service: the new
+    outbox drain, and the pre-existing hourly `sweepStaleReservations()`, were
+    both dead. chat/inventory/notification/product already had the `init()`
+    call; rewards/social also lack it but have no cron, so they were left
+    alone.
+  - Because the hourly sweep goes live with this deploy, it now has a backlog
+    to work through (58 sweepable orders on DEV Aiven), so it is capped at
+    **25 orders per tick** — each swept order costs an inventory release (TCP)
+    plus a cancel event (RMQ), and the connection-capped Aiven tier should not
+    take that as one burst.
+  - Verified on the running dev stack, no process restart involved in the
+    recovery: COD order → 201 with the outbox row committed and marked
+    published; `docker stop rabbitmq` → order still 201, row `published_at
+    NULL`, `attempts 1`, `last_error "RabbitMQ publisher unavailable"`;
+    `docker start rabbitmq` → the poller delivered the same row ~60s later with
+    `last_error` cleared. Orders suite 77 tests, full suite 31/288 green.
+
 - **IDLEAK-01 / ENVELOPE-01 / ENUM-MSG-01 — the last three cosmetic-but-real
   defects from the prod sweep (2026-08-13).** One batch, three independent
   fixes, all release class **B** (no current FE reads any of the three).
