@@ -860,6 +860,24 @@ export class OrdersService {
     }
   }
 
+  /**
+   * Price the shipping leg for a checkout that has not been committed yet.
+   *
+   * Two failure classes, deliberately handled differently (PRODTEST-0806 #2):
+   *
+   * - **GHN refuses the address** (unknown district, ward from another district,
+   *   free-text that resolves to nothing → `BadRequestException`). The refusal
+   *   is deterministic: `buildShippingOrderBody` is shared with
+   *   `createShippingOrder`, so a waybill for this address can NEVER be cut.
+   *   Swallowing it booked an order at fee 0 that ready-to-ship could only
+   *   reject forever, leaving cancel as the buyer's single option. Propagate it
+   *   instead — nothing is reserved or committed at this point, so the buyer
+   *   gets the same actionable 400 that `POST /api/order/shipping-fee` already
+   *   returns and can fix the address before an order exists.
+   * - **GHN is unreachable** (outage, timeout, circuit open → 503/500). Nothing
+   *   is wrong with the order, so stay fail-open: place it at fee 0 and let
+   *   ready-to-ship cut the waybill on retry.
+   */
   private async getShippingFeeOrZero(
     shippingAddress: string,
     codAmount: number,
@@ -887,6 +905,9 @@ export class OrdersService {
       );
       return preview.shippingFee;
     } catch (err) {
+      if (err instanceof BadRequestException) {
+        throw err;
+      }
       this.logger.warn(
         `[ORDERS] GHN fee preview failed — shipping fee defaulted to 0: ${String(err)}`,
       );

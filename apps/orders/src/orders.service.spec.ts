@@ -209,6 +209,7 @@ describe("OrdersService stock reservation", () => {
     transaction: jest.Mock;
     publish: jest.Mock;
     update: jest.Mock;
+    ghnPreview: jest.Mock;
   } {
     const inventorySend = jest.fn();
     const transaction = jest.fn();
@@ -239,7 +240,14 @@ describe("OrdersService stock reservation", () => {
       ghnService as unknown as GhnService,
     );
 
-    return { service, inventorySend, transaction, publish, update };
+    return {
+      service,
+      inventorySend,
+      transaction,
+      publish,
+      update,
+      ghnPreview: ghnService.previewShippingFee,
+    };
   }
 
   function createServiceWithoutPublisher(): {
@@ -406,6 +414,70 @@ describe("OrdersService stock reservation", () => {
         reservationKey: "reservation-1",
       }),
     );
+  });
+
+  // PRODTEST-0806 #2 — a GHN refusal at fee preview is deterministic: the same
+  // address can never be turned into a waybill, so the checkout must fail while
+  // nothing is reserved rather than book an unshippable order at fee 0.
+  it("rejects the checkout when GHN refuses the address, before reserving stock", async () => {
+    const { service, inventorySend, transaction, ghnPreview } = createService();
+    mockStock(inventorySend, [true]);
+    ghnPreview.mockRejectedValue(
+      new BadRequestException("GHN does not know district 999999"),
+    );
+
+    await expect(
+      service.placeOrder(18, PaymentMethod.COD, "address", [item]),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(inventorySend).not.toHaveBeenCalledWith(
+      INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK,
+      expect.anything(),
+    );
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  // The other half of the same branch: an outage is not the order's fault, so
+  // the order is still placed at fee 0 and ready-to-ship retries the waybill.
+  it("still places the order when GHN is unreachable at fee preview", async () => {
+    const { service, inventorySend, transaction, ghnPreview } = createService();
+    mockStock(inventorySend, [true]);
+    ghnPreview.mockRejectedValue(
+      new ServiceUnavailableException("GHN unavailable"),
+    );
+    transaction.mockResolvedValue({
+      id: 1,
+      paymentMethod: PaymentMethod.VNPAY,
+      items: [],
+    });
+
+    await expect(
+      service.placeOrder(18, PaymentMethod.VNPAY, "address", [item]),
+    ).resolves.toEqual(expect.objectContaining({ id: 1 }));
+    expect(transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a multi-seller checkout when GHN refuses the address", async () => {
+    const { service, inventorySend, transaction, ghnPreview } = createService();
+    mockStock(inventorySend, [true, true]);
+    ghnPreview.mockRejectedValue(
+      new BadRequestException(
+        "Ward 20308 does not belong to GHN district 1442",
+      ),
+    );
+
+    await expect(
+      service.placeMultiSellerOrder(18, PaymentMethod.COD, "address", [
+        item,
+        { ...item, productId: 2, sellerId: 21 },
+      ]),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(inventorySend).not.toHaveBeenCalledWith(
+      INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK,
+      expect.anything(),
+    );
+    expect(transaction).not.toHaveBeenCalled();
   });
 
   it("does not create multi-seller orders when reservation fails", async () => {
