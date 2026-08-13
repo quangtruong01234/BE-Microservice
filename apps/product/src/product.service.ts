@@ -106,7 +106,19 @@ export class ProductService {
   ) {}
 
   async onModuleInit(): Promise<void> {
-    await this.ordersClient.connect();
+    // Best-effort socket warmup — see the same note in OrdersService. Orders
+    // pre-connects to product and product pre-connects to orders, so letting an
+    // ECONNREFUSED escape here means neither service can boot while the other
+    // is down. ClientProxy connects lazily on the first send regardless.
+    try {
+      await this.ordersClient.connect();
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : "unknown transport error";
+      this.logger.warn(
+        `Could not pre-connect to the orders service (${message}) — connecting lazily on the first call instead.`,
+      );
+    }
   }
 
   private buildSearchCacheKey(query: GetProductsQueryDto): string {
