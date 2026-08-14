@@ -13,9 +13,14 @@ import { Brand } from "./entity/brand.entity";
 import { Category } from "./entity/category.entity";
 import { ProductRiskFeedback } from "./entity/product-risk-feedback.entity";
 import { DatabaseModule } from "@app/database";
-import { CloudinaryModule, RmqModule, RmqService } from "@app/common";
+import {
+  CloudinaryModule,
+  ResilientClientTCP,
+  RmqModule,
+  RmqService,
+} from "@app/common";
 import { CachedModule } from "@app/cached";
-import { ClientsModule, Transport } from "@nestjs/microservices";
+import { ClientsModule } from "@nestjs/microservices";
 import {
   NAME_SERVICE_TCP,
   PORT_TCP,
@@ -42,7 +47,7 @@ import {
     ClientsModule.register([
       {
         name: NAME_SERVICE_TCP.ORDERS_SERVICE,
-        transport: Transport.TCP,
+        customClass: ResilientClientTCP,
         options: {
           host: TCP_HOST,
           port: PORT_TCP.ORDERS_TCP_PORT,

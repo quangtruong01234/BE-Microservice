@@ -9,9 +9,9 @@ import { CartItem } from "./entity/cart-item.entity";
 import { AllRpcExceptionFilter } from "./filters/rpc-exception.filter";
 import { ConfigModule } from "@nestjs/config";
 import { ScheduleModule } from "@nestjs/schedule";
-import { RmqModule } from "@app/common";
+import { ResilientClientTCP, RmqModule } from "@app/common";
 import { HttpModule } from "@nestjs/axios";
-import { ClientsModule, Transport } from "@nestjs/microservices";
+import { ClientsModule } from "@nestjs/microservices";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { resolveTypeOrmSynchronize } from "@app/database";
 import { OrderItem } from "./entity/order_item.entity";
@@ -42,7 +42,7 @@ import { GhnModule } from "./ghn/ghn.module";
     ClientsModule.register([
       {
         name: NAME_SERVICE_TCP.INVENTORY_SERVICE,
-        transport: Transport.TCP,
+        customClass: ResilientClientTCP,
         options: {
           host: TCP_HOST,
           port: PORT_TCP.INVENTORY_TCP_PORT,
@@ -50,7 +50,7 @@ import { GhnModule } from "./ghn/ghn.module";
       },
       {
         name: NAME_SERVICE_TCP.USER_SERVICE,
-        transport: Transport.TCP,
+        customClass: ResilientClientTCP,
         options: {
           host: TCP_HOST,
           port: PORT_TCP.USER_TCP_PORT,
@@ -58,7 +58,7 @@ import { GhnModule } from "./ghn/ghn.module";
       },
       {
         name: NAME_SERVICE_TCP.PRODUCT_SERVICE,
-        transport: Transport.TCP,
+        customClass: ResilientClientTCP,
         options: {
           host: TCP_HOST,
           port: PORT_TCP.PRODUCT_TCP_PORT,

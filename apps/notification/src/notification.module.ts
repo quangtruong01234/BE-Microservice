@@ -1,8 +1,8 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { TypeOrmModule } from "@nestjs/typeorm";
-import { ClientsModule, Transport } from "@nestjs/microservices";
-import { MailerModule, RmqModule } from "@app/common";
+import { ClientsModule } from "@nestjs/microservices";
+import { MailerModule, ResilientClientTCP, RmqModule } from "@app/common";
 import {
   NAME_SERVICE_TCP,
   PORT_TCP,
@@ -36,7 +36,7 @@ import { Notification } from "./entities/notification.entity";
     ClientsModule.register([
       {
         name: NAME_SERVICE_TCP.ORDERS_SERVICE,
-        transport: Transport.TCP,
+        customClass: ResilientClientTCP,
         options: {
           host: TCP_HOST,
           port: PORT_TCP.ORDERS_TCP_PORT,
@@ -44,7 +44,7 @@ import { Notification } from "./entities/notification.entity";
       },
       {
         name: NAME_SERVICE_TCP.USER_SERVICE,
-        transport: Transport.TCP,
+        customClass: ResilientClientTCP,
         options: {
           host: TCP_HOST,
           port: PORT_TCP.USER_TCP_PORT,

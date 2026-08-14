@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
-import { ClientsModule, Transport } from "@nestjs/microservices";
+import { ResilientClientTCP } from "@app/common";
+import { ClientsModule } from "@nestjs/microservices";
 import { InventoryController } from "./inventory.controller";
 import { InventoryService } from "./inventory.service";
 import {
@@ -13,7 +14,7 @@ import {
     ClientsModule.register([
       {
         name: NAME_SERVICE_TCP.INVENTORY_SERVICE,
-        transport: Transport.TCP,
+        customClass: ResilientClientTCP,
         options: {
           host: TCP_HOST,
           port: PORT_TCP.INVENTORY_TCP_PORT,
@@ -21,7 +22,7 @@ import {
       },
       {
         name: NAME_SERVICE_TCP.PRODUCT_SERVICE,
-        transport: Transport.TCP,
+        customClass: ResilientClientTCP,
         options: {
           host: TCP_HOST,
           port: PORT_TCP.PRODUCT_TCP_PORT,

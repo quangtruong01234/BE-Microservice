@@ -41,6 +41,11 @@ describe("isTransportError", () => {
     expect(isTransportError(new Error("Connection closed"))).toBe(true);
   });
 
+  it("recognises a write that never left an already-closed socket", () => {
+    // NetSocketClosedException, surfaced by ResilientClientTCP.
+    expect(isTransportError(new Error("The net socket is closed."))).toBe(true);
+  });
+
   it("ignores business errors", () => {
     expect(isTransportError(new Error("Post not found"))).toBe(false);
     expect(

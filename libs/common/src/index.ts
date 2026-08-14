@@ -18,3 +18,4 @@ export * from "./cloudinary/cloudinary.service";
 export * from "./public-id/public-id.util";
 
 export * from "./resilience/circuit-breaker";
+export * from "./resilience/resilient-client-tcp";

@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
-import { ClientsModule, Transport } from "@nestjs/microservices";
+import { ResilientClientTCP } from "@app/common";
+import { ClientsModule } from "@nestjs/microservices";
 import { OrderService } from "./order.service";
 import { OrderController } from "./order.controller";
 import { CachedModule } from "@app/cached";
@@ -14,22 +15,22 @@ import {
     ClientsModule.register([
       {
         name: NAME_SERVICE_TCP.ORDERS_SERVICE,
-        transport: Transport.TCP,
+        customClass: ResilientClientTCP,
         options: { host: TCP_HOST, port: PORT_TCP.ORDERS_TCP_PORT },
       },
       {
         name: NAME_SERVICE_TCP.PAYMENT_SERVICE,
-        transport: Transport.TCP,
+        customClass: ResilientClientTCP,
         options: { host: TCP_HOST, port: PORT_TCP.PAYMENT_TCP_PORT },
       },
       {
         name: NAME_SERVICE_TCP.USER_SERVICE,
-        transport: Transport.TCP,
+        customClass: ResilientClientTCP,
         options: { host: TCP_HOST, port: PORT_TCP.USER_TCP_PORT },
       },
       {
         name: NAME_SERVICE_TCP.PRODUCT_SERVICE,
-        transport: Transport.TCP,
+        customClass: ResilientClientTCP,
         options: { host: TCP_HOST, port: PORT_TCP.PRODUCT_TCP_PORT },
       },
     ]),

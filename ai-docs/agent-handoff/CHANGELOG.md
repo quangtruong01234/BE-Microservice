@@ -6,6 +6,92 @@
 
 ## Completed Milestones
 
+- **TCP-RESIL-01 — the null-socket race is fixed at the transport instead of
+  retried at 92 call sites (2026-08-15).** Release class **A** (internal
+  resilience; no route, field, status code or event changed). SOCIAL-502 and its
+  rollout treated the SYMPTOM with an rxjs retry, which by construction can only
+  cover idempotent reads: rxjs cannot tell "never sent" from "sent, response
+  lost". This closes the cause.
+  - **New `libs/common/src/resilience/resilient-client-tcp.ts`
+    (`ResilientClientTCP`)**, next to the RESIL-01 circuit breaker and exported
+    from `@app/common`. All **35** client registrations in 16 module files now
+    use `customClass: ResilientClientTCP` instead of `transport: Transport.TCP`
+    (`ClientProxyFactory` does `new customClass(options)`, so the same
+    `{host, port}` options object and the same DI token/`ClientProxy` type keep
+    working). Server-side `createMicroservice({transport: Transport.TCP})` in
+    each `main.ts` is untouched, and the RMQ registrations in `RmqModule` are
+    untouched.
+  - **Defect 1 — the race itself.** `publish()` now checks `this.socket` and,
+    when it is null, awaits `connect()` and publishes the SAME packet. Nothing
+    had been written when the race fires, so this is transparent **even for
+    writes**. Scoped to `socket === null` on purpose: `handleClose()` has no
+    socket-identity check, so forcing a reconnect over a still-live socket would
+    let the old socket's late `'close'` null the new one.
+  - **Defect 2 — a silently dropped write (previously unknown).**
+    `ClientTCP.publish()` calls `sendMessage()` with no callback, so a send on
+    an already-closed socket is dropped without a trace and the caller burns its
+    whole `timeout(…)` budget — and an rxjs `TimeoutError` is deliberately never
+    retried, so the user always ate that one. `sendPacket()` passes the callback
+    and fails the packet immediately with `NetSocketClosedException`;
+    `isTransportError()` learned that message so `retryOnTransportError()` can
+    act on it.
+  - **Layer A — half-open sockets.** `createSocket()` sets TCP keep-alive
+    (`TCP_KEEP_ALIVE_DELAY_MS = 30_000`) on every socket it builds, including
+    reconnects, so a peer killed without FIN surfaces as `ECONNRESET` instead of
+    a writable-looking socket that swallows sends. Overriding `createSocket()`
+    rather than passing a custom `socketClass` keeps the base class's
+    `maxBufferSize` forwarding, which is guarded by a strict
+    `socketClass === JsonSocket` check any subclass would fail.
+  - **Unsubscribe safety.** If the caller's `timeout(…)` fires while the
+    reconnect is in flight, the returned teardown cancels it and the packet is
+    never written — a write is not applied after the caller gave up. Concurrent
+    publishes share one reconnect (`connect()` caches `connectionPromise`), so
+    there is no thundering herd.
+  - **`retryOnTransportError()` stays.** It still covers a peer that is
+    genuinely down or restarting (`ECONNREFUSED`, `"Connection closed"`) and is
+    still reads-only. The two layers are complementary.
+  - **Tests: 9 new specs** in `resilient-client-tcp.spec.ts` against a REAL
+    `net` server speaking the NestJS `<len>#<json>` frame — two of them PIN the
+    base-class bugs (null-socket `TypeError`; a send that hangs), so a future
+    NestJS upgrade that fixes them upstream is detected. Reproducing the race
+    requires issuing `send()` from a macrotask (`setImmediate`), as a real HTTP
+    handler does: from inside an async function the microtask queue drains
+    first and the far more benign `"Connection closed"` wins instead. Suite:
+    **33 suites / 308 tests green** (was 32/298).
+  - **How hard is it to ACTIVATE? Harder than "restart under load."** A probe
+    driving sustained traffic through a peer that RSTs every connection every
+    60ms produced **0 null-socket failures in 45,206 requests on the BASE
+    client** — `publish()` normally wins, and the packet fails with the benign
+    `"Connection closed"` that `handleClose()` hands to every in-flight
+    callback. The TypeError needs `publish()` to LOSE to a nextTick-queued
+    close. That is why prod (sockets die only on a deploy/restart) has never
+    shown it while dev (watch-mode recompiles all day) surfaced it repeatedly.
+    The same probe through a proxy in front of the real product service, with
+    the request issued in the exact tick the peer is RST, lands on defect 2
+    instead — the base client's write is dropped and only the peer's own close
+    reports it.
+  - **Tried and reverted: tearing the socket down from the send callback.**
+    Failing fast means the dead socket is still installed for the few ms until
+    its 'close' event runs, so an INSTANT retry hits it again (measured: base
+    recovers on the immediate next call, this class needs ~one turn; the
+    gateway's 100ms `TRANSPORT_RETRY_DELAY_MS` already covers it). Calling
+    `handleClose()` there to close that window made things worse — it takes no
+    socket argument, so the stale socket's late 'close' tore down the
+    REPLACEMENT socket mid-connect and the next call died with `TypeError:
+    Cannot read properties of null (reading 'on')`. Reverted; the window is
+    documented in `known-behaviors.md` instead. Do not retry this.
+  - **Runtime evidence.** A probe against the LIVE product service on :3006:
+    base `ClientTCP` → `REJECTED: Cannot read properties of null (reading
+    'sendMessage')`; `ResilientClientTCP` → resolved 20 brands, and the
+    follow-up call on the reconnected socket also resolved. Gateway reads
+    re-verified end-to-end after the restart (`/api/user/me`, `/api/products`,
+    `/api/social/posts`, `/api/notifications`, `/api/order/seller` → 200) plus a
+    write round-trip (`POST /api/cart` 201 → `DELETE /api/cart/items/:id` 200).
+  - **Residual:** warnings log under the `[ClientTCP]` context (the base class's
+    `readonly logger`); `dispatchEvent()` (TCP `emit()`) gets the same null-socket
+    guard but keeps the base class's fire-and-forget drop on an already-closed
+    socket — grep confirms no production caller emits over TCP today.
+
 - **SOCIAL-502-ROLLOUT — the transport retry now covers every idempotent gateway
   read (2026-08-14).** Release class **A** (internal resilience; no route, field
   or status code changed). `retryOnTransportError()` had been wired to the 7

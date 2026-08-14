@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
-import { ClientsModule, Transport } from "@nestjs/microservices";
+import { ResilientClientTCP } from "@app/common";
+import { ClientsModule } from "@nestjs/microservices";
 import { ShippingController } from "./shipping.controller";
 import { ShippingService } from "./shipping.service";
 import {
@@ -13,7 +14,7 @@ import {
     ClientsModule.register([
       {
         name: NAME_SERVICE_TCP.ORDERS_SERVICE,
-        transport: Transport.TCP,
+        customClass: ResilientClientTCP,
         options: { host: TCP_HOST, port: PORT_TCP.ORDERS_TCP_PORT },
       },
     ]),

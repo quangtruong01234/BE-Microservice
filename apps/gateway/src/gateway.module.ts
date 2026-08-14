@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
-import { ClientsModule, Transport } from "@nestjs/microservices";
+import { ResilientClientTCP } from "@app/common";
+import { ClientsModule } from "@nestjs/microservices";
 import { GatewayController } from "./gateway.controller";
 import { InventoryModule } from "./inventory/inventory.module";
 import { UserModule } from "./user/user.module";
@@ -50,7 +51,7 @@ import { MetricsModule } from "./metrics/metrics.module";
     ClientsModule.register([
       {
         name: NAME_SERVICE_TCP.ORDERS_SERVICE, // Tên token để inject
-        transport: Transport.TCP,
+        customClass: ResilientClientTCP,
         options: {
           host: TCP_HOST, // Hoặc địa chỉ IP của Orders service
           port: PORT_TCP.ORDERS_TCP_PORT, // Port mà Orders service sẽ lắng nghe
@@ -58,7 +59,7 @@ import { MetricsModule } from "./metrics/metrics.module";
       },
       {
         name: NAME_SERVICE_TCP.INVENTORY_SERVICE,
-        transport: Transport.TCP,
+        customClass: ResilientClientTCP,
         options: {
           host: TCP_HOST,
           port: PORT_TCP.INVENTORY_TCP_PORT,
@@ -66,7 +67,7 @@ import { MetricsModule } from "./metrics/metrics.module";
       },
       {
         name: NAME_SERVICE_TCP.USER_SERVICE,
-        transport: Transport.TCP,
+        customClass: ResilientClientTCP,
         options: {
           host: TCP_HOST,
           port: PORT_TCP.USER_TCP_PORT,
@@ -74,7 +75,7 @@ import { MetricsModule } from "./metrics/metrics.module";
       },
       {
         name: NAME_SERVICE_TCP.PRODUCT_SERVICE,
-        transport: Transport.TCP,
+        customClass: ResilientClientTCP,
         options: {
           host: TCP_HOST,
           port: PORT_TCP.PRODUCT_TCP_PORT,
@@ -82,7 +83,7 @@ import { MetricsModule } from "./metrics/metrics.module";
       },
       {
         name: NAME_SERVICE_TCP.PAYMENT_SERVICE,
-        transport: Transport.TCP,
+        customClass: ResilientClientTCP,
         options: {
           host: TCP_HOST,
           port: PORT_TCP.PAYMENT_TCP_PORT,
@@ -90,7 +91,7 @@ import { MetricsModule } from "./metrics/metrics.module";
       },
       {
         name: NAME_SERVICE_TCP.SOCIAL_SERVICE,
-        transport: Transport.TCP,
+        customClass: ResilientClientTCP,
         options: {
           host: TCP_HOST,
           port: PORT_TCP.SOCIAL_TCP_PORT,
@@ -98,7 +99,7 @@ import { MetricsModule } from "./metrics/metrics.module";
       },
       {
         name: NAME_SERVICE_TCP.NOTIFICATION_SERVICE,
-        transport: Transport.TCP,
+        customClass: ResilientClientTCP,
         options: {
           host: TCP_HOST,
           port: PORT_TCP.NOTIFICATION_TCP_PORT,

@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
-import { ClientsModule, Transport } from "@nestjs/microservices";
+import { ResilientClientTCP } from "@app/common";
+import { ClientsModule } from "@nestjs/microservices";
 import {
   NAME_SERVICE_TCP,
   PORT_TCP,
@@ -17,7 +18,7 @@ import { OptionalJwtAuthGuard } from "../common/guards/optional-jwt-auth.guard";
     ClientsModule.register([
       {
         name: NAME_SERVICE_TCP.SOCIAL_SERVICE,
-        transport: Transport.TCP,
+        customClass: ResilientClientTCP,
         options: {
           host: TCP_HOST,
           port: PORT_TCP.SOCIAL_TCP_PORT,
@@ -25,7 +26,7 @@ import { OptionalJwtAuthGuard } from "../common/guards/optional-jwt-auth.guard";
       },
       {
         name: NAME_SERVICE_TCP.USER_SERVICE,
-        transport: Transport.TCP,
+        customClass: ResilientClientTCP,
         options: {
           host: TCP_HOST,
           port: PORT_TCP.USER_TCP_PORT,
@@ -33,7 +34,7 @@ import { OptionalJwtAuthGuard } from "../common/guards/optional-jwt-auth.guard";
       },
       {
         name: NAME_SERVICE_TCP.PRODUCT_SERVICE,
-        transport: Transport.TCP,
+        customClass: ResilientClientTCP,
         options: {
           host: TCP_HOST,
           port: PORT_TCP.PRODUCT_TCP_PORT,

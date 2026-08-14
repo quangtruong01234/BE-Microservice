@@ -138,6 +138,15 @@ this order:
   route 404s in production. Only the gateway is instrumented; the other 9
   services still have no metrics surface, and the registry is per-process, so
   `GATEWAY_INSTANCES>1` would need `prom-client`'s cluster aggregator.
+- **TCP-RESIL-01 — null-socket race fixed at the transport — DONE 2026-08-15,
+  NOT YET DEPLOYED** (branch `fix/tcp-null-socket-race`, class A). See
+  `CHANGELOG.md`. All 35 TCP client registrations now use
+  `customClass: ResilientClientTCP` (`libs/common/src/resilience/`), which
+  reconnects-and-republishes the unsent packet (safe on writes too), fails a
+  send on an already-closed socket immediately instead of hanging out the
+  caller's timeout, and sets TCP keep-alive. `retryOnTransportError()` is kept
+  as the outage layer and is still reads-only. **Any new client registration
+  must use `customClass`, not `transport: Transport.TCP`.**
 
 Deliberately NOT doing (decided, do not re-propose): full DDD refactor (huge
 diff, zero behaviour change); async order placement via queue (breaks the

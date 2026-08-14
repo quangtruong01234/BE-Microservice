@@ -25,6 +25,14 @@ const NOT_INITIALIZED_MESSAGE =
   'Not initialized. Please call the "connect" method first.';
 
 /**
+ * `NetSocketClosedException` — the write never left the process because the
+ * socket was already closed. Only surfaces via `ResilientClientTCP`, which
+ * passes the send callback the base `ClientTCP` omits; without it the packet
+ * is dropped silently and the caller waits out its whole timeout budget.
+ */
+const NET_SOCKET_CLOSED_MESSAGE = "The net socket is closed.";
+
+/**
  * True for the null-socket race in `ClientTCP.publish()`: `connect()` resolves
  * its cached `connectionPromise` in a microtask, but Node drains the nextTick
  * queue — where the socket's 'close' listener calls `handleClose()` and nulls
@@ -62,6 +70,7 @@ export function isTransportError(error: unknown): boolean {
   return (
     message === CONNECTION_CLOSED_MESSAGE ||
     message === NOT_INITIALIZED_MESSAGE ||
+    message === NET_SOCKET_CLOSED_MESSAGE ||
     isNullSocketPublish(candidate.name, message)
   );
 }

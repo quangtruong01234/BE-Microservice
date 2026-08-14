@@ -364,6 +364,42 @@ answer a dropped/refused/nulled socket with `502` +
     (they have their own circuit breaker, RESIL-01), and
     `PRODUCT_DUPLICATE_IMAGE_CHECK` (downloads from Cloudinary + O(catalog)
     pHash scan — too expensive to retry).
+- **The race itself is now fixed at the transport, not just retried
+  (TCP-RESIL-01, 2026-08-15).** Every TCP client is a `ResilientClientTCP`
+  (`libs/common/src/resilience/resilient-client-tcp.ts`), registered with
+  `customClass:` instead of `transport: Transport.TCP`. Consequences:
+  - The null-socket race no longer reaches rxjs at all — the client reconnects
+    and publishes the SAME packet, so it is transparent on **writes too**
+    (nothing was written when it fires; the packet is provably unsent).
+  - A send on an already-closed socket now fails immediately with
+    `NetSocketClosedException` ("The net socket is closed.") instead of hanging
+    for the caller's whole timeout budget. `isTransportError()` recognises it.
+  - `retryOnTransportError()` stays — it still covers a peer that is genuinely
+    down/restarting (`ECONNREFUSED`, `"Connection closed"`), and is still
+    reads-only. The two layers are complementary; do not remove either.
+  - Sockets carry TCP keep-alive (30s idle) so a peer that dies without FIN
+    surfaces as `ECONNRESET` instead of a half-open socket that swallows writes.
+  - Warnings are logged under the `[ClientTCP]` context (the base class's
+    `readonly logger`), not `[ResilientClientTCP]` — grep the message, not the
+    context.
+  - **A failed write leaves the dead socket installed for a few ms.** The client
+    reports `NetSocketClosedException` before the socket's own 'close' event has
+    run, so a caller that retries INSTANTLY hits the same dead socket and fails
+    again; recovery is complete one event-loop turn later (measured: fine at
+    50ms, and `TRANSPORT_RETRY_DELAY_MS` is 100ms). Do NOT "fix" this by calling
+    `handleClose()` from the send callback: it takes no socket argument, so the
+    stale socket's late 'close' then tears down the REPLACEMENT socket
+    mid-connect and the next call dies with `TypeError: Cannot read properties
+    of null (reading 'on')` — strictly worse. Tried and reverted 2026-08-15.
+  - **Activation is narrower than "restarts under load".** 45k requests through
+    a peer restarting every 60ms produced ZERO null-socket failures on the BASE
+    client: `publish()` normally wins the race and the packet fails with the
+    benign `"Connection closed"` from `handleClose()`. The TypeError needs
+    `publish()` to lose to a nextTick-queued close — rare, which is why prod has
+    never shown it and dev (watch-mode recompiles all day) did.
+  - **Any NEW `ClientsModule.register` client entry must use
+    `customClass: ResilientClientTCP`.** `transport: Transport.TCP` in a
+    `main.ts` `createMicroservice` is the SERVER side and must stay as is.
 
 ## Approved return restocks via a dedicated path (RETURN-STOCK-01, fixed 2026-08-11)
 
