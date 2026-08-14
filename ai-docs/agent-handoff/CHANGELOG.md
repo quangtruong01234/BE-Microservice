@@ -6,6 +6,48 @@
 
 ## Completed Milestones
 
+- **CHAT-ROOM-01 — `new_message` reaches both participants without a `join`
+  (2026-08-15).** Release class **B** (additive: the same event, the same
+  payload, delivered to strictly more sockets; a client that keeps calling
+  `join` is unaffected). Reported by the storefront FE via
+  `backend-handoff.md`; the FE was working around it by joining **every** one of
+  the viewer's conversations at connect (`chatPresenceSocket.ts` `joinAll`) and
+  re-joining from a query-cache subscription whenever the conversation list grew.
+  - **The gap.** `handleSendMessage` emitted only to `conv:<publicId>` — a room
+    a socket enters on demand — so a recipient who was anywhere other than that
+    open conversation received nothing: no unread badge, no toast, no list
+    reorder until a manual refetch.
+  - **The fix is a room union, not a new event.** Every socket already joins
+    `user:<id>` at connect (`chat.ws-gateway.ts:63`), so half the infrastructure
+    existed. The emit now targets both participants' user rooms **plus** the
+    legacy conversation room. Socket.IO dedupes a multi-room emit, so a socket
+    sitting in several targeted rooms still receives exactly one copy.
+  - **Where the participants come from.** `chat.send_message` now returns
+    `participantIds` alongside the saved row (`SentMessageWithParticipants`).
+    `ChatService.sendMessage` already loads the conversation row for its
+    membership check, so this costs **no extra query and no extra round trip**.
+    The pattern has exactly one consumer (the WS gateway), so widening the reply
+    is internal.
+  - **No id leak.** `participantIds` are internal numeric ids; `exposeChatMessage`
+    builds an explicit field list rather than spreading, so they cannot reach the
+    wire. Verified at runtime, not just by reading.
+  - **Degrades to the old behaviour** when `participantIds` is absent (an older
+    chat service): `chatMessageRooms()` falls back to the conversation room alone.
+  - **Verified (local, dev Aiven, two real accounts over a real socket):**
+    recipient who **never** emitted `join` received exactly **1** `new_message`;
+    sender received exactly 1 (no self-duplicate); recipient sitting in **both**
+    the user room and the conv room received exactly **1** (union dedupes);
+    emitted payload carries no `participantIds` and only public ids
+    (`msg_…`/`conv_…`/`usr_…`). tsc/eslint clean; 4 new unit tests pin
+    `chatMessageRooms` (both participants, missing participants, dedupe/falsy,
+    string ids over TCP).
+  - **FE can now drop** the `joinAll` loop and the query-cache subscription and
+    keep a single `new_message` listener — at its own pace, since the `join`
+    handler is unchanged.
+  - Files: `apps/chat/src/chat.{types,service,controller}.ts`,
+    `apps/gateway/src/chat/chat.types.ts` (+`chat.types.spec.ts`),
+    `apps/gateway/src/chat/chat.ws-gateway.ts`.
+
 - **TCP-RESIL-01 — the null-socket race is fixed at the transport instead of
   retried at 92 call sites (2026-08-15).** Release class **A** (internal
   resilience; no route, field, status code or event changed). SOCIAL-502 and its
