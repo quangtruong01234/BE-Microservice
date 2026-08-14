@@ -192,20 +192,22 @@
 - **`nodeA-20260811-001-add-paid-at-to-orders`** — `orders.paid_at` DATETIME NULL
   (additive, guarded) + a NULL-only backfill (non-COD at processing/shipped/
   delivering/completed, COD at completed → `updated_at`). **Applied to DEV Aiven
-  2026-08-11. OWED ON PROD** — the CD workflow migrates before it restarts, so
-  the push that ships ORD-GUARD-01 applies it; no manual step is needed unless
-  that run is skipped. Code that depends on it: `assertOnlinePaymentSettled()`
+  2026-08-11; APPLIED TO PROD 2026-08-15** by the deploy of `6bcb6da` (the
+  workflow migrates under `set -euo pipefail` before `pm2 startOrRestart`, so
+  the observed gateway restart is itself proof the apply exited 0). Code that
+  depends on it: `assertOnlinePaymentSettled()`
   in `orders.service.ts` (prod forces `synchronize:false`, so the column will
   not appear on its own).
 
 - **`nodeA-20260813-001-add-order-outbox`** — creates `order_outbox` (+ index
   `idx_order_outbox_pending`) for RESIL-02; additive, guarded, no backfill.
   Dev auto-created the table via `synchronize:true`, so `db:migrate:status`
-  reports it `[pending]` on DEV — cosmetic ledger gap only. **OWED ON PROD**:
-  prod forces `synchronize:false`, and the orders service writes an outbox row
-  inside every order-create transaction, so checkout FAILS there until the
-  table exists. The CD workflow migrates before it restarts, so the push that
-  ships RESIL-02 applies it; only a skipped/manual run needs the SQL run by hand.
+  reports it `[pending]` on DEV — cosmetic ledger gap only. **APPLIED TO PROD
+  2026-08-15** by the deploy of `6bcb6da`. It had to be: prod forces
+  `synchronize:false` and the orders service writes an outbox row inside every
+  order-create transaction, so checkout would have failed there without the
+  table. The migrate step runs before `pm2 startOrRestart` under
+  `set -euo pipefail`, so the restart could not have happened had it failed.
 
 ### Pre-cutoff applied-migration history (fresh-DB reference only)
 

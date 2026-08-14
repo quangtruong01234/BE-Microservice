@@ -120,27 +120,28 @@ this order:
   it is deliberately in-process, so with multiple instances each learns an
   outage on its own. GHN is currently its only consumer — reuse it for any other
   outbound third-party integration rather than writing a second one.
-- **RESIL-02 — transactional outbox for `order_created` — DONE 2026-08-13, NOT
-  YET DEPLOYED.** See `CHANGELOG.md`. Two things a future session must know:
-  the migration `nodeA-20260813-001-add-order-outbox` is **owed on prod** (the
-  CD workflow applies it before the restart, so the push that ships this covers
-  it); and the fix included the missing `await app.init()` in
+- **RESIL-02 — transactional outbox for `order_created` — DONE 2026-08-13,
+  DEPLOYED 2026-08-15.** See `CHANGELOG.md`. Two things a future session must
+  know: the migration `nodeA-20260813-001-add-order-outbox` was applied to prod
+  by that deploy (no longer owed); and the fix included the missing
+  `await app.init()` in
   `apps/orders/src/main.ts` — see Known Issues. Follow-up (2026-08-14): that
   `init()` also started running `OrdersService.onModuleInit()`, whose eager
   `client.connect()` calls crashed the process when a peer was not listening
   yet — orders and product each refused to boot while the other was down. Both
   warmups are best-effort now (warn + lazy connect on first send).
-- **RESIL-03 — Prometheus metrics — DONE 2026-08-14, NOT YET DEPLOYED.** See
+- **RESIL-03 — Prometheus metrics — DONE 2026-08-14, DEPLOYED 2026-08-15.** See
   `CHANGELOG.md`. `GET /metrics` on the gateway (default process metrics +
   `http_requests_total` / `http_request_duration_seconds` /
   `http_requests_in_flight`, labelled with the ROUTE PATTERN, unmatched paths
-  collapsed). Prod needs `METRICS_TOKEN` in `local/nodeA/.env` — unset means the
-  route 404s in production. Only the gateway is instrumented; the other 9
+  collapsed). Prod needs `METRICS_TOKEN` in `local/nodeA/.env` — still UNSET, so
+  `/metrics` currently 404s on prod (verified 2026-08-15); set it only when a
+  scraper actually exists. Only the gateway is instrumented; the other 9
   services still have no metrics surface, and the registry is per-process, so
   `GATEWAY_INSTANCES>1` would need `prom-client`'s cluster aggregator.
-- **TCP-RESIL-01 — null-socket race fixed at the transport — DONE 2026-08-15,
-  NOT YET DEPLOYED** (branch `fix/tcp-null-socket-race`, class A). See
-  `CHANGELOG.md`. All 35 TCP client registrations now use
+- **TCP-RESIL-01 — null-socket race fixed at the transport — DONE and DEPLOYED
+  2026-08-15** (commit `6bcb6da`, class A). See `CHANGELOG.md`. All 35 TCP
+  client registrations now use
   `customClass: ResilientClientTCP` (`libs/common/src/resilience/`), which
   reconnects-and-republishes the unsent packet (safe on writes too), fails a
   send on an already-closed socket immediately instead of hanging out the
@@ -385,7 +386,8 @@ nothing until that is decided.
 - Storefront catalog defaults `isActive:true` unless `isActive` or single
   `userId` is passed; `?userId=` shows that seller's hidden products by design;
   `GET /api/products/:id` still returns deactivated products with 200.
-- ORD-CRON-01: orders `@Cron`s were NEVER scheduled before 2026-08-13 —
+- ORD-CRON-01 (LIVE ON PROD since the 2026-08-15 deploy — the first sweep wave
+  is happening now): orders `@Cron`s were NEVER scheduled before 2026-08-13 —
   `main.ts` called neither `listen()` nor `init()`, so no lifecycle hook ran.
   Consequence of the fix: `sweepStaleReservations()` starts running hourly for
   the first time and has a backlog to clear (58 sweepable orders on DEV; prod
