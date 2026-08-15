@@ -102,6 +102,87 @@ describe("UploadService", () => {
     ).toThrow(ForbiddenException);
   });
 
+  describe("upload size caps (UPLOAD-SIZE-01)", () => {
+    it("returns the image cap, and no video cap for an image-only folder", () => {
+      const signature = service.generateSignature("trybuy/products", 20);
+
+      expect(signature.maxBytes).toBe(10 * 1024 * 1024);
+      expect(signature.maxVideoBytes).toBeUndefined();
+    });
+
+    it("returns both caps for the posts folder, which allows mp4", () => {
+      const signature = service.generateSignature("trybuy/posts", 20);
+
+      expect(signature.maxBytes).toBe(10 * 1024 * 1024);
+      expect(signature.maxVideoBytes).toBe(100 * 1024 * 1024);
+    });
+
+    it("signs when no size is declared", () => {
+      expect(() =>
+        service.generateSignature("trybuy/products", 20),
+      ).not.toThrow();
+    });
+
+    it("signs a declared size at the ceiling", () => {
+      const signature = service.generateSignature(
+        "trybuy/products",
+        20,
+        undefined,
+        10 * 1024 * 1024,
+      );
+
+      expect(signature.signature).toEqual(expect.any(String));
+    });
+
+    it("rejects a declared size over the folder ceiling", () => {
+      expect(() =>
+        service.generateSignature(
+          "trybuy/products",
+          20,
+          undefined,
+          10 * 1024 * 1024 + 1,
+        ),
+      ).toThrow(BadRequestException);
+    });
+
+    it("measures the posts folder against its video ceiling, not the image one", () => {
+      const signature = service.generateSignature(
+        "trybuy/posts",
+        20,
+        undefined,
+        50 * 1024 * 1024,
+      );
+
+      expect(signature.folder).toBe("trybuy/posts");
+      expect(() =>
+        service.generateSignature(
+          "trybuy/posts",
+          20,
+          undefined,
+          100 * 1024 * 1024 + 1,
+        ),
+      ).toThrow(BadRequestException);
+    });
+
+    it("keeps size out of the signed string", () => {
+      const nowSpy = jest.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+      const withoutSize = service.generateSignature(
+        "trybuy/products",
+        20,
+        "20_product-image",
+      );
+      const withSize = service.generateSignature(
+        "trybuy/products",
+        20,
+        "20_product-image",
+        1024,
+      );
+
+      expect(withSize.signature).toBe(withoutSize.signature);
+      nowSpy.mockRestore();
+    });
+  });
+
   describe("with NODE_ENV=production", () => {
     const previousNodeEnv = process.env.NODE_ENV;
 
@@ -139,6 +220,17 @@ describe("UploadService", () => {
       const signature = service.generateSignature("avatars", 20, "20_avatar");
 
       expect(signature.folder).toBe("avatars");
+    });
+
+    it("resolves the size caps for the prod physical folders too", () => {
+      // The caps are keyed by PHYSICAL folder, so a prod-only key miss would
+      // silently drop maxBytes from the response (or throw on maxBytes.video).
+      expect(
+        service.generateSignature("trybuy/products", 20, "20_image").maxBytes,
+      ).toBe(10 * 1024 * 1024);
+      expect(
+        service.generateSignature("trybuy/posts", 20, "20_clip").maxVideoBytes,
+      ).toBe(100 * 1024 * 1024);
     });
 
     it("still rejects a folder that is neither logical nor physical", () => {

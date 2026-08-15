@@ -1,5 +1,6 @@
 import {
   BadGatewayException,
+  BadRequestException,
   ForbiddenException,
   ServiceUnavailableException,
   ValidationPipe,
@@ -25,6 +26,7 @@ describe("UploadController", () => {
       folder: "trybuy/products",
       public_id: "20_product-image",
       allowed_formats: "jpg,png,webp",
+      maxBytes: 10 * 1024 * 1024,
     });
     generateDeleteSignature = jest.fn().mockReturnValue({
       signature: "signature",
@@ -76,6 +78,27 @@ describe("UploadController", () => {
         pipe.transform({ folder: "trybuy/products" }, metadata),
       ).resolves.toMatchObject({ folder: "trybuy/products" });
     });
+
+    it("coerces the bytes query string to a number", async () => {
+      await expect(
+        pipe.transform(
+          { folder: "trybuy/products", bytes: "2097152" },
+          metadata,
+        ),
+      ).resolves.toMatchObject({ bytes: 2097152 });
+    });
+
+    it("rejects a non-integer bytes value", async () => {
+      await expect(
+        pipe.transform({ folder: "trybuy/products", bytes: "big" }, metadata),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it("rejects a zero or negative bytes value", async () => {
+      await expect(
+        pipe.transform({ folder: "trybuy/products", bytes: "0" }, metadata),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
   });
 
   it("uses the normalized authenticated user id for product uploads", () => {
@@ -88,6 +111,21 @@ describe("UploadController", () => {
       "trybuy/products",
       20,
       undefined,
+      undefined,
+    );
+  });
+
+  it("forwards the declared byte size to the signer", () => {
+    controller.getSignature(
+      { folder: "trybuy/products", bytes: 2097152 },
+      { user: { id: 20 } },
+    );
+
+    expect(generateSignature).toHaveBeenCalledWith(
+      "trybuy/products",
+      20,
+      undefined,
+      2097152,
     );
   });
 

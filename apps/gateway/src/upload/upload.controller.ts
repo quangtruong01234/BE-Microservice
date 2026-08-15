@@ -16,7 +16,8 @@ import {
   ApiPropertyOptional,
   ApiTags,
 } from "@nestjs/swagger";
-import { IsNotEmpty, IsOptional, IsString } from "class-validator";
+import { Type } from "class-transformer";
+import { IsInt, IsNotEmpty, IsOptional, IsString, Min } from "class-validator";
 import { UPLOAD_MESSAGE } from "libs/constant/response-message.constant";
 import { UploadService } from "./upload.service";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
@@ -49,6 +50,19 @@ export class GetSignatureQueryDto {
   @IsOptional()
   @IsString()
   declare userId?: string;
+
+  @ApiPropertyOptional({
+    example: 2_097_152,
+    description:
+      "Size in bytes of the file about to be uploaded. Optional. When sent " +
+      "and larger than the folder's limit the signature is refused with 400. " +
+      "The limits themselves come back as `maxBytes` / `maxVideoBytes`.",
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  declare bytes?: number;
 }
 
 class DeleteMediaDto {
@@ -77,6 +91,7 @@ export class UploadController {
       query.folder,
       req.user.id,
       query.publicId,
+      query.bytes,
     );
   }
 
