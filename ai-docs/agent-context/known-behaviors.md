@@ -591,3 +591,44 @@ you need it there.
   cloud was purged wholesale once; leftovers with a doubled `trybuy/posts/
   trybuy/posts/` folder or an `undefined_` prefix come from an old FE upload
   bug. Fix such rows as data, do not re-diagnose the cleanup path.
+
+## Upload size caps are a contract, NOT a security boundary (UPLOAD-SIZE-01, 2026-08-15)
+
+`POST /api/upload/signature` returns `maxBytes` (and `maxVideoBytes` on the
+posts folder, the only one whose `allowed_formats` admits mp4) and refuses with
+400 when the caller declares a `bytes` larger than the folder's ceiling. Read
+this before "hardening" it — the limits are deliberately unenforceable server
+side, and the reasons are probed facts, not assumptions:
+
+- **Cloudinary cannot enforce a signed size on this account.** Three live probes
+  on 2026-08-15: (1) putting `max_file_size` in the signed string → `401 Invalid
+  Signature`, and Cloudinary's own error echoes the string it expected —
+  `allowed_formats=…&folder=…&public_id=…&timestamp=…` — i.e. size params are
+  excluded from the signable set; (2) a *signed* upload preset carrying
+  `max_file_size: 10240` still accepted a 40 KB file (HTTP 200, `bytes=40964`);
+  (3) the Admin API silently DROPPED `max_file_size` — `GET
+  upload_presets/<name>` came back with `settings: {"folder":"trybuy/products"}`
+  and nothing else. So there is no signed-upload size limit to reach for. Do not
+  re-probe this; do not add `max_bytes` to `paramsToSign` — it breaks every
+  upload.
+- **Therefore `bytes` is advisory.** It is optional and client-supplied: a
+  client that omits it or lies gets a signature and uploads anything. The check
+  exists so both sides agree on ONE number instead of the FE hardcoding its own.
+  Do not describe it as a limit that protects the account.
+- **The only real fix is proxying the bytes through the gateway**, which throws
+  away the entire point of direct-to-Cloudinary upload. Considered and declined;
+  it would also be a class C contract change.
+- **Response fields are camelCase ON PURPOSE.** Everything else in that response
+  is snake_case because it is a Cloudinary param the client forwards verbatim;
+  `maxBytes`/`maxVideoBytes` are ours and must NOT be forwarded. Verified
+  harmless either way — a client that does forward `maxBytes` still uploads
+  (HTTP 200): Cloudinary ignores parameter names it does not recognize. That is
+  the opposite of `max_file_size`, a name it DOES recognize, which is what makes
+  signing it fatal.
+- **The ceiling is per folder, not per file type.** The signature is issued
+  before any byte is read, so the server cannot tell an image from a video and
+  checks `bytes` against the folder's *video* cap where one exists (posts:
+  100 MB). An 11 MB image into `trybuy/posts` therefore passes the server and is
+  caught only by the client's own per-type check. That asymmetry is intended —
+  do not "fix" it by rejecting on the image cap, which would block legitimate
+  video uploads.

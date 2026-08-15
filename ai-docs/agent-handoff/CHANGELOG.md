@@ -6,6 +6,45 @@
 
 ## Completed Milestones
 
+- **UPLOAD-SIZE-01 — the upload size limit is now server-owned, but it is a
+  contract, not an enforcement (2026-08-15).** Release class **B** (additive:
+  two new response fields the live FE's allow-list ignores, and one new
+  OPTIONAL query param). FE asked for a size limit "inside the signed string"
+  (`max_bytes`, or a signed preset with `max_file_size`) so the two sides could
+  not drift. **That is not possible on Cloudinary, proven, not assumed** — three
+  live probes: signing `max_file_size` returns `401 Invalid Signature` with
+  Cloudinary echoing the param set it actually signs (size excluded); a *signed*
+  preset with `max_file_size: 10240` still accepted a 40 KB file (HTTP 200,
+  `bytes=40964`); and the Admin API silently dropped `max_file_size` from the
+  preset entirely (`settings: {"folder":"trybuy/products"}`). All probe assets
+  and presets were deleted. So the honest version shipped instead: the server
+  owns the NUMBERS and hands them to the client.
+  - `POST /api/upload/signature` now returns `maxBytes` (10 MB) and, for
+    `trybuy/posts` only — the one folder whose `allowed_formats` admits mp4 —
+    `maxVideoBytes` (100 MB). Those match the FE's own existing constants in
+    `uploadValidation.ts`, so nothing about current behaviour changes; the FE
+    just stops hardcoding them. camelCase deliberately, to mark them as OURS
+    rather than a Cloudinary param to forward (harmless if forwarded anyway —
+    verified HTTP 200; Cloudinary ignores names it does not recognize).
+  - `?bytes=<n>` is a new optional query param. When present and over the
+    folder's ceiling the signature is refused with 400 before it is ever issued.
+    Advisory by construction: omit it or lie and you still get a signature.
+  - The signed string is **byte-for-byte unchanged** — pinned by the pre-existing
+    `paramsToSign` test plus a new one asserting the signature is identical with
+    and without `bytes`.
+  - Ceiling is per FOLDER, not per file type: the signature predates any byte,
+    so an image into `trybuy/posts` is measured against the 100 MB video cap.
+    Intended; see `known-behaviors.md`.
+  - Verified live end-to-end against the real Cloudinary account: signature →
+    multipart upload with exactly the fields the FE forwards → HTTP 200,
+    `bytes=70` stored → deleted again through `DELETE /api/upload/media` →
+    `{"result":"ok"}`. Plus route-level checks: products `maxBytes` only, posts
+    both caps, at-cap 201, over-cap 400 on both image and video ceilings, and
+    `bytes=abc` → 400 from the DTO.
+  - Files: `apps/gateway/src/upload/{upload.constants,upload.types,upload.service,upload.controller}.ts`,
+    `libs/constant/response-message.constant.ts`, plus both upload spec files
+    (34 tests green).
+
 - **TCP-RESIL-01 — the null-socket race is fixed at the transport instead of
   retried at 92 call sites (2026-08-15).** Release class **A** (internal
   resilience; no route, field, status code or event changed). SOCIAL-502 and its
