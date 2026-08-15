@@ -34,6 +34,8 @@ export const UPLOAD_MESSAGE = {
   CANNOT_ATTACH_OTHERS_MEDIA: "Cannot attach media uploaded by another user",
   MEDIA_SERVICE_UNAVAILABLE: "Media service is unavailable",
   DELETE_FAILED: "Failed to delete media",
+  FILE_TOO_LARGE: (bytes: number, maxBytes: number): string =>
+    `File is ${bytes} bytes, over the ${maxBytes} byte limit for this folder`,
 } as const;
 
 export const USER_MESSAGE = {
