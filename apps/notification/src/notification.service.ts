@@ -6,6 +6,7 @@ import { ClientProxy } from "@nestjs/microservices";
 import { firstValueFrom, Observable, timeout } from "rxjs";
 import {
   generatePublicId,
+  isRmqPublisherLive,
   MailerService,
   PaginatedResponse,
 } from "@app/common";
@@ -96,7 +97,7 @@ export class NotificationService {
     });
     const saved = await this.notificationRepository.save(notification);
 
-    if (!this.fanoutChannel) {
+    if (!this.fanoutChannel || !isRmqPublisherLive(this.fanoutChannel)) {
       this.logger.warn(
         "[NOTIFICATION] fanoutChannel unavailable — WS push skipped",
       );
