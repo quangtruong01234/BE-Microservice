@@ -1569,15 +1569,45 @@ export class OrderService {
     };
   }
 
+  /**
+   * Analytics rows arrive keyed by the numeric product PK. Swap each one for
+   * its opaque `prod_` public id before the payload leaves the gateway — it was
+   * the last numeric internal id still on this response (PRODTEST-0806 #4).
+   * `buildProductMap` degrades to an empty map when the product service is
+   * down, so an unresolvable id becomes `null` instead of failing the whole
+   * dashboard.
+   */
+  private async exposeAnalyticsProductIds(
+    analytics: unknown,
+  ): Promise<unknown> {
+    const payload = analytics as OrderAnalyticsResponse | null;
+    const topProducts = payload?.topProducts;
+    if (!Array.isArray(topProducts) || topProducts.length === 0) {
+      return analytics;
+    }
+    const productMap = await this.buildProductMap(
+      topProducts
+        .map((product) => Number(product.productId))
+        .filter((productId) => Number.isFinite(productId)),
+    );
+    return {
+      ...payload,
+      topProducts: topProducts.map((product) => ({
+        ...product,
+        productId: productMap.get(Number(product.productId))?.publicId ?? null,
+      })),
+    };
+  }
+
   private async fetchAnalytics(
     sellerId: number | null,
     query: AnalyticsQueryDto,
     operation: string,
   ): Promise<unknown> {
     try {
-      return await firstValueFrom(
+      const analytics = await firstValueFrom(
         this.ordersClient
-          .send(ORDER_MESSAGE_PATTERN.ANALYTICS, {
+          .send<unknown>(ORDER_MESSAGE_PATTERN.ANALYTICS, {
             sellerId,
             from: query.from,
             to: query.to,
@@ -1592,6 +1622,7 @@ export class OrderService {
             }),
           ),
       );
+      return await this.exposeAnalyticsProductIds(analytics);
     } catch (error) {
       MicroserviceErrorHandler.handleError(error, operation, "Orders Service");
     }

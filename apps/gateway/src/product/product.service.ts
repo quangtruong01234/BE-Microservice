@@ -204,6 +204,42 @@ export class ProductService {
     return expose(value);
   }
 
+  /**
+   * Brand/category rows carry `submittedBy` — the numeric PK of the seller who
+   * proposed them. Only the moderation queue has a reason to show it, and there
+   * it is resolved to a `usr_` public id. Everywhere else the field is unread
+   * weight that leaks an internal id, so it is dropped instead of resolved:
+   * these are hot, cached catalog reads and must not start depending on the
+   * user service being up (PRODTEST-0806 #4).
+   */
+  private hideSubmittedBy(value: unknown): unknown {
+    if (Array.isArray(value)) {
+      return value.map((item) => this.hideSubmittedBy(item));
+    }
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([key]) => key !== "submittedBy")
+        .map(([key, nested]) => [key, this.hideSubmittedBy(nested)]),
+    );
+  }
+
+  /**
+   * Moderation-queue variant: resolve `submittedBy` to a `usr_` public id, but
+   * never let a user-service outage take the queue down — a moderator can still
+   * approve/reject without knowing who submitted, so an unresolvable batch
+   * degrades to the field being dropped rather than to a 500.
+   */
+  private async exposeSubmittedBy(value: unknown): Promise<unknown> {
+    try {
+      return await this.exposeUserReferences(value);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Could not resolve submittedBy — ${message}`);
+      return this.hideSubmittedBy(value);
+    }
+  }
+
   private async exposeProductReferences(value: unknown): Promise<unknown> {
     const productIds = new Set<number>();
     const collect = (nested: unknown): void => {
@@ -1063,14 +1099,16 @@ export class ProductService {
 
   async createBrand(dto: CreateBrandDto, userId: number): Promise<unknown> {
     try {
-      return (await firstValueFrom(
-        this.productClient
-          .send(PRODUCT_MESSAGE_PATTERNS.BRAND_CREATE, {
-            ...dto,
-            submittedBy: userId,
-          })
-          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
-      )) as unknown;
+      return this.hideSubmittedBy(
+        await firstValueFrom(
+          this.productClient
+            .send(PRODUCT_MESSAGE_PATTERNS.BRAND_CREATE, {
+              ...dto,
+              submittedBy: userId,
+            })
+            .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
+        ),
+      );
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -1081,32 +1119,40 @@ export class ProductService {
   }
 
   async getAllBrands(): Promise<unknown> {
-    return (await firstValueFrom(
-      this.productClient
-        .send(PRODUCT_MESSAGE_PATTERNS.BRAND_FIND_ALL, {})
-        .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
-    )) as unknown;
+    return this.hideSubmittedBy(
+      await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.BRAND_FIND_ALL, {})
+          .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
+      ),
+    );
   }
 
   async getPendingBrands(): Promise<unknown> {
-    return (await firstValueFrom(
-      this.productClient
-        .send(PRODUCT_MESSAGE_PATTERNS.BRAND_FIND_ALL, { status: "pending" })
-        .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
-    )) as unknown;
+    // The moderation queue is the one place `submittedBy` is actually rendered,
+    // so it is resolved to a `usr_` public id rather than dropped.
+    return this.exposeSubmittedBy(
+      await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.BRAND_FIND_ALL, { status: "pending" })
+          .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
+      ),
+    );
   }
 
   async reviewBrand(id: number, dto: ReviewBrandDto): Promise<unknown> {
     try {
-      return (await firstValueFrom(
-        this.productClient
-          .send(PRODUCT_MESSAGE_PATTERNS.BRAND_REVIEW, {
-            id,
-            action: dto.action,
-            note: dto.note,
-          })
-          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
-      )) as unknown;
+      return this.hideSubmittedBy(
+        await firstValueFrom(
+          this.productClient
+            .send(PRODUCT_MESSAGE_PATTERNS.BRAND_REVIEW, {
+              id,
+              action: dto.action,
+              note: dto.note,
+            })
+            .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
+        ),
+      );
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -1117,11 +1163,13 @@ export class ProductService {
   }
 
   async getBrandById(id: number): Promise<unknown> {
-    return (await firstValueFrom(
-      this.productClient
-        .send(PRODUCT_MESSAGE_PATTERNS.BRAND_FIND_BY_ID, id)
-        .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
-    )) as unknown;
+    return this.hideSubmittedBy(
+      await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.BRAND_FIND_BY_ID, id)
+          .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
+      ),
+    );
   }
 
   // ============================================================================
@@ -1133,14 +1181,16 @@ export class ProductService {
     userId: number,
   ): Promise<unknown> {
     try {
-      return (await firstValueFrom(
-        this.productClient
-          .send(PRODUCT_MESSAGE_PATTERNS.CATEGORY_CREATE, {
-            ...dto,
-            submittedBy: userId,
-          })
-          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
-      )) as unknown;
+      return this.hideSubmittedBy(
+        await firstValueFrom(
+          this.productClient
+            .send(PRODUCT_MESSAGE_PATTERNS.CATEGORY_CREATE, {
+              ...dto,
+              submittedBy: userId,
+            })
+            .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
+        ),
+      );
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -1159,7 +1209,7 @@ export class ProductService {
           .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
       )) as unknown as unknown[];
       this.logger.log(`Found ${result?.length ?? 0} categories`);
-      return result;
+      return this.hideSubmittedBy(result);
     } catch (error) {
       this.logger.error("Failed to fetch categories:", error);
       throw error;
@@ -1167,24 +1217,32 @@ export class ProductService {
   }
 
   async getPendingCategories(): Promise<unknown> {
-    return (await firstValueFrom(
-      this.productClient
-        .send(PRODUCT_MESSAGE_PATTERNS.CATEGORY_FIND_ALL, { status: "pending" })
-        .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
-    )) as unknown;
+    // Same as the pending brands queue — `submittedBy` is rendered here, so it
+    // is resolved to a `usr_` public id instead of dropped.
+    return this.exposeSubmittedBy(
+      await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.CATEGORY_FIND_ALL, {
+            status: "pending",
+          })
+          .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
+      ),
+    );
   }
 
   async reviewCategory(id: number, dto: ReviewCategoryDto): Promise<unknown> {
     try {
-      return (await firstValueFrom(
-        this.productClient
-          .send(PRODUCT_MESSAGE_PATTERNS.CATEGORY_REVIEW, {
-            id,
-            action: dto.action,
-            note: dto.note,
-          })
-          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
-      )) as unknown;
+      return this.hideSubmittedBy(
+        await firstValueFrom(
+          this.productClient
+            .send(PRODUCT_MESSAGE_PATTERNS.CATEGORY_REVIEW, {
+              id,
+              action: dto.action,
+              note: dto.note,
+            })
+            .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
+        ),
+      );
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -1195,11 +1253,13 @@ export class ProductService {
   }
 
   async getCategoryById(id: number): Promise<unknown> {
-    return (await firstValueFrom(
-      this.productClient
-        .send(PRODUCT_MESSAGE_PATTERNS.CATEGORY_FIND_BY_ID, id)
-        .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
-    )) as unknown;
+    return this.hideSubmittedBy(
+      await firstValueFrom(
+        this.productClient
+          .send(PRODUCT_MESSAGE_PATTERNS.CATEGORY_FIND_BY_ID, id)
+          .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
+      ),
+    );
   }
 
   // ============================================================================

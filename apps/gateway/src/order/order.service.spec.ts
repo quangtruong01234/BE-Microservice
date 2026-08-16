@@ -296,4 +296,83 @@ describe("OrderService access control", () => {
       expect(cached.del).toHaveBeenCalledWith("idem:order:18:key-3");
     });
   });
+
+  describe("analytics product ids (PRODTEST-0806 #4)", () => {
+    const analytics = {
+      from: "2026-08-01",
+      to: "2026-08-15",
+      interval: "day",
+      summary: {
+        totalRevenue: 500,
+        completedOrders: 2,
+        totalOrders: 3,
+        averageOrderValue: 250,
+      },
+      revenueOverTime: [],
+      statusDistribution: { completed: 2 },
+      topProducts: [
+        { productId: 7, productName: "Áo", quantitySold: 4, revenue: 400 },
+        { productId: 9, productName: "Quần", quantitySold: 1, revenue: 100 },
+      ],
+    };
+
+    it("exposes topProducts productId as a public id", async () => {
+      ordersClient.send.mockReturnValue(of(analytics));
+      productClient.send.mockReturnValue(
+        of([
+          { id: 7, publicId: "prod_aaaaaaaaaaaaaaaa" },
+          { id: 9, publicId: "prod_bbbbbbbbbbbbbbbb" },
+        ]),
+      );
+
+      const result = (await service.getSellerAnalytics(20, {
+        interval: "day",
+      })) as { topProducts: { productId: unknown }[] };
+
+      expect(productClient.send).toHaveBeenCalledWith(
+        PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_IDS,
+        [7, 9],
+      );
+      expect(result.topProducts.map((product) => product.productId)).toEqual([
+        "prod_aaaaaaaaaaaaaaaa",
+        "prod_bbbbbbbbbbbbbbbb",
+      ]);
+    });
+
+    it("nulls a product id it cannot resolve instead of leaking the number", async () => {
+      ordersClient.send.mockReturnValue(of(analytics));
+      productClient.send.mockReturnValue(
+        throwError(() => new Error("product service down")),
+      );
+
+      const result = (await service.getSellerAnalytics(20, {
+        interval: "day",
+      })) as { topProducts: { productId: unknown }[] };
+
+      expect(result.topProducts.map((product) => product.productId)).toEqual([
+        null,
+        null,
+      ]);
+    });
+
+    it("keeps the revenue-stripped payload on public ids too", async () => {
+      ordersClient.send.mockReturnValue(of(analytics));
+      productClient.send.mockReturnValue(
+        of([{ id: 7, publicId: "prod_aaaaaaaaaaaaaaaa" }]),
+      );
+
+      const result = (await service.getShippingAnalytics(
+        { interval: "day" },
+        false,
+      )) as {
+        summary: Record<string, unknown>;
+        topProducts: Record<string, unknown>[];
+      };
+
+      expect(result.summary).not.toHaveProperty("totalRevenue");
+      expect(result.topProducts[0].productId).toBe("prod_aaaaaaaaaaaaaaaa");
+      expect(result.topProducts[1].productId).toBeNull();
+      expect(result.topProducts[0]).not.toHaveProperty("revenue");
+    });
+  });
 });
