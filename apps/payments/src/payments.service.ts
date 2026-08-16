@@ -10,7 +10,10 @@ import { Repository } from "typeorm";
 import { Channel } from "amqplib";
 import { Payment, PaymentStatus } from "./entity/payment.entity";
 import { PaymentMethod } from "./entity/payment-method.entity";
-import { PaymentMethod as PaymentMethodEnum } from "@app/common";
+import {
+  isRmqPublisherLive,
+  PaymentMethod as PaymentMethodEnum,
+} from "@app/common";
 import { PaymentGatewayFactory } from "./payment-gateway.factory";
 import { EXCHANGE } from "@app/common/constants/exchange";
 import { EVENT } from "@app/common/constants/event";
@@ -193,6 +196,15 @@ export class PaymentsService {
   }
 
   private emitPaymentCompleted(orderId: number, amount: number): void {
+    if (!isRmqPublisherLive(this.fanoutChannel)) {
+      // The payment row is already COMPLETED, so the money is recorded and only
+      // the order-side flip is owed. Log it at error level: nothing retries this
+      // event, so the order has to be reconciled by hand (OUTBOX-SCOPE-01).
+      this.logger.error(
+        `[PAYMENTS] RMQ publisher unavailable — ${EVENT.PAYMENT_COMPLETED_EVENT} not published for order ${orderId} (amount ${amount}); order state needs manual reconciliation`,
+      );
+      return;
+    }
     const eventPayload = {
       data: { orderId, amount },
       pattern: EVENT.PAYMENT_COMPLETED_EVENT,
