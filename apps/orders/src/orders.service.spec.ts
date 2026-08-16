@@ -24,11 +24,18 @@ import {
 import { GhnService } from "./ghn/ghn.service";
 import { OrdersService } from "./orders.service";
 import { EVENT } from "@app/common/constants/event";
+import { ORDER_MESSAGE } from "libs/constant/response-message.constant";
 
 // Names of the events published through the raw amqplib channel, in call
 // order — publish(exchange, eventName, payload).
 const publishedEventNames = (publish: jest.Mock): string[] =>
   publish.mock.calls.map((call: unknown[]) => String(call[1]));
+
+// The `message` persisted on the first shipping_history row a call wrote.
+const firstHistoryMessage = (historySave: jest.Mock): string => {
+  const calls = historySave.mock.calls as Array<[{ message: string | null }]>;
+  return String(calls[0][0].message);
+};
 
 // RESIL-02 outbox repository: only the post-commit bookkeeping (mark delivered
 // / record the failure / discard on cancel) goes through it — the row itself is
@@ -209,6 +216,41 @@ describe("OrdersService.handleGhnWebhook", () => {
       { status: OrderStatus.CANCELED },
     );
     expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  // GHN-FAIL-01: `delivery_fail` is a failed delivery ATTEMPT — GHN retries and
+  // only then moves to the return family — so the local status must not move,
+  // but the history row must not call it "Unhandled" either.
+  it("keeps a delivery_fail order in delivering and records it as acknowledged", async () => {
+    const { service, publish, update, historySave } = createService(
+      createOrder(OrderStatus.DELIVERING),
+      1,
+    );
+
+    await service.handleGhnWebhook("GHN-1", "delivery_fail");
+
+    expect(update).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+    expect(firstHistoryMessage(historySave)).toBe(
+      ORDER_MESSAGE.GHN_STATUS_NO_LOCAL_STATUS(
+        "delivery_fail",
+        OrderStatus.DELIVERING,
+      ),
+    );
+  });
+
+  it("still reports a GHN status it has never seen as unhandled", async () => {
+    const { service, update, historySave } = createService(
+      createOrder(OrderStatus.DELIVERING),
+      1,
+    );
+
+    await service.handleGhnWebhook("GHN-1", "teleported");
+
+    expect(update).not.toHaveBeenCalled();
+    expect(firstHistoryMessage(historySave)).toBe(
+      ORDER_MESSAGE.GHN_STATUS_UNHANDLED("teleported"),
+    );
   });
 
   it("does not fail webhook processing when history insert fails", async () => {
