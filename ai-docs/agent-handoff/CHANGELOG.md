@@ -6,6 +6,209 @@
 
 ## Completed Milestones
 
+- **GHN-FAIL-01 — `delivery_fail` keeps the local status, and the timeline now
+  says so instead of "Unhandled" (2026-08-16). Release class A.** Answers the
+  GHN console's open question (`backend-handoff.md`, `risks.md` item 6) with
+  option (b) — deliberately do not map — plus the observability fix that makes
+  (b) readable.
+  - **The decision.** `delivery_fail` is a failed delivery ATTEMPT, not a failed
+    delivery: GHN retries on its own and only then moves to the return family,
+    which already maps to CANCELED. Canceling on the first miss would release
+    reserved stock for a parcel still out for redelivery, and there is no local
+    status between DELIVERING and CANCELED to move to — inventing one means a
+    new `orders.status` enum value (migration + a contract change for both
+    frontends) for a state the buyer already sees on the GHN badge.
+  - **The real defect was the message, not the mapping.** `applyGhnStatus`
+    labelled every unmapped status `Unhandled GHN status "<x>"`, and that string
+    is persisted to `shipping_history.message` and rendered verbatim in the
+    console timeline — so a legitimate, expected GHN status read as a backend
+    bug next to a GHN badge that had visibly moved.
+  - **What changed.** New `GHN_STATUSES_WITHOUT_LOCAL_STATUS` +
+    `isGhnStatusWithoutLocalStatus()` in `libs/constant/shipping.constant.ts`
+    lists the ten GHN statuses we recognise and deliberately do not map
+    (`ready_to_pick`, the five in-transit legs, `delivery_fail`, `exception`,
+    `damage`, `lost`), each with the reason in the doc comment. The null branch
+    of `applyGhnStatus` splits on it: recognised → `GHN status "<x>"
+    acknowledged; no local equivalent, order stays <status>` at `log` level;
+    anything else → the old `Unhandled GHN status "<x>"`, now at **warn**, so a
+    new GHN vocabulary word is loud instead of buried. Return value is
+    untouched (`changed: false`, status unchanged), so no behaviour moved.
+  - **`exception` / `damage` / `lost` are held for a second reason** beyond "no
+    local status": mapping them to CANCELED would restock goods that no longer
+    physically exist. They stay visible and unmapped for an operator.
+  - **Verified on the running dev stack, all three entry points** (they share
+    `applyGhnStatus`): demo-status `delivery_fail` on
+    `ord_YzPpdMWzrvxxk7eb` (`processing` → demo `delivering` → `delivery_fail`)
+    → `201`, `previousStatus == newStatus == "delivering"`, history row 42 reads
+    "acknowledged; no local equivalent"; the same status over the real webhook
+    (`POST /api/ghn/webhook`, `L89XNE`) → row 43, same text; an invented
+    `teleported` over the webhook → row 44 still reads `Unhandled GHN status
+    "teleported"`. Plus 2 unit tests in `orders.service.spec.ts` (61 pass).
+  - **Forward-only.** Rows written before this change keep the old text — same
+    call as GHN-HIST-01, no backfill.
+  - **Left open on purpose (product, not backend):** whether a failed delivery
+    attempt should notify the buyer. Nothing notifies today.
+  - Files: `apps/orders/src/orders.service.ts`,
+    `libs/constant/shipping.constant.ts`,
+    `libs/constant/response-message.constant.ts`,
+    `apps/orders/src/orders.service.spec.ts`, `ops-runtime.md`,
+    `known-behaviors.md`.
+
+- **IDLEAK-02 — the last two numeric internal ids on PUBID domains are gone
+  (2026-08-15). Release class C: IMPLEMENTED AND VERIFIED, BUT HELD — NOT
+  DEPLOYED.** Closes the two sub-items that `PRODTEST-0806 #4` had deliberately
+  deferred on 2026-08-13 because each has a live FE consumer typed `number`.
+  The hold lives in `../.agent-local/release-gate.md` → IDLEAK-02; the whole
+  `api` working tree is held with it (a tree takes the highest class present),
+  so the class-A UP-03(i) and OUTBOX-SCOPE-01 work sitting alongside it is held
+  too — isolate them on their own branch if they ever need to ship first.
+  - **`submittedBy` on the moderation queues → `usr_` public id.**
+    `GET /api/products/brands/pending` and `/categories/pending` were returning
+    the submitting seller's raw PK. The root cause was not missing id logic:
+    `exposeUserReferences()` already knew the `submittedBy` key, but those two
+    methods returned the raw TCP payload without passing through any exposure
+    helper. They now do.
+  - **`submittedBy` is DROPPED from every other brand/category read** —
+    `createBrand`, `getAllBrands`, `getBrandById`, `reviewBrand` and the four
+    category equivalents run the payload through the new
+    `hideSubmittedBy()` (recursive key strip). Dropping rather than resolving is
+    deliberate: only the moderation queue renders the field, these are hot
+    public catalog reads, and `exposeUserReferences` needs a user-service round
+    trip that would make a cached read depend on another service being up.
+    Class B on its own (nothing reads the field), folded into this batch.
+  - **Fail-soft on the queue.** Found by the Change-Impact Review, not by the
+    self-test: routing the queues through `exposeUserReferences` made them
+    **500 during a user-service outage**, since that helper throws. New
+    `exposeSubmittedBy()` wraps it — resolve normally, and on throw log a warn
+    and fall back to `hideSubmittedBy()`. A moderator can approve/reject without
+    knowing who submitted, so the field disappearing beats the queue dying.
+    Consumers must therefore treat `submittedBy` as `string | null | absent`.
+  - **`topProducts[].productId` on analytics → `prod_` public id.** New
+    `exposeAnalyticsProductIds()` in the gateway order service, applied inside
+    `fetchAnalytics` so it covers BOTH `getSellerAnalytics` and
+    `getShippingAnalytics` (including the revenue-stripped RBAC branch, which
+    copies `productId` through verbatim) and stays inside the existing
+    `MicroserviceErrorHandler` try. It reuses `buildProductMap`, which degrades
+    to an empty map on a product-service failure, so an unresolvable id becomes
+    **`null`, never the number** — a deleted product and a dead product service
+    look the same to the client, which is the correct trade here.
+    `order.types.ts` widens `topProducts[].productId` to
+    `number | string | null`.
+  - **Deliberately NOT touched:** brand/category `id` itself stays numeric
+    (these are not PUBID domains — only the *user reference* on them was the
+    leak). And the brand/category objects nested inside the product payload keep
+    their `submittedBy`, because `exposeUserReferences` already runs over the
+    whole product payload in the same batched call, so it comes out as `usr_…`
+    — PUBID-safe, merely inconsistent with the standalone reads. Not worth
+    touching a hot path for a cosmetic difference.
+  - Files: `apps/gateway/src/product/product.service.ts`,
+    `apps/gateway/src/order/order.service.ts`,
+    `apps/gateway/src/order/order.types.ts`. No migration, no new endpoint, no
+    microservice change. `tsc --noEmit` clean, eslint/prettier clean, jest
+    **36 suites / 345 tests** green (new `product.service.spec.ts` +7, including
+    the user-service-outage degradation; `order.service.spec.ts` +3, including
+    the all-null product-service-down branch).
+  - Runtime-verified on local dev (`testadmin` + shop `test1`): pending brands
+    and pending categories return `submittedBy: "usr_60ccb7b981c411f1"` /
+    `"usr_60ccb8d381c411f1"` (5 rows each); `GET /api/products/brands` and
+    `/categories` carry no `submittedBy` key; admin analytics `topProducts` →
+    `[null, null, "prod_ffc7fc2281d211f1", null, "prod_ffc4fcfc81d211f1"]`;
+    seller analytics → `[null, null, "prod_ffc4fcfc81d211f1"]`.
+  - FE handoff written to both inboxes: `frontend-handoff.md` (storefront —
+    `catalog.ts:14,29` type flip + drop the `#` prefix in
+    `PendingBrandsPage.tsx:101` / `PendingCategoriesPage.tsx:101`) and
+    `frontend-handoff-ghn.md` (console — `analytics.ts:76` type flip and,
+    critically, `AnalyticsPanel.tsx:369` must stop using `productId` as the
+    React key, since several deleted products now yield duplicate `null` keys).
+    The storefront needs **no** analytics change: `TopProductStat.productId` is
+    already typed `string` there and the dashboard charts by `productName`.
+
+- **PROD-PAY-01 — CLOSED 2026-08-15 by owner confirmation, no code change.** The
+  ZaloPay callback leg was tracked as "never exercised by a real sandbox
+  payment". The owner confirmed it is working and does not need a verification
+  run, so the item was removed from `snapshot.md` Active Tasks. The handler is
+  unchanged; nothing was tested or modified by this entry — it records WHY the
+  item disappeared so a future session does not re-open it as an untested leg.
+  (VNPay IPN was already closed by PROD-PAY-02 on 2026-08-13.)
+
+- **UP-03(i) — product `description` images are now garbage-collected, and all
+  product media cleanup is reference-counted (2026-08-15).** Release class **A**
+  (no contract change: same routes, same request and response shapes; only
+  storage GC behaviour changed). Two real defects closed at once.
+  - **Defect 1 — description images were orphaned forever.** `imageUrls` was
+    the only column diffed on edit/delete, so every image the seller embedded
+    in the rich-text `description` through the same signed upload flow stayed
+    on Cloudinary after the product was edited or deleted. New shared util
+    `libs/common/src/cloudinary/cloudinary-html.util.ts` →
+    `extractCloudinaryUrlsFromHtml()` pulls our-cloud URLs out of the HTML
+    (host-matched against `CLOUDINARY_DELIVERY_HOST`, strips trailing prose
+    punctuation, de-duplicated); `collectProductMediaUrls()` unions it with
+    `imageUrls`, and `applyProductUpdate` now also captures
+    `previousDescription` before `Object.assign` overwrites it.
+  - **Defect 2 — product cleanup had no reference counting.** The same uploaded
+    URL can legitimately sit on several rows (a re-used photo) *and* in two
+    columns of one row (gallery image also embedded in the description).
+    Destroying on the first edit/delete 404'd the image everywhere else it was
+    still displayed. `destroyUnreferencedImages()` now asks per URL whether ANY
+    product row still cites it —
+    `JSON_CONTAINS(product.image_urls, JSON_QUOTE(:url))` OR
+    `LOCATE(:url, product.description) > 0` — and destroys only the ones nobody
+    references. `LOCATE`, not `LIKE`: Cloudinary leaf names contain `_`, which
+    `LIKE` reads as a single-char wildcard. Same shape as the post-media
+    cleanup already in `social.service.ts`. It runs AFTER the caller's commit,
+    so the edited/deleted row can no longer match itself; a failed reference
+    check destroys nothing and only warns (best-effort, never fails the
+    mutation).
+  - Verified end-to-end on the live stack with two real assets uploaded through
+    the real signed flow into two products: removing an image from a
+    description destroyed exactly that asset (404) and left the other one
+    (200); clearing `imageUrls` did NOT destroy an asset a second product's
+    description still cited (200); deleting that second product finally
+    destroyed it (404). Plus 4 new unit tests in `product.service.spec.ts` and
+    7 in `cloudinary-html.util.spec.ts`.
+  - Known limit (accepted): the reference check only scans `products`. A
+    product image URL pasted into a social post or used as an avatar is not
+    seen — the upload folders differ (`trybuy/products` vs `trybuy/posts`), so
+    it takes deliberate cross-pasting to hit. Concurrent deletes of two rows
+    sharing a URL can also both see the other still present and leak the asset;
+    that is the safe direction (leak, never a broken image).
+
+- **OUTBOX-SCOPE-01 — every RMQ publish site now detects a dead broker instead
+  of silently dropping the event (2026-08-15).** Release class **A**
+  (observability + logging only; no contract or behaviour change while RabbitMQ
+  is up). `RmqModule.registerDirectPublisher()` hands out a self-healing PROXY,
+  not a raw channel: during an outage it stays truthy, `publish()` no-ops
+  returning `false`, and every other property reads `undefined`. So the
+  ubiquitous `if (this.fanoutChannel)` guard passed happily while the event went
+  nowhere, with no log, no nack, no dead-letter. The honest signal —
+  `channel.connection` — was already known and used by RESIL-02's outbox, but
+  only there.
+  - Extracted it into the shared `isRmqPublisherLive()`
+    (`libs/common/src/rmq/rmq-publisher.util.ts`, exported from `@app/common`,
+    3 unit tests) and applied it to **all 11 remaining publish sites across 6
+    services**: orders (`order_canceled`, COD `payment_completed`,
+    `order.status_changed`, order-return events — `isFanoutChannelLive()` now
+    delegates to the shared util), payments (`payment_completed`), product
+    (`sku_upserted`, `brand_reviewed`, `category_reviewed`), social
+    (`comment_created`, `reply_created`), notification (WS push), inventory
+    (`stock_changed`).
+  - **Payments was the worst case: it had NO guard at all** and its
+    `fanoutChannel` was typed non-null even though the factory returns `null`
+    when the broker is down at startup. A completed payment could therefore
+    silently never flip its order. It now logs at **error** level naming the
+    order id and amount, because the money IS recorded and only the order-side
+    flip is owed — that order needs manual reconciliation.
+  - **Deliberately NOT routed through the outbox** (do not re-propose): for all
+    of these the state-critical work already happens synchronously before the
+    publish (`markOrderPaid`, `releaseReservedItems`), and the
+    `payment_completed` consumers in rewards/payments are empty stubs — the
+    events are notification-grade. Making them durable would risk duplicate
+    notifications, since `order.status_changed` carries no idempotency key.
+    `order_created` remains the only durable event.
+  - Three payments specs had to gain `connection: {}` on their channel mocks;
+    the pre-existing warn branches in the orders specs come from harnesses that
+    pass `null` as the channel and are unchanged.
+
 - **UPLOAD-SIZE-01 — the upload size limit is now server-owned, but it is a
   contract, not an enforcement (2026-08-15).** Release class **B** (additive:
   two new response fields the live FE's allow-list ignores, and one new

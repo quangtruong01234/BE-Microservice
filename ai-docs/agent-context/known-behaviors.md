@@ -193,6 +193,37 @@ accepted since 2026-08-04); `toWardCode` stays `@IsString()` on purpose — GHN
 ward codes can carry leading zeros. For COD the waybill is created at
 ORDER-CREATE time, so ready-to-ship re-uses the existing `ghnOrderCode`.
 
+## `delivery_fail` does not move the local status — on purpose (GHN-FAIL-01, 2026-08-16)
+
+`mapGhnStatus` covers `picking|picked`, `delivering`, `delivered` and the whole
+cancel/return family. Everything else returns `null` and the order keeps the
+status it has. That is the settled answer for `delivery_fail`, not a gap:
+
+- **`delivery_fail` is a failed delivery ATTEMPT, not a failed delivery.** GHN
+  retries by itself and only then moves to the return family, which already maps
+  to CANCELED. Canceling on the first miss would release reserved stock for a
+  parcel that is still out for redelivery.
+- **There is no local status to move to**, and inventing one would be a new
+  enum value on `orders.status` — a migration plus a contract change for both
+  frontends, for a state the buyer already sees through the GHN badge.
+- **`exception` / `damage` / `lost` are held for the same reason**, plus one
+  more: mapping them to CANCELED would restock goods that no longer physically
+  exist. They need an operator decision, so they stay visible and unmapped.
+- **What DID change:** the null branch no longer calls all of these "Unhandled".
+  The ten recognised statuses in `GHN_STATUSES_WITHOUT_LOCAL_STATUS`
+  (`libs/constant/shipping.constant.ts`) write `GHN status "<x>" acknowledged;
+  no local equivalent, order stays <status>` to `shipping_history.message` and
+  log at `log` level; a string we have never seen still writes `Unhandled GHN
+  status "<x>"` and now logs at **warn**, so a new GHN vocabulary word is loud.
+  Forward-only — rows written before 2026-08-16 keep the old text.
+- Applies identically on all three entry points (webhook, admin manual sync,
+  demo-status), because all three go through `applyGhnStatus`.
+- Still open as a **product** question, not a bug: whether a failed attempt
+  should notify the buyer. Nothing notifies today. The decided shape (scope,
+  the `shipping_history`-as-ledger dedupe, why not `order.status_changed`) is
+  written up as **GHN-FAIL-NTF-01** in `snapshot.md` — read that before
+  designing it again.
+
 ## An unknown district/ward is a 400 (GHN-DIST-01, 2026-08-13; extended to order create by GHN-CREATE-01)
 
 `buildShippingOrderBody` validates a caller-supplied `toDistrictId` +
