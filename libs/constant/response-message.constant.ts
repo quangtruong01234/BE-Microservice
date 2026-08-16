@@ -190,6 +190,11 @@ export const ORDER_MESSAGE = {
     `GHN receiver updated (${fields})`,
   GHN_STATUS_UNHANDLED: (ghnStatus: string): string =>
     `Unhandled GHN status "${ghnStatus}"`,
+  GHN_STATUS_NO_LOCAL_STATUS: (
+    ghnStatus: string,
+    currentStatus: string,
+  ): string =>
+    `GHN status "${ghnStatus}" acknowledged; no local equivalent, order stays ${currentStatus}`,
   GHN_STATUS_TERMINAL_IGNORED: (
     ghnStatus: string,
     orderId: number | string,

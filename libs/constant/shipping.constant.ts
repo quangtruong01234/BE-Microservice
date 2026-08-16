@@ -67,3 +67,50 @@ export const GHN_STATUS_VALUES = [
 ] as const;
 
 export type GhnStatusValue = (typeof GHN_STATUS_VALUES)[number];
+
+/**
+ * GHN statuses we know about and deliberately do NOT map to a local
+ * `OrderStatus` — the parcel is still moving inside GHN and no local state
+ * describes where it is, so the order keeps whatever status it already has.
+ *
+ * Kept apart from a genuinely unknown string on purpose: an unknown status is a
+ * gap in our mapping and must stay loud (warn + "Unhandled GHN status"), while
+ * these are answered questions and must read as such in the console timeline.
+ *
+ * Why each one has no local status:
+ * - `ready_to_pick` — the initial state; there is nothing to advance to.
+ * - `money_collect_picking`, `storing`, `transporting`, `sorting`,
+ *   `money_collect_delivering` — in-transit legs between SHIPPED and
+ *   DELIVERING; we do not model GHN's internal hops.
+ * - `delivery_fail` — a failed delivery ATTEMPT, not a failed delivery. GHN
+ *   retries on its own and only then moves to the return family (which maps to
+ *   CANCELED). Canceling on the first miss would release stock for a parcel
+ *   that is still out for redelivery.
+ * - `exception`, `damage`, `lost` — need a human/compensation decision.
+ *   Mapping them to CANCELED would restock goods that no longer physically
+ *   exist, so they are surfaced and left to an operator.
+ */
+export const GHN_STATUSES_WITHOUT_LOCAL_STATUS = [
+  "ready_to_pick",
+  "money_collect_picking",
+  "storing",
+  "transporting",
+  "sorting",
+  "money_collect_delivering",
+  "delivery_fail",
+  "exception",
+  "damage",
+  "lost",
+] as const;
+
+const ghnStatusesWithoutLocalStatus = new Set<string>(
+  GHN_STATUSES_WITHOUT_LOCAL_STATUS,
+);
+
+/**
+ * True when GHN's status is one we recognise but have no local status for.
+ * Case-insensitive: GHN sends lower snake_case, the demo endpoint echoes back
+ * whatever the caller typed.
+ */
+export const isGhnStatusWithoutLocalStatus = (ghnStatus: string): boolean =>
+  ghnStatusesWithoutLocalStatus.has(ghnStatus.toLowerCase());
