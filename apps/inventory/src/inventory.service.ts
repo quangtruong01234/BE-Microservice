@@ -13,6 +13,7 @@ import {
   InventoryReservation,
   InventoryReservationStatus,
 } from "./inventory-reservation.entity";
+import { isRmqPublisherLive } from "@app/common";
 import { EXCHANGE } from "@app/common/constants/exchange";
 import { EVENT } from "@app/common/constants/event";
 import { INVENTORY_MESSAGE } from "libs/constant/response-message.constant";
@@ -35,9 +36,9 @@ export class InventoryService {
   ) {}
 
   private emitStockChanged(productId: number, availableStock: number): void {
-    if (!this.fanoutChannel) {
+    if (!this.fanoutChannel || !isRmqPublisherLive(this.fanoutChannel)) {
       this.logger.warn(
-        "Fanout channel unavailable — skipping stock changed emit",
+        `Fanout channel unavailable — skipping stock changed emit for product ${productId}`,
       );
       return;
     }
