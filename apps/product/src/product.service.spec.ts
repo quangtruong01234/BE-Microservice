@@ -481,3 +481,108 @@ describe("ProductService.getPriceSuggestion", () => {
     });
   });
 });
+
+describe("ProductService media cleanup — description images (UP-03)", () => {
+  const asset = (leaf: string): string =>
+    `https://res.cloudinary.com/demo/image/upload/v1712345678/trybuy/products/${leaf}`;
+
+  const galleryUrl = asset("17_gallery.png");
+  const embeddedUrl = asset("17_embedded.png");
+
+  const destroyAssets = jest.fn(() => Promise.resolve());
+  const getCount = jest.fn();
+  const productRepository = {
+    findOne: jest.fn(),
+    remove: jest.fn(() => Promise.resolve()),
+    createQueryBuilder: jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orWhere: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      getCount,
+    })),
+  };
+  const cachedService = { keys: jest.fn(() => Promise.resolve([])) };
+  const ordersClient = { send: jest.fn(), connect: jest.fn() };
+
+  let service: ProductService;
+
+  // The cleanup is fire-and-forget (`void`), so the mutation resolves before it
+  // runs — drain the microtask queue before asserting on Cloudinary.
+  const flushCleanup = (): Promise<void> =>
+    new Promise((resolve) => setImmediate(resolve));
+
+  const productWith = (description: string | null): Product =>
+    ({
+      id: 1,
+      imageUrls: [galleryUrl],
+      description,
+    }) as unknown as Product;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = new ProductService(
+      productRepository as unknown as Repository<Product>,
+      {} as unknown as Repository<Brand>,
+      {} as unknown as Repository<Category>,
+      {} as unknown as Repository<ProductReview>,
+      {} as unknown as Repository<ProductSku>,
+      {} as unknown as Repository<WishlistItem>,
+      {} as unknown as DataSource,
+      cachedService as unknown as CachedService,
+      { destroyAssets } as unknown as CloudinaryService,
+      {} as unknown as ProductImageHashService,
+      null,
+      ordersClient as unknown as ClientProxy,
+    );
+  });
+
+  it("destroys an image embedded in the description when the product is deleted", async () => {
+    productRepository.findOne.mockResolvedValue(
+      productWith(`<p>Mô tả</p><img src="${embeddedUrl}">`),
+    );
+    getCount.mockResolvedValue(0);
+
+    await service.deleteProduct(1);
+    await flushCleanup();
+
+    expect(destroyAssets).toHaveBeenCalledTimes(1);
+    expect(destroyAssets).toHaveBeenCalledWith([galleryUrl, embeddedUrl]);
+  });
+
+  it("keeps an asset another product still references", async () => {
+    productRepository.findOne.mockResolvedValue(
+      productWith(`<img src="${embeddedUrl}">`),
+    );
+    // Gallery image is orphaned; the embedded one is re-used elsewhere.
+    getCount.mockResolvedValueOnce(0).mockResolvedValueOnce(1);
+
+    await service.deleteProduct(1);
+    await flushCleanup();
+
+    expect(destroyAssets).toHaveBeenCalledWith([galleryUrl]);
+  });
+
+  it("counts an asset once when it sits in both imageUrls and the description", async () => {
+    productRepository.findOne.mockResolvedValue(
+      productWith(`<img src="${galleryUrl}">`),
+    );
+    getCount.mockResolvedValue(0);
+
+    await service.deleteProduct(1);
+    await flushCleanup();
+
+    expect(destroyAssets).toHaveBeenCalledWith([galleryUrl]);
+  });
+
+  it("destroys nothing when the reference check itself fails", async () => {
+    productRepository.findOne.mockResolvedValue(
+      productWith(`<img src="${embeddedUrl}">`),
+    );
+    getCount.mockRejectedValue(new Error("db down"));
+
+    await expect(service.deleteProduct(1)).resolves.toEqual({ success: true });
+    await flushCleanup();
+
+    expect(destroyAssets).not.toHaveBeenCalled();
+  });
+});

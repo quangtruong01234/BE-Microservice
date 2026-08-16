@@ -26,6 +26,7 @@ import {
   PaginatedResponse,
   generatePublicId,
   isPublicId,
+  isRmqPublisherLive,
 } from "@app/common";
 import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 import { HttpService } from "@nestjs/axios";
@@ -39,6 +40,7 @@ import { INVENTORY_MESSAGE_PATTERNS } from "libs/constant/message-pattern-invent
 import { USER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
+import { isGhnStatusWithoutLocalStatus } from "libs/constant/shipping.constant";
 import { generateInvoicePdf, InvoiceParty } from "./invoice/invoice.generator";
 import { GhnService } from "./ghn/ghn.service";
 import {
@@ -816,10 +818,13 @@ export class OrdersService {
    * property with `undefined`. So `connection` is the only honest liveness
    * signal — without checking it, an outage would mark every outbox row
    * published and lose exactly the events this table exists to protect.
+   *
+   * Every publish site in this service goes through it (OUTBOX-SCOPE-01): the
+   * non-outbox events are still best-effort, but an outage now produces a
+   * warn naming the dropped event instead of a silent no-op.
    */
   private isFanoutChannelLive(): boolean {
-    const connection: unknown = this.fanoutChannel?.connection;
-    return connection !== undefined && connection !== null;
+    return isRmqPublisherLive(this.fanoutChannel);
   }
 
   /**
@@ -2434,7 +2439,7 @@ export class OrdersService {
    * can react. Shared by the user/sweeper cancel flow and the GHN-driven cancel.
    */
   private publishOrderCanceledEvent(order: Order): void {
-    if (this.fanoutChannel) {
+    if (this.fanoutChannel && this.isFanoutChannelLive()) {
       this.fanoutChannel.publish(
         EXCHANGE.ORDERS_EXCHANGE,
         EVENT.ORDER_CANCELED_EVENT,
@@ -2580,8 +2585,22 @@ export class OrdersService {
     const mappedStatus = this.mapGhnStatus(ghnStatus);
     const currentStatus = order.status ?? OrderStatus.PENDING;
     if (!mappedStatus) {
-      const message = ORDER_MESSAGE.GHN_STATUS_UNHANDLED(ghnStatus);
-      this.logger.log(`[GHN] ${message} for order ${order.id} - skipping`);
+      // Two very different things end up here. A status we know has no local
+      // equivalent (`delivery_fail`, the in-transit legs, `lost`, ...) is an
+      // answered question — say so, because this message is persisted to
+      // shipping_history and read in the console timeline, where "Unhandled"
+      // looked like a bug. A string we have never seen is a real gap in the
+      // mapping and stays loud at warn level.
+      const isKnown = isGhnStatusWithoutLocalStatus(ghnStatus);
+      const message = isKnown
+        ? ORDER_MESSAGE.GHN_STATUS_NO_LOCAL_STATUS(ghnStatus, currentStatus)
+        : ORDER_MESSAGE.GHN_STATUS_UNHANDLED(ghnStatus);
+      const logLine = `[GHN] ${message} for order ${order.publicId ?? order.id}`;
+      if (isKnown) {
+        this.logger.log(logLine);
+      } else {
+        this.logger.warn(logLine);
+      }
       return {
         previousStatus: currentStatus,
         newStatus: currentStatus,
@@ -2695,6 +2714,10 @@ export class OrdersService {
     if (normalized.includes("cancel") || normalized.includes("return")) {
       return OrderStatus.CANCELED;
     }
+    // Everything else keeps the local status. The recognised ones are listed in
+    // GHN_STATUSES_WITHOUT_LOCAL_STATUS with the reason each has no local
+    // equivalent — `delivery_fail` in particular is a failed ATTEMPT, and GHN
+    // retries before moving to the return family (GHN-FAIL-01, 2026-08-16).
     return null;
   }
 
@@ -2737,7 +2760,7 @@ export class OrdersService {
       // seller's complete/deliver response returns, and it must not report
       // paidAt:null for an order this call just marked paid.
       order.paidAt = (await this.markOrderPaid(order.id)) ?? order.paidAt;
-      if (this.fanoutChannel) {
+      if (this.fanoutChannel && this.isFanoutChannelLive()) {
         this.fanoutChannel.publish(
           EXCHANGE.PAYMENTS_EXCHANGE,
           EVENT.PAYMENT_COMPLETED_EVENT,
@@ -3424,7 +3447,7 @@ export class OrdersService {
     previousStatus: OrderStatus,
   ): void {
     const eventName = EVENT.ORDER_STATUS_CHANGED_EVENT;
-    if (!this.fanoutChannel) {
+    if (!this.fanoutChannel || !this.isFanoutChannelLive()) {
       this.logger.warn(
         `[ORDERS] RMQ channel unavailable — ${eventName} event not published for order ${order.id}`,
       );
@@ -3456,7 +3479,7 @@ export class OrdersService {
   }
 
   private publishOrderReturnEvent(eventName: string, orderId: number): void {
-    if (this.fanoutChannel) {
+    if (this.fanoutChannel && this.isFanoutChannelLive()) {
       this.fanoutChannel.publish(
         EXCHANGE.ORDERS_EXCHANGE,
         eventName,

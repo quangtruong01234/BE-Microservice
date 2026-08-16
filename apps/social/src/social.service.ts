@@ -11,7 +11,11 @@ import { InjectDataSource, InjectRepository } from "@nestjs/typeorm";
 import { DataSource, In, IsNull, QueryFailedError, Repository } from "typeorm";
 import { Channel } from "amqplib";
 import { CachedService } from "@app/cached";
-import { CloudinaryService, PaginatedResponse } from "@app/common";
+import {
+  CloudinaryService,
+  isRmqPublisherLive,
+  PaginatedResponse,
+} from "@app/common";
 import { generatePublicId } from "@app/common";
 import { EXCHANGE } from "@app/common/constants/exchange";
 import { EVENT } from "@app/common/constants/event";
@@ -590,7 +594,7 @@ export class SocialService {
     });
     const saved = await this.commentRepository.save(comment);
     if (payload.userId !== post.userId) {
-      if (this.fanoutChannel) {
+      if (this.fanoutChannel && isRmqPublisherLive(this.fanoutChannel)) {
         this.fanoutChannel.publish(
           EXCHANGE.SOCIAL_EXCHANGE,
           EVENT.COMMENT_CREATED_EVENT,
@@ -680,7 +684,7 @@ export class SocialService {
       }),
     );
     if (payload.userId !== parentComment.userId) {
-      if (this.fanoutChannel) {
+      if (this.fanoutChannel && isRmqPublisherLive(this.fanoutChannel)) {
         this.fanoutChannel.publish(
           EXCHANGE.SOCIAL_EXCHANGE,
           EVENT.REPLY_CREATED_EVENT,

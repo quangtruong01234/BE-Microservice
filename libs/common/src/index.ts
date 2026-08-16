@@ -8,12 +8,14 @@ export * from "./filters/http-to-rpc-exception.filter";
 
 export * from "./rmq/rmq.module";
 export * from "./rmq/rmq.service";
+export * from "./rmq/rmq-publisher.util";
 
 export * from "./mailer/mailer.module";
 export * from "./mailer/mailer.service";
 
 export * from "./cloudinary/cloudinary.module";
 export * from "./cloudinary/cloudinary.service";
+export * from "./cloudinary/cloudinary-html.util";
 
 export * from "./public-id/public-id.util";
 

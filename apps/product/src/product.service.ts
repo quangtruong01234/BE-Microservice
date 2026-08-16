@@ -22,8 +22,10 @@ import { firstValueFrom, retry, timeout } from "rxjs";
 import { Channel } from "amqplib";
 import {
   CloudinaryService,
+  extractCloudinaryUrlsFromHtml,
   generatePublicId,
   isPublicId,
+  isRmqPublisherLive,
   PaginatedResponse,
 } from "@app/common";
 import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
@@ -1055,7 +1057,7 @@ export class ProductService {
       );
     }
 
-    if (!this.fanoutChannel) {
+    if (!this.fanoutChannel || !isRmqPublisherLive(this.fanoutChannel)) {
       this.logger.warn(
         "[PRODUCT] fanoutChannel unavailable — sku_upserted event skipped",
       );
@@ -1405,13 +1407,71 @@ export class ProductService {
     return product;
   }
 
-  // Fire-and-forget post-commit cleanup — destroyAssets never throws, so a
-  // Cloudinary failure can never fail the product mutation that triggered it.
+  /**
+   * Every Cloudinary asset a product row references: the `imageUrls` gallery
+   * PLUS the images embedded in the rich-text `description` (UP-03). Both are
+   * uploaded through the same signed flow, so both must be diffed on edit —
+   * only diffing `imageUrls` orphaned every description image forever.
+   * De-duplicated because the same URL can legitimately sit in both.
+   */
+  private collectProductMediaUrls(
+    imageUrls: string[] | null | undefined,
+    description: string | null | undefined,
+  ): string[] {
+    return [
+      ...new Set([
+        ...(imageUrls ?? []),
+        ...extractCloudinaryUrlsFromHtml(description),
+      ]),
+    ];
+  }
+
+  // Fire-and-forget post-commit cleanup — destroyUnreferencedImages never
+  // throws, so a Cloudinary failure can never fail the product mutation that
+  // triggered it.
   private destroyDroppedImages(oldUrls: string[], keptUrls: string[]): void {
     const keptUrlSet = new Set(keptUrls);
     const droppedUrls = oldUrls.filter((imageUrl) => !keptUrlSet.has(imageUrl));
     if (droppedUrls.length === 0) return;
-    void this.cloudinaryService.destroyAssets(droppedUrls);
+    void this.destroyUnreferencedImages(droppedUrls);
+  }
+
+  /**
+   * `imageUrls` and `description` are both client-supplied, so the same
+   * uploaded URL can legitimately be referenced by more than one product (the
+   * seller re-used the photo, or embedded a gallery image in the description
+   * too). Destroying on the first edit/delete would then 404 the image on every
+   * other product still showing it — an asset is only orphaned once NO row
+   * references it, in either column. Callers run this after their own commit,
+   * so the edited/deleted row can no longer match itself.
+   */
+  private async destroyUnreferencedImages(
+    droppedUrls: string[],
+  ): Promise<void> {
+    try {
+      const stillReferenced = await Promise.all(
+        droppedUrls.map((imageUrl) =>
+          this.productRepository
+            .createQueryBuilder("product")
+            .where("JSON_CONTAINS(product.image_urls, JSON_QUOTE(:imageUrl))", {
+              imageUrl,
+            })
+            .orWhere("LOCATE(:imageUrl, product.description) > 0", { imageUrl })
+            .limit(1)
+            .getCount(),
+        ),
+      );
+      const orphanedUrls = droppedUrls.filter(
+        (_, index) => stillReferenced[index] === 0,
+      );
+      if (orphanedUrls.length === 0) return;
+      await this.cloudinaryService.destroyAssets(orphanedUrls);
+    } catch (err: unknown) {
+      // Cleanup is best-effort: a failed reference check must never destroy
+      // anything, and must never surface on the mutation that triggered it.
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Skipped Cloudinary cleanup — ${message}`);
+    }
   }
 
   // Fields whose change invalidates the stored risk score / image hashes.
@@ -1478,7 +1538,11 @@ export class ProductService {
   private async applyProductUpdate(
     id: number,
     updateProductDto: UpdateProductDto,
-  ): Promise<{ updated: Product; previousImageUrls: string[] }> {
+  ): Promise<{
+    updated: Product;
+    previousImageUrls: string[];
+    previousDescription: string | null;
+  }> {
     return this.dataSource.transaction(async (manager) => {
       const lockedRow = await manager
         .createQueryBuilder(Product, "product")
@@ -1497,8 +1561,9 @@ export class ProductService {
       if (!product) {
         throw new NotFoundException(PRODUCT_MESSAGE.NOT_FOUND);
       }
-      // Capture before Object.assign overwrites imageUrls on the same instance.
+      // Capture before Object.assign overwrites these on the same instance.
       const previousImageUrls = product.imageUrls ?? [];
+      const previousDescription = product.description ?? null;
 
       if (
         updateProductDto.version !== undefined &&
@@ -1594,7 +1659,7 @@ export class ProductService {
       }
 
       const updated = await manager.save(product);
-      return { updated, previousImageUrls };
+      return { updated, previousImageUrls, previousDescription };
     });
   }
 
@@ -1603,28 +1668,33 @@ export class ProductService {
     updateProductDto: UpdateProductDto,
   ): Promise<Product> {
     const { skuList } = updateProductDto;
-    const { updated, previousImageUrls } = await this.runProductUpdate(() =>
-      this.applyProductUpdate(id, updateProductDto),
-    ).catch((error: unknown) => {
-      // Two products can claim the same new sku at once: both pass the
-      // check-then-act guard above and the loser hits the unique index. Report
-      // the intended conflict instead of leaking a driver error as a 502.
-      if (
-        typeof updateProductDto.sku === "string" &&
-        this.isDuplicateEntryFor(error, updateProductDto.sku)
-      ) {
-        throw new ConflictException(PRODUCT_MESSAGE.SKU_ALREADY_EXISTS);
-      }
-      throw error;
-    });
+    const { updated, previousImageUrls, previousDescription } =
+      await this.runProductUpdate(() =>
+        this.applyProductUpdate(id, updateProductDto),
+      ).catch((error: unknown) => {
+        // Two products can claim the same new sku at once: both pass the
+        // check-then-act guard above and the loser hits the unique index. Report
+        // the intended conflict instead of leaking a driver error as a 502.
+        if (
+          typeof updateProductDto.sku === "string" &&
+          this.isDuplicateEntryFor(error, updateProductDto.sku)
+        ) {
+          throw new ConflictException(PRODUCT_MESSAGE.SKU_ALREADY_EXISTS);
+        }
+        throw error;
+      });
 
     if (skuList !== undefined) {
       updated.skus = await this.upsertSkus(updated.id, skuList);
     }
 
     await this.invalidateSearchCache();
-    // SEC-M7: dropped images are orphaned on Cloudinary once the edit commits.
-    this.destroyDroppedImages(previousImageUrls, updated.imageUrls ?? []);
+    // SEC-M7 / UP-03: images dropped from the gallery OR from the rich-text
+    // description are orphaned on Cloudinary once the edit commits.
+    this.destroyDroppedImages(
+      this.collectProductMediaUrls(previousImageUrls, previousDescription),
+      this.collectProductMediaUrls(updated.imageUrls, updated.description),
+    );
     // The risk state itself was already reset inside the update transaction.
     if (this.needsRiskRescore(updateProductDto)) {
       this.scheduleRiskRescore();
@@ -1634,7 +1704,10 @@ export class ProductService {
 
   async deleteProduct(id: number): Promise<{ success: boolean }> {
     const product = await this.findProductById(id);
-    const removedImageUrls = product.imageUrls ?? [];
+    const removedImageUrls = this.collectProductMediaUrls(
+      product.imageUrls,
+      product.description,
+    );
     await this.productRepository.remove(product);
     await this.invalidateSearchCache();
     this.destroyDroppedImages(removedImageUrls, []);
@@ -1812,7 +1885,7 @@ export class ProductService {
       );
     }
     if (saved.submittedBy != null) {
-      if (!this.fanoutChannel) {
+      if (!this.fanoutChannel || !isRmqPublisherLive(this.fanoutChannel)) {
         this.logger.warn(
           "[PRODUCT] fanoutChannel unavailable — brand_reviewed notification skipped",
         );
@@ -1955,7 +2028,7 @@ export class ProductService {
       );
     }
     if (saved.submittedBy != null) {
-      if (!this.fanoutChannel) {
+      if (!this.fanoutChannel || !isRmqPublisherLive(this.fanoutChannel)) {
         this.logger.warn(
           "[PRODUCT] fanoutChannel unavailable — category_reviewed notification skipped",
         );

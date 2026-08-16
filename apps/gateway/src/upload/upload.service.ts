@@ -7,6 +7,7 @@ import { createHash } from "crypto";
 import { UPLOAD_MESSAGE } from "libs/constant/response-message.constant";
 import {
   getAllowedUploadFormatsByFolder,
+  getMaxUploadBytesByFolder,
   PUBLIC_ID_PATTERN,
   resolvePhysicalUploadFolder,
 } from "./upload.constants";
@@ -27,10 +28,21 @@ function nanoid(len = 10): string {
 
 @Injectable()
 export class UploadService {
+  /**
+   * Signs a direct-to-Cloudinary upload.
+   *
+   * `declaredBytes` is the size the client says it is about to upload. When it
+   * is present and over the folder's ceiling the request is refused before a
+   * signature is ever issued. This is a CONTRACT boundary, not a security one:
+   * the parameter is optional and client-supplied, and Cloudinary offers no
+   * signable size limit (see upload.constants.ts), so a client that lies or
+   * omits it still uploads. It exists so the two sides agree on one number.
+   */
   generateSignature(
     folder: string,
     userId: number,
     incomingPublicId?: string,
+    declaredBytes?: number,
   ): UploadSignatureResponse {
     const apiSecret = requireEnv("CLOUDINARY_API_SECRET");
     const apiKey = requireEnv("CLOUDINARY_API_KEY");
@@ -39,12 +51,26 @@ export class UploadService {
     const timestamp = Math.floor(Date.now() / 1000);
     const normalizedFolder = this.normalizeAllowedFolder(folder);
     const allowedFormats = getAllowedUploadFormatsByFolder()[normalizedFolder];
+    const maxBytes = getMaxUploadBytesByFolder()[normalizedFolder];
     const publicId = this.normalizeOwnedUploadPublicId(
       userId,
       incomingPublicId,
     );
 
-    // params must be sorted alphabetically for Cloudinary signature
+    // The signature is issued before any byte is read, so we cannot tell an
+    // image from a video here — check against the folder's ceiling (its video
+    // cap where one exists). The client still applies the per-type numbers we
+    // hand back below.
+    const ceilingBytes = maxBytes.video ?? maxBytes.image;
+    if (declaredBytes !== undefined && declaredBytes > ceilingBytes) {
+      throw new BadRequestException(
+        UPLOAD_MESSAGE.FILE_TOO_LARGE(declaredBytes, ceilingBytes),
+      );
+    }
+
+    // params must be sorted alphabetically for Cloudinary signature.
+    // Size is deliberately NOT in here: Cloudinary excludes `max_bytes` from
+    // the signable set and 401s the upload if you sign it.
     const paramsToSign = `allowed_formats=${allowedFormats}&folder=${normalizedFolder}&public_id=${publicId}&timestamp=${timestamp}${apiSecret}`;
     const signature = createHash("sha1").update(paramsToSign).digest("hex");
 
@@ -56,6 +82,10 @@ export class UploadService {
       folder: normalizedFolder,
       public_id: publicId,
       allowed_formats: allowedFormats,
+      maxBytes: maxBytes.image,
+      ...(maxBytes.video !== undefined
+        ? { maxVideoBytes: maxBytes.video }
+        : {}),
     };
   }
 

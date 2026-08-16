@@ -34,6 +34,8 @@ export const UPLOAD_MESSAGE = {
   CANNOT_ATTACH_OTHERS_MEDIA: "Cannot attach media uploaded by another user",
   MEDIA_SERVICE_UNAVAILABLE: "Media service is unavailable",
   DELETE_FAILED: "Failed to delete media",
+  FILE_TOO_LARGE: (bytes: number, maxBytes: number): string =>
+    `File is ${bytes} bytes, over the ${maxBytes} byte limit for this folder`,
 } as const;
 
 export const USER_MESSAGE = {
@@ -188,6 +190,11 @@ export const ORDER_MESSAGE = {
     `GHN receiver updated (${fields})`,
   GHN_STATUS_UNHANDLED: (ghnStatus: string): string =>
     `Unhandled GHN status "${ghnStatus}"`,
+  GHN_STATUS_NO_LOCAL_STATUS: (
+    ghnStatus: string,
+    currentStatus: string,
+  ): string =>
+    `GHN status "${ghnStatus}" acknowledged; no local equivalent, order stays ${currentStatus}`,
   GHN_STATUS_TERMINAL_IGNORED: (
     ghnStatus: string,
     orderId: number | string,

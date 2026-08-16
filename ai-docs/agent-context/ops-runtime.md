@@ -296,7 +296,12 @@ the seed script.
   `delivering`→DELIVERING, `delivered`→COMPLETED (+stock consume/COD
   payment_completed), `cancel` + any `*return*`→CANCELED (+release reserved stock
   + `ORDER_CANCELED_EVENT`, no cancel pushed back to GHN). Forward-only by rank;
-  terminal orders untouched.
+  terminal orders untouched. Everything else keeps the local status: the ten
+  recognised no-local-equivalent statuses (`GHN_STATUSES_WITHOUT_LOCAL_STATUS`
+  in `libs/constant/shipping.constant.ts` — `ready_to_pick`, the in-transit
+  legs, `delivery_fail`, `exception`, `damage`, `lost`) log at `log` level and
+  write "acknowledged; no local equivalent"; anything else logs at `warn` and
+  writes "Unhandled GHN status" (GHN-FAIL-01, 2026-08-16).
 - **Admin actions (B1 cancel/return)**: `POST /api/order/admin/ghn/orders/:id/cancel`
   and `:id/return` (`@CheckPermission("shipping","update:any")`). Both call GHN
   `POST /v2/switch-status/{cancel|return}` and resolve the local order to

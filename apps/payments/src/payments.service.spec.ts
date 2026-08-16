@@ -29,7 +29,8 @@ describe("PaymentsService callback idempotency", () => {
       { findOne, update } as unknown as Repository<Payment>,
       {} as Repository<PaymentMethod>,
       {} as PaymentGatewayFactory,
-      { publish } as unknown as Channel,
+      // `connection` present = the publisher proxy is live (isRmqPublisherLive).
+      { publish, connection: {} } as unknown as Channel,
     );
     return { service, findOne, update, publish };
   }
@@ -101,7 +102,7 @@ describe("PaymentsService payment return URLs", () => {
           verifyCallback: jest.fn(),
         }),
       } as unknown as PaymentGatewayFactory,
-      { publish: jest.fn() } as unknown as Channel,
+      { publish: jest.fn(), connection: {} } as unknown as Channel,
     );
     return { service, createPayment };
   }
@@ -210,7 +211,7 @@ describe("PaymentsService getPaymentUrl recovery", () => {
           verifyCallback: jest.fn(),
         }),
       } as unknown as PaymentGatewayFactory,
-      { publish: jest.fn() } as unknown as Channel,
+      { publish: jest.fn(), connection: {} } as unknown as Channel,
     );
     return { service, createPayment, update };
   }

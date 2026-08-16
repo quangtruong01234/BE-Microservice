@@ -77,13 +77,15 @@ work is the two class-C sub-items under #4. Kept in full for the audit trail:
    `"Comment 1 not found"` messages all carry a public id (or no id) now. Two
    sub-items were verified ALREADY FIXED earlier and are stale in this list:
    review-create `userId` (REVIEW-ID-01) and the notification message text
-   (`orderLabel` is publicId-safe). **Still open, and deliberately deferred as
-   release class C** — both have a live FE consumer typed `number`, so backend
-   and FE must ship together:
-   - `submittedBy` on pending brands/categories — rendered as `#{submittedBy}`
-     in `PendingBrandsPage.tsx:101` / `PendingCategoriesPage.tsx:101`, typed
-     `submittedBy: number` in `frontend/src/types/catalog.ts`.
-   - `topProducts[].productId` on the analytics response.
+   (`orderLabel` is publicId-safe). The last two sub-items (`submittedBy` on the
+   pending brand/category queues, `topProducts[].productId` on analytics) are
+   **DONE ON THE BACKEND 2026-08-15 (IDLEAK-02) but HELD, not deployed** — they
+   are release class C and each has a live FE consumer typed `number`. Do NOT
+   re-implement them; the code is in the working tree. The hold is tracked in
+   `../.agent-local/release-gate.md` → IDLEAK-02 (`api: ✅`, `frontend: ⏳`
+   submittedBy, `web-flow-GHN: ⏳` productId-as-React-key), and **the whole `api`
+   working tree is held at class C until both cells flip**. See `CHANGELOG.md`
+   2026-08-15. With that, defect #4 has nothing left to implement.
    (Fixed and deployed 2026-08-12 by GHN-HIST-01: shipping-history `actorId`
    and every GHN action/status message now carry `usr_`/`ord_`. Wishlist `id`
    was fixed by the 08-11 batch.)
@@ -157,12 +159,6 @@ bucketing. **Gated:** Redis pre-deduct stock via atomic Lua — the real seckill
 core, and the fix for reserve serializing on a hot row lock, but only if a real
 flash-sale event is planned. Second tier of local cache in front of Redis is
 also open but only safe for brand/category (multi-instance staleness).
-
-### PROD-PAY-01 — ZaloPay callback leg still unverified end-to-end
-
-VNPay IPN is CLOSED (PROD-PAY-02, 2026-08-13 — see `CHANGELOG.md`). The ZaloPay
-callback has never been exercised by a real sandbox payment; the handler itself
-is unchanged and untested against a live provider call.
 
 ### CI/CD
 
@@ -334,6 +330,42 @@ an emit + a handler + a notification type; the open question is product-side
 others liked your post", rather than one notification per like). FE needs
 nothing until that is decided.
 
+### GHN-FAIL-NTF-01 — notify the buyer on a failed delivery attempt (planned, class B, no migration)
+
+Left open by GHN-FAIL-01 (2026-08-16): `delivery_fail` moves no local status and
+notifies nobody. Decided shape — implement as-is, the design work is done:
+
+- **Scope: `delivery_fail` ONLY**, of the ten `GHN_STATUSES_WITHOUT_LOCAL_STATUS`.
+  It is the only one the buyer can act on (wrong address / nobody home / phone
+  unreachable) and the last chance to fix it before the return family cancels the
+  order. The in-transit legs are GHN-internal noise. `exception`/`damage`/`lost`
+  deliberately do NOT auto-notify — telling a buyer their parcel is lost before a
+  human has decided the remedy is worse than silence; warn internally instead.
+- **Buyer only, in-app only, no email.** `EMAILED_STATUSES` is milestones only
+  (`shipped`/`delivering`/`completed`); emailing a retryable event generates
+  "is my order broken?" tickets. Seller can do nothing about a missed attempt.
+- **Dedupe is the hard part** — `applyGhnStatus` returns `changed:false`, so
+  there is NO transition to hang idempotency on (unlike every existing order
+  notification), GHN retries ~3×, webhooks redeliver, and all three entry points
+  (webhook / manual sync / demo-status) hit the same function. Emit naively and
+  one order yields 3–5 identical notifications. **Use `shipping_history` as the
+  ledger: emit only when this is the FIRST `delivery_fail` row for the order.**
+  The row is written in that code path anyway — one existence query on
+  `shippingHistoryRepository` (already injected, `orders.service.ts:129`), no
+  Redis, no new column, no migration. Later attempts still write history for the
+  console; they just stop pestering the buyer.
+- **New event, do NOT reuse `order.status_changed`** — its payload's
+  `status`/`previousStatus` mean `OrderStatus`, and `statusChangedMessage()`
+  would need a branch for a "status" that does not exist.
+- `type = "order_delivery_attempt_failed"` (`type` is free-form `varchar(50)`;
+  an unmapped type falls back to default rendering on FE — NOTIF-LIFECYCLE-01
+  precedent). Wording must read as not-final: "Giao hàng chưa thành công, đơn vị
+  vận chuyển sẽ giao lại…", never a bare "thất bại".
+- **Still the user's call:** whether the notification carries a CTA. A buyer
+  cannot self-serve an address fix after the waybill exists (`update_receiver` is
+  an admin/`shipping_manager` action), so it is either purely informational or
+  "liên hệ người bán", which shifts load onto the shop.
+
 ### Open questions
 
 - **OQ-2:** can GHN webhook `?token=` query auth be REMOVED entirely (header
@@ -379,6 +411,12 @@ nothing until that is decided.
 - Array query params: `?categoryIds[]=` → 400; use repeated keys or scalar.
 - GHN free-text address is best-effort; exact `toDistrictId`+`toWardCode` skip
   resolution; `toWardCode` stays a string (leading zeros).
+- GHN-FAIL-01: `delivery_fail` (plus `ready_to_pick`, the in-transit legs,
+  `exception`/`damage`/`lost`) deliberately does NOT move the local status — it
+  is a failed delivery ATTEMPT and GHN retries before the return family, which
+  already cancels. The history row now reads "acknowledged; no local
+  equivalent"; only a GHN status we have never seen still reads "Unhandled"
+  (now at warn). Not a gap — do not map it.
 - GHN-DIST-01: an unknown `toDistrictId` / a ward from another district is a 400
   on `POST /api/order/shipping-fee`, on `POST /api/order` (GHN-CREATE-01) and at
   waybill create — but validation is fail-open (outage/empty list ⇒ quote and
@@ -396,12 +434,19 @@ nothing until that is decided.
   their stock. Capped at 25 orders/tick, so a backlog drains over hours, not in
   one burst. Buyers of those orders get a cancel notification — expected, but
   it will look like a wave on the first day after deploy.
-- OUTBOX-SCOPE-01: RESIL-02 covers `order_created` ONLY. The other publish
-  sites in `orders.service.ts` (`payment_completed`, `order.status_changed`)
-  still guard with a plain `if (this.fanoutChannel)` truthiness check, which
-  the self-healing publisher proxy always passes — during a broker outage they
-  silently no-op and the event is lost. Use `isFanoutChannelLive()` if/when
-  those are made durable too.
+- OUTBOX-SCOPE-01 (silent-drop half FIXED 2026-08-15): every RMQ publish site
+  in all 6 publishing services now guards with the shared
+  `isRmqPublisherLive()` (`libs/common/src/rmq/rmq-publisher.util.ts`), so a
+  broker outage produces a log naming the dropped event instead of a silent
+  no-op — payments had NO guard at all and now logs at error level because a
+  lost `payment_completed` leaves a paid order unflipped and needs manual
+  reconciliation. What is unchanged and deliberate: only `order_created` is
+  DURABLE (RESIL-02 outbox). The rest stay best-effort — their state-critical
+  work already ran synchronously before the publish, so the events are
+  notification-grade; routing them through the outbox would risk duplicate
+  notifications (`order.status_changed` has no idempotency key). Do not
+  re-open as a silent-loss bug; re-open only if one of those events becomes
+  state-critical.
 - PATCH-ATOMIC-01: `PATCH /api/products/:id` is NOT one transaction — product
   fields, `skuList`, and the inventory stock write are three sequential steps
   across two databases. A late inventory failure rolls the stock mirror back but

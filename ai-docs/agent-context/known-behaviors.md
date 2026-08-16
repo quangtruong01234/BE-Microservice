@@ -193,6 +193,37 @@ accepted since 2026-08-04); `toWardCode` stays `@IsString()` on purpose — GHN
 ward codes can carry leading zeros. For COD the waybill is created at
 ORDER-CREATE time, so ready-to-ship re-uses the existing `ghnOrderCode`.
 
+## `delivery_fail` does not move the local status — on purpose (GHN-FAIL-01, 2026-08-16)
+
+`mapGhnStatus` covers `picking|picked`, `delivering`, `delivered` and the whole
+cancel/return family. Everything else returns `null` and the order keeps the
+status it has. That is the settled answer for `delivery_fail`, not a gap:
+
+- **`delivery_fail` is a failed delivery ATTEMPT, not a failed delivery.** GHN
+  retries by itself and only then moves to the return family, which already maps
+  to CANCELED. Canceling on the first miss would release reserved stock for a
+  parcel that is still out for redelivery.
+- **There is no local status to move to**, and inventing one would be a new
+  enum value on `orders.status` — a migration plus a contract change for both
+  frontends, for a state the buyer already sees through the GHN badge.
+- **`exception` / `damage` / `lost` are held for the same reason**, plus one
+  more: mapping them to CANCELED would restock goods that no longer physically
+  exist. They need an operator decision, so they stay visible and unmapped.
+- **What DID change:** the null branch no longer calls all of these "Unhandled".
+  The ten recognised statuses in `GHN_STATUSES_WITHOUT_LOCAL_STATUS`
+  (`libs/constant/shipping.constant.ts`) write `GHN status "<x>" acknowledged;
+  no local equivalent, order stays <status>` to `shipping_history.message` and
+  log at `log` level; a string we have never seen still writes `Unhandled GHN
+  status "<x>"` and now logs at **warn**, so a new GHN vocabulary word is loud.
+  Forward-only — rows written before 2026-08-16 keep the old text.
+- Applies identically on all three entry points (webhook, admin manual sync,
+  demo-status), because all three go through `applyGhnStatus`.
+- Still open as a **product** question, not a bug: whether a failed attempt
+  should notify the buyer. Nothing notifies today. The decided shape (scope,
+  the `shipping_history`-as-ledger dedupe, why not `order.status_changed`) is
+  written up as **GHN-FAIL-NTF-01** in `snapshot.md` — read that before
+  designing it again.
+
 ## An unknown district/ward is a 400 (GHN-DIST-01, 2026-08-13; extended to order create by GHN-CREATE-01)
 
 `buildShippingOrderBody` validates a caller-supplied `toDistrictId` +
@@ -591,3 +622,44 @@ you need it there.
   cloud was purged wholesale once; leftovers with a doubled `trybuy/posts/
   trybuy/posts/` folder or an `undefined_` prefix come from an old FE upload
   bug. Fix such rows as data, do not re-diagnose the cleanup path.
+
+## Upload size caps are a contract, NOT a security boundary (UPLOAD-SIZE-01, 2026-08-15)
+
+`POST /api/upload/signature` returns `maxBytes` (and `maxVideoBytes` on the
+posts folder, the only one whose `allowed_formats` admits mp4) and refuses with
+400 when the caller declares a `bytes` larger than the folder's ceiling. Read
+this before "hardening" it — the limits are deliberately unenforceable server
+side, and the reasons are probed facts, not assumptions:
+
+- **Cloudinary cannot enforce a signed size on this account.** Three live probes
+  on 2026-08-15: (1) putting `max_file_size` in the signed string → `401 Invalid
+  Signature`, and Cloudinary's own error echoes the string it expected —
+  `allowed_formats=…&folder=…&public_id=…&timestamp=…` — i.e. size params are
+  excluded from the signable set; (2) a *signed* upload preset carrying
+  `max_file_size: 10240` still accepted a 40 KB file (HTTP 200, `bytes=40964`);
+  (3) the Admin API silently DROPPED `max_file_size` — `GET
+  upload_presets/<name>` came back with `settings: {"folder":"trybuy/products"}`
+  and nothing else. So there is no signed-upload size limit to reach for. Do not
+  re-probe this; do not add `max_bytes` to `paramsToSign` — it breaks every
+  upload.
+- **Therefore `bytes` is advisory.** It is optional and client-supplied: a
+  client that omits it or lies gets a signature and uploads anything. The check
+  exists so both sides agree on ONE number instead of the FE hardcoding its own.
+  Do not describe it as a limit that protects the account.
+- **The only real fix is proxying the bytes through the gateway**, which throws
+  away the entire point of direct-to-Cloudinary upload. Considered and declined;
+  it would also be a class C contract change.
+- **Response fields are camelCase ON PURPOSE.** Everything else in that response
+  is snake_case because it is a Cloudinary param the client forwards verbatim;
+  `maxBytes`/`maxVideoBytes` are ours and must NOT be forwarded. Verified
+  harmless either way — a client that does forward `maxBytes` still uploads
+  (HTTP 200): Cloudinary ignores parameter names it does not recognize. That is
+  the opposite of `max_file_size`, a name it DOES recognize, which is what makes
+  signing it fatal.
+- **The ceiling is per folder, not per file type.** The signature is issued
+  before any byte is read, so the server cannot tell an image from a video and
+  checks `bytes` against the folder's *video* cap where one exists (posts:
+  100 MB). An 11 MB image into `trybuy/posts` therefore passes the server and is
+  caught only by the client's own per-type check. That asymmetry is intended —
+  do not "fix" it by rejecting on the image cap, which would block legitimate
+  video uploads.

@@ -149,7 +149,9 @@ export interface OrderAnalyticsResponse {
   revenueOverTime: { period: string; revenue: number; orderCount: number }[];
   statusDistribution: Record<string, number>;
   topProducts: {
-    productId: number | string;
+    // Numeric from the orders service; exposed as the opaque `prod_...` public
+    // id, or null when the product can no longer be resolved (PUBID).
+    productId: number | string | null;
     productName: string;
     quantitySold: number;
     revenue: number;
