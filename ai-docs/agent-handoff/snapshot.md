@@ -104,6 +104,18 @@ deleted) rather than an empty cart. The `shippingFee: 0` observation is CLOSED �
 the GHN dev gateway returns zero for every destination/weight on both fee
 endpoints; see `ops-runtime.md` → GHN.
 
+### VOUCHER-CONC-01 — one migration owed on PROD (2026-08-18)
+
+The voucher-concurrency work is DONE (see `CHANGELOG.md` 2026-08-18) and is
+release class A, but `nodeA-20260818-001-add-voucher-indexes` is applied on DEV
+only. It ships with the next deploy — the workflow migrates before
+`pm2 startOrRestart` under `set -euo pipefail`. Nothing breaks if it lags: the
+code degrades to the pre-existing behaviour (slower lookups, `createVoucher`
+still guarded by its check-then-act, per-user re-check served by a scan). The
+two UNIQUE indexes ABORT rather than skip if prod holds duplicates — if the
+migrate step fails, dedupe `vouchers.code` / `voucher_redemptions
+(voucher_id, order_id)` on prod first. Details in `ops-runtime.md`.
+
 ### RESIL-01..03 — resilience patterns borrowed from a flash-sale reference (2026-08-10)
 
 Reviewed a high-concurrency flash-sale/seckill reference architecture against
@@ -155,10 +167,15 @@ Deliberately NOT doing (decided, do not re-propose): full DDD refactor (huge
 diff, zero behaviour change); async order placement via queue (breaks the
 synchronous checkout contract the FE depends on for `paymentUrl`/`orderUrl`);
 Kafka replacing RabbitMQ (hybrid TCP/RMQ was settled 2026-06-30); stock
-bucketing. **Gated:** Redis pre-deduct stock via atomic Lua — the real seckill
+bucketing. **Gated:** Redis pre-deduct STOCK via atomic Lua — the real seckill
 core, and the fix for reserve serializing on a hot row lock, but only if a real
-flash-sale event is planned. Second tier of local cache in front of Redis is
-also open but only safe for brand/category (multi-instance staleness).
+flash-sale event is planned. The primitive now exists and is proven:
+VOUCHER-CONC-01 (2026-08-18) put the same pattern in front of the voucher quota
+(`CachedService.claimFromSeededQuota` / `releaseToSeededQuota`, seed+check+decr
+in one Lua step, TTL self-healing, fails open). Extending it to stock reuses
+that helper — the hard part left is per-SKU seeding and the compensation matrix,
+not the Lua. Second tier of local cache in front of Redis is also open but only
+safe for brand/category (multi-instance staleness).
 
 ### CI/CD
 
@@ -451,6 +468,13 @@ notifies nobody. Decided shape — implement as-is, the design work is done:
   fields, `skuList`, and the inventory stock write are three sequential steps
   across two databases. A late inventory failure rolls the stock mirror back but
   leaves the product fields committed behind an error response.
+- VOUCHER-CONC-01: the Redis quota gate in front of a capped voucher FAILS OPEN
+  (Redis down ⇒ checkout proceeds, the conditional UPDATE still enforces the
+  cap) and is only a mirror of `usage_limit - used_count`, so a lost refund can
+  make it pessimistic for up to its 300s TTL — a buyer gets 409
+  `JUST_FULLY_REDEEMED` on a code that still has room. Deliberate. Also
+  unchanged by that work: a payment-init failure after commit cancels the order
+  but does NOT give the redemption back.
 
 ## Ops / Runtime Reference
 

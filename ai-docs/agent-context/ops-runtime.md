@@ -209,6 +209,18 @@
   table. The migrate step runs before `pm2 startOrRestart` under
   `set -euo pipefail`, so the restart could not have happened had it failed.
 
+- **`nodeA-20260818-001-add-voucher-indexes`** — VOUCHER-CONC-01: adds
+  `uq_vouchers_code` (UNIQUE), `uq_voucher_redemptions_voucher_order` (UNIQUE)
+  and `idx_voucher_redemptions_voucher_user` (non-unique). Additive, guarded by
+  INFORMATION_SCHEMA, safe to re-run. **Applied to DEV Aiven 2026-08-18; OWED ON
+  PROD** — it ships with the next deploy. The two UNIQUE indexes deliberately
+  ABORT (unknown-column error naming the table) rather than silently skip if the
+  target already holds duplicates; dev was verified clean (0 duplicate codes, 0
+  duplicate voucher/order pairs) before applying, so re-verify on prod if the
+  migrate step fails. Code that depends on it: the `ER_DUP_ENTRY` → 409 mapping
+  in `createVoucher` and the locking per-user re-check in `redeemVoucher`
+  (`orders.service.ts`).
+
 ### Pre-cutoff applied-migration history (fresh-DB reference only)
 
 All absorbed into the 2026-07-17 baseline; listed for context on WHY columns

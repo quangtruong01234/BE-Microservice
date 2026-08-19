@@ -6,6 +6,79 @@
 
 ## Completed Milestones
 
+- **VOUCHER-CONC-01 — a flash voucher is now safe under a burst: indexes, an
+  honest per-user cap, a Redis admission gate, and a shorter lock hold
+  (2026-08-18). Release class A.** Came out of the question "is high concurrency
+  OK if we run a flash voucher?" — the answer was no, for three separable
+  reasons, all three fixed here.
+  - **1. The voucher tables shipped with nothing but their primary keys.**
+    Migration `nodeA-20260818-001-add-voucher-indexes` adds `uq_vouchers_code`
+    (every checkout and every `/voucher/validate` full-scanned `vouchers`, and
+    the duplicate check in `createVoucher` was a check-then-act that could seat
+    two rows with the same code), `uq_voucher_redemptions_voucher_order` (the
+    entity's own comment called that pair the thing that makes recording a
+    redemption idempotent — the guarantee existed only in the comment), and
+    `idx_voucher_redemptions_voucher_user` (backs the per-user count). Additive
+    and guarded; the UNIQUE ones abort loudly rather than skip if duplicates
+    already exist. `createVoucher` now maps the `ER_DUP_ENTRY` the index
+    produces to the same 409 the lookup would have, so the race loser does not
+    get a 500.
+  - **2. The per-user limit was a check-then-act.** `validateVoucherForCheckout`
+    counts redemptions long before the order commits, so two tabs from one buyer
+    (two idempotency keys → two real checkouts) both passed it and both redeemed
+    a one-per-user code. The count is now re-run inside `redeemVoucher`, after
+    the conditional UPDATE has taken the voucher row's exclusive lock — the one
+    place where concurrent redemptions are serialized. It must be a **locking
+    read**: under REPEATABLE READ a plain SELECT still answers from the snapshot
+    taken before the UPDATE, which cannot see the row committed by the
+    transaction we just queued behind. `pessimistic_write` reads the latest
+    committed version. Lock order (voucher → redemptions) is identical in every
+    caller, so it cannot deadlock.
+  - **3. Losers paid full price before being rejected.** The DB cap only rejects
+    at the very end, so every loser had already burnt an outbound GHN preview
+    and a stock reservation that then had to be compensated. New Redis counter
+    `voucher:quota:<id>` (`claimFromSeededQuota` / `releaseToSeededQuota` in
+    `CachedService`, one Lua script each) is claimed BEFORE the GHN round trip
+    and before any reservation; the losers now cost one round trip. Seed, bound
+    check and decrement are one atomic step — a GET-then-DECR pair lets N
+    callers all read the last unit and all claim it. TTL 300s makes the counter
+    self-healing: every lapse re-seeds from `usage_limit - used_count`, so drift
+    cannot accumulate, and `releaseToSeededQuota` deliberately does NOT
+    resurrect an expired key (a plain INCR would leave a TTL-less counter stuck
+    at "1 left" forever). **Fails OPEN** — Redis unreachable means the checkout
+    proceeds and the conditional UPDATE still enforces the cap. SQL stays the
+    source of truth; this is an admission gate, never an authority.
+  - **4. The lock hold got shorter.** `redeemVoucher` is now the last statement
+    before commit. It used to run before the order-items insert and the outbox
+    insert, so the voucher row's exclusive lock — which every concurrent
+    checkout of that code queues behind — was held across both. On a hot code
+    that statement's position is what decides the endpoint's throughput.
+  - **Compensation.** `placeOrder` has one try/catch covering the fee preview,
+    the reservation and the transaction; `reservedKey` is assigned only after a
+    successful reserve (a failing reserve already rolls back its own partial
+    holds), and the claimed quota slot is handed back on any failure. The
+    post-commit payment-init cancel path deliberately does NOT refund the slot —
+    `used_count` is not decremented there either, so the mirror stays consistent
+    with SQL. (Pre-existing and unchanged: a payment-init failure burns the
+    buyer's redemption.)
+  - **Verified on the running dev stack.** 4 concurrent checkouts on a 1-use
+    code → 2 rejected at the Redis gate with 409 before GHN was called, counter
+    back to 1 after the refund; the winner got 201 with the counter at 0; a
+    later attempt got the unchanged 400 `FULLY_REDEEMED`. 4 concurrent checkouts
+    on a `perUserLimit:1` code → exactly one 201 and three 400
+    `USER_LIMIT_REACHED` (all four used to get through). DB after: `used_count`
+    1 on both codes, exactly one redemption row each, no phantom increments. 6
+    concurrent admin creates of one code → one 201 and five 409s, one row, no
+    500. Inventory ledger after: 2 `reserved` (the two live orders), 3
+    `released` (the rolled-back ones), and the gate-rejected requests created no
+    reservation row at all. Plus 6 new unit tests (gate rejection short-circuits
+    GHN + reserve, refund on downstream failure, no refund on success, fail-open
+    on a Redis error, uncapped voucher never touches the counter, `ER_DUP_ENTRY`
+    → 409): 36 suites / 353 tests green, tsc + eslint clean.
+  - **Class A**: the HTTP contract is unchanged — the gate returns the same 409
+    `JUST_FULLY_REDEEMED` the DB-level race loser already returned, and every
+    other status/message is as before.
+
 - **GHN-FAIL-01 — `delivery_fail` keeps the local status, and the timeline now
   says so instead of "Unhandled" (2026-08-16). Release class A.** Answers the
   GHN console's open question (`backend-handoff.md`, `risks.md` item 6) with

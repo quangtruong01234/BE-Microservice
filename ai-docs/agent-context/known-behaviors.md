@@ -663,3 +663,43 @@ side, and the reasons are probed facts, not assumptions:
   caught only by the client's own per-type check. That asymmetry is intended —
   do not "fix" it by rejecting on the image cap, which would block legitimate
   video uploads.
+
+## The voucher quota gate is an admission gate, not the cap (VOUCHER-CONC-01, 2026-08-18)
+
+`voucher:quota:<voucherId>` in Redis is claimed at the top of `placeOrder`,
+before the GHN fee preview and before any stock is reserved, so a burst on a
+flash code rejects its losers after one round trip instead of after a GHN call
+plus a reservation that then needs compensating. What it is NOT is the cap.
+
+- **It fails OPEN.** Redis unreachable ⇒ `claimVoucherQuota` logs a warn, returns
+  false, and the checkout proceeds. The conditional
+  `UPDATE ... WHERE usage_limit IS NULL OR used_count < usage_limit` inside the
+  create transaction is what actually enforces the limit, exactly as before. A
+  Redis outage costs throughput, never correctness. Do not "harden" this into a
+  fail-closed gate — that turns a cache outage into a checkout outage.
+- **It can be pessimistic for up to 300s.** The counter mirrors
+  `usage_limit - used_count`, and the refund on a failed checkout is best
+  effort. A lost refund (process died between the failure and the release) makes
+  the mirror read low, so a buyer gets 409 `JUST_FULLY_REDEEMED` on a code that
+  still has room in SQL. Self-heals at the TTL, which re-seeds from SQL. This is
+  why the TTL is short and why `releaseToSeededQuota` refuses to recreate an
+  expired key — a plain INCR would resurrect it TTL-less at "1 left" forever.
+- **409 vs 400 is not arbitrary.** `validateVoucherForCheckout` runs BEFORE the
+  claim, so an already-exhausted code still returns the old 400
+  `FULLY_REDEEMED`. The gate only ever produces 409 `JUST_FULLY_REDEEMED` — the
+  same status the DB-level race loser has always returned. That ordering is what
+  keeps the change release class A; do not reorder them.
+- **Cancelling never gives a redemption back.** `used_count` is not decremented
+  anywhere — not by buyer cancel, not by the post-commit payment-init failure
+  path, which cancels the order and releases stock but leaves the redemption
+  standing. The Redis mirror deliberately matches that: the claim is kept on
+  commit and only refunded when the checkout did NOT commit. If a future change
+  makes cancellation restore `used_count`, the mirror has to learn the same
+  rule.
+- **The per-user re-check inside `redeemVoucher` must stay a LOCKING read.**
+  Under MySQL REPEATABLE READ a plain SELECT answers from the snapshot the
+  transaction took before its conditional UPDATE, which cannot see the row
+  committed by the transaction it just queued behind — it would count zero and
+  let a second order through on a one-per-user code. `pessimistic_write` reads
+  the latest committed version. Lock order is voucher row first, redemptions
+  second, in every caller; keep it that way and it cannot deadlock.
