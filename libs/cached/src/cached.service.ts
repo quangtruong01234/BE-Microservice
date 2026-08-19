@@ -96,6 +96,66 @@ export class CachedService {
     return await this.redis.decr(key);
   }
 
+  /**
+   * Claim one unit from a counter that seeds itself on first touch, atomically.
+   * Used as a cheap admission gate in front of a scarce SQL resource (voucher
+   * quota): the losers are rejected here, before the request spends anything
+   * expensive downstream, while SQL stays the source of truth.
+   *
+   * Seeding, the bound check and the decrement have to be ONE step — a
+   * GET-then-DECR pair lets N concurrent callers all read the last unit and
+   * every one of them claim it. Returns the remaining count after the claim,
+   * or -1 when the quota was already exhausted (nothing is decremented then,
+   * so the counter never runs away below zero).
+   *
+   * The TTL makes the counter self-healing: once it lapses, the next caller
+   * re-seeds from whatever the caller reads out of SQL, so drift cannot
+   * accumulate.
+   */
+  async claimFromSeededQuota(
+    key: string,
+    seedRemaining: number,
+    ttlSeconds: number,
+  ): Promise<number> {
+    const result = await this.redis.eval(
+      `local remaining = redis.call('GET', KEYS[1])
+       if not remaining then
+         redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
+         remaining = ARGV[1]
+       end
+       if tonumber(remaining) <= 0 then
+         return -1
+       end
+       return redis.call('DECR', KEYS[1])`,
+      1,
+      key,
+      seedRemaining,
+      ttlSeconds,
+    );
+    return Number(result);
+  }
+
+  /**
+   * Give one unit back to a counter claimed via {@link claimFromSeededQuota},
+   * for when the work the claim was covering did not go through.
+   *
+   * Deliberately does NOT recreate an expired key: a plain INCR would resurrect
+   * it as a TTL-less counter holding `1`, which then reads as "one unit left"
+   * forever. If the key is gone the release is a no-op (-1) and the next claim
+   * re-seeds from SQL, which by then already reflects the rollback.
+   */
+  async releaseToSeededQuota(key: string): Promise<number> {
+    const result = await this.redis.eval(
+      `if redis.call('EXISTS', KEYS[1]) == 0 then
+         return -1
+       end
+       return redis.call('INCR', KEYS[1])`,
+      1,
+      key,
+    );
+    return Number(result);
+  }
+
   // Hashes
   async hget(hash: string, field: string): Promise<string | null> {
     return await this.redis.hget(hash, field);
