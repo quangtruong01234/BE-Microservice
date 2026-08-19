@@ -1,5 +1,6 @@
 import {
   Entity,
+  Index,
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
@@ -17,6 +18,9 @@ export enum VoucherDiscountType {
  * in the same transaction that creates the order.
  */
 @Entity("vouchers")
+// Codes are the lookup key on every checkout and every voucher preview, and the
+// duplicate check in `createVoucher` is a check-then-act race without this.
+@Index("uq_vouchers_code", ["code"], { unique: true })
 export class Voucher {
   @PrimaryGeneratedColumn("increment")
   id!: number;

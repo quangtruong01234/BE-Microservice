@@ -17,6 +17,7 @@ import {
   IsNull,
   LessThan,
   Like,
+  QueryFailedError,
   Repository,
 } from "typeorm";
 import { Order, OrderStatus } from "./entity/order.entity";
@@ -29,6 +30,7 @@ import {
   isRmqPublisherLive,
 } from "@app/common";
 import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
+import { CachedService } from "@app/cached";
 import { HttpService } from "@nestjs/axios";
 import { ClientProxy } from "@nestjs/microservices";
 import { catchError, firstValueFrom, throwError, timeout } from "rxjs";
@@ -105,6 +107,17 @@ const ORDER_OUTBOX_RETENTION_DAYS = 7;
 /** How many abandoned orders one stale-reservation sweep tick cancels. */
 const ORDER_STALE_SWEEP_BATCH_SIZE = 25;
 
+/** Redis key prefix for the remaining-redemptions counter of a capped voucher. */
+const VOUCHER_QUOTA_KEY_PREFIX = "voucher:quota:";
+
+/**
+ * How long the Redis mirror of a voucher's remaining redemptions lives.
+ * Short on purpose: SQL is the source of truth, so the counter only has to
+ * outlive a burst. Every lapse re-seeds it from `usage_limit - used_count`,
+ * which erases any drift a failed refund left behind (VOUCHER-CONC-01).
+ */
+const VOUCHER_QUOTA_TTL_SECONDS = 300;
+
 @Injectable()
 export class OrdersService {
   private readonly logger = new Logger(OrdersService.name);
@@ -135,6 +148,7 @@ export class OrdersService {
     @InjectRepository(VoucherRedemption)
     private readonly voucherRedemptionRepository: Repository<VoucherRedemption>,
     private readonly ghnService: GhnService,
+    private readonly cachedService: CachedService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -231,23 +245,35 @@ export class OrdersService {
       ? await this.validateVoucherForCheckout(userId, voucherCode, itemsTotal)
       : null;
     const discountAmount = voucherResult?.discountAmount ?? 0;
-    // Shipping fee from GHN preview is added to the order total so the
-    // payment (COD or gateway) charges goods + shipping in one amount
-    const shippingFee = await this.getShippingFeeOrZero(
-      shippingAddress,
-      paymentMethod === PaymentMethod.COD ? itemsTotal : 0,
-      items,
-      ghnAddress,
-    );
-    // Discount applies to goods only — never to shipping — and can never drive
-    // the total below the shipping fee.
-    const total = itemsTotal - discountAmount + shippingFee;
-    const reservationKey = randomUUID();
-    await this.reserveOrderItems(items, reservationKey);
+    // VOUCHER-CONC-01: take the quota slot HERE — before the GHN round trip and
+    // before any stock is reserved. On a flash voucher the DB cap alone rejects
+    // the losers only at the very end, after each of them has already burnt an
+    // outbound GHN call and a reservation that then has to be compensated. The
+    // Redis counter turns that into a rejection that costs one round trip.
+    const hasClaimedVoucherQuota = voucherResult
+      ? await this.claimVoucherQuota(voucherResult.voucher)
+      : false;
 
     let order: Order;
     let outboxRow: OrderOutbox;
+    let reservedKey: string | null = null;
     try {
+      // Shipping fee from GHN preview is added to the order total so the
+      // payment (COD or gateway) charges goods + shipping in one amount
+      const shippingFee = await this.getShippingFeeOrZero(
+        shippingAddress,
+        paymentMethod === PaymentMethod.COD ? itemsTotal : 0,
+        items,
+        ghnAddress,
+      );
+      // Discount applies to goods only — never to shipping — and can never drive
+      // the total below the shipping fee.
+      const total = itemsTotal - discountAmount + shippingFee;
+      const reservationKey = randomUUID();
+      await this.reserveOrderItems(items, reservationKey);
+      // Only from here on is there a reservation to compensate: a failing
+      // reserve already rolls back its own partial holds.
+      reservedKey = reservationKey;
       const created = await this.orderRepository.manager.transaction(
         async (manager) => {
           const savedOrder = await manager.save(
@@ -278,6 +304,19 @@ export class OrdersService {
             }),
           );
           await manager.save(OrderItem, orderItems);
+          savedOrder.items = orderItems;
+          // RESIL-02: the event commits with the order, so a broker outage can
+          // no longer leave a live order that nobody downstream heard about.
+          const outbox = await this.enqueueOrderCreatedEvent(
+            manager,
+            savedOrder,
+          );
+          // VOUCHER-CONC-01: redeem LAST. The conditional UPDATE below takes an
+          // exclusive row lock on the voucher that every concurrent checkout of
+          // the same code queues behind, and the lock is only released at
+          // commit — so on a hot code this statement's position decides the
+          // whole endpoint's throughput. Keep it the last thing before commit;
+          // it used to also span the order-items and outbox inserts.
           if (voucherResult) {
             await this.redeemVoucher(
               manager,
@@ -287,20 +326,18 @@ export class OrdersService {
               discountAmount,
             );
           }
-          savedOrder.items = orderItems;
-          // RESIL-02: the event commits with the order, so a broker outage can
-          // no longer leave a live order that nobody downstream heard about.
-          const outbox = await this.enqueueOrderCreatedEvent(
-            manager,
-            savedOrder,
-          );
           return { savedOrder, outbox };
         },
       );
       order = created.savedOrder;
       outboxRow = created.outbox;
     } catch (error) {
-      await this.releaseReservedItems(items, reservationKey);
+      if (reservedKey) {
+        await this.releaseReservedItems(items, reservedKey);
+      }
+      if (hasClaimedVoucherQuota && voucherResult) {
+        await this.releaseVoucherQuota(voucherResult.voucher.id);
+      }
       throw error;
     }
 
@@ -440,6 +477,33 @@ export class OrdersService {
         VOUCHER_MESSAGE.JUST_FULLY_REDEEMED(voucher.code),
       );
     }
+    // The UPDATE above holds the voucher row exclusively until commit, so every
+    // concurrent redemption of this code is serialized from here on. That makes
+    // this the only place the per-user limit can be counted honestly: the same
+    // count in `validateVoucherForCheckout` is a check-then-act that two
+    // requests from one buyer both pass (two tabs → two idempotency keys → two
+    // orders on a one-per-user code). Throwing here rolls the increment back
+    // with the order.
+    //
+    // It has to be a LOCKING read: under REPEATABLE READ a plain SELECT answers
+    // from the snapshot this transaction took before the UPDATE, which does not
+    // include the row the transaction we just queued behind has since
+    // committed. `FOR UPDATE` reads the latest committed version instead. The
+    // lock order (voucher row first, redemptions second) is the same in every
+    // caller, so this cannot deadlock. Served by
+    // idx_voucher_redemptions_voucher_user.
+    if (voucher.perUserLimit !== null) {
+      const redemptionsByUser = await manager.find(VoucherRedemption, {
+        where: { voucherId: voucher.id, userId },
+        select: { id: true },
+        lock: { mode: "pessimistic_write" },
+      });
+      if (redemptionsByUser.length >= voucher.perUserLimit) {
+        throw new BadRequestException(
+          VOUCHER_MESSAGE.USER_LIMIT_REACHED(voucher.code),
+        );
+      }
+    }
     await manager.save(
       manager.create(VoucherRedemption, {
         voucherId: voucher.id,
@@ -448,6 +512,68 @@ export class OrdersService {
         discountAmount: discountAmount.toFixed(2),
       }),
     );
+  }
+
+  /**
+   * Admission gate in front of a capped voucher (VOUCHER-CONC-01).
+   *
+   * Returns true when a slot was taken and the caller therefore owes a
+   * {@link releaseVoucherQuota} if the checkout does not commit. Uncapped
+   * vouchers claim nothing. Throws 409 — the same status the DB-level loser
+   * gets today — when the quota is already gone.
+   *
+   * Fails OPEN: if Redis is unreachable the checkout proceeds and the
+   * conditional UPDATE in {@link redeemVoucher} still enforces the cap. This
+   * counter is an optimization, never the source of truth, so a Redis outage
+   * must cost throughput, not correctness.
+   */
+  private async claimVoucherQuota(voucher: Voucher): Promise<boolean> {
+    if (voucher.usageLimit === null) {
+      return false;
+    }
+    const remainingInSql = Math.max(voucher.usageLimit - voucher.usedCount, 0);
+    try {
+      const remaining = await this.cachedService.claimFromSeededQuota(
+        `${VOUCHER_QUOTA_KEY_PREFIX}${voucher.id}`,
+        remainingInSql,
+        VOUCHER_QUOTA_TTL_SECONDS,
+      );
+      if (remaining < 0) {
+        throw new ConflictException(
+          VOUCHER_MESSAGE.JUST_FULLY_REDEEMED(voucher.code),
+        );
+      }
+      return true;
+    } catch (error: unknown) {
+      if (error instanceof ConflictException) {
+        throw error;
+      }
+      const message =
+        error instanceof Error ? error.message : "unknown cache error";
+      this.logger.warn(
+        `Voucher quota gate unavailable for ${voucher.code} (${message}) — falling through to the database cap.`,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Hand a claimed slot back when the checkout it was covering failed. Best
+   * effort: a lost refund only makes the mirror pessimistic (a few buyers get a
+   * 409 on a code that still has room) until the TTL re-seeds it from SQL.
+   */
+  private async releaseVoucherQuota(voucherId: number): Promise<void> {
+    try {
+      await this.cachedService.releaseToSeededQuota(
+        `${VOUCHER_QUOTA_KEY_PREFIX}${voucherId}`,
+      );
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : "unknown cache error";
+      this.logger.warn(
+        `Could not return the quota slot of voucher ${voucherId} (${message}) — it self-heals when the counter expires.`,
+      );
+    }
   }
 
   /**
@@ -525,7 +651,21 @@ export class OrdersService {
       expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
       isActive: input.isActive ?? true,
     });
-    return this.voucherRepository.save(voucher);
+    try {
+      return await this.voucherRepository.save(voucher);
+    } catch (error: unknown) {
+      // The `existing` lookup above is a check-then-act; uq_vouchers_code is
+      // what actually stops two admins creating the same code at once. Map its
+      // collision to the same 409 the lookup would have produced instead of
+      // leaking a driver error as a 500.
+      if (
+        error instanceof QueryFailedError &&
+        (error.driverError as { code?: string })?.code === "ER_DUP_ENTRY"
+      ) {
+        throw new ConflictException(VOUCHER_MESSAGE.ALREADY_EXISTS(code));
+      }
+      throw error;
+    }
   }
 
   async listVouchers(

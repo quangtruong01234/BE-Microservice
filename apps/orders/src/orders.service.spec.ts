@@ -9,18 +9,19 @@ import { HttpService } from "@nestjs/axios";
 import { ClientProxy } from "@nestjs/microservices";
 import { Channel } from "amqplib";
 import { of } from "rxjs";
-import { FindOperator, Repository } from "typeorm";
+import { FindOperator, QueryFailedError, Repository } from "typeorm";
 import { INVENTORY_MESSAGE_PATTERNS } from "libs/constant/message-pattern-inventory.constant";
 import { Order, OrderStatus } from "./entity/order.entity";
 import { OrderOutbox } from "./entity/order-outbox.entity";
 import { OrderItem } from "./entity/order_item.entity";
 import { OrderReturnRequest } from "./entity/order-return-request.entity";
-import { Voucher } from "./entity/voucher.entity";
+import { Voucher, VoucherDiscountType } from "./entity/voucher.entity";
 import { VoucherRedemption } from "./entity/voucher-redemption.entity";
 import {
   ShippingHistory,
   ShippingHistoryType,
 } from "./entity/shipping-history.entity";
+import { CachedService } from "@app/cached";
 import { GhnService } from "./ghn/ghn.service";
 import { OrdersService } from "./orders.service";
 import { EVENT } from "@app/common/constants/event";
@@ -130,6 +131,7 @@ describe("OrdersService.handleGhnWebhook", () => {
       {} as Repository<Voucher>,
       {} as Repository<VoucherRedemption>,
       {} as GhnService,
+      {} as CachedService,
     );
 
     return { service, publish, update, historySave };
@@ -328,6 +330,7 @@ describe("OrdersService stock reservation", () => {
       {} as Repository<Voucher>,
       {} as Repository<VoucherRedemption>,
       ghnService as unknown as GhnService,
+      {} as CachedService,
     );
 
     return {
@@ -376,6 +379,7 @@ describe("OrdersService stock reservation", () => {
       {} as Repository<Voucher>,
       {} as Repository<VoucherRedemption>,
       ghnService as unknown as GhnService,
+      {} as CachedService,
     );
 
     return { service, inventorySend, transaction, update, outbox };
@@ -772,6 +776,7 @@ describe("OrdersService.sweepStaleReservations", () => {
       {} as Repository<Voucher>,
       {} as Repository<VoucherRedemption>,
       { cancelShippingOrder } as unknown as GhnService,
+      {} as CachedService,
     );
 
     return {
@@ -916,6 +921,7 @@ describe("OrdersService.cancelOrder GHN detachment", () => {
       {} as Repository<Voucher>,
       {} as Repository<VoucherRedemption>,
       { cancelShippingOrder } as unknown as GhnService,
+      {} as CachedService,
     );
 
     return { service, update, publish };
@@ -1018,6 +1024,7 @@ describe("OrdersService.advanceOrderStatus", () => {
       {} as Repository<Voucher>,
       {} as Repository<VoucherRedemption>,
       {} as GhnService,
+      {} as CachedService,
     );
     return { service, update, inventorySend, publish };
   };
@@ -1136,6 +1143,7 @@ describe("OrdersService payment completion idempotency", () => {
       {} as Repository<Voucher>,
       {} as Repository<VoucherRedemption>,
       { createShippingOrder } as unknown as GhnService,
+      {} as CachedService,
     );
 
     await Promise.all([
@@ -1184,6 +1192,7 @@ describe("OrdersService.readyToShip GHN waybill gating", () => {
       {} as Repository<Voucher>,
       {} as Repository<VoucherRedemption>,
       { createShippingOrder } as unknown as GhnService,
+      {} as CachedService,
     );
     return { service, save, update };
   };
@@ -1276,6 +1285,7 @@ describe("OrdersService admin GHN actions (cancel / return)", () => {
       {} as Repository<Voucher>,
       {} as Repository<VoucherRedemption>,
       ghn as unknown as GhnService,
+      {} as CachedService,
     );
     return { service, update, save, publish, inventorySend };
   };
@@ -1528,6 +1538,7 @@ describe("OrdersService.getAdminGhnOrderDetail (demo-mode GHN status)", () => {
       {} as Repository<Voucher>,
       {} as Repository<VoucherRedemption>,
       { getOrderDetail } as unknown as GhnService,
+      {} as CachedService,
     );
     return { service, getOrderDetail };
   };
@@ -1629,6 +1640,7 @@ describe("OrdersService ORD-GUARD-01 — unpaid online orders cannot be fulfille
       {} as Repository<Voucher>,
       {} as Repository<VoucherRedemption>,
       { createShippingOrder } as unknown as GhnService,
+      {} as CachedService,
     );
     return { service, save, update, createShippingOrder };
   };
@@ -1726,5 +1738,204 @@ describe("OrdersService ORD-GUARD-01 — unpaid online orders cannot be fulfille
     // payment_completed cannot rewrite the original timestamp.
     expect(criteria.paidAt).toBeInstanceOf(FindOperator);
     expect(patch.paidAt).toBeInstanceOf(Date);
+  });
+});
+
+describe("OrdersService VOUCHER-CONC-01 — voucher quota gate", () => {
+  const item = {
+    productId: 1,
+    productName: "Product 1",
+    quantity: 1,
+    price: 100,
+    sellerId: 20,
+  };
+
+  const voucherRow = (overrides: Partial<Voucher> = {}): Voucher =>
+    ({
+      id: 5,
+      code: "FLASH",
+      description: null,
+      discountType: VoucherDiscountType.FIXED,
+      discountValue: "10.00",
+      minOrderAmount: "0.00",
+      maxDiscountAmount: null,
+      usageLimit: 1,
+      usedCount: 0,
+      perUserLimit: null,
+      startsAt: null,
+      expiresAt: null,
+      isActive: true,
+      ...overrides,
+    }) as Voucher;
+
+  function createService(voucher: Voucher | null): {
+    service: OrdersService;
+    inventorySend: jest.Mock;
+    transaction: jest.Mock;
+    ghnPreview: jest.Mock;
+    claim: jest.Mock;
+    release: jest.Mock;
+    save: jest.Mock;
+  } {
+    const inventorySend = jest.fn();
+    const transaction = jest.fn();
+    const claim = jest.fn();
+    const release = jest.fn().mockResolvedValue(1);
+    const save = jest.fn();
+    const orderRepository = {
+      manager: { transaction },
+      update: jest.fn(),
+    };
+    const ghnService = {
+      previewShippingFee: jest.fn().mockResolvedValue({
+        shippingFee: 0,
+        expectedDeliveryTime: null,
+      }),
+    };
+    const voucherRepository = {
+      findOne: jest.fn().mockResolvedValue(voucher),
+      create: jest.fn((input: Partial<Voucher>) => input as Voucher),
+      save,
+    };
+    const service = new OrdersService(
+      { publish: jest.fn(), connection: {} } as unknown as Channel,
+      {} as HttpService,
+      { send: inventorySend } as unknown as ClientProxy,
+      {} as ClientProxy,
+      {} as ClientProxy,
+      orderRepository as unknown as Repository<Order>,
+      {} as Repository<OrderItem>,
+      createOutboxRepository().repository,
+      {} as Repository<ShippingHistory>,
+      {} as Repository<OrderReturnRequest>,
+      voucherRepository as unknown as Repository<Voucher>,
+      {
+        count: jest.fn().mockResolvedValue(0),
+      } as unknown as Repository<VoucherRedemption>,
+      ghnService as unknown as GhnService,
+      {
+        claimFromSeededQuota: claim,
+        releaseToSeededQuota: release,
+      } as unknown as CachedService,
+    );
+
+    inventorySend.mockImplementation((pattern: string) => {
+      if (pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_CHECK_STOCK) {
+        return of({ available: true, availableStock: 10 });
+      }
+      return of(true);
+    });
+
+    return {
+      service,
+      inventorySend,
+      transaction,
+      ghnPreview: ghnService.previewShippingFee,
+      claim,
+      release,
+      save,
+    };
+  }
+
+  const placeWithVoucher = (service: OrdersService): Promise<Order> =>
+    service.placeOrder(18, PaymentMethod.COD, "address", [item], "FLASH");
+
+  it("rejects the loser before GHN is called and before stock is reserved", async () => {
+    const { service, transaction, ghnPreview, inventorySend, claim } =
+      createService(voucherRow());
+    // -1 = the counter was already exhausted by a concurrent checkout.
+    claim.mockResolvedValue(-1);
+
+    await expect(placeWithVoucher(service)).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+
+    // The whole point of the gate: nothing expensive happened downstream.
+    expect(ghnPreview).not.toHaveBeenCalled();
+    expect(transaction).not.toHaveBeenCalled();
+    expect(inventorySend).not.toHaveBeenCalledWith(
+      INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK,
+      expect.anything(),
+    );
+  });
+
+  it("hands the claimed slot back when the checkout fails downstream", async () => {
+    const { service, transaction, claim, release } =
+      createService(voucherRow());
+    claim.mockResolvedValue(0);
+    transaction.mockRejectedValue(new Error("DB unavailable"));
+
+    await expect(placeWithVoucher(service)).rejects.toThrow("DB unavailable");
+
+    expect(release).toHaveBeenCalledWith("voucher:quota:5");
+  });
+
+  it("keeps the slot when the order commits", async () => {
+    const { service, transaction, claim, release } =
+      createService(voucherRow());
+    claim.mockResolvedValue(0);
+    transaction.mockResolvedValue({
+      savedOrder: { id: 1, paymentMethod: PaymentMethod.COD, items: [] },
+      outbox: outboxRow(1),
+    });
+
+    await placeWithVoucher(service);
+
+    expect(release).not.toHaveBeenCalled();
+  });
+
+  it("falls through to the database cap when Redis is unavailable", async () => {
+    const { service, transaction, claim, release } =
+      createService(voucherRow());
+    // Fail OPEN: the counter is an optimization, the conditional UPDATE in
+    // `redeemVoucher` is what actually enforces the cap.
+    claim.mockRejectedValue(new Error("Redis down"));
+    transaction.mockResolvedValue({
+      savedOrder: { id: 1, paymentMethod: PaymentMethod.COD, items: [] },
+      outbox: outboxRow(1),
+    });
+
+    await placeWithVoucher(service);
+
+    expect(transaction).toHaveBeenCalled();
+    // Nothing was claimed, so nothing may be handed back — a stray release
+    // would inflate the counter above the real remaining quota.
+    expect(release).not.toHaveBeenCalled();
+  });
+
+  it("does not touch the counter for an uncapped voucher", async () => {
+    const { service, transaction, claim } = createService(
+      voucherRow({ usageLimit: null }),
+    );
+    transaction.mockResolvedValue({
+      savedOrder: { id: 1, paymentMethod: PaymentMethod.COD, items: [] },
+      outbox: outboxRow(1),
+    });
+
+    await placeWithVoucher(service);
+
+    expect(claim).not.toHaveBeenCalled();
+  });
+
+  it("maps a uq_vouchers_code collision to the same 409 as the lookup", async () => {
+    // The duplicate check in `createVoucher` is a check-then-act, so two admins
+    // racing on one code both pass it and the index is what stops the second.
+    // That path must not leak a driver error as a 500.
+    const { service, save } = createService(null);
+    save.mockRejectedValue(
+      new QueryFailedError(
+        "INSERT INTO `vouchers`",
+        [],
+        Object.assign(new Error("Duplicate entry"), { code: "ER_DUP_ENTRY" }),
+      ),
+    );
+
+    await expect(
+      service.createVoucher({
+        code: "flash",
+        discountType: VoucherDiscountType.FIXED,
+        discountValue: 10,
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
   });
 });

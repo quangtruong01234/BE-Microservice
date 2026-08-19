@@ -10,6 +10,7 @@ import { AllRpcExceptionFilter } from "./filters/rpc-exception.filter";
 import { ConfigModule } from "@nestjs/config";
 import { ScheduleModule } from "@nestjs/schedule";
 import { ResilientClientTCP, RmqModule } from "@app/common";
+import { CachedModule } from "@app/cached";
 import { HttpModule } from "@nestjs/axios";
 import { ClientsModule } from "@nestjs/microservices";
 import { TypeOrmModule } from "@nestjs/typeorm";
@@ -68,6 +69,7 @@ import { GhnModule } from "./ghn/ghn.module";
     // RmqModule.register({ name: "INVENTORY_SERVICE" }),
     // RmqModule.register({ name: "PAYMENTS_SERVICE" }),
     GhnModule,
+    CachedModule,
     RmqModule,
     RmqModule.registerDirectPublisher(),
     // TYPEORM_MODULE.forFeature([Order, OrderItem])

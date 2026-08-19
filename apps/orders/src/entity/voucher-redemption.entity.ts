@@ -1,5 +1,6 @@
 import {
   Entity,
+  Index,
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
@@ -11,6 +12,10 @@ import {
  * backs the per-user-limit count.
  */
 @Entity("voucher_redemptions")
+@Index("uq_voucher_redemptions_voucher_order", ["voucherId", "orderId"], {
+  unique: true,
+})
+@Index("idx_voucher_redemptions_voucher_user", ["voucherId", "userId"])
 export class VoucherRedemption {
   @PrimaryGeneratedColumn("increment")
   id!: number;
