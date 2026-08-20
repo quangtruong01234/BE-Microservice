@@ -579,11 +579,12 @@ a user. See `CHANGELOG.md` 2026-08-11 for the design.
   per SKU asynchronously via `sku_upserted`. A client never needs to
   `POST /api/inventory` after creating a product; doing so is a guaranteed 409.
 
-## Order item `image` vs `productImage` (ORDER-SHAPE-01, 2026-08-11)
+## Order item `image` — one key on HTTP, two inside (ORDER-SHAPE-01, 2026-08-11; collapsed by OVERFETCH-01, 2026-08-20)
 
-Order items on the decorated read paths (`GET /api/order/:id`, buyer list,
-seller list, seller detail, `confirm`, `ready-to-ship`) carry BOTH keys. They
-are not a duplication bug:
+Order items used to carry BOTH `image` and `productImage` on the decorated read
+paths. Since OVERFETCH-01 every buyer/seller path through `exposeOrder` emits
+`image` ONLY — `productImage` is deleted at the HTTP boundary. The two internal
+values still exist and still mean different things:
 
 - `productImage` is the raw purchase-time snapshot column. It is `null` on
   orders created before the P2-02 snapshot columns existed.
@@ -591,9 +592,16 @@ are not a duplication bug:
   the live product's first image, else `null`. Legacy orders render only
   because of the fallback.
 
-Prefer `image` for display. `POST /api/order` does not decorate its items, so
-it returns `productImage` only — that path is not a read path and the FE
-already has the product in hand at checkout.
+`POST /api/order` does NOT decorate its items — it had only the raw column, so
+`exposeOrder` copies `productImage` into `image` when `image` is absent before
+deleting it. That is why the create response is not image-less; do not remove
+that fallback.
+
+The ONE path that still ships `productImage` is the admin GHN console detail
+(`GET /api/order/admin/ghn/orders/:id`): `getAdminGhnOrderDetail` calls
+`decorateItem` WITHOUT `exposeOrder`, and `web-flow-GHN` reads
+`item.productImage` (`features/ghn-shipping/api/adapters.ts`). The asymmetry is
+deliberate — do not "unify" it without changing that console first.
 
 Item `price` is a `number` on every path (entity transformer), and since
 RET-NUM-01 (2026-08-13) so is return-request `refundAmount` — same
@@ -703,3 +711,65 @@ plus a reservation that then needs compensating. What it is NOT is the cap.
   let a second order through on a one-per-user code. `pessimistic_write` reads
   the latest committed version. Lock order is voucher row first, redemptions
   second, in every caller; keep it that way and it cannot deadlock.
+
+## Gateway read payloads are trimmed at the boundary (OVERFETCH-01, 2026-08-20)
+
+The FE asked for smaller read payloads. Every cut is made in a gateway
+boundary walker, never in a microservice — the TCP/RMQ shapes and the entities
+are unchanged, so internal consumers keep every field. What HTTP no longer
+carries, and why it cannot come back by accident:
+
+- **`reservationKey`** (`exposeOrder`) — the internal inventory-reservation
+  handle. Server-side state; shipping it let a caller name another order's
+  reservation. `toAdminGhnLocalOrder` projects explicit fields and never had it.
+- **`productImage`** on order items — see ORDER-SHAPE-01 above.
+- **`previousOrderStatus`** (`exposeReturnRequest`) — exists only so the orders
+  service can roll an order back when a return is rejected.
+- **`user1LastReadAt` / `user2LastReadAt`** (`exposeChatConversation`) — per-side
+  read cursors. `unreadCount` is the derived value the client renders; the
+  cursors also told each participant when the other last opened the thread.
+  `ChatConversationTcp` still declares them: that type describes the TCP wire.
+- **`followerId` / `followingId`** on `GET /api/social/users/:id/followers`
+  and `/following` — the embedded `user.id` is the same value.
+- **`role.slug`** (`exposeRole`) — `name` is the `RoleName` enum that JWT
+  generation and every `CheckPermission` grant key off; `rol_slug` had no reader
+  in any of the three repos. Only `{id, name}` is exposed now.
+- **Nested `brand` / `categories[]` on a product row** are trimmed to
+  `{id, name, isActive}` by `trimTaxonomyReferences`. The moderation columns
+  (`description`, `status`, `submittedBy`, `reviewNote`, timestamps) are the
+  moderation queue's business, and those routes (`brands`, `brands/pending`,
+  `categories`, `categories/pending`) do NOT pass through
+  `exposeProductReferences`, so they still carry them. `attachCategoryIds` runs
+  BEFORE the trim and only needs `id` — keep that ordering.
+
+Additive in the same pass: a hydrated `{id, username, avatar}` sibling next to a
+bare user-reference id, built from the user rows the walker already fetched —
+`actor` (notifications), `reporter` (social report rows), `reviewer`
+(return requests). The bare id key is unchanged. NEVER add `email` to these:
+`getUserSummaryMap` pulls it with `includeEmail: true` for internal use, and the
+summary object is what reaches HTTP.
+
+**All three embeds must keep ONE shape** — `{ id: string, username: string,
+avatar: string | null } | null`, so the FE can declare a single `UserSummary`
+for all of them. The first cut of `actor` did not: it was hand-built as
+`publicId ?? null` / `username ?? null`, making all three keys nullable while
+`reviewer`/`reporter` (both from `UserInfo`) were not. The FE caught it the same
+day and it is fixed — `actor` now emits the embed only when the row has a public
+id, so it is either COMPLETE or `null`. Do not "fix" that skip into a
+`String(user.id)` fallback: order/social do fall back that way, but on this path
+the sibling `actorId` is already `publicId ?? null`, and a numeric fallback here
+would put an internal id on the wire (PUBID). In practice neither is reachable —
+`users.username` is NOT NULL and `publicId` is assigned at registration.
+
+`actor` rides the realtime push too, not just the list: `NotificationPushController`
+runs the same `exposeReferences` before `sendToUser`, so the `notification` event
+on WS namespace `/notifications` carries the identical embed (verified live over
+a real socket).
+
+Deliberately KEPT after review: `toDistrictId` / `toWardCode` on orders (the FE
+needs them to re-open an address picker), and everything the FE listed as
+"please keep".
+
+Residual: the product public read cache holds already-exposed payloads
+(`PUBLIC_READ_CACHE_TTL_SECONDS = 10`), so for up to 10s after a deploy a
+product read can still serve a pre-trim fat row. Self-healing; not a bug.

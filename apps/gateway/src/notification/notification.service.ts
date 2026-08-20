@@ -9,7 +9,10 @@ import {
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
 import { retryOnTransportError } from "../common/exception/transport-error";
-import { PaginatedNotifications } from "./notification.types";
+import {
+  NotificationActor,
+  PaginatedNotifications,
+} from "./notification.types";
 import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 
 @Injectable()
@@ -64,7 +67,12 @@ export class NotificationGatewayService {
         : firstValueFrom(
             this.userClient
               .send<
-                Array<{ id: number; publicId?: string | null }>
+                Array<{
+                  id: number;
+                  publicId?: string | null;
+                  username?: string | null;
+                  avatar?: string | null;
+                }>
               >({ cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS }, { userIds })
               .pipe(timeout(TCP_TIMEOUT_MS.WRITE), retryOnTransportError()),
           ),
@@ -75,6 +83,24 @@ export class NotificationGatewayService {
     const userPublicIdById = new Map(
       users.map((user) => [Number(user.id), user.publicId ?? null]),
     );
+    // OVERFETCH-01 (7): the actor rows are already fetched to map their public
+    // ids, so hand the FE the name/avatar too instead of making it resolve
+    // `actorId` per notification. Public id / username / avatar only — never
+    // the email. The embed is either COMPLETE or absent: a row with no public
+    // id is skipped rather than falling back to the numeric id (that fallback
+    // would leak an internal id, PUBID), which keeps `id`/`username` non-null
+    // and the shape identical to the `reviewer`/`reporter` embeds. In practice
+    // it is always present — `username` is NOT NULL and `publicId` is assigned
+    // at registration.
+    const actorById = new Map<number, NotificationActor>();
+    for (const user of users) {
+      if (!user.publicId || !user.username) continue;
+      actorById.set(Number(user.id), {
+        id: user.publicId,
+        username: user.username,
+        avatar: user.avatar ?? null,
+      });
+    }
     const exposeRow = (
       row: Record<string, unknown>,
     ): Record<string, unknown> => ({
@@ -91,6 +117,10 @@ export class NotificationGatewayService {
         row.actorId === null
           ? null
           : (userPublicIdById.get(Number(row.actorId)) ?? null),
+      actor:
+        row.actorId === null
+          ? null
+          : (actorById.get(Number(row.actorId)) ?? null),
     });
     return (
       Array.isArray(value.data)

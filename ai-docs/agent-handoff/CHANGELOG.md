@@ -6,6 +6,91 @@
 
 ## Completed Milestones
 
+- **OVERFETCH-01 — gateway read payloads trimmed at the boundary: one security
+  leak closed, five dead fields dropped, three user references hydrated
+  (2026-08-20). Release class B.** Came from the FE agent's payload-cleanup
+  request (`backend-handoff.md`), which was explicit that nothing was blocked
+  and that its "BE returns extra" claims were **inferred from entity +
+  serializer, not curled** — so every item below was first confirmed against a
+  real response, then re-verified live after the cut. All seven parts are
+  gateway-only: the changes live in the boundary serializers, so entities, TCP
+  payloads and RMQ events are byte-identical and no microservice was touched.
+  - **(1) `reservationKey` no longer ships to any client** (`exposeOrder`,
+    `apps/gateway/src/order/order.service.ts`). It is the internal
+    inventory-reservation handle; shipping it let a caller name another order's
+    reservation. The only real security item in the batch. The admin GHN detail
+    path was already immune — `toAdminGhnLocalOrder` projects explicit fields
+    and never carried it.
+  - **(2) One image key on order items, not two.** `productImage` is gone;
+    `image` is the survivor. **Not a plain delete** — see the regression note
+    below.
+  - **(3) Nested `brand` / `categories[]` on product rows are trimmed to
+    `{id, name, isActive}`** (`trimTaxonomyReferences` +
+    `pickTaxonomySummary`, `apps/gateway/src/product/product.service.ts`),
+    applied at both `exposeProductReferences` return points. It is recursive,
+    so it covers list rows, detail, and nested product refs alike. Ordering
+    rule that must hold: `attachCategoryIds` runs BEFORE the trim at all 9 call
+    sites and only needs `id`.
+  - **(4) Five fields dropped that no client ever read**: `user1LastReadAt` /
+    `user2LastReadAt` (chat conversations — read cursors, server-side state),
+    `followerId` / `followingId` (social follows — the row already carries the
+    hydrated `user`), `previousOrderStatus` (return requests — it exists so the
+    orders service can roll an order back on reject). **`toDistrictId` /
+    `toWardCode` were deliberately KEPT** at FE's own request.
+  - **(5) `role.slug` dropped, `role.name` kept** (`exposeRole`,
+    `apps/gateway/src/user/user.service.ts`). `RoleName` is both a TS enum and
+    a DB enum column; JWT generation and `CheckPermission` key off `rol_name`.
+    `rol_slug` had exactly one reader in the whole workspace —
+    `role.entity.ts:39`, its own declaration — and zero in either FE repo.
+  - **(6) Every "please keep" field left alone.** No action, by design.
+  - **(7) Three user references hydrated, additively**: `actor` on
+    notifications, `reporter` on social reports, `reviewer` on return requests,
+    each `{id, username, avatar}` next to the unchanged bare public id. The
+    rows were already being fetched to map their public ids, so this costs no
+    extra query. **`email` must never be added to these three** — the summary
+    map is fetched with `includeEmail: true` for other callers, so the omission
+    is deliberate and load-bearing.
+  - **Regression caught by the Change-Impact Review, not by the self-test.**
+    `POST /api/order` does not decorate its items (ORDER-SHAPE-01), so it
+    carried `productImage` *alone* — an unconditional delete would have shipped
+    a checkout response with no image key at all. `exposeOrder` now copies
+    `productImage` into `image` when `image` is absent, then deletes it. Do not
+    remove that fallback. The admin GHN console detail bypasses `exposeOrder`
+    entirely and still receives `productImage` — a deliberate asymmetry,
+    `web-flow-GHN/src/features/ghn-shipping/api/adapters.ts` reads it.
+  - **Verified live** (dev, real accounts): order detail has no
+    `reservationKey` and one `image` key; `POST /api/order` → 201 with `image`
+    populated from the Cloudinary snapshot and no `productImage`; return
+    requests carry `reviewer` and no `previousOrderStatus`; admin reports carry
+    a hydrated `reporter`; admin role reads `{"id":1,"name":"admin"}`; the
+    moderation queues (pending brands, categories) are untouched; GHN console
+    detail still carries `productImage`. `tsc --noEmit` clean, eslint clean,
+    36 jest suites / 353 tests green.
+  - **Residual:** the product public read cache stores already-exposed payloads
+    with a 10s TTL, so a pre-trim fat row can be served for up to 10 seconds
+    after deploy. Self-healing; no action.
+  - **Class B, not C:** every removed field appears in the FE repos only as a
+    type declaration or not at all, and the one real consumer (`productImage`
+    in the GHN console) sits on a route this change does not touch. Nothing a
+    user sees breaks in the gap between a BE and an FE deploy.
+  - **Follow-up the same day, from the FE's post-check: the three embeds did
+    not have one shape.** `reviewer` and `reporter` are both built from
+    `UserInfo` (`id: string`, `username: string`, `avatar: string | null`), but
+    `actor` was hand-built in `notification.service.ts` as `publicId ?? null` /
+    `username ?? null` — all three keys nullable. One concept, two shapes, and
+    an FE `UserSummary` typed non-null was lying on the notification path.
+    Fixed: `actor` is now emitted only for a row that has a public id, so the
+    embed is **complete or `null`**, never half-populated. Deliberately NOT the
+    `String(user.id)` fallback order/social use — the sibling `actorId` on this
+    path is already `publicId ?? null`, and a numeric fallback would put an
+    internal id on the wire. Neither branch is reachable in practice
+    (`username` is NOT NULL, `publicId` is assigned at registration). The shape
+    is now declared, not implicit: `NotificationActor` in
+    `notification.types.ts`, with `actor` added to `NotificationItem`.
+    Verified live on `GET /api/notifications` **and** over a real socket — the
+    `notification` event on WS `/notifications` runs the same `exposeReferences`
+    and carries the identical embed, which the first entry did not mention.
+
 - **VOUCHER-CONC-01 — a flash voucher is now safe under a burst: indexes, an
   honest per-user cap, a Redis admission gate, and a shorter lock hold
   (2026-08-18). Release class A.** Came out of the question "is high concurrency

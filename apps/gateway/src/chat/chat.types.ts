@@ -50,12 +50,16 @@ export interface ExposedChatMessage {
   createdAt: string | Date;
 }
 
+/**
+ * OVERFETCH-01 (4): the per-side read cursors (`user1LastReadAt` /
+ * `user2LastReadAt`) stay server-side. They only exist so the chat service can
+ * compute `unreadCount`, which is the value the client actually renders — and
+ * exposing them told each participant when the other last opened the thread.
+ */
 export interface ExposedChatConversation {
   id: string;
   user1Id: string | null;
   user2Id: string | null;
-  user1LastReadAt: string | Date | null;
-  user2LastReadAt: string | Date | null;
   createdAt: string | Date;
   lastMessage?: {
     id: string;
@@ -98,8 +102,6 @@ export function exposeChatConversation(
     id: conversation.publicId ?? String(conversation.id),
     user1Id: userPublicIdById.get(Number(conversation.user1Id)) ?? null,
     user2Id: userPublicIdById.get(Number(conversation.user2Id)) ?? null,
-    user1LastReadAt: conversation.user1LastReadAt,
-    user2LastReadAt: conversation.user2LastReadAt,
     createdAt: conversation.createdAt,
   };
   if (conversation.lastMessage !== undefined) {

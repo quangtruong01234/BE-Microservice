@@ -46,15 +46,16 @@ export class UserService {
     const raw = role as {
       rol_id?: unknown;
       rol_name?: unknown;
-      rol_slug?: unknown;
     };
     if (raw.rol_name === undefined && raw.rol_id === undefined) {
       return role;
     }
+    // OVERFETCH-01 (5): `name` is the stable key — it is the `RoleName` enum
+    // that JWT generation and every `CheckPermission` grant key off. `slug` was
+    // a second spelling of the same value with no reader anywhere.
     return {
       id: raw.rol_id ?? null,
       name: raw.rol_name ?? null,
-      slug: raw.rol_slug ?? null,
     };
   }
 
