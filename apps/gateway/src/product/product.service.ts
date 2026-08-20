@@ -42,6 +42,9 @@ import {
 } from "./product.types";
 import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 
+/** Fields of a nested `brand` / `categories[]` row that survive to HTTP. */
+const TAXONOMY_SUMMARY_KEYS = ["id", "name", "isActive"] as const;
+
 @Injectable()
 export class ProductService {
   private readonly logger = new Logger(ProductService.name);
@@ -120,6 +123,52 @@ export class ProductService {
         `Public read cache invalidation failed for product ${productId}: ${(error as Error).message}`,
       );
     }
+  }
+
+  /**
+   * OVERFETCH-01 (3): `brand` and `categories` are eager relations, so every
+   * product row carried the FULL taxonomy entity — `description`, `status`,
+   * `submittedBy`, `reviewNote`, `createdAt`, `updatedAt` — repeated once per
+   * product per category. Only the display fields belong on a product row; the
+   * moderation columns are the moderation queue's business and those routes
+   * (`getPendingBrands` / `getPendingCategories` / `getAllBrands` /
+   * `getAllCategories`) do not pass through this walker, so they keep them.
+   */
+  private trimTaxonomyReferences(value: unknown): unknown {
+    if (Array.isArray(value)) {
+      return value.map((item) => this.trimTaxonomyReferences(item));
+    }
+    if (!value || typeof value !== "object") {
+      return value;
+    }
+    const trimmed: Record<string, unknown> = {};
+    for (const [key, nestedValue] of Object.entries(
+      value as Record<string, unknown>,
+    )) {
+      trimmed[key] =
+        key === "brand" || key === "categories"
+          ? this.pickTaxonomySummary(nestedValue)
+          : this.trimTaxonomyReferences(nestedValue);
+    }
+    return trimmed;
+  }
+
+  /** Reduces a brand/category row to the fields a product card renders. */
+  private pickTaxonomySummary(value: unknown): unknown {
+    if (Array.isArray(value)) {
+      return value.map((item) => this.pickTaxonomySummary(item));
+    }
+    if (!value || typeof value !== "object") {
+      return value;
+    }
+    const raw = value as Record<string, unknown>;
+    const summary: Record<string, unknown> = {};
+    for (const key of TAXONOMY_SUMMARY_KEYS) {
+      if (key in raw) {
+        summary[key] = raw[key];
+      }
+    }
+    return summary;
   }
 
   private exposeProductPayload(value: unknown): unknown {
@@ -264,7 +313,9 @@ export class ProductService {
     };
     collect(value);
     if (productIds.size === 0) {
-      return this.exposeUserReferences(this.exposeProductPayload(value));
+      return this.exposeUserReferences(
+        this.trimTaxonomyReferences(this.exposeProductPayload(value)),
+      );
     }
     const products = await firstValueFrom(
       this.productClient
@@ -297,7 +348,9 @@ export class ProductService {
       }
       return exposed;
     };
-    return this.exposeUserReferences(expose(value));
+    return this.exposeUserReferences(
+      this.trimTaxonomyReferences(expose(value)),
+    );
   }
 
   private async resolveProductQuery(

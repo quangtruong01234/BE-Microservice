@@ -13,6 +13,16 @@ import { CommentNode, UserInfo, UserInfoTcp } from "./social.types";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
 import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 
+/**
+ * OVERFETCH-01 (7): user-reference keys that also get a hydrated sibling
+ * ({ id, username, avatar }) next to the bare public id — the users are
+ * already fetched by `exposeReferences`, so the FE should not need a second
+ * lookup per row. Additive: the id key itself is unchanged.
+ */
+const HYDRATED_USER_KEY_BY_REFERENCE: Record<string, string> = {
+  reporterId: "reporter",
+};
+
 @Injectable()
 export class SocialGatewayService {
   constructor(
@@ -211,7 +221,12 @@ export class SocialGatewayService {
         } else if (nestedValue !== null && commentKeys.has(key)) {
           exposed[key] = commentPublicIdById.get(Number(nestedValue)) ?? null;
         } else if (nestedValue !== null && userKeys.has(key)) {
-          exposed[key] = users.get(Number(nestedValue))?.id ?? null;
+          const summary = users.get(Number(nestedValue));
+          exposed[key] = summary?.id ?? null;
+          const hydratedKey = HYDRATED_USER_KEY_BY_REFERENCE[key];
+          if (hydratedKey !== undefined) {
+            exposed[hydratedKey] = summary ?? null;
+          }
         } else {
           exposed[key] = expose(nestedValue);
         }
@@ -750,9 +765,11 @@ export class SocialGatewayService {
       ]);
       return this.exposeReferences({
         ...result,
-        data: result.data.map((r) => ({
-          ...r,
-          user: authorMap.get(r.followerId) ?? null,
+        // OVERFETCH-01 (4): the embedded `user` already carries the follower's
+        // public id, so `followerId` was the same value a second time.
+        data: result.data.map(({ followerId, ...row }) => ({
+          ...row,
+          user: authorMap.get(followerId) ?? null,
         })),
       });
     } catch (error) {
@@ -792,9 +809,10 @@ export class SocialGatewayService {
       ]);
       return this.exposeReferences({
         ...result,
-        data: result.data.map((r) => ({
-          ...r,
-          user: authorMap.get(r.followingId) ?? null,
+        // OVERFETCH-01 (4): same as `getFollowers` — `user.id` already is it.
+        data: result.data.map(({ followingId, ...row }) => ({
+          ...row,
+          user: authorMap.get(followingId) ?? null,
         })),
       });
     } catch (error) {

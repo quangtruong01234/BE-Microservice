@@ -50,6 +50,15 @@ import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 import { OrderStatusValue } from "libs/constant/order-status.constant";
 import { READ_ONLY_SHIPPING_ACTIONS } from "libs/constant/shipping.constant";
 
+/**
+ * OVERFETCH-01 (7): user-reference keys that also get a hydrated sibling
+ * object ({ id, username, avatar }) next to the bare public id, so the FE can
+ * render a name without a second lookup. Additive — the id key is unchanged.
+ */
+const HYDRATED_USER_KEY_BY_REFERENCE: Record<string, string> = {
+  reviewedBy: "reviewer",
+};
+
 export abstract class BaseAggregatorService {
   protected logger = new Logger(BaseAggregatorService.name);
 
@@ -684,16 +693,33 @@ export class OrderService {
     const expose = (nested: unknown): unknown => {
       if (Array.isArray(nested)) return nested.map(expose);
       if (!nested || typeof nested !== "object") return nested;
-      return Object.fromEntries(
-        Object.entries(nested as Record<string, unknown>).map(
-          ([key, nestedValue]) => [
-            key,
-            userReferenceKeys.has(key) && nestedValue !== null
-              ? (users.get(Number(nestedValue))?.id ?? null)
-              : expose(nestedValue),
-          ],
-        ),
-      );
+      const exposedRow: Record<string, unknown> = {};
+      for (const [key, nestedValue] of Object.entries(
+        nested as Record<string, unknown>,
+      )) {
+        if (!userReferenceKeys.has(key) || nestedValue === null) {
+          exposedRow[key] = expose(nestedValue);
+          continue;
+        }
+        const summary = users.get(Number(nestedValue));
+        exposedRow[key] = summary?.id ?? null;
+        // OVERFETCH-01 (7): the users are already fetched here, so hydrate the
+        // moderator next to the bare id instead of making the FE resolve
+        // `reviewedBy` with a second lookup per row. Public id / username /
+        // avatar only — never the email `getUserSummaryMap` pulls for
+        // internal use.
+        const hydratedKey = HYDRATED_USER_KEY_BY_REFERENCE[key];
+        if (hydratedKey !== undefined) {
+          exposedRow[hydratedKey] = summary
+            ? {
+                id: summary.id,
+                username: summary.username,
+                avatar: summary.avatar ?? null,
+              }
+            : null;
+        }
+      }
+      return exposedRow;
     };
     return expose(value);
   }
@@ -706,6 +732,12 @@ export class OrderService {
       id: order.publicId ?? String(order.id),
     };
     delete exposed.publicId;
+    // OVERFETCH-01 (1): `reservationKey` is the internal inventory-reservation
+    // handle. It is server-side state, no client has ever read it, and shipping
+    // it lets a caller name another order's reservation — strip it at the HTTP
+    // boundary. The admin GHN detail path is unaffected: `toAdminGhnLocalOrder`
+    // projects explicit fields and never carried it.
+    delete exposed.reservationKey;
     if (Array.isArray(order.items)) {
       exposed.items = order.items.map((item) => {
         if (!item || typeof item !== "object") {
@@ -722,6 +754,17 @@ export class OrderService {
           : null;
         delete cleaned.productPublicId;
         delete cleaned.orderId;
+        // OVERFETCH-01 (2): collapse the two image keys into `image`, the one
+        // the storefront reads. The decorated read paths already carry it
+        // (`decorateItem` resolves snapshot → live product → null), but
+        // `POST /api/order` does NOT decorate — it used to ship the raw
+        // `productImage` alone (ORDER-SHAPE-01), so fall back to it rather than
+        // leaving that response with no image at all. The GHN console detail
+        // bypasses this walker and still receives `productImage`.
+        if (cleaned.image === undefined) {
+          cleaned.image = cleaned.productImage ?? null;
+        }
+        delete cleaned.productImage;
         return cleaned;
       });
     }
@@ -786,6 +829,10 @@ export class OrderService {
     };
     delete exposed.publicId;
     delete exposed.orderPublicId;
+    // OVERFETCH-01 (4): `previousOrderStatus` exists purely so the orders
+    // service can roll the order back when a return is rejected. It is not part
+    // of the buyer- or seller-facing contract.
+    delete exposed.previousOrderStatus;
     return exposed;
   }
 
