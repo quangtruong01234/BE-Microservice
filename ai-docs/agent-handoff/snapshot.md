@@ -475,6 +475,11 @@ notifies nobody. Decided shape — implement as-is, the design work is done:
   `JUST_FULLY_REDEEMED` on a code that still has room. Deliberate. Also
   unchanged by that work: a payment-init failure after commit cancels the order
   but does NOT give the redemption back.
+- REPORT-TOTAL-01: `deletePost` hard-removes the post and never deletes its
+  `post_reports` rows, so orphan reports accumulate forever. Deliberate — the
+  rows are the moderation audit trail. Since 2026-08-21 they are invisible to
+  `GET /social/admin/reports` (both the page and `total` inner-join `posts`),
+  so this is a storage-only residue, not a contract bug.
 
 ## Ops / Runtime Reference
 

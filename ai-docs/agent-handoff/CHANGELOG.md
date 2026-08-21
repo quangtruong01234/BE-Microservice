@@ -6,6 +6,56 @@
 
 ## Completed Milestones
 
+- **REPORT-TOTAL-01 — `total` on the moderation queue counted reports whose
+  post no longer exists (2026-08-21). Release class B.** From the FE inbox
+  (`backend-handoff.md`, 2026-08-21): on prod
+  `GET /api/social/admin/reports?status=resolved` returned
+  `{data: [], total: 1}`. The FE guessed `total` was being counted without the
+  `status` filter — **that guess was wrong**, and checking it first is what
+  found the real cause. Both query builders in
+  `SocialService.listReportedPosts` (`apps/social/src/social.service.ts:878`,
+  `:883`) have filtered by `status` since the moderation feature shipped
+  (`f5d6400`, 2026-07-08).
+  - **Real cause: orphaned report rows.** `deletePost`
+    (`social.service.ts:559`) hard-removes the post via `postRepository.remove`
+    and never touches `post_reports`; there is no FK and no cascade
+    (`post-report.entity.ts` carries a plain `post_id` int). So a report can
+    outlive its post. `total` was `COUNT(DISTINCT report.postId)` straight off
+    `post_reports` and counted those orphans, while `data` dropped them in the
+    `if (!post) return null` guard after the posts were fetched. Two different
+    row sets, one of them reported as the size of the other.
+  - **Fix:** both `groupedQb` and `totalQb` now
+    `.innerJoin(Post, "post", "post.id = report.postId")`. `posts.id` is the PK
+    so at most one row matches — `COUNT(report.id)` per group and
+    `COUNT(DISTINCT report.postId)` are unaffected. The `if (!post)` guard stays
+    as a type guard for the `Map.get()` and against a delete racing between the
+    two queries.
+  - **Second bug the same join fixes, which the FE report did not mention:** the
+    page window (`.offset().limit()`) also ran over unjoined rows, so an orphan
+    inside a page silently consumed a slot — a `limit=20` page could return 19
+    entries with `hasNext: false`. `totalPages` was derived from the inflated
+    count too, so paging past the real end yielded an empty page.
+  - **Verified on dev with a purpose-built orphan**: created a post as user 17,
+    reported it as user 18 (`pending` → `total: 1, count: 1` ✅), then deleted
+    the post as its owner. Post-fix the endpoint returns
+    `{total: 0, count: 0, totalPages: 1, hasNext: false}` for `pending`, and
+    `resolved`/`dismissed` still return `{total: 1, count: 1}` — untouched.
+    Ran both count variants directly against the dev MySQL to show what the old
+    code would have answered: `pending` old (no join) = **2**, new (join) =
+    **0**; `resolved` and `dismissed` identical at 1 either way. Two real orphan
+    rows exist on dev (`post_reports.id` 1 → post 9, id 8 → post 29); they are
+    now invisible over HTTP and were left in place as fixtures.
+  - `tsc --noEmit` clean, eslint/prettier clean, jest **36 suites / 353 tests**
+    green.
+  - **Class B, not A:** the response shape is identical and no field changed
+    type, but `total` is an FE-visible value that changes. Nothing breaks in the
+    deploy gap — `ReportedPostsPage.tsx:229` deliberately does not render
+    `total`, and the `totalPages`/`hasNext` it does read only get more correct.
+  - **Deliberately NOT done: cleaning up orphan reports in `deletePost`.** The
+    rows are the moderation audit trail for a post that was taken down, and
+    deleting them is a product decision, not a bug fix. Recorded in
+    `known-behaviors.md` instead — the read path no longer exposes them.
+
 - **OVERFETCH-01 — gateway read payloads trimmed at the boundary: one security
   leak closed, five dead fields dropped, three user references hydrated
   (2026-08-20). Release class B.** Came from the FE agent's payload-cleanup

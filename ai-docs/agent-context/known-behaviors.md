@@ -20,8 +20,7 @@
   stock is never rewritten by an edit.
 - The removed-SKU reference check (`getReferencedSkuIds` → orders TCP
   `order.get_referenced_sku_ids`) **fails safe**: on error every candidate is
-  treated as referenced → deactivated instead of hard-deleted, seller still gets
-  200. The call retries once before falling back (a single stale-socket blip
+  treated as referenced → deactivated instead of hard-deleted, seller still gets 200. The call retries once before falling back (a single stale-socket blip
   used to trigger it). A sustained orders outage degrades the same way by
   design — re-sending the same edit hard-deletes the leftover once orders is
   reachable.
@@ -43,8 +42,8 @@ Never write a test asserting `paymentUrl` on the single-seller shape.
 ## Sellers cannot set shipping status by hand (ORD-RBAC-01, 2026-08-13)
 
 `PATCH /api/order/:id/{ship,deliver,complete}` is **admin-only**. Role `shop`
-(and every other non-admin role) gets a **403** *"Shipping status after
-ready-to-ship is reported by the carrier — a seller cannot set it manually"*
+(and every other non-admin role) gets a **403** _"Shipping status after
+ready-to-ship is reported by the carrier — a seller cannot set it manually"_
 before the order is even loaded — so a seller gets 403 even for an order id that
 does not exist or that they do not own. Deliberate, not an oversight:
 
@@ -70,8 +69,8 @@ does not exist or that they do not own. Deliberate, not an oversight:
 lives on Node B and speaks to orders only through the `payment_completed`
 fanout. `confirm`, `ready-to-ship` and every `advanceOrderStatus` step call
 `assertOnlinePaymentSettled()`: COD or a non-null `paidAt` passes, anything else
-is a **400** *"Order cannot be advanced — the &lt;method&gt; payment has not
-completed yet"*. Consequences that are deliberate, not bugs:
+is a **400** _"Order cannot be advanced — the &lt;method&gt; payment has not
+completed yet"_. Consequences that are deliberate, not bugs:
 
 - **A genuinely paid order whose `payment_completed` was lost is now blocked for
   the seller too.** It was already stuck — the same lost event is what leaves it
@@ -187,8 +186,7 @@ Only affects callers that do NOT send `toDistrictId`/`toWardCode` (GHN-ADDR-01,
 address can resolve to a wrong-but-valid GHN location, because short numeric
 master-data names match many free-text parts via containment. When BOTH ids are
 present the waybill/fee-preview use them exactly and skip free-text resolution;
-a partial pair is treated as absent. Truly unresolvable free-text → 400, not
-502. Both DTOs carry `@Type(() => Number)` on `toDistrictId` (string-numeric
+a partial pair is treated as absent. Truly unresolvable free-text → 400, not 502. Both DTOs carry `@Type(() => Number)` on `toDistrictId` (string-numeric
 accepted since 2026-08-04); `toWardCode` stays `@IsString()` on purpose — GHN
 ward codes can carry leading zeros. For COD the waybill is created at
 ORDER-CREATE time, so ready-to-ship re-uses the existing `ghnOrderCode`.
@@ -212,9 +210,9 @@ status it has. That is the settled answer for `delivery_fail`, not a gap:
 - **What DID change:** the null branch no longer calls all of these "Unhandled".
   The ten recognised statuses in `GHN_STATUSES_WITHOUT_LOCAL_STATUS`
   (`libs/constant/shipping.constant.ts`) write `GHN status "<x>" acknowledged;
-  no local equivalent, order stays <status>` to `shipping_history.message` and
+no local equivalent, order stays <status>` to `shipping_history.message` and
   log at `log` level; a string we have never seen still writes `Unhandled GHN
-  status "<x>"` and now logs at **warn**, so a new GHN vocabulary word is loud.
+status "<x>"` and now logs at **warn**, so a new GHN vocabulary word is loud.
   Forward-only — rows written before 2026-08-16 keep the old text.
 - Applies identically on all three entry points (webhook, admin manual sync,
   demo-status), because all three go through `applyGhnStatus`.
@@ -266,10 +264,10 @@ as the only exit.
 
 The catch now splits the two failure classes:
 
-| GHN said | Exception | `POST /api/order` |
-|---|---|---|
-| refusal — unknown district, ward from another district, unresolvable free-text, non-operational 4xx | `BadRequestException` | **400**, GHN's own message, nothing reserved or committed |
-| outage — down, timeout, 5xx/401/403/429, circuit open | `ServiceUnavailableException` / `InternalServerErrorException` | **201** at fee 0 (unchanged); `readyToShip` cuts the waybill later |
+| GHN said                                                                                            | Exception                                                      | `POST /api/order`                                                  |
+| --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------ |
+| refusal — unknown district, ward from another district, unresolvable free-text, non-operational 4xx | `BadRequestException`                                          | **400**, GHN's own message, nothing reserved or committed          |
+| outage — down, timeout, 5xx/401/403/429, circuit open                                               | `ServiceUnavailableException` / `InternalServerErrorException` | **201** at fee 0 (unchanged); `readyToShip` cuts the waybill later |
 
 - **The refusal is deterministic, which is what makes rejecting safe.** Preview
   and waybill create share one body builder, so an address that fails here could
@@ -307,7 +305,7 @@ field. Deliberate consequences — do not "restore" any of them:
   in favour of the status phrase, so an internal class name can never reach a
   client — including a raw `TypeError` from an unhandled gateway bug.
 - **Prod and dev agree.** The production 500 override still sanitizes the
-  *message* to `"Internal server error"`, but its label is the same phrase dev
+  _message_ to `"Internal server error"`, but its label is the same phrase dev
   emits (it used to be the unspaced `"InternalServerError"`).
 - No FE reads this field — the storefront client reads `message` + HTTP status,
   the GHN console branches on status. It is a debugging aid, not a contract.
@@ -378,8 +376,8 @@ answer a dropped/refused/nulled socket with `502` +
   genuinely restarting (multi-second) still returns 502 — correctly. Only
   `retryOnTransportError()`'s single 100ms retry hides the sub-tick socket flap.
 - **Worst-case latency on a retried read** is one fast transport failure + 100ms
-  + a full `TCP_TIMEOUT_MS.READ` budget. The retry only fires on transport
-  errors, which fail fast, so this is ~5.1s, not 10s.
+  - a full `TCP_TIMEOUT_MS.READ` budget. The retry only fires on transport
+    errors, which fail fast, so this is ~5.1s, not 10s.
 - **The retry now covers every idempotent gateway read (SOCIAL-502-ROLLOUT,
   2026-08-14)** — 92 call sites across cart, chat, inventory, notification,
   order, payment-options, product, shipping, social, user. Rules that were
@@ -421,7 +419,7 @@ answer a dropped/refused/nulled socket with `502` +
     `handleClose()` from the send callback: it takes no socket argument, so the
     stale socket's late 'close' then tears down the REPLACEMENT socket
     mid-connect and the next call dies with `TypeError: Cannot read properties
-    of null (reading 'on')` — strictly worse. Tried and reverted 2026-08-15.
+of null (reading 'on')` — strictly worse. Tried and reverted 2026-08-15.
   - **Activation is narrower than "restarts under load".** 45k requests through
     a peer restarting every 60ms produced ZERO null-socket failures on the BASE
     client: `publish()` normally wins the race and the packet fails with the
@@ -503,19 +501,19 @@ Answer to the FE question "is the PATCH atomic when the inventory step fails":
 1. **Product fields** — one MySQL transaction (`applyProductUpdate` inside
    `runProductUpdate`, `apps/product/src/product.service.ts`). Atomic among
    themselves.
-2. **`skuList`** — a *second*, separate MySQL transaction (`upsertSkus`, same
+2. **`skuList`** — a _second_, separate MySQL transaction (`upsertSkus`, same
    file). Atomic among themselves, but not with step 1.
 3. **`stockQuantity`** — a TCP write to inventory, which is a different service
    on a different database (Postgres). It can never join a MySQL transaction.
 
 What each failure leaves behind, after the 2026-08-12 narrowing:
 
-| Fails | Product fields | `skuList` | Stock |
-|---|---|---|---|
-| step 1 | rolled back | not reached | untouched |
-| step 2 | **committed** | rolled back | untouched |
-| inventory unreachable / no base row read fails | **untouched** | untouched | untouched |
-| inventory write (step 3) | **committed** | committed | mirror restored |
+| Fails                                          | Product fields | `skuList`   | Stock           |
+| ---------------------------------------------- | -------------- | ----------- | --------------- |
+| step 1                                         | rolled back    | not reached | untouched       |
+| step 2                                         | **committed**  | rolled back | untouched       |
+| inventory unreachable / no base row read fails | **untouched**  | untouched   | untouched       |
+| inventory write (step 3)                       | **committed**  | committed   | mirror restored |
 
 The narrowing: the base-inventory row is now resolved **before** the product
 write (`resolveStockSyncTarget`), so an inventory outage aborts the PATCH with
@@ -628,7 +626,7 @@ you need it there.
   is best-effort and must never fail the mutation that triggered it.
 - Dead post URLs are therefore NOT evidence of an over-eager cleanup. The dev
   cloud was purged wholesale once; leftovers with a doubled `trybuy/posts/
-  trybuy/posts/` folder or an `undefined_` prefix come from an old FE upload
+trybuy/posts/` folder or an `undefined_` prefix come from an old FE upload
   bug. Fix such rows as data, do not re-diagnose the cleanup path.
 
 ## Upload size caps are a contract, NOT a security boundary (UPLOAD-SIZE-01, 2026-08-15)
@@ -641,12 +639,12 @@ side, and the reasons are probed facts, not assumptions:
 
 - **Cloudinary cannot enforce a signed size on this account.** Three live probes
   on 2026-08-15: (1) putting `max_file_size` in the signed string → `401 Invalid
-  Signature`, and Cloudinary's own error echoes the string it expected —
+Signature`, and Cloudinary's own error echoes the string it expected —
   `allowed_formats=…&folder=…&public_id=…&timestamp=…` — i.e. size params are
-  excluded from the signable set; (2) a *signed* upload preset carrying
+  excluded from the signable set; (2) a _signed_ upload preset carrying
   `max_file_size: 10240` still accepted a 40 KB file (HTTP 200, `bytes=40964`);
   (3) the Admin API silently DROPPED `max_file_size` — `GET
-  upload_presets/<name>` came back with `settings: {"folder":"trybuy/products"}`
+upload_presets/<name>` came back with `settings: {"folder":"trybuy/products"}`
   and nothing else. So there is no signed-upload size limit to reach for. Do not
   re-probe this; do not add `max_bytes` to `paramsToSign` — it breaks every
   upload.
@@ -666,7 +664,7 @@ side, and the reasons are probed facts, not assumptions:
   signing it fatal.
 - **The ceiling is per folder, not per file type.** The signature is issued
   before any byte is read, so the server cannot tell an image from a video and
-  checks `bytes` against the folder's *video* cap where one exists (posts:
+  checks `bytes` against the folder's _video_ cap where one exists (posts:
   100 MB). An 11 MB image into `trybuy/posts` therefore passes the server and is
   caught only by the client's own per-type check. That asymmetry is intended —
   do not "fix" it by rejecting on the image cap, which would block legitimate
@@ -773,3 +771,27 @@ needs them to re-open an address picker), and everything the FE listed as
 Residual: the product public read cache holds already-exposed payloads
 (`PUBLIC_READ_CACHE_TTL_SECONDS = 10`), so for up to 10s after a deploy a
 product read can still serve a pre-trim fat row. Self-healing; not a bug.
+
+## Reports outlive their post; the moderation queue hides them (REPORT-TOTAL-01, 2026-08-21)
+
+`deletePost` (`apps/social/src/social.service.ts:559`) hard-removes the post with
+`postRepository.remove` and never deletes the matching `post_reports` rows. There
+is no FK and no cascade — `PostReport` carries a plain `post_id` int column
+(`apps/social/src/entities/post-report.entity.ts:17`). So every deleted post that
+had been reported leaves its report rows behind, permanently.
+
+This is deliberate: those rows are the moderation audit trail for a post that was
+taken down. Do NOT "fix" it by deleting reports in `deletePost` without a product
+decision.
+
+What WAS a bug and is fixed: `listReportedPosts` counted those orphans in `total`
+while dropping them from `data`, so `GET /api/social/admin/reports` could answer
+`{data: [], total: 1}` — that is exactly the prod symptom the FE reported on
+`?status=resolved`. Both the page query and the count query now inner-join
+`posts`, so orphans are excluded from both. The `if (!post) return null` guard
+further down is now only a type guard for the `Map.get()` plus a defence against
+a post deleted between the two queries — it is no longer what filters orphans.
+
+Consequence to expect: `total` on this endpoint can be LOWER than the raw
+`post_reports` row count for that status, and that is correct. Anyone reconciling
+the endpoint against the table directly must join `posts` too.
