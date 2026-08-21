@@ -866,8 +866,14 @@ export class SocialService {
   > {
     const { status, page, limit } = payload;
 
+    // `deletePost` hard-removes the post but leaves its report rows behind, so
+    // `post_reports` can hold rows pointing at a post that no longer exists.
+    // Both queries inner-join `posts` to exclude those orphans: without the
+    // join the count sees them but the page does not, so `total`/`totalPages`
+    // overstate the real result set and an orphan silently eats a page slot.
     const groupedQb = this.postReportRepository
       .createQueryBuilder("report")
+      .innerJoin(Post, "post", "post.id = report.postId")
       .select("report.postId", "postId")
       .addSelect("COUNT(report.id)", "reportCount")
       .addSelect("MAX(report.createdAt)", "latestReportedAt")
@@ -879,6 +885,7 @@ export class SocialService {
 
     const totalQb = this.postReportRepository
       .createQueryBuilder("report")
+      .innerJoin(Post, "post", "post.id = report.postId")
       .select("COUNT(DISTINCT report.postId)", "cnt");
     if (status) totalQb.where("report.status = :status", { status });
 
@@ -916,8 +923,9 @@ export class SocialService {
       .map((row) => {
         const postId = Number(row.postId);
         const post = postById.get(postId);
-        // Report rows can outlive their post only if a post was hard-deleted
-        // without cleaning reports; skip those orphans.
+        // The inner join above already excluded orphaned reports; this stays as
+        // a type guard for the map lookup and a defence against a post deleted
+        // between the two queries.
         if (!post) return null;
         const postReports = reportsByPostId.get(postId) ?? [];
         return {
