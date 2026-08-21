@@ -79,13 +79,12 @@ work is the two class-C sub-items under #4. Kept in full for the audit trail:
    review-create `userId` (REVIEW-ID-01) and the notification message text
    (`orderLabel` is publicId-safe). The last two sub-items (`submittedBy` on the
    pending brand/category queues, `topProducts[].productId` on analytics) are
-   **DONE ON THE BACKEND 2026-08-15 (IDLEAK-02) but HELD, not deployed** — they
-   are release class C and each has a live FE consumer typed `number`. Do NOT
-   re-implement them; the code is in the working tree. The hold is tracked in
-   `../.agent-local/release-gate.md` → IDLEAK-02 (`api: ✅`, `frontend: ⏳`
-   submittedBy, `web-flow-GHN: ⏳` productId-as-React-key), and **the whole `api`
-   working tree is held at class C until both cells flip**. See `CHANGELOG.md`
-   2026-08-15. With that, defect #4 has nothing left to implement.
+   **DONE AND RELEASED** — implemented on the backend 2026-08-15 (IDLEAK-02,
+   release class C), pushed 2026-08-16 (`6bcb6da..44d976e`) once both FE cells
+   went ✅, and the `release-gate.md` entry now sits under **Released**. The
+   class-C hold that used to be described here is OVER — do not treat the `api`
+   working tree as blocked by it. See `CHANGELOG.md` 2026-08-15. With that,
+   defect #4 has nothing left to implement.
    (Fixed and deployed 2026-08-12 by GHN-HIST-01: shipping-history `actorId`
    and every GHN action/status message now carry `usr_`/`ord_`. Wishlist `id`
    was fixed by the 08-11 batch.)
