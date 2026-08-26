@@ -6,6 +6,117 @@
 
 ## Completed Milestones
 
+- **GHN-WARD-01 — stop offering wards GHN refuses to deliver to (2026-08-26).
+  Release class B, no migration.** Closes the first half of PRODTEST-0806 defect
+  #3, which the prod voucher sweep re-opened: of the 19 wards
+  `GET /api/shipping/wards?districtId=1450` returned for Quận 8, only 7 could
+  actually be quoted, so the storefront dropdown could hand a buyer an address
+  that 400s at checkout with a Vietnamese GHN message and no way to tell which
+  ward was at fault.
+  - **The signal was already in the payload.** Vietnam's 2025 ward merger left
+    GHN's master data carrying both generations: the merged wards `910374`
+    (Xóm Củi), `910375` (Hưng Phú), `910376` (Rạch Ông) come back with
+    `Status: 3, SupportType: 0` while every legacy ward is `Status: 1,
+    SupportType: 3`. We were discarding both fields. `GhnWard.Status?: number`
+    (optional — only `/master-data/ward` carries it) plus
+    `GhnService.isDeliverableWard()` is the whole fix; no preview probe, no
+    cache, no extra GHN call, and the 24h master-data cache is untouched.
+  - **Three call sites, three different treatments — deliberate.**
+    `listWards()` filters (the dropdown must not offer a dead ward);
+    `resolveAddressToGhnIds()` filters its candidate list (resolving free text
+    onto a retired ward would just hand back an id that fails later);
+    `assertLocationExists()` still matches against the RAW list, so it can tell
+    "not in this district" apart from "retired" and throw the new
+    `GHN_MESSAGE.WARD_INACTIVE` instead of the misleading `WARD_NOT_IN_DISTRICT`.
+    That branch is reachable via an address saved before the ward was retired,
+    since the dropdown no longer offers one.
+  - **Fail-open on a missing field:** if GHN ever stops sending `Status`, every
+    ward is kept. Emptying a district's dropdown is worse than showing one bad
+    ward.
+  - **Verified locally** (all four legs, dev GHN sandbox): wards for 1450 → 16
+    rows, no `9103xx`; `POST /api/order/shipping-fee` with ward `910376` → 400
+    "GHN no longer delivers to ward 910376"; ward `20816` → 201 with an ETA;
+    ward `1A0807` (district 1490) → 400 `WARD_NOT_IN_DISTRICT` (unchanged);
+    free-text "Phuong 16, Quan 8" → 201; free-text "Phuong Rach Ong, Quan 8" →
+    400 `ADDRESS_UNRESOLVED`; `POST /api/order` on ward `910376` → 400 with no
+    order created (GHN-CREATE-01 propagation intact).
+  - **NOT fixed, and not ours:** the other nine failing wards (`20801`-`20803`,
+    `20808`-`20813`) answer `Lỗi hệ thống - không lấy được thông tin kho` while
+    being `Status: 1` — indistinguishable from a good ward in master data. See
+    GHN-MSG-01 below for what was done about them instead, and
+    `known-behaviors.md` for the evidence that they are GHN's problem.
+
+- **GHN-MSG-01 — an unserviceable destination no longer surfaces as GHN's
+  internal system error (2026-08-26). Release class B, no migration.** The nine
+  wards GHN-WARD-01 could not filter answer `GHN preview error: Lỗi hệ thống -
+  không lấy được thông tin kho`. A buyer picking one at checkout reads that as
+  OUR site being broken, and it names nothing they can act on.
+  - **Re-probed before deciding, and the earlier "sandbox coverage gap" reading
+    was only half right.** Prod and local both point at
+    `dev-online-gateway.ghn.vn` shop `200481` (the `shippingFee: 0` on every
+    quote is that gateway's signature), so this hits REAL prod buyers today —
+    12 of 19 Quận 8 wards cannot be ordered to. What is dev-only is GHN's side:
+    the shop's demo warehouse, not our code.
+  - **Everything that could have been our bug was ruled out** by calling GHN
+    directly: `service_type_id` 2 and 5, an explicit `from_district_id`/
+    `from_ward_code`, and a 5kg parcel all fail identically, while the shop
+    record itself is `status: 1` and `available-services` offers both services
+    for the lane. `/shipping-order/fee` and `/leadtime` DO answer 200 for those
+    wards — tempting, but `/shipping-order/create` fails with the same warehouse
+    error, so quoting from `/fee` would book an order GHN cannot turn into a
+    waybill. That is exactly the failure GHN-CREATE-01 exists to prevent, so the
+    400 stays.
+  - **What changed:** `GhnService.toGhnDomainError()` classifies GHN's own
+    wording and returns the stable `GHN_MESSAGE.DESTINATION_NOT_SERVICEABLE`
+    instead of echoing it. Signatures are deliberately narrow —
+    `"không lấy được thông tin kho"` and `"người nhận không còn hoạt động"`, not
+    a bare `"không còn hoạt động"`, because the same function serves the admin
+    waybill actions and would otherwise swallow an order-state refusal.
+  - **Order of checks matters:** the outage branch runs FIRST, so an unreachable
+    GHN stays a 503 whatever text it echoed. Collapsing it into a 400 would send
+    a buyer off to edit an address that was never the problem.
+  - The raw GHN wording is logged at `warn` before it is dropped — it is the only
+    clue to which destination rule GHN applied.
+  - **Verified locally, 6 legs:** good ward → 201; warehouse-gap ward `20801` →
+    400 with the new message; retired ward `910376` → still 400
+    `WARD_INACTIVE` (our own earlier guard, unaffected); ward of another
+    district → 400 `WARD_NOT_IN_DISTRICT`; unknown district → 400
+    `DISTRICT_NOT_FOUND`; and a NON-destination GHN refusal (invalid phone)
+    still passes GHN's own text through unchanged — proof the mapping does not
+    over-swallow.
+
+- **VOUCHER-CANCEL-01 — cancelling an order gives the voucher redemption back
+  (2026-08-26). Release class A, no migration.** Found during the prod voucher
+  sweep: `releaseVoucherQuota()` only ran when the checkout itself failed, so
+  the `voucher_redemptions` row and `used_count` outlived every cancellation.
+  A buyer who placed and cancelled twice on a `perUserLimit: 2` code was locked
+  out of it forever, and each cancelled order permanently burned one of
+  `usage_limit` — verified live on prod, where 3 cancelled orders had left
+  `used_count` at 2 and 1.
+  - **`OrdersService.releaseVoucherRedemption(order)`** deletes the redemption
+    row, decrements `used_count` with `GREATEST(used_count - 1, 0)` in one
+    transaction, then drops the VOUCHER-CONC-01 Redis quota key so the next
+    claim re-seeds instead of enforcing the stale cap for up to 300s.
+  - **The DELETE's `affected` count is the concurrency guard** — no new column,
+    no Redis key, no status check. Two racing cancels both read the row but only
+    one delete reports `affected: 1`, so `used_count` cannot be decremented
+    twice for one order, and a redelivered GHN cancel webhook arriving after a
+    buyer cancel is a no-op for the same reason.
+  - **Wired into all three cancellation paths:** `finalizeCancellation` (buyer
+    cancel + the hourly stale-reservation sweep), `finalizeGhnCancellation`
+    (GHN cancel/return, webhook + manual sync + demo-status), and
+    `cancelOrderAfterPaymentInitializationFailure` — the last of which also
+    closes the previously-recorded residual "a payment-init failure after commit
+    cancels the order but does NOT give the redemption back".
+  - **Non-fatal by design:** a cancel must not fail because voucher bookkeeping
+    did. On error it logs and the counter stays pessimistically high, which is
+    the state VOUCHER-CONC-01 already tolerates.
+  - **Verified locally end-to-end** on a platform voucher (`usageLimit: 2`,
+    `perUserLimit: 1`): order → `usedCount 1`; second order → 400 "already used
+    the maximum number of times"; cancel → `usedCount 0`; re-cancel → 400 "Order
+    cannot be canceled" and `usedCount` still 0 (no double-decrement); re-order
+    with the same code → 201 with the discount applied, `usedCount 1` again.
+
 - **Released to production 2026-08-26 (`ccb8f9a..e10506f`)** — VOUCHER-SHOP-01
   phase 1, VOUCHER-GUARD-01 and VOUCHER-EDIT-01, all release class B. The CD run
   applied both owed voucher migrations (`nodeA-20260818-001-add-voucher-indexes`,

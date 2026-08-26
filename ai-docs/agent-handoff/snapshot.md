@@ -71,6 +71,39 @@ work is the two class-C sub-items under #4. Kept in full for the audit trail:
    message ⇒ the ward really is unshippable and only then is this a real defect.
    GHN-DIST-01 (2026-08-13) adds a third, earlier signal: a district/ward pair
    GHN's master data does not know now 400s before any preview call.
+   **REOPENED AND CONFIRMED REAL 2026-08-26** by the self-classification rule
+   above. Probed all 19 wards `/api/shipping/wards?districtId=1450` returns for
+   Quận 8 against `POST /api/order/shipping-fee` on prod: only **7 of 19** quote
+   a fee. Deterministic `400`s, GHN's own message, no 503 anywhere:
+   - `910376` / `910375` / `910374` (Rạch Ông, Hưng Phú, Xóm Củi — the 2025
+     merged-ward ids) → `phường/xã người nhận không còn hoạt động`. GHN's
+     master-data endpoint lists them, GHN's own preview refuses them.
+   - `20801`,`20802`,`20803`,`20808`..`20813` → `Lỗi hệ thống - không lấy được
+     thông tin kho` (likely a sandbox shop-warehouse coverage gap, not a bad
+     ward — re-probe on real GHN credentials before acting on this half).
+   So the FE ward dropdown CAN hand a buyer a selection that 400s at checkout,
+   and the buyer has no way to tell which. Known-good pair for any manual prod
+   test: district `1450` + ward `20816`.
+   **FIRST HALF FIXED 2026-08-26 (GHN-WARD-01, class B)** — no preview probe
+   needed after all: GHN's own ward payload carries `Status` (1 = live, 3 =
+   retired) and the three merged wards are the only `Status: 3` rows, so
+   `GET /api/shipping/wards` now filters them out server-side at zero extra GHN
+   calls. `?districtId=1450` returns 16 wards, not 19. See `CHANGELOG.md`
+   2026-08-26. **Second half is NOT ours to fix, re-probed on prod 2026-08-26**
+   (GHN-MSG-01): the nine `Lỗi hệ thống - không lấy được thông tin kho` wards
+   are `Status: 1`, i.e. indistinguishable from a good ward. Calling GHN
+   directly ruled out every variable on our side (`service_type_id` 2 and 5,
+   explicit `from_district_id`/`from_ward_code`, 5kg parcel — all fail
+   identically; the shop record is healthy and `available-services` offers both
+   services for the lane). Do NOT "fix" it by quoting from
+   `/shipping-order/fee`, which answers 200 for those wards: `create` fails with
+   the same warehouse error, so that would just re-create the GHN-CREATE-01 bug.
+   What DID change: the buyer now gets `GHN_MESSAGE.DESTINATION_NOT_SERVICEABLE`
+   instead of GHN's internal system error. **This is live on prod, not a dev-only
+   quirk** — prod points at the same `dev-online-gateway` shop `200481`, so 12
+   of 19 Quận 8 wards genuinely cannot be ordered to until real GHN credentials
+   exist. Re-probe then; only if it persists is the per-district shippable-ward
+   cache built from preview probes worth considering.
 4. **Numeric internal ids still leak on PUBID domains** — MOSTLY FIXED
    2026-08-13 (IDLEAK-01, class B): `stock-check.productId`, return-request
    `reviewedBy`, moderation `moderatorId`, and the social `"Post 1 not found"` /
@@ -535,6 +568,16 @@ See `CHANGELOG.md` 2026-08-26.
   vouchers and is uncached (it prices against the live basket). A shop's 403 on
   another shop's voucher carries NO code in the message, on purpose — otherwise
   walking numeric voucher ids harvests other shops' codes.
+- VOUCHER-CANCEL-01 (found on prod 2026-08-26, FIXED the same day): cancelling
+  an order now gives the voucher redemption back — `releaseVoucherRedemption()`
+  deletes the `voucher_redemptions` row, decrements `used_count` and drops the
+  Redis quota mirror on every cancel path. Residual, deliberate: a **returned**
+  order reaches CANCELED through `applyGhnStatus`, so a return also gives the
+  voucher back; and the release is non-fatal, so if it throws the cancel still
+  succeeds and the counter stays pessimistically high (same tolerated state as
+  VOUCHER-CONC-01). Cancel-farming a limited code is now possible by design —
+  the alternative was permanently burning a slot for an order that was never
+  fulfilled. See `CHANGELOG.md` 2026-08-26.
 - VOUCHER-EDIT-01: a LOOSENING edit on a redeemed voucher cannot be walked back
   through the API — the reverse is by definition a tightening, which the same
   rule 400s. Bump `usageLimit` 3 → 20 by mistake and the only remedy is
