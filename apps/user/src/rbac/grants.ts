@@ -38,6 +38,13 @@ const grantList = [
     action: "update:any",
     attributes: "*",
   },
+  // voucher — VOUCHER-SHOP-01. Separate resource so a shop can issue its own
+  // discount codes without widening the `order` grant it already holds.
+  { role: "admin", resource: "voucher", action: "create:any", attributes: "*" },
+  { role: "admin", resource: "voucher", action: "read:any", attributes: "*" },
+  { role: "admin", resource: "voucher", action: "update:any", attributes: "*" },
+  { role: "admin", resource: "voucher", action: "delete:any", attributes: "*" },
+
   // post — social post moderation (admin-only)
   { role: "admin", resource: "post", action: "read:any", attributes: "*" },
   { role: "admin", resource: "post", action: "update:any", attributes: "*" },
@@ -57,6 +64,9 @@ const grantList = [
     action: "update:own",
     attributes: "*",
   },
+  { role: "shop", resource: "voucher", action: "create:own", attributes: "*" },
+  { role: "shop", resource: "voucher", action: "read:own", attributes: "*" },
+  { role: "shop", resource: "voucher", action: "update:own", attributes: "*" },
   { role: "shop", resource: "user", action: "read:own", attributes: "*" },
   {
     role: "shop",
