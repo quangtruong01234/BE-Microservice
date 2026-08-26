@@ -18,6 +18,7 @@ import { Type } from "class-transformer";
 import { OrderItemDto } from "./create-order.dto";
 import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 import { IsPublicId } from "../../common/validators/is-public-id.validator";
+import { IsOptionalNotNull } from "../../common/validators/is-optional-not-null.validator";
 
 export enum VoucherDiscountType {
   PERCENT = "percent",
@@ -169,6 +170,10 @@ export class CreateVoucherDto {
  *
  * Every nullable field accepts an explicit `null` to CLEAR it (uncapped /
  * unlimited / no window / no description); omit the key to leave it untouched.
+ *
+ * `minOrderAmount` and `isActive` are the two exceptions: they map to NOT NULL
+ * columns, so they take `@IsOptionalNotNull()` and a `null` is a 400 rather
+ * than a 500 in the service. Send `0` / `false` instead.
  */
 export class UpdateVoucherDto {
   @ApiPropertyOptional({
@@ -183,11 +188,19 @@ export class UpdateVoucherDto {
 
   @ApiPropertyOptional({
     description:
-      "Minimum order subtotal (VND). Cannot be raised once the voucher has been redeemed.",
+      "Minimum order subtotal (VND). Cannot be raised once the voucher has " +
+      "been redeemed. Send `0` to remove the threshold — NOT `null`, the " +
+      "column is NOT NULL.",
     example: 100000,
   })
-  @IsOptional()
-  @IsNumber()
+  @IsOptionalNotNull()
+  @IsNumber(
+    {},
+    {
+      message:
+        "minOrderAmount must be a number — send 0 to remove the threshold, not null",
+    },
+  )
   @Min(0)
   minOrderAmount?: number;
 
@@ -245,11 +258,13 @@ export class UpdateVoucherDto {
   @ApiPropertyOptional({
     description:
       "Activate or deactivate the voucher. `true` is how a deactivated " +
-      "voucher is switched back on.",
+      "voucher is switched back on. Not nullable — the column is NOT NULL.",
     example: true,
   })
-  @IsOptional()
-  @IsBoolean()
+  @IsOptionalNotNull()
+  @IsBoolean({
+    message: "isActive must be a boolean — true or false, not null",
+  })
   isActive?: boolean;
 }
 
