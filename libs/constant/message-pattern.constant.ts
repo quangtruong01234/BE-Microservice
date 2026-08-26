@@ -75,8 +75,10 @@ export const ORDER_MESSAGE_PATTERN = {
   SHIPPING_DISTRICTS: "order.shipping_districts",
   SHIPPING_WARDS: "order.shipping_wards",
   VOUCHER_VALIDATE: "order.voucher_validate",
+  VOUCHER_AVAILABLE: "order.voucher_available",
   VOUCHER_CREATE: "order.voucher_create",
   VOUCHER_LIST: "order.voucher_list",
+  VOUCHER_UPDATE: "order.voucher_update",
   VOUCHER_DEACTIVATE: "order.voucher_deactivate",
   ANALYTICS: "order.analytics",
 };

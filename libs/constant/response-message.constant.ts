@@ -272,7 +272,52 @@ export const VOUCHER_MESSAGE = {
   NOT_FOUND_BY_ID: (id: number | string): string => `Voucher ${id} not found`,
   SINGLE_SELLER_ONLY:
     "Voucher codes are only supported on single-seller orders",
+  // VOUCHER-SHOP-01: a shop voucher priced against a basket that contains none
+  // of that shop's items.
+  WRONG_SELLER: (code: string): string =>
+    `Voucher ${code} only applies to items from the shop that issued it`,
+  // VOUCHER-GUARD-01: a fixed voucher worth as much as (or more than) the
+  // spend it requires zeroes the goods total of every qualifying basket.
+  FIXED_VALUE_EXCEEDS_MIN_ORDER: (
+    discountValue: number,
+    minOrderAmount: number,
+  ): string =>
+    `A fixed voucher must require a minimum order above its own value ` +
+    `(discountValue ${discountValue}, minOrderAmount ${minOrderAmount})`,
+  // No code in the message on purpose: a shop must not be able to harvest
+  // other shops' / platform voucher codes by walking voucher ids.
+  NOT_OWNED_BY_SELLER: "This voucher belongs to another shop",
+  // VOUCHER-EDIT-01. The immutable fields (code, discountType, discountValue)
+  // need no message of their own: they are absent from `UpdateVoucherDto`, so
+  // the gateway's whitelist rejects them before the orders service is reached.
+  USAGE_LIMIT_BELOW_USED: (usageLimit: number, usedCount: number): string =>
+    `usageLimit ${usageLimit} is below the ${usedCount} redemption(s) already made`,
+  // Loosening a voucher mid-campaign is fine; tightening it after buyers have
+  // started using it changes the rules of a game already in progress.
+  CANNOT_TIGHTEN_AFTER_USE: (field: string): string =>
+    `${field} cannot be made stricter once the voucher has been redeemed`,
+  SELLER_NOT_ASSIGNABLE:
+    "A shop voucher is always owned by its creator — remove `sellerId`",
 } as const;
+
+/**
+ * Stable, machine-readable reason a voucher cannot be applied to the current
+ * basket. Sent by `order.voucher_available` so the frontend renders its own
+ * copy — the backend never ships prose for this.
+ */
+export const VOUCHER_INELIGIBLE_REASON = {
+  INACTIVE: "INACTIVE",
+  WRONG_SELLER: "WRONG_SELLER",
+  NOT_ACTIVE_YET: "NOT_ACTIVE_YET",
+  EXPIRED: "EXPIRED",
+  MIN_ORDER_NOT_MET: "MIN_ORDER_NOT_MET",
+  FULLY_REDEEMED: "FULLY_REDEEMED",
+  USER_LIMIT_REACHED: "USER_LIMIT_REACHED",
+  NO_DISCOUNT: "NO_DISCOUNT",
+} as const;
+
+export type VoucherIneligibleReason =
+  (typeof VOUCHER_INELIGIBLE_REASON)[keyof typeof VOUCHER_INELIGIBLE_REASON];
 
 export const GHN_MESSAGE = {
   ADDRESS_MISSING_PARTS:
