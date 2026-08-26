@@ -1378,14 +1378,60 @@ export class ProductService {
     return Number(product.id);
   }
 
+  /**
+   * Batch id resolution for read paths. Unlike `resolveProductId`, an id that
+   * does not resolve is SKIPPED instead of throwing (SHAPE-01): a batch read
+   * must be partial-tolerant, otherwise a single product deleted after the
+   * client cached its id — one stale cart line, one wishlist row — turns the
+   * whole response into a 404 and the caller sees nothing instead of the items
+   * that do still exist. `findProductsByIds` already drops missing NUMERIC ids
+   * for the same reason; this makes the public-id half behave identically.
+   * Resolution is one `IN` query, not one query per id.
+   *
+   * The result KEEPS THE INPUT ORDER (minus what did not resolve). The first
+   * version partitioned numeric/public and appended the DB's row order, which
+   * happened to be harmless because the only caller maps by id — a trap for
+   * the second caller. Order is part of the contract now, not an accident.
+   */
   async resolveProductIds(productIds: (number | string)[]): Promise<number[]> {
-    return Promise.all(
-      productIds.map((productId) => this.resolveProductId(productId)),
+    const publicIds = productIds.filter(
+      (productId): productId is string =>
+        typeof productId === "string" &&
+        isPublicId(PUBLIC_ID_PREFIXES.PRODUCT, productId),
     );
+
+    const idByPublicId = new Map<string, number>();
+    if (publicIds.length > 0) {
+      const products = await this.productRepository.find({
+        where: { publicId: In(publicIds) },
+        select: { id: true, publicId: true },
+      });
+      for (const product of products) {
+        if (product.publicId) {
+          idByPublicId.set(product.publicId, Number(product.id));
+        }
+      }
+    }
+
+    const resolvedIds: number[] = [];
+    for (const productId of productIds) {
+      if (typeof productId === "number") {
+        resolvedIds.push(productId);
+        continue;
+      }
+      const resolvedId = idByPublicId.get(productId);
+      if (resolvedId !== undefined) {
+        resolvedIds.push(resolvedId);
+      }
+    }
+    return resolvedIds;
   }
 
   // Batch variant of findProductById (GAP-01). Missing ids are skipped —
   // callers treat absent products as deleted and fall back to snapshots/null.
+  // Row ORDER IS THE DB'S, not the order of `ids`: this is a single `IN` query
+  // with no ORDER BY. Callers must key by id (all seven do); if a caller ever
+  // needs the request order, map it back the way `search` does at :1333.
   async findProductsByIds(ids: number[]): Promise<Product[]> {
     if (!Array.isArray(ids) || ids.length === 0) {
       return [];
