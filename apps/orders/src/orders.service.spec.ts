@@ -1935,7 +1935,468 @@ describe("OrdersService VOUCHER-CONC-01 — voucher quota gate", () => {
         code: "flash",
         discountType: VoucherDiscountType.FIXED,
         discountValue: 10,
+        // VOUCHER-GUARD-01: a fixed voucher must require more spend than it is
+        // worth, otherwise it zeroes the goods total of every qualifying basket.
+        minOrderAmount: 100,
       }),
     ).rejects.toBeInstanceOf(ConflictException);
+  });
+});
+
+describe("OrdersService VOUCHER-GUARD-01 — fixed value vs minimum order", () => {
+  function createService(): {
+    service: OrdersService;
+    save: jest.Mock;
+  } {
+    const save = jest.fn((input: Partial<Voucher>) => input as Voucher);
+    const voucherRepository = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((input: Partial<Voucher>) => input as Voucher),
+      save,
+    };
+    const service = new OrdersService(
+      { publish: jest.fn(), connection: {} } as unknown as Channel,
+      {} as HttpService,
+      {} as ClientProxy,
+      {} as ClientProxy,
+      {} as ClientProxy,
+      { manager: { transaction: jest.fn() } } as unknown as Repository<Order>,
+      {} as Repository<OrderItem>,
+      createOutboxRepository().repository,
+      {} as Repository<ShippingHistory>,
+      {} as Repository<OrderReturnRequest>,
+      voucherRepository as unknown as Repository<Voucher>,
+      {} as Repository<VoucherRedemption>,
+      {} as GhnService,
+      {} as CachedService,
+    );
+    return { service, save };
+  }
+
+  it("rejects a fixed voucher worth as much as the spend it requires", async () => {
+    const { service, save } = createService();
+
+    await expect(
+      service.createVoucher({
+        code: "FREE500",
+        discountType: VoucherDiscountType.FIXED,
+        discountValue: 500000,
+        minOrderAmount: 500000,
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("rejects a fixed voucher with no minimum order at all", async () => {
+    const { service, save } = createService();
+
+    await expect(
+      service.createVoucher({
+        code: "FREE500",
+        discountType: VoucherDiscountType.FIXED,
+        discountValue: 500000,
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("accepts a fixed voucher whose minimum order exceeds its value", async () => {
+    const { service, save } = createService();
+
+    await service.createVoucher({
+      code: "SAVE50",
+      discountType: VoucherDiscountType.FIXED,
+      discountValue: 50000,
+      minOrderAmount: 200000,
+    });
+
+    expect(save).toHaveBeenCalled();
+  });
+
+  it("leaves percent vouchers alone — the guard is fixed-only", async () => {
+    const { service, save } = createService();
+
+    await service.createVoucher({
+      code: "SALE10",
+      discountType: VoucherDiscountType.PERCENT,
+      discountValue: 10,
+    });
+
+    expect(save).toHaveBeenCalled();
+  });
+
+  it("stores sellerId as null when no owner is given", async () => {
+    const { service, save } = createService();
+
+    await service.createVoucher({
+      code: "PLATFORM10",
+      discountType: VoucherDiscountType.PERCENT,
+      discountValue: 10,
+    });
+
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ sellerId: null }),
+    );
+  });
+
+  it("stores the owning shop when sellerId is given", async () => {
+    const { service, save } = createService();
+
+    await service.createVoucher({
+      code: "SHOP10",
+      discountType: VoucherDiscountType.PERCENT,
+      discountValue: 10,
+      sellerId: 42,
+    });
+
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ sellerId: 42 }),
+    );
+  });
+});
+
+describe("OrdersService VOUCHER-EDIT-01 — editing an existing voucher", () => {
+  // Only the columns updateVoucher reads or writes. DECIMAL columns are strings
+  // here because that is what TypeORM hands back on a real read.
+  const storedVoucher = (overrides: Partial<Voucher> = {}): Voucher =>
+    ({
+      id: 7,
+      code: "SALE10",
+      sellerId: null,
+      description: null,
+      discountType: VoucherDiscountType.PERCENT,
+      discountValue: "10.00",
+      minOrderAmount: "100000.00",
+      maxDiscountAmount: null,
+      usageLimit: null,
+      usedCount: 0,
+      perUserLimit: null,
+      startsAt: null,
+      expiresAt: null,
+      isActive: true,
+      ...overrides,
+    }) as Voucher;
+
+  function createService(voucher: Voucher): {
+    service: OrdersService;
+    save: jest.Mock;
+    del: jest.Mock;
+  } {
+    const save = jest.fn((input: Voucher) => input);
+    const del = jest.fn().mockResolvedValue(undefined);
+    const voucherRepository = {
+      findOne: jest.fn().mockResolvedValue(voucher),
+      save,
+    };
+    const service = new OrdersService(
+      { publish: jest.fn(), connection: {} } as unknown as Channel,
+      {} as HttpService,
+      {} as ClientProxy,
+      {} as ClientProxy,
+      {} as ClientProxy,
+      { manager: { transaction: jest.fn() } } as unknown as Repository<Order>,
+      {} as Repository<OrderItem>,
+      createOutboxRepository().repository,
+      {} as Repository<ShippingHistory>,
+      {} as Repository<OrderReturnRequest>,
+      voucherRepository as unknown as Repository<Voucher>,
+      {} as Repository<VoucherRedemption>,
+      {} as GhnService,
+      { del } as unknown as CachedService,
+    );
+    return { service, save, del };
+  }
+
+  it("applies a partial edit and leaves the untouched fields alone", async () => {
+    const { service, save } = createService(
+      storedVoucher({ description: "old" }),
+    );
+
+    const updated = await service.updateVoucher(7, { description: "new" });
+
+    expect(updated.description).toBe("new");
+    expect(updated.minOrderAmount).toBe("100000.00");
+    expect(save).toHaveBeenCalled();
+  });
+
+  it("clears a nullable field on an explicit null", async () => {
+    const { service } = createService(
+      storedVoucher({ maxDiscountAmount: "50000.00", expiresAt: new Date() }),
+    );
+
+    const updated = await service.updateVoucher(7, {
+      maxDiscountAmount: null,
+      expiresAt: null,
+    });
+
+    expect(updated.maxDiscountAmount).toBeNull();
+    expect(updated.expiresAt).toBeNull();
+  });
+
+  it("switches a deactivated voucher back on", async () => {
+    const { service } = createService(storedVoucher({ isActive: false }));
+
+    const updated = await service.updateVoucher(7, { isActive: true });
+
+    expect(updated.isActive).toBe(true);
+  });
+
+  it("refuses another shop's voucher", async () => {
+    const { service, save } = createService(storedVoucher({ sellerId: 42 }));
+
+    await expect(
+      service.updateVoucher(7, { description: "hijacked" }, 99),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("refuses to tighten a redeemed voucher", async () => {
+    const { service, save } = createService(storedVoucher({ usedCount: 3 }));
+
+    await expect(
+      service.updateVoucher(7, { minOrderAmount: 200000 }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("treats introducing a cap where there was none as tightening", async () => {
+    const { service } = createService(
+      storedVoucher({ usedCount: 3, perUserLimit: null }),
+    );
+
+    await expect(
+      service.updateVoucher(7, { perUserLimit: 1 }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("allows loosening a redeemed voucher", async () => {
+    const { service } = createService(
+      storedVoucher({ usedCount: 3, usageLimit: 5 }),
+    );
+
+    const updated = await service.updateVoucher(7, { usageLimit: 20 });
+
+    expect(updated.usageLimit).toBe(20);
+  });
+
+  it("rejects a usage limit below the redemptions already made", async () => {
+    const { service } = createService(
+      storedVoucher({ usedCount: 3, usageLimit: null }),
+    );
+
+    await expect(
+      service.updateVoucher(7, { usageLimit: 2 }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("re-checks the fixed-value guard against the merged state", async () => {
+    const { service } = createService(
+      storedVoucher({
+        discountType: VoucherDiscountType.FIXED,
+        discountValue: "50000.00",
+        minOrderAmount: "200000.00",
+      }),
+    );
+
+    await expect(
+      service.updateVoucher(7, { minOrderAmount: 30000 }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("drops the Redis quota mirror when the usage limit changes", async () => {
+    const { service, del } = createService(storedVoucher({ usageLimit: 5 }));
+
+    await service.updateVoucher(7, { usageLimit: 50 });
+
+    expect(del).toHaveBeenCalledWith("voucher:quota:7");
+  });
+
+  it("leaves the quota mirror alone for an unrelated edit", async () => {
+    const { service, del } = createService(storedVoucher({ usageLimit: 5 }));
+
+    await service.updateVoucher(7, { description: "new" });
+
+    expect(del).not.toHaveBeenCalled();
+  });
+
+  it("survives a Redis failure while dropping the mirror", async () => {
+    const { service, del } = createService(storedVoucher({ usageLimit: 5 }));
+    del.mockRejectedValue(new Error("redis down"));
+
+    await expect(
+      service.updateVoucher(7, { usageLimit: 50 }),
+    ).resolves.toMatchObject({ usageLimit: 50 });
+  });
+});
+
+describe("OrdersService VOUCHER-SHOP-01 — basket eligibility list", () => {
+  const voucherRow = (overrides: Partial<Voucher> = {}): Voucher =>
+    ({
+      id: 1,
+      code: "PLATFORM10",
+      description: null,
+      sellerId: null,
+      discountType: VoucherDiscountType.PERCENT,
+      discountValue: "10.00",
+      minOrderAmount: "0.00",
+      maxDiscountAmount: null,
+      usageLimit: null,
+      usedCount: 0,
+      perUserLimit: null,
+      startsAt: null,
+      expiresAt: null,
+      isActive: true,
+      ...overrides,
+    }) as Voucher;
+
+  function createService(candidates: Voucher[]): {
+    service: OrdersService;
+    find: jest.Mock;
+  } {
+    const find = jest.fn().mockResolvedValue(candidates);
+    const service = new OrdersService(
+      { publish: jest.fn(), connection: {} } as unknown as Channel,
+      {} as HttpService,
+      {} as ClientProxy,
+      {} as ClientProxy,
+      {} as ClientProxy,
+      { manager: { transaction: jest.fn() } } as unknown as Repository<Order>,
+      {} as Repository<OrderItem>,
+      createOutboxRepository().repository,
+      {} as Repository<ShippingHistory>,
+      {} as Repository<OrderReturnRequest>,
+      { find } as unknown as Repository<Voucher>,
+      {
+        count: jest.fn().mockResolvedValue(0),
+        createQueryBuilder: jest.fn(),
+      } as unknown as Repository<VoucherRedemption>,
+      {} as GhnService,
+      {} as CachedService,
+    );
+    return { service, find };
+  }
+
+  // Basket: 40k from shop 20, 100k from shop 30 → itemsTotal 140k.
+  const basket = [
+    { price: 40000, quantity: 1, sellerId: 20 },
+    { price: 100000, quantity: 1, sellerId: 30 },
+  ];
+
+  it("prices a platform voucher against the whole basket", async () => {
+    const { service } = createService([voucherRow()]);
+
+    const result = await service.listAvailableVouchers(7, basket);
+
+    expect(result.itemsTotal).toBe(140000);
+    expect(result.vouchers[0]).toMatchObject({
+      scope: "platform",
+      sellerId: null,
+      isEligible: true,
+      applicableSubtotal: 140000,
+      discountAmount: 14000,
+    });
+  });
+
+  it("prices a shop voucher against that shop's slice only", async () => {
+    const { service } = createService([
+      voucherRow({ id: 2, code: "SHOP20", sellerId: 20 }),
+    ]);
+
+    const result = await service.listAvailableVouchers(7, basket);
+
+    expect(result.vouchers[0]).toMatchObject({
+      scope: "shop",
+      sellerId: 20,
+      isEligible: true,
+      // 10% of shop 20's 40k, not of the 140k basket.
+      applicableSubtotal: 40000,
+      discountAmount: 4000,
+    });
+  });
+
+  it("shows a voucher the basket does not qualify for, with the shortfall", async () => {
+    const { service } = createService([
+      voucherRow({
+        id: 3,
+        code: "BIG500",
+        sellerId: 20,
+        discountType: VoucherDiscountType.FIXED,
+        discountValue: "50000.00",
+        minOrderAmount: "500000.00",
+      }),
+    ]);
+
+    const result = await service.listAvailableVouchers(7, basket);
+
+    expect(result.vouchers[0]).toMatchObject({
+      isEligible: false,
+      ineligibleReason: "MIN_ORDER_NOT_MET",
+      // 500k required against shop 20's 40k slice.
+      amountToAdd: 460000,
+      // Never advertise a discount on a code that cannot be applied.
+      discountAmount: 0,
+    });
+  });
+
+  it("marks a voucher from a shop outside the basket as WRONG_SELLER", async () => {
+    const { service } = createService([
+      voucherRow({ id: 4, code: "OTHER", sellerId: 999 }),
+    ]);
+
+    const result = await service.listAvailableVouchers(7, basket);
+
+    expect(result.vouchers[0]).toMatchObject({
+      isEligible: false,
+      ineligibleReason: "WRONG_SELLER",
+      discountAmount: 0,
+    });
+  });
+
+  it("sorts eligible first, then by the discount each one gives", async () => {
+    const { service } = createService([
+      voucherRow({ id: 5, code: "SMALL", sellerId: 20 }), // 10% of 40k = 4k
+      voucherRow({ id: 6, code: "BIG" }), // 10% of 140k = 14k
+      voucherRow({
+        id: 7,
+        code: "LOCKED",
+        minOrderAmount: "999999.00",
+      }),
+    ]);
+
+    const result = await service.listAvailableVouchers(7, basket);
+
+    expect(result.vouchers.map((voucher) => voucher.code)).toEqual([
+      "BIG",
+      "SMALL",
+      "LOCKED",
+    ]);
+  });
+
+  it("asks only for platform vouchers when the basket has no seller", async () => {
+    const { service, find } = createService([]);
+
+    const result = await service.listAvailableVouchers(7, []);
+
+    expect(result).toEqual({ itemsTotal: 0, vouchers: [] });
+    // A single object, not the two-branch OR — with no seller in the cart there
+    // is no `seller_id IN (...)` half to ask for.
+    const [findOptions] = find.mock.calls[0] as [{ where: unknown }];
+    const where = findOptions.where;
+    expect(Array.isArray(where)).toBe(false);
+    expect(where).toMatchObject({ isActive: true });
+  });
+
+  it("skips the redemption query entirely when nothing caps per user", async () => {
+    const createQueryBuilder = jest.fn();
+    const { service } = createService([voucherRow()]);
+    (
+      service as unknown as {
+        voucherRedemptionRepository: { createQueryBuilder: jest.Mock };
+      }
+    ).voucherRedemptionRepository.createQueryBuilder = createQueryBuilder;
+
+    await service.listAvailableVouchers(7, basket);
+
+    expect(createQueryBuilder).not.toHaveBeenCalled();
   });
 });

@@ -539,13 +539,26 @@ export class OrdersController {
       userId: number;
       code: string;
       itemsTotal: number;
+      sellerId?: number | null;
     },
   ) {
     return this.ordersService.previewVoucher(
       data.userId,
       data.code,
       data.itemsTotal,
+      data.sellerId ?? null,
     );
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.VOUCHER_AVAILABLE)
+  async handleAvailableVouchers(
+    @Payload()
+    data: {
+      userId: number;
+      items: Array<{ price: number; quantity: number; sellerId: number }>;
+    },
+  ) {
+    return this.ordersService.listAvailableVouchers(data.userId, data.items);
   }
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.VOUCHER_CREATE)
@@ -563,19 +576,53 @@ export class OrdersController {
       startsAt?: string | null;
       expiresAt?: string | null;
       isActive?: boolean;
+      sellerId?: number | null;
     },
   ) {
     return this.ordersService.createVoucher(data);
   }
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.VOUCHER_LIST)
-  async handleListVouchers(@Payload() data: { page: number; limit: number }) {
-    return this.ordersService.listVouchers(data.page, data.limit);
+  async handleListVouchers(
+    @Payload()
+    data: {
+      page: number;
+      limit: number;
+      sellerId?: number | null;
+    },
+  ) {
+    return this.ordersService.listVouchers(
+      data.page,
+      data.limit,
+      data.sellerId ?? null,
+    );
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.VOUCHER_UPDATE)
+  async handleUpdateVoucher(
+    @Payload()
+    data: {
+      id: number;
+      sellerId?: number | null;
+      description?: string | null;
+      minOrderAmount?: number;
+      maxDiscountAmount?: number | null;
+      usageLimit?: number | null;
+      perUserLimit?: number | null;
+      startsAt?: string | null;
+      expiresAt?: string | null;
+      isActive?: boolean;
+    },
+  ) {
+    const { id, sellerId, ...changes } = data;
+    return this.ordersService.updateVoucher(id, changes, sellerId ?? null);
   }
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.VOUCHER_DEACTIVATE)
-  async handleDeactivateVoucher(@Payload() data: { id: number }) {
-    return this.ordersService.deactivateVoucher(data.id);
+  async handleDeactivateVoucher(
+    @Payload() data: { id: number; sellerId?: number | null },
+  ) {
+    return this.ordersService.deactivateVoucher(data.id, data.sellerId ?? null);
   }
 
   @EventPattern(EVENT.PAYMENT_COMPLETED_EVENT)

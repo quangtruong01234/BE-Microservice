@@ -21,6 +21,9 @@ export enum VoucherDiscountType {
 // Codes are the lookup key on every checkout and every voucher preview, and the
 // duplicate check in `createVoucher` is a check-then-act race without this.
 @Index("uq_vouchers_code", ["code"], { unique: true })
+// VOUCHER-SHOP-01: the basket voucher list asks for "platform vouchers + the
+// vouchers of the sellers in this cart" on every checkout page view.
+@Index("idx_vouchers_seller_active", ["sellerId", "isActive"])
 export class Voucher {
   @PrimaryGeneratedColumn("increment")
   id!: number;
@@ -28,6 +31,14 @@ export class Voucher {
   // Stored upper-cased; lookups upper-case the incoming code.
   @Column({ type: "varchar", length: 64 })
   code!: string;
+
+  /**
+   * Owning shop (`users.id`). NULL = platform-wide voucher, priced against the
+   * whole goods subtotal; set = that shop's voucher, priced against that
+   * seller's slice of the basket only.
+   */
+  @Column({ name: "seller_id", type: "int", nullable: true, default: null })
+  sellerId!: number | null;
 
   @Column({ type: "varchar", length: 255, nullable: true, default: null })
   description!: string | null;

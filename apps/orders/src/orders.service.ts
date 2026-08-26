@@ -69,6 +69,8 @@ import { VoucherRedemption } from "./entity/voucher-redemption.entity";
 import {
   ORDER_MESSAGE,
   VOUCHER_MESSAGE,
+  VOUCHER_INELIGIBLE_REASON,
+  VoucherIneligibleReason,
 } from "libs/constant/response-message.constant";
 import {
   StockReservationItem,
@@ -87,6 +89,9 @@ import {
   AdminGhnUpdateReceiverResult,
   GhnStatusApplyResult,
   ReturnRequestView,
+  AvailableVoucher,
+  VoucherEvaluation,
+  VoucherEvaluationContext,
 } from "./orders.types";
 
 /**
@@ -111,12 +116,31 @@ const ORDER_STALE_SWEEP_BATCH_SIZE = 25;
 const VOUCHER_QUOTA_KEY_PREFIX = "voucher:quota:";
 
 /**
+ * Hard cap on the buyer-facing basket voucher list. It runs on every checkout
+ * page view and a buyer can only apply one code, so an unbounded list would be
+ * pure overhead.
+ */
+const VOUCHER_AVAILABLE_LIST_LIMIT = 50;
+
+/**
  * How long the Redis mirror of a voucher's remaining redemptions lives.
  * Short on purpose: SQL is the source of truth, so the counter only has to
  * outlive a burst. Every lapse re-seeds it from `usage_limit - used_count`,
  * which erases any drift a failed refund left behind (VOUCHER-CONC-01).
  */
 const VOUCHER_QUOTA_TTL_SECONDS = 300;
+
+/**
+ * Compare two nullable voucher caps where NULL means "no limit". The new value
+ * is STRICTER when it introduces a limit that did not exist before, or lowers
+ * one that did — the direction VOUCHER-EDIT-01 refuses on a redeemed voucher.
+ */
+function isStricterCap(current: number | null, next: number | null): boolean {
+  if (next === null) {
+    return false;
+  }
+  return current === null || next < current;
+}
 
 @Injectable()
 export class OrdersService {
@@ -242,7 +266,21 @@ export class OrdersService {
     // before reserving stock so an invalid code fails fast. The redemption is
     // consumed atomically inside the create transaction below.
     const voucherResult = voucherCode
-      ? await this.validateVoucherForCheckout(userId, voucherCode, itemsTotal)
+      ? await this.validateVoucherForCheckout(
+          userId,
+          voucherCode,
+          itemsTotal,
+          // Single-seller path, so the seller's slice IS the whole basket —
+          // but a shop voucher issued by a DIFFERENT shop still has to be
+          // rejected, which is what passing the map (not just the total) buys.
+          this.buildSubtotalBySellerId(
+            items.map((item) => ({
+              price: item.price,
+              quantity: item.quantity,
+              sellerId,
+            })),
+          ),
+        )
       : null;
     const discountAmount = voucherResult?.discountAmount ?? 0;
     // VOUCHER-CONC-01: take the quota slot HERE — before the GHN round trip and
@@ -380,52 +418,289 @@ export class OrdersService {
   }
 
   /**
-   * Validate a voucher against a goods subtotal and compute the discount. This
-   * is a pure read — it does NOT consume usage. Throws on any rule violation so
-   * the caller surfaces a clear 400/404.
+   * The ONE place the voucher rules live (VOUCHER-SHOP-01).
+   *
+   * Pure and non-throwing: it reports a verdict, it does not decide an HTTP
+   * status. Both consumers go through it — the basket list maps the verdict
+   * straight to its response, and {@link validateVoucherForCheckout} throws the
+   * matching message when `isEligible` is false. Keeping a second copy of the
+   * rules for the list is what would make the list say "eligible" on a code
+   * that then 400s at apply.
+   *
+   * Scope decides what the voucher is priced against: a platform voucher
+   * (`sellerId === null`) sees the whole goods subtotal, a shop voucher sees
+   * only that seller's slice of the basket — `minOrderAmount` and
+   * `maxDiscountAmount` therefore apply to that slice too.
    */
-  private async validateVoucherForCheckout(
-    userId: number,
-    rawCode: string,
-    itemsTotal: number,
-  ): Promise<{ voucher: Voucher; discountAmount: number }> {
-    const code = this.normalizeVoucherCode(rawCode);
-    const voucher = await this.voucherRepository.findOne({ where: { code } });
-    if (!voucher || !voucher.isActive) {
-      throw new NotFoundException(VOUCHER_MESSAGE.NOT_FOUND_OR_INACTIVE(code));
+  private evaluateVoucher(
+    voucher: Voucher,
+    context: VoucherEvaluationContext,
+  ): VoucherEvaluation {
+    // `?? null` because a row written before the `seller_id` column existed
+    // hydrates as undefined on a partial select — that is a platform voucher,
+    // not an unowned shop voucher that matches no seller in the basket.
+    const ownerSellerId = voucher.sellerId ?? null;
+    const applicableSubtotal =
+      ownerSellerId === null
+        ? context.itemsTotal
+        : (context.subtotalBySellerId.get(ownerSellerId) ?? 0);
+    const minOrderAmount = Number(voucher.minOrderAmount ?? 0);
+    const ineligible = (
+      reason: VoucherIneligibleReason,
+      amountToAdd = 0,
+    ): VoucherEvaluation => ({
+      isEligible: false,
+      ineligibleReason: reason,
+      // Deliberately 0 rather than "what it would give": a fixed 500k voucher
+      // on a 40k basket computes to 40k once clamped, which reads as a real
+      // offer. The frontend sorts the eligible ones by `discountAmount` and
+      // shows `amountToAdd` for the rest.
+      discountAmount: 0,
+      applicableSubtotal,
+      amountToAdd,
+    });
+
+    if (!voucher.isActive) {
+      return ineligible(VOUCHER_INELIGIBLE_REASON.INACTIVE);
     }
-    const now = new Date();
-    if (voucher.startsAt && now < voucher.startsAt) {
-      throw new BadRequestException(VOUCHER_MESSAGE.NOT_ACTIVE_YET(code));
+    if (
+      ownerSellerId !== null &&
+      !context.subtotalBySellerId.has(ownerSellerId)
+    ) {
+      return ineligible(VOUCHER_INELIGIBLE_REASON.WRONG_SELLER);
     }
-    if (voucher.expiresAt && now > voucher.expiresAt) {
-      throw new BadRequestException(VOUCHER_MESSAGE.EXPIRED(code));
+    if (voucher.startsAt && context.now < voucher.startsAt) {
+      return ineligible(VOUCHER_INELIGIBLE_REASON.NOT_ACTIVE_YET);
     }
-    const minOrder = Number(voucher.minOrderAmount ?? 0);
-    if (itemsTotal < minOrder) {
-      throw new BadRequestException(
-        VOUCHER_MESSAGE.MIN_ORDER_NOT_MET(minOrder, code),
+    if (voucher.expiresAt && context.now > voucher.expiresAt) {
+      return ineligible(VOUCHER_INELIGIBLE_REASON.EXPIRED);
+    }
+    if (applicableSubtotal < minOrderAmount) {
+      return ineligible(
+        VOUCHER_INELIGIBLE_REASON.MIN_ORDER_NOT_MET,
+        Math.round(minOrderAmount - applicableSubtotal),
       );
     }
     if (
       voucher.usageLimit !== null &&
       voucher.usedCount >= voucher.usageLimit
     ) {
-      throw new BadRequestException(VOUCHER_MESSAGE.FULLY_REDEEMED(code));
+      return ineligible(VOUCHER_INELIGIBLE_REASON.FULLY_REDEEMED);
     }
-    if (voucher.perUserLimit !== null) {
-      const usedByUser = await this.voucherRedemptionRepository.count({
-        where: { voucherId: voucher.id, userId },
-      });
-      if (usedByUser >= voucher.perUserLimit) {
-        throw new BadRequestException(VOUCHER_MESSAGE.USER_LIMIT_REACHED(code));
-      }
+    if (
+      voucher.perUserLimit !== null &&
+      context.userRedemptionCount >= voucher.perUserLimit
+    ) {
+      return ineligible(VOUCHER_INELIGIBLE_REASON.USER_LIMIT_REACHED);
     }
-    const discountAmount = this.computeDiscount(voucher, itemsTotal);
+    const discountAmount = this.computeDiscount(voucher, applicableSubtotal);
     if (discountAmount <= 0) {
-      throw new BadRequestException(VOUCHER_MESSAGE.NO_DISCOUNT(code));
+      return ineligible(VOUCHER_INELIGIBLE_REASON.NO_DISCOUNT);
     }
-    return { voucher, discountAmount };
+    return {
+      isEligible: true,
+      ineligibleReason: null,
+      discountAmount,
+      applicableSubtotal,
+      amountToAdd: 0,
+    };
+  }
+
+  /** Map an evaluator verdict onto the exception the HTTP boundary expects. */
+  private voucherRejection(
+    code: string,
+    voucher: Voucher,
+    evaluation: VoucherEvaluation,
+  ): Error {
+    switch (evaluation.ineligibleReason) {
+      case VOUCHER_INELIGIBLE_REASON.INACTIVE:
+        return new NotFoundException(
+          VOUCHER_MESSAGE.NOT_FOUND_OR_INACTIVE(code),
+        );
+      case VOUCHER_INELIGIBLE_REASON.WRONG_SELLER:
+        return new BadRequestException(VOUCHER_MESSAGE.WRONG_SELLER(code));
+      case VOUCHER_INELIGIBLE_REASON.NOT_ACTIVE_YET:
+        return new BadRequestException(VOUCHER_MESSAGE.NOT_ACTIVE_YET(code));
+      case VOUCHER_INELIGIBLE_REASON.EXPIRED:
+        return new BadRequestException(VOUCHER_MESSAGE.EXPIRED(code));
+      case VOUCHER_INELIGIBLE_REASON.MIN_ORDER_NOT_MET:
+        return new BadRequestException(
+          VOUCHER_MESSAGE.MIN_ORDER_NOT_MET(
+            Number(voucher.minOrderAmount ?? 0),
+            code,
+          ),
+        );
+      case VOUCHER_INELIGIBLE_REASON.FULLY_REDEEMED:
+        return new BadRequestException(VOUCHER_MESSAGE.FULLY_REDEEMED(code));
+      case VOUCHER_INELIGIBLE_REASON.USER_LIMIT_REACHED:
+        return new BadRequestException(
+          VOUCHER_MESSAGE.USER_LIMIT_REACHED(code),
+        );
+      default:
+        return new BadRequestException(VOUCHER_MESSAGE.NO_DISCOUNT(code));
+    }
+  }
+
+  /**
+   * Validate a voucher against a basket and compute the discount. This is a
+   * pure read — it does NOT consume usage. Throws on any rule violation so the
+   * caller surfaces a clear 400/404.
+   */
+  private async validateVoucherForCheckout(
+    userId: number,
+    rawCode: string,
+    itemsTotal: number,
+    subtotalBySellerId: Map<number, number>,
+  ): Promise<{ voucher: Voucher; discountAmount: number }> {
+    const code = this.normalizeVoucherCode(rawCode);
+    const voucher = await this.voucherRepository.findOne({ where: { code } });
+    if (!voucher) {
+      throw new NotFoundException(VOUCHER_MESSAGE.NOT_FOUND_OR_INACTIVE(code));
+    }
+    // Only counted when a per-user cap exists — the same query saving the
+    // pre-refactor code made. The honest count still happens under the row
+    // lock in `redeemVoucher`; this one is the fail-fast.
+    const userRedemptionCount =
+      voucher.perUserLimit !== null
+        ? await this.voucherRedemptionRepository.count({
+            where: { voucherId: voucher.id, userId },
+          })
+        : 0;
+    const evaluation = this.evaluateVoucher(voucher, {
+      itemsTotal,
+      subtotalBySellerId,
+      userRedemptionCount,
+      now: new Date(),
+    });
+    if (!evaluation.isEligible) {
+      throw this.voucherRejection(code, voucher, evaluation);
+    }
+    return { voucher, discountAmount: evaluation.discountAmount };
+  }
+
+  /**
+   * Buyer-facing basket voucher list (VOUCHER-SHOP-01): every platform voucher
+   * plus every voucher owned by a seller in this cart, each carrying whether it
+   * applies right now and why not. Visible is NOT applicable — an ineligible
+   * code still fails at `voucher/validate` and at order create; this list is a
+   * hint the frontend greys out, never the authority.
+   */
+  async listAvailableVouchers(
+    userId: number,
+    items: Array<{ price: number; quantity: number; sellerId: number }>,
+  ): Promise<{ itemsTotal: number; vouchers: AvailableVoucher[] }> {
+    const itemsTotal = items.reduce(
+      (sum, item) => sum + item.price * item.quantity,
+      0,
+    );
+    const subtotalBySellerId = this.buildSubtotalBySellerId(items);
+    const sellerIds = [...subtotalBySellerId.keys()];
+
+    const candidates = await this.voucherRepository.find({
+      where: sellerIds.length
+        ? [
+            { isActive: true, sellerId: IsNull() },
+            { isActive: true, sellerId: In(sellerIds) },
+          ]
+        : { isActive: true, sellerId: IsNull() },
+      order: { createdAt: "DESC" },
+      // Bounded on purpose: this runs on every checkout page view, and a
+      // buyer cannot use more than a handful of codes anyway.
+      take: VOUCHER_AVAILABLE_LIST_LIMIT,
+    });
+    if (!candidates.length) {
+      return { itemsTotal, vouchers: [] };
+    }
+
+    const redemptionCountByVoucherId = await this.countRedemptionsByVoucher(
+      userId,
+      candidates,
+    );
+    const now = new Date();
+    const vouchers = candidates.map((voucher): AvailableVoucher => {
+      const evaluation = this.evaluateVoucher(voucher, {
+        itemsTotal,
+        subtotalBySellerId,
+        userRedemptionCount: redemptionCountByVoucherId.get(voucher.id) ?? 0,
+        now,
+      });
+      return {
+        code: voucher.code,
+        description: voucher.description,
+        discountType: voucher.discountType,
+        discountValue: Number(voucher.discountValue ?? 0),
+        minOrderAmount: Number(voucher.minOrderAmount ?? 0),
+        maxDiscountAmount:
+          voucher.maxDiscountAmount !== null
+            ? Number(voucher.maxDiscountAmount)
+            : null,
+        sellerId: voucher.sellerId ?? null,
+        scope: (voucher.sellerId ?? null) === null ? "platform" : "shop",
+        isEligible: evaluation.isEligible,
+        ineligibleReason: evaluation.ineligibleReason,
+        discountAmount: evaluation.discountAmount,
+        applicableSubtotal: evaluation.applicableSubtotal,
+        amountToAdd: evaluation.amountToAdd,
+      };
+    });
+    // Best offer first, then the "spend a bit more" ones — the order the
+    // frontend renders them in.
+    vouchers.sort((left, right) => {
+      if (left.isEligible !== right.isEligible) {
+        return left.isEligible ? -1 : 1;
+      }
+      if (left.isEligible) {
+        return right.discountAmount - left.discountAmount;
+      }
+      return left.amountToAdd - right.amountToAdd;
+    });
+    return { itemsTotal, vouchers };
+  }
+
+  /** Goods subtotal per seller — the slice a shop voucher is priced against. */
+  private buildSubtotalBySellerId(
+    items: Array<{ price: number; quantity: number; sellerId: number }>,
+  ): Map<number, number> {
+    const subtotalBySellerId = new Map<number, number>();
+    for (const item of items) {
+      const sellerId = Number(item.sellerId);
+      if (!Number.isFinite(sellerId)) {
+        continue;
+      }
+      const current = subtotalBySellerId.get(sellerId) ?? 0;
+      subtotalBySellerId.set(sellerId, current + item.price * item.quantity);
+    }
+    return subtotalBySellerId;
+  }
+
+  /**
+   * How many times this buyer has already redeemed each of these vouchers, in
+   * ONE grouped query — the per-voucher count would be an N+1 across the list.
+   * Only vouchers that actually cap per user are asked about.
+   */
+  private async countRedemptionsByVoucher(
+    userId: number,
+    vouchers: Voucher[],
+  ): Promise<Map<number, number>> {
+    const cappedVoucherIds = vouchers
+      .filter((voucher) => voucher.perUserLimit !== null)
+      .map((voucher) => voucher.id);
+    if (!cappedVoucherIds.length) {
+      return new Map();
+    }
+    const rows = await this.voucherRedemptionRepository
+      .createQueryBuilder("redemption")
+      .select("redemption.voucherId", "voucherId")
+      .addSelect("COUNT(*)", "redemptionCount")
+      .where("redemption.userId = :userId", { userId })
+      .andWhere("redemption.voucherId IN (:...cappedVoucherIds)", {
+        cappedVoucherIds,
+      })
+      .groupBy("redemption.voucherId")
+      .getRawMany<{ voucherId: number; redemptionCount: string }>();
+    return new Map(
+      rows.map((row) => [Number(row.voucherId), Number(row.redemptionCount)]),
+    );
   }
 
   /**
@@ -584,6 +859,7 @@ export class OrdersService {
     userId: number,
     code: string,
     itemsTotal: number,
+    sellerId?: number | null,
   ): Promise<{
     code: string;
     discountType: VoucherDiscountType;
@@ -591,10 +867,18 @@ export class OrdersService {
     itemsTotal: number;
     finalItemsTotal: number;
   }> {
+    // The gateway keeps this endpoint single-seller, so the seller's slice is
+    // the whole subtotal. An absent sellerId leaves the map empty, which makes
+    // every shop voucher WRONG_SELLER — a platform voucher still previews.
+    const subtotalBySellerId = new Map<number, number>();
+    if (sellerId != null && Number.isFinite(Number(sellerId))) {
+      subtotalBySellerId.set(Number(sellerId), itemsTotal);
+    }
     const { voucher, discountAmount } = await this.validateVoucherForCheckout(
       userId,
       code,
       itemsTotal,
+      subtotalBySellerId,
     );
     return {
       code: voucher.code,
@@ -617,6 +901,7 @@ export class OrdersService {
     startsAt?: string | null;
     expiresAt?: string | null;
     isActive?: boolean;
+    sellerId?: number | null;
   }): Promise<Voucher> {
     const code = this.normalizeVoucherCode(input.code);
     const existing = await this.voucherRepository.findOne({ where: { code } });
@@ -629,14 +914,29 @@ export class OrdersService {
     ) {
       throw new BadRequestException(VOUCHER_MESSAGE.PERCENT_VALUE_INVALID);
     }
-    if (
-      input.discountType === VoucherDiscountType.FIXED &&
-      input.discountValue <= 0
-    ) {
-      throw new BadRequestException(VOUCHER_MESSAGE.FIXED_VALUE_INVALID);
+    if (input.discountType === VoucherDiscountType.FIXED) {
+      if (input.discountValue <= 0) {
+        throw new BadRequestException(VOUCHER_MESSAGE.FIXED_VALUE_INVALID);
+      }
+      // VOUCHER-GUARD-01: the two numbers were only ever validated in
+      // isolation, so `fixed 500000, minOrderAmount 0` was creatable — and
+      // `computeDiscount`'s clamp then zeroes the goods cost of EVERY basket
+      // (the buyer still pays shipping, nothing crashes, the shop just gives
+      // the goods away). Requiring the threshold to sit above the voucher's
+      // own value covers the no-minimum case with the same rule.
+      const minOrderAmount = input.minOrderAmount ?? 0;
+      if (input.discountValue >= minOrderAmount) {
+        throw new BadRequestException(
+          VOUCHER_MESSAGE.FIXED_VALUE_EXCEEDS_MIN_ORDER(
+            input.discountValue,
+            minOrderAmount,
+          ),
+        );
+      }
     }
     const voucher = this.voucherRepository.create({
       code,
+      sellerId: input.sellerId ?? null,
       description: input.description ?? null,
       discountType: input.discountType,
       discountValue: input.discountValue.toFixed(2),
@@ -668,11 +968,17 @@ export class OrdersService {
     }
   }
 
+  /**
+   * Admin lists every voucher; a shop passes its own id and sees only the
+   * vouchers it issued (never the platform ones, never another shop's).
+   */
   async listVouchers(
     page: number,
     limit: number,
+    sellerId?: number | null,
   ): Promise<PaginatedResponse<Voucher>> {
     const [data, total] = await this.voucherRepository.findAndCount({
+      where: sellerId != null ? { sellerId } : {},
       order: { createdAt: "DESC" },
       skip: (page - 1) * limit,
       take: limit,
@@ -680,10 +986,173 @@ export class OrdersService {
     return PaginatedResponse.of(data, total, page, limit);
   }
 
-  async deactivateVoucher(id: number): Promise<Voucher> {
+  /**
+   * VOUCHER-EDIT-01: partial edit of an existing voucher, shared by the admin
+   * route and the shop route (`sellerId` set = ownership check, exactly like
+   * {@link deactivateVoucher}).
+   *
+   * `code`, `discountType` and `discountValue` are deliberately NOT in the
+   * input: they define what the voucher IS, and an order already priced against
+   * them cannot be re-priced. Everything else is editable, under two guards —
+   * the MERGED state must still satisfy VOUCHER-GUARD-01, and once the voucher
+   * has been redeemed it may only be loosened.
+   *
+   * `null` clears a nullable field (uncapped / unlimited / no window / no
+   * description); `undefined` leaves it alone.
+   */
+  async updateVoucher(
+    id: number,
+    input: {
+      description?: string | null;
+      minOrderAmount?: number;
+      maxDiscountAmount?: number | null;
+      usageLimit?: number | null;
+      perUserLimit?: number | null;
+      startsAt?: string | null;
+      expiresAt?: string | null;
+      isActive?: boolean;
+    },
+    sellerId?: number | null,
+  ): Promise<Voucher> {
     const voucher = await this.voucherRepository.findOne({ where: { id } });
     if (!voucher) {
       throw new NotFoundException(VOUCHER_MESSAGE.NOT_FOUND_BY_ID(id));
+    }
+    if (sellerId != null && voucher.sellerId !== sellerId) {
+      throw new ForbiddenException(VOUCHER_MESSAGE.NOT_OWNED_BY_SELLER);
+    }
+
+    const hasBeenRedeemed = voucher.usedCount > 0;
+
+    if (input.minOrderAmount !== undefined) {
+      if (
+        hasBeenRedeemed &&
+        input.minOrderAmount > Number(voucher.minOrderAmount)
+      ) {
+        throw new BadRequestException(
+          VOUCHER_MESSAGE.CANNOT_TIGHTEN_AFTER_USE("minOrderAmount"),
+        );
+      }
+      // VOUCHER-GUARD-01 re-checked against the merged state: lowering the
+      // threshold of an existing FIXED voucher re-opens the exact footgun
+      // `createVoucher` closes at creation time.
+      const discountValue = Number(voucher.discountValue);
+      if (
+        voucher.discountType === VoucherDiscountType.FIXED &&
+        discountValue >= input.minOrderAmount
+      ) {
+        throw new BadRequestException(
+          VOUCHER_MESSAGE.FIXED_VALUE_EXCEEDS_MIN_ORDER(
+            discountValue,
+            input.minOrderAmount,
+          ),
+        );
+      }
+      voucher.minOrderAmount = input.minOrderAmount.toFixed(2);
+    }
+
+    if (input.maxDiscountAmount !== undefined) {
+      const currentCap =
+        voucher.maxDiscountAmount != null
+          ? Number(voucher.maxDiscountAmount)
+          : null;
+      if (
+        hasBeenRedeemed &&
+        isStricterCap(currentCap, input.maxDiscountAmount)
+      ) {
+        throw new BadRequestException(
+          VOUCHER_MESSAGE.CANNOT_TIGHTEN_AFTER_USE("maxDiscountAmount"),
+        );
+      }
+      voucher.maxDiscountAmount =
+        input.maxDiscountAmount != null
+          ? input.maxDiscountAmount.toFixed(2)
+          : null;
+    }
+
+    const isUsageLimitChanged =
+      input.usageLimit !== undefined && input.usageLimit !== voucher.usageLimit;
+    if (input.usageLimit !== undefined) {
+      // Independent of redemptions: a cap below what has already been handed
+      // out would make `used_count > usage_limit` and is simply incoherent.
+      if (input.usageLimit != null && input.usageLimit < voucher.usedCount) {
+        throw new BadRequestException(
+          VOUCHER_MESSAGE.USAGE_LIMIT_BELOW_USED(
+            input.usageLimit,
+            voucher.usedCount,
+          ),
+        );
+      }
+      if (
+        hasBeenRedeemed &&
+        isStricterCap(voucher.usageLimit, input.usageLimit)
+      ) {
+        throw new BadRequestException(
+          VOUCHER_MESSAGE.CANNOT_TIGHTEN_AFTER_USE("usageLimit"),
+        );
+      }
+      voucher.usageLimit = input.usageLimit;
+    }
+
+    if (input.perUserLimit !== undefined) {
+      if (
+        hasBeenRedeemed &&
+        isStricterCap(voucher.perUserLimit, input.perUserLimit)
+      ) {
+        throw new BadRequestException(
+          VOUCHER_MESSAGE.CANNOT_TIGHTEN_AFTER_USE("perUserLimit"),
+        );
+      }
+      voucher.perUserLimit = input.perUserLimit;
+    }
+
+    if (input.description !== undefined) {
+      voucher.description = input.description ?? null;
+    }
+    if (input.startsAt !== undefined) {
+      voucher.startsAt = input.startsAt ? new Date(input.startsAt) : null;
+    }
+    if (input.expiresAt !== undefined) {
+      voucher.expiresAt = input.expiresAt ? new Date(input.expiresAt) : null;
+    }
+    if (input.isActive !== undefined) {
+      voucher.isActive = input.isActive;
+    }
+
+    const saved = await this.voucherRepository.save(voucher);
+
+    if (isUsageLimitChanged) {
+      // The Redis quota mirror (VOUCHER-CONC-01) caches `usage_limit -
+      // used_count`. Dropping the key makes the next claim re-seed from SQL
+      // immediately instead of enforcing the old cap for up to its TTL.
+      try {
+        await this.cachedService.del(`${VOUCHER_QUOTA_KEY_PREFIX}${saved.id}`);
+      } catch (error: unknown) {
+        const message =
+          error instanceof Error ? error.message : "unknown cache error";
+        this.logger.warn(
+          `Could not drop the quota mirror of voucher ${saved.code} (${message}) — it self-heals when the counter expires.`,
+        );
+      }
+    }
+
+    return saved;
+  }
+
+  /**
+   * `sellerId` is the owner check for the shop-facing route: a shop may only
+   * deactivate its own voucher. Admin passes nothing and may deactivate any.
+   */
+  async deactivateVoucher(
+    id: number,
+    sellerId?: number | null,
+  ): Promise<Voucher> {
+    const voucher = await this.voucherRepository.findOne({ where: { id } });
+    if (!voucher) {
+      throw new NotFoundException(VOUCHER_MESSAGE.NOT_FOUND_BY_ID(id));
+    }
+    if (sellerId != null && voucher.sellerId !== sellerId) {
+      throw new ForbiddenException(VOUCHER_MESSAGE.NOT_OWNED_BY_SELLER);
     }
     voucher.isActive = false;
     return this.voucherRepository.save(voucher);

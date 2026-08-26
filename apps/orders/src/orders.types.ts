@@ -2,7 +2,9 @@ import { PaymentMethod } from "@app/common";
 import { OrderStatus } from "./entity/order.entity";
 import { OrderItem } from "./entity/order_item.entity";
 import { OrderReturnRequest } from "./entity/order-return-request.entity";
+import { VoucherDiscountType } from "./entity/voucher.entity";
 import { GhnOrderDetail } from "./ghn/ghn.types";
+import { VoucherIneligibleReason } from "libs/constant/response-message.constant";
 
 export type StockReservationItem = {
   productId: number;
@@ -162,4 +164,48 @@ export interface GhnStatusApplyResult {
   newStatus: OrderStatus | undefined;
   changed: boolean;
   message: string;
+}
+
+// VOUCHER-SHOP-01 -------------------------------------------------------------
+
+/** Everything the voucher rules are evaluated against for one basket. */
+export interface VoucherEvaluationContext {
+  /** Goods subtotal of the whole basket — what a platform voucher prices against. */
+  itemsTotal: number;
+  /** Goods subtotal per seller — what a shop voucher prices against. */
+  subtotalBySellerId: Map<number, number>;
+  /** Redemptions this buyer already holds for this voucher. */
+  userRedemptionCount: number;
+  now: Date;
+}
+
+/** Verdict of the single shared voucher evaluator. Never throws. */
+export interface VoucherEvaluation {
+  isEligible: boolean;
+  /** Stable enum-ish reason when `isEligible` is false, else null. */
+  ineligibleReason: VoucherIneligibleReason | null;
+  /** Discount this voucher gives right now — 0 when it is not applicable. */
+  discountAmount: number;
+  /** The slice of the basket this voucher prices against. */
+  applicableSubtotal: number;
+  /** How much more the buyer must spend to reach `minOrderAmount`; 0 when met. */
+  amountToAdd: number;
+}
+
+/** One row of the buyer-facing basket voucher list. */
+export interface AvailableVoucher {
+  code: string;
+  description: string | null;
+  discountType: VoucherDiscountType;
+  discountValue: number;
+  minOrderAmount: number;
+  maxDiscountAmount: number | null;
+  /** Owning shop (numeric here; the gateway swaps it for the `usr_` public id). */
+  sellerId: number | null;
+  scope: "platform" | "shop";
+  isEligible: boolean;
+  ineligibleReason: VoucherIneligibleReason | null;
+  discountAmount: number;
+  applicableSubtotal: number;
+  amountToAdd: number;
 }
