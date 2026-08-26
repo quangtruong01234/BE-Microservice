@@ -103,17 +103,25 @@ deleted) rather than an empty cart. The `shippingFee: 0` observation is CLOSED �
 the GHN dev gateway returns zero for every destination/weight on both fee
 endpoints; see `ops-runtime.md` → GHN.
 
-### VOUCHER-CONC-01 — one migration owed on PROD (2026-08-18)
+### VOUCHER migrations owed on PROD (2 files, DEV-applied only)
 
-The voucher-concurrency work is DONE (see `CHANGELOG.md` 2026-08-18) and is
-release class A, but `nodeA-20260818-001-add-voucher-indexes` is applied on DEV
-only. It ships with the next deploy — the workflow migrates before
-`pm2 startOrRestart` under `set -euo pipefail`. Nothing breaks if it lags: the
-code degrades to the pre-existing behaviour (slower lookups, `createVoucher`
-still guarded by its check-then-act, per-user re-check served by a scan). The
-two UNIQUE indexes ABORT rather than skip if prod holds duplicates — if the
-migrate step fails, dedupe `vouchers.code` / `voucher_redemptions
-(voucher_id, order_id)` on prod first. Details in `ops-runtime.md`.
+Both ship with the next deploy — the workflow migrates before
+`pm2 startOrRestart` under `set -euo pipefail`. Details in `ops-runtime.md`.
+
+- `nodeA-20260818-001-add-voucher-indexes` (VOUCHER-CONC-01, class A, DONE
+  2026-08-18). Nothing breaks if it lags: the code degrades to the pre-existing
+  behaviour (slower lookups, `createVoucher` still guarded by its
+  check-then-act, per-user re-check served by a scan). The two UNIQUE indexes
+  ABORT rather than skip if prod holds duplicates — if the migrate step fails,
+  dedupe `vouchers.code` / `voucher_redemptions (voucher_id, order_id)` on prod
+  first.
+- `nodeA-20260825-001-add-voucher-seller-id` (VOUCHER-SHOP-01 phase 1, class B,
+  DONE 2026-08-25). Adds `vouchers.seller_id INT NULL` +
+  `idx_vouchers_seller_active`. **This one is NOT optional — the code deployed
+  with it selects `seller_id`, so shipping the code without the column breaks
+  every voucher read.** Purely additive and guarded, so it cannot abort on
+  existing data; existing rows become platform vouchers (`NULL`), which is
+  exactly today's behaviour.
 
 ### RESIL-01..03 — resilience patterns borrowed from a flash-sale reference (2026-08-10)
 
@@ -382,6 +390,72 @@ notifies nobody. Decided shape — implement as-is, the design work is done:
   an admin/`shipping_manager` action), so it is either purely informational or
   "liên hệ người bán", which shifts load onto the shop.
 
+### VOUCHER-SHOP-01 — phase 1 + edit routes DONE; phase 2 (stacking) still open
+
+Phase 1 (per-shop vouchers + basket eligibility list) and VOUCHER-GUARD-01 (the
+fixed-value-vs-threshold guard) are IMPLEMENTED, self-tested and release **class
+B** — see `CHANGELOG.md` 2026-08-25. `nodeA-20260825-001-add-voucher-seller-id`
+is DEV-only and owed on prod (above). What shipped, in one line each: a shop can
+create/list/deactivate its own vouchers (`/api/order/vouchers*`, new RBAC
+resource `voucher`), an admin can assign one to a shop; `POST
+/api/order/vouchers/available` prices every relevant voucher against the basket
+and returns `isEligible` + `ineligibleReason` + `amountToAdd`; a shop voucher is
+priced against **that seller's slice**, a platform voucher against the whole
+goods subtotal.
+
+**VOUCHER-EDIT-01 (2026-08-26, class B, no migration)** closed the last open item
+in `backend-handoff.md`: `PATCH /api/order/vouchers/:id` (shop, own only) and
+`PATCH /api/order/admin/vouchers/:id` (admin, any). Partial body; `null` clears a
+nullable field; `{"isActive":true}` is the reactivate path (deactivate used to be
+one-way). `code`/`discountType`/`discountValue` are absent from `UpdateVoucherDto`
+on purpose — immutable, so the gateway whitelist 400s them before orders is
+reached. On a REDEEMED voucher only LOOSENING is allowed (`isStricterCap()` in
+`orders.service.ts`); an untouched voucher edits freely. Changing `usageLimit`
+drops the VOUCHER-CONC-01 Redis quota key so the next claim re-seeds instead of
+enforcing the old cap for up to 300s. Same commit: an explicit `sellerId: null`
+on voucher create is now a platform voucher instead of a `404 User not found`.
+See `CHANGELOG.md` 2026-08-26.
+
+**Two invariants a future session must not break:**
+- **One rules engine.** `evaluateVoucher()` (`apps/orders/src/orders.service.ts`)
+  is pure and non-throwing; the list maps it to a response and
+  `validateVoucherForCheckout` maps it to a 400 via `voucherRejection()`. Never
+  re-implement a rule in the list path — list and apply drifting apart is the
+  exact failure this design exists to prevent.
+- **Visible ≠ applicable.** The list is a hint; applying an ineligible code still
+  400s on `voucher/validate` and on `POST /api/order`.
+
+**Phase 2 — Shopee-style stacking + multi-shop apportionment (NOT started):**
+- Keep it class B by adding an optional `voucherCodes?: string[]` *alongside* the
+  existing `voucherCode` rather than changing that field's type (changing it is
+  class C and would need a `release-gate.md` hold).
+- Target is one shop voucher per shop + one platform voucher.
+- Lifting the `SINGLE_SELLER_ONLY` block (gateway `createOrder` AND
+  `validateVoucher`, `apps/gateway/src/order/order.service.ts`) belongs to
+  phase 2. **Landmine when you do:** `previewVoucher()`
+  (`apps/orders/src/orders.service.ts`) does not build the seller map from the
+  items — it assigns the WHOLE `itemsTotal` to the single `sellerId` the
+  gateway passes. That is correct today only because the gateway 400s a
+  multi-seller basket first. Lift the guard without switching preview to
+  `buildSubtotalBySellerId(items)` and a shop voucher gets priced against the
+  entire multi-shop cart, i.e. exactly the list-vs-apply drift this design
+  exists to prevent.
+- **Voucher codes are globally unique** (`uq_vouchers_code`) and checkout looks
+  a voucher up **by code alone**. So the first shop to take `SALE10` blocks
+  every other shop and the platform forever, where Shopee namespaces codes per
+  shop. Fixing it is a composite unique `(seller_id, code)` PLUS a lookup that
+  resolves the code within the basket's sellers — bigger than it looks, decide
+  in phase 2. Related minor: the shop-facing create echoes the code in its 409
+  (`ALREADY_EXISTS`), which lets a shop probe whether a rival's code exists —
+  same class as the leak closed on deactivate, low severity because codes are
+  meant to reach buyers anyway.
+- **Wrinkle to settle first:** a platform voucher across a multi-shop checkout
+  writes one `voucher_redemptions` row **per sub-order** (unique key is
+  `(voucher_id, order_id)`), so it burns N redemptions against `usage_limit`
+  where Shopee counts 1 — and the Redis quota mirror (VOUCHER-CONC-01)
+  decrements N times too. Decide the counting unit (per checkout vs per order)
+  before writing the redemption path.
+
 ### Open questions
 
 - **OQ-2:** can GHN webhook `?token=` query auth be REMOVED entirely (header
@@ -474,6 +548,20 @@ notifies nobody. Decided shape — implement as-is, the design work is done:
   `JUST_FULLY_REDEEMED` on a code that still has room. Deliberate. Also
   unchanged by that work: a payment-init failure after commit cancels the order
   but does NOT give the redemption back.
+- VOUCHER-SHOP-01 residuals (deliberate): the admin `sellerId` on
+  `POST /api/order/admin/vouchers` is only checked to be an EXISTING user (404
+  otherwise), not a `shop`-role one — assigning it to a buyer just yields a
+  voucher no basket ever matches. `GET /api/order/vouchers/available` caps at 50
+  vouchers and is uncached (it prices against the live basket). A shop's 403 on
+  another shop's voucher carries NO code in the message, on purpose — otherwise
+  walking numeric voucher ids harvests other shops' codes.
+- VOUCHER-EDIT-01: a LOOSENING edit on a redeemed voucher cannot be walked back
+  through the API — the reverse is by definition a tightening, which the same
+  rule 400s. Bump `usageLimit` 3 → 20 by mistake and the only remedy is
+  deactivate + reissue (FE has been told to confirm before widening). Deliberate:
+  the alternative is letting a shop tighten the rules of a campaign buyers are
+  already playing. Also deliberate: an empty `{}` body is a 200 no-op, and
+  `expiresAt` before `startsAt` is still accepted, exactly as on create.
 - REPORT-TOTAL-01: `deletePost` hard-removes the post and never deletes its
   `post_reports` rows, so orphan reports accumulate forever. Deliberate — the
   rows are the moderation audit trail. Since 2026-08-21 they are invisible to

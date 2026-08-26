@@ -6,6 +6,147 @@
 
 ## Completed Milestones
 
+- **VOUCHER-EDIT-01 — a voucher can be edited, and a deactivated one switched
+  back on (2026-08-26). Release class B, no migration.** Closes the last **Open**
+  entry in `backend-handoff.md` (2026-08-18, "voucher admin: không có route sửa
+  và không có route bật lại"): `deactivate` was one-way and nothing was mutable,
+  so a wrong `expiresAt` meant burning the code and reissuing.
+  - **Routes:** `PATCH /api/order/vouchers/:id` (`@CheckPermission("voucher",
+    "update:own")`, scoped to the caller's own vouchers) and `PATCH
+    /api/order/admin/vouchers/:id` (`@CheckPermission("order", "update:any")`,
+    any voucher). Numeric id — vouchers are deliberately not a PUBID domain.
+    New TCP pattern `ORDER_MESSAGE_PATTERN.VOUCHER_UPDATE = "order.voucher_update"`;
+    both routes funnel into one `OrdersService.updateVoucher(id, changes,
+    sellerId)`, where a non-null `sellerId` is what makes the shop route
+    ownership-checked — so admin and shop cannot drift apart in behaviour.
+  - **Immutable by omission, not by guard:** `code`, `discountType` and
+    `discountValue` are simply absent from `UpdateVoucherDto`, so the gateway's
+    `forbidNonWhitelisted` 400s them ("property discountValue should not exist")
+    before the orders service is reached. A `VOUCHER_MESSAGE.IMMUTABLE_FIELDS`
+    constant was written and then deleted for exactly this reason — it was
+    unreachable. Rationale: orders already priced against a voucher cannot be
+    re-priced; changing the money is a deactivate-and-reissue.
+  - **Loosen-only once redeemed.** With `usedCount > 0`, raising
+    `minOrderAmount` or tightening any of `maxDiscountAmount` / `usageLimit` /
+    `perUserLimit` is a 400 (`CANNOT_TIGHTEN_AFTER_USE`); loosening or clearing
+    to `null` is always allowed, and an unredeemed voucher edits freely in either
+    direction. "Tighter" for a nullable cap is decided by the module-level
+    `isStricterCap(current, next)` where `null` means no limit — introducing a
+    limit that did not exist counts as tightening. Independent of redemptions,
+    `usageLimit < usedCount` is always a 400 (it would make `used_count >
+    usage_limit`, which is simply incoherent).
+  - **VOUCHER-GUARD-01 re-checked against the merged state**, not just at
+    creation: lowering an existing FIXED voucher's `minOrderAmount` below its own
+    `discountValue` re-opens the exact footgun `createVoucher` closes, so it 400s
+    the same way.
+  - **Redis quota coherence:** changing `usageLimit` deletes
+    `voucher:quota:<id>` so the next claim re-seeds from SQL, instead of the
+    VOUCHER-CONC-01 mirror enforcing the OLD cap for up to its 300s TTL. Guarded
+    by an `isUsageLimitChanged` check (a description-only edit leaves the counter
+    alone — verified) and wrapped in try/catch: a Redis failure warns and lets
+    the counter self-heal on expiry rather than failing the edit.
+  - **`sellerId: null` on create fixed in the same pass.** An admin form leaving
+    the shop field empty sent `"sellerId": null`, and the gateway passed it to
+    `resolveUserId()` → `404 "User not found"`. `null` now means what it reads
+    as (no owner ⇒ platform voucher). Probed while writing the FE handoff: every
+    OTHER optional create field already accepted `null` — `@IsOptional()` skips
+    both `undefined` and `null` — so the FE's long-standing belief that "optional
+    fields must be absent on create" came from this single field and was wrong
+    in general. Corrected in `backend-handoff.md` rather than left standing.
+  - **Self-tested** on local dev with real accounts (admin / shop / buyer), 14
+    cases: happy-path edit, immutable-field 400 naming both properties,
+    deactivate→reactivate, the FIXED-vs-threshold guard both directions, three
+    tightening refusals + one loosening success, cross-shop 403 (no code echoed),
+    404 unknown id, 400 non-numeric id, 403 buyer role on both routes, the two
+    Redis-key assertions, and a read-back through the APPLY path proving an
+    edited cap really changes `discountAmount` and that clearing `expiresAt`
+    makes an expired voucher usable again.
+  - **Unit tests:** +12 in `apps/orders/src/orders.service.spec.ts`
+    (`VOUCHER-EDIT-01` describe) covering partial edit, `null` clearing,
+    reactivate, cross-shop 403, three tightening refusals, a loosening success,
+    `usageLimit < usedCount`, the re-checked FIXED guard, and all three
+    quota-mirror cases (dropped / untouched / Redis failure survived). Suite:
+    92 passed.
+  - **Residual (in snapshot Known Issues):** a loosening edit on a redeemed
+    voucher is not reversible through the API, since the reverse is a tightening.
+  - Files: `apps/gateway/src/order/{order.controller.ts,order.service.ts,
+    dto/voucher.dto.ts}`, `apps/orders/src/{orders.controller.ts,
+    orders.service.ts}`, `libs/constant/{message-pattern,response-message}.constant.ts`.
+
+- **VOUCHER-SHOP-01 phase 1 + VOUCHER-GUARD-01 — per-shop vouchers, basket
+  eligibility list, and a fixed-value sanity guard (2026-08-25). Release class
+  B.** Implemented from the design settled in snapshot.md (owner = both shop and
+  admin; Shopee threshold semantics; list shows ineligible vouchers greyed out
+  but still rejects them on apply). One additive migration,
+  `nodeA-20260825-001-add-voucher-seller-id` — applied on DEV, **owed on prod**.
+  - **Schema:** `vouchers.seller_id INT NULL DEFAULT NULL` (`NULL` = platform
+    voucher, set = that shop's) + `idx_vouchers_seller_active
+    (seller_id, is_active)`, which is what the basket list query needs
+    ("platform vouchers + the vouchers of the sellers in this cart") on every
+    checkout page view. INT to match `users.id`; no FK, deliberately — orders
+    and user are separate services on the same MySQL and the codebase does not
+    cross-service FK anywhere else.
+  - **One rules engine, not two.** The stated trap in the design note was list
+    and checkout drifting apart. Closed by extracting a pure, non-throwing
+    `evaluateVoucher(voucher, context) → {isEligible, reason, discountAmount,
+    amountToAdd}` in `apps/orders/src/orders.service.ts`. The list maps it
+    straight to the response; `validateVoucherForCheckout` became "call it, then
+    `voucherRejection()` maps the reason to the right exception". Runtime-proved
+    symmetric: the same code the list flags `MIN_ORDER_NOT_MET` 400s on apply.
+  - **Scope pricing (the Shopee mapping):** a shop voucher is priced against
+    that seller's subtotal slice only — `min_order_amount` and
+    `max_discount_amount` both apply to the slice — while a platform voucher
+    keeps today's whole-goods-subtotal behaviour.
+    `buildSubtotalBySellerId()` computes the slices once per request.
+  - **New endpoints.** `POST /api/order/vouchers/available` (JwtAuthGuard, TCP
+    `order.voucher_available`) takes the cart items, re-prices them through the
+    existing `enrichOrderItems()` so the client cannot lie about prices, and
+    returns each voucher with `{code, description, discountType, discountValue,
+    minOrderAmount, maxDiscountAmount, sellerId, scope, isEligible,
+    ineligibleReason, amountToAdd, discountAmount}`. `ineligibleReason` is a
+    stable enum-ish string (`VOUCHER_INELIGIBLE_REASON` in
+    `libs/constant/response-message.constant.ts`) — FE renders the copy, the
+    backend sends no prose. Shop-facing CRUD: `POST /api/order/vouchers`,
+    `GET /api/order/vouchers/mine`, `PATCH /api/order/vouchers/:id/deactivate`.
+  - **RBAC:** new `voucher` resource in `apps/user/src/rbac/grants.ts` (shop
+    `create/read/update:own`, admin `*:any`) rather than widening `order` —
+    `shop` deliberately still has no `order: create:any`.
+  - **PUBID:** `sellerId` crosses HTTP as `usr_…` in both directions —
+    `resolveUserId()` inbound, `exposeUserReferences()` on every voucher
+    response. A bogus owner id is a clean `404 User not found`; the id is only
+    checked to exist, not to be a `shop`-role user (see snapshot Known Issues).
+  - **VOUCHER-GUARD-01:** `createVoucher` now rejects a FIXED voucher whose
+    `discountValue >= minOrderAmount` (and `<= 0`), closing the
+    `fixed 500000 / minOrderAmount 0` footgun where `computeDiscount`'s
+    `Math.min(discount, itemsTotal)` clamped every basket to zero goods cost.
+    This TIGHTENS an admin-only endpoint that previously accepted the input —
+    the batch stays class B because no FE change could make that 400 land any
+    better (the remedy is an admin typing a different number, and the admin UI
+    already renders the sibling `PERCENT_VALUE_INVALID` / `FIXED_VALUE_INVALID`
+    400s).
+  - **Leak found and fixed during self-test:** a shop deactivating someone
+    else's voucher got `403 "Voucher SWEEPOTHER01 belongs to another shop"` —
+    walking numeric voucher ids would have harvested platform and rival shop
+    codes. `NOT_OWNED_BY_SELLER` is now a code-free constant.
+  - **N+1 avoided:** per-user redemption counts come from ONE grouped
+    QueryBuilder over `voucher_redemptions`, run only when some voucher in the
+    list actually has a `perUserLimit`, and skipped entirely otherwise.
+  - **Self-tested end to end on dev** (accounts from `test-accounts.md`): shop
+    create → 201 with `sellerId:"usr_…"`; shop supplying a `sellerId` → 400
+    `SELLER_NOT_ASSIGNABLE`; guard → 400; admin platform create → 201
+    `sellerId:null`; admin create-for-shop → 201; multi-seller basket
+    (`itemsTotal 35980`) → platform 3598, shop A 3196 on its 15980 slice, shop B
+    2000 on its 20000 slice, plus `MIN_ORDER_NOT_MET` with
+    `amountToAdd 4964020`; single-seller list excludes other shops; empty basket
+    → platform-only, no crash; `USER_LIMIT_REACHED` / `FULLY_REDEEMED` both
+    reproduced against real redemption rows; cross-shop deactivate → 403, own →
+    200 and it drops out of the list; buyer and shop both 403 on the admin
+    route; a real checkout with a shop voucher (`ord_lkKfhejmVcGGxM60`,
+    discount 1598, `usedCount` → 1) then cancelled to release stock. Every
+    pre-existing voucher row reports `scope:"platform"`, confirming the
+    `?? null` normalization on legacy rows. `tsc --noEmit` clean, orders spec
+    80/80 (13 new tests).
+
 - **REPORT-TOTAL-01 — `total` on the moderation queue counted reports whose
   post no longer exists (2026-08-21). Release class B.** From the FE inbox
   (`backend-handoff.md`, 2026-08-21): on prod
