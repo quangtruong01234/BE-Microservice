@@ -40,7 +40,9 @@ import {
   ReturnRequestsQueryDto,
 } from "./dto/return-request.dto";
 import {
+  AvailableVouchersDto,
   CreateVoucherDto,
+  UpdateVoucherDto,
   ValidateVoucherDto,
   VouchersQueryDto,
 } from "./dto/voucher.dto";
@@ -343,6 +345,114 @@ export class OrderController {
     return this.orderService.validateVoucher(userId, dto);
   }
 
+  @Post("vouchers/available")
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({
+    summary:
+      "Buyer: list every voucher relevant to a basket (platform + the cart's shops) with an eligibility flag",
+  })
+  @ApiBody({ type: AvailableVouchersDto })
+  @ApiResponse({
+    status: 201,
+    description:
+      "Voucher list — each row carries isEligible, ineligibleReason, discountAmount and amountToAdd.",
+  })
+  @ApiResponse({ status: 400, description: "Invalid basket payload." })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  async listAvailableVouchers(
+    @Body(ValidationPipe) dto: AvailableVouchersDto,
+    @Req() req: Request,
+  ): Promise<unknown> {
+    const userId = req.user?.id ?? 0;
+    return this.orderService.listAvailableVouchers(userId, dto);
+  }
+
+  @Post("vouchers")
+  @UseGuards(JwtAuthGuard)
+  @CheckPermission("voucher", "create:own")
+  @ApiOperation({
+    summary: "Shop: create a voucher owned by the calling shop",
+  })
+  @ApiBody({ type: CreateVoucherDto })
+  @ApiResponse({ status: 201, description: "Voucher created." })
+  @ApiResponse({
+    status: 400,
+    description: "Invalid voucher payload, or `sellerId` was supplied.",
+  })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  @ApiResponse({ status: 403, description: "Forbidden — shop only." })
+  @ApiResponse({ status: 409, description: "Voucher code already exists." })
+  async createShopVoucher(
+    @Body(ValidationPipe) dto: CreateVoucherDto,
+    @Req() req: Request,
+  ): Promise<unknown> {
+    const sellerId = req.user?.id ?? 0;
+    return this.orderService.createShopVoucher(sellerId, dto);
+  }
+
+  @Get("vouchers/mine")
+  @UseGuards(JwtAuthGuard)
+  @CheckPermission("voucher", "read:own")
+  @ApiOperation({ summary: "Shop: list the calling shop's vouchers" })
+  @ApiResponse({ status: 200, description: "Paginated voucher list." })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  @ApiResponse({ status: 403, description: "Forbidden — shop only." })
+  async listShopVouchers(
+    @Query(ValidationPipe) query: VouchersQueryDto,
+    @Req() req: Request,
+  ): Promise<unknown> {
+    const sellerId = req.user?.id ?? 0;
+    return this.orderService.listVouchers(query.page, query.limit, sellerId);
+  }
+
+  @Patch("vouchers/:id/deactivate")
+  @UseGuards(JwtAuthGuard)
+  @CheckPermission("voucher", "update:own")
+  @ApiOperation({ summary: "Shop: deactivate one of the shop's own vouchers" })
+  @ApiResponse({ status: 200, description: "Voucher deactivated." })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  @ApiResponse({
+    status: 403,
+    description: "Forbidden — the voucher belongs to another shop.",
+  })
+  @ApiResponse({ status: 404, description: "Voucher not found." })
+  async deactivateShopVoucher(
+    @Param("id", ParseIntPipe) id: number,
+    @Req() req: Request,
+  ): Promise<unknown> {
+    const sellerId = req.user?.id ?? 0;
+    return this.orderService.deactivateVoucher(id, sellerId);
+  }
+
+  @Patch("vouchers/:id")
+  @UseGuards(JwtAuthGuard)
+  @CheckPermission("voucher", "update:own")
+  @ApiOperation({
+    summary:
+      "Shop: edit one of the shop's own vouchers (also how a deactivated voucher is switched back on)",
+  })
+  @ApiBody({ type: UpdateVoucherDto })
+  @ApiResponse({ status: 200, description: "Voucher updated." })
+  @ApiResponse({
+    status: 400,
+    description:
+      "Immutable field supplied, invalid value, or a tightening edit on a voucher that has already been redeemed.",
+  })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  @ApiResponse({
+    status: 403,
+    description: "Forbidden — the voucher belongs to another shop.",
+  })
+  @ApiResponse({ status: 404, description: "Voucher not found." })
+  async updateShopVoucher(
+    @Param("id", ParseIntPipe) id: number,
+    @Body(ValidationPipe) dto: UpdateVoucherDto,
+    @Req() req: Request,
+  ): Promise<unknown> {
+    const sellerId = req.user?.id ?? 0;
+    return this.orderService.updateVoucher(id, dto, sellerId);
+  }
+
   @Post("admin/vouchers")
   @UseGuards(JwtAuthGuard)
   @CheckPermission("order", "create:any")
@@ -384,6 +494,30 @@ export class OrderController {
     @Param("id", ParseIntPipe) id: number,
   ): Promise<unknown> {
     return this.orderService.deactivateVoucher(id);
+  }
+
+  @Patch("admin/vouchers/:id")
+  @UseGuards(JwtAuthGuard)
+  @CheckPermission("order", "update:any")
+  @ApiOperation({
+    summary:
+      "Admin: edit a voucher (also how a deactivated voucher is switched back on)",
+  })
+  @ApiBody({ type: UpdateVoucherDto })
+  @ApiResponse({ status: 200, description: "Voucher updated." })
+  @ApiResponse({
+    status: 400,
+    description:
+      "Immutable field supplied, invalid value, or a tightening edit on a voucher that has already been redeemed.",
+  })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  @ApiResponse({ status: 403, description: "Forbidden — admin only." })
+  @ApiResponse({ status: 404, description: "Voucher not found." })
+  async updateVoucher(
+    @Param("id", ParseIntPipe) id: number,
+    @Body(ValidationPipe) dto: UpdateVoucherDto,
+  ): Promise<unknown> {
+    return this.orderService.updateVoucher(id, dto);
   }
 
   @Post("shipping-fee")

@@ -27,7 +27,12 @@ import { retryOnTransportError } from "../common/exception/transport-error";
 import { isPublicId, PaginatedResponse, PaymentMethod } from "@app/common";
 import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 import { CreateOrderDto } from "./dto/create-order.dto";
-import { CreateVoucherDto, ValidateVoucherDto } from "./dto/voucher.dto";
+import {
+  AvailableVouchersDto,
+  CreateVoucherDto,
+  UpdateVoucherDto,
+  ValidateVoucherDto,
+} from "./dto/voucher.dto";
 import { SellerOrdersQueryDto } from "./dto/seller-orders-query.dto";
 import { ShippingFeeDto } from "./dto/shipping-fee.dto";
 import { AdminGhnOrdersQueryDto } from "./dto/admin-ghn-orders-query.dto";
@@ -457,34 +462,134 @@ export class OrderService {
       (sum, item) => sum + item.price * item.quantity,
       0,
     );
-    return this.errorHandledSend(
-      ORDER_MESSAGE_PATTERN.VOUCHER_VALIDATE,
-      { userId, code: dto.code, itemsTotal },
-      "validate voucher",
+    return this.exposeUserReferences(
+      await this.errorHandledSend(
+        ORDER_MESSAGE_PATTERN.VOUCHER_VALIDATE,
+        {
+          userId,
+          code: dto.code,
+          itemsTotal,
+          // VOUCHER-SHOP-01: single-seller basket (enforced above), so the whole
+          // subtotal belongs to this seller — a shop voucher issued by anyone
+          // else must be rejected rather than silently priced platform-wide.
+          sellerId: enrichedItems[0]?.sellerId ?? null,
+        },
+        "validate voucher",
+      ),
     );
   }
 
+  /**
+   * VOUCHER-SHOP-01: every voucher relevant to this basket — platform vouchers
+   * plus the vouchers of the sellers in the cart — each with an eligibility flag
+   * and a machine-readable reason. Visible is NOT applicable: applying an
+   * ineligible code still fails on `voucher/validate` and on order creation.
+   */
+  async listAvailableVouchers(
+    userId: number,
+    dto: AvailableVouchersDto,
+  ): Promise<unknown> {
+    const enrichedItems = await this.enrichOrderItems(dto.items);
+    return this.exposeUserReferences(
+      await this.errorHandledSend(
+        ORDER_MESSAGE_PATTERN.VOUCHER_AVAILABLE,
+        {
+          userId,
+          items: enrichedItems.map((item) => ({
+            price: item.price,
+            quantity: item.quantity,
+            sellerId: item.sellerId,
+          })),
+        },
+        "list available vouchers",
+      ),
+    );
+  }
+
+  /**
+   * Admin create: `sellerId` is optional — omitted (or an explicit `null`,
+   * which is what a FE form with an empty "shop" field sends) means a platform
+   * voucher, a public `usr_` id assigns the voucher to that shop.
+   */
   async createVoucher(dto: CreateVoucherDto): Promise<unknown> {
-    return this.errorHandledSend(
-      ORDER_MESSAGE_PATTERN.VOUCHER_CREATE,
-      dto,
-      "create voucher",
+    const { sellerId, ...rest } = dto;
+    const ownerId =
+      sellerId == null ? null : await this.resolveUserId(sellerId);
+    return this.exposeUserReferences(
+      await this.errorHandledSend(
+        ORDER_MESSAGE_PATTERN.VOUCHER_CREATE,
+        { ...rest, sellerId: ownerId },
+        "create voucher",
+      ),
     );
   }
 
-  async listVouchers(page: number, limit: number): Promise<unknown> {
-    return this.errorHandledSend(
-      ORDER_MESSAGE_PATTERN.VOUCHER_LIST,
-      { page, limit },
-      "list vouchers",
+  /**
+   * Shop create: the voucher always belongs to the caller. A shop may not issue
+   * a platform voucher, nor one owned by another shop.
+   */
+  async createShopVoucher(
+    sellerId: number,
+    dto: CreateVoucherDto,
+  ): Promise<unknown> {
+    // An explicit `null` carries no owner, so it is not an attempt to assign
+    // one — accept it like an omission, the same way the admin route does.
+    if (dto.sellerId != null) {
+      throw new BadRequestException(VOUCHER_MESSAGE.SELLER_NOT_ASSIGNABLE);
+    }
+    const rest = { ...dto };
+    delete rest.sellerId;
+    return this.exposeUserReferences(
+      await this.errorHandledSend(
+        ORDER_MESSAGE_PATTERN.VOUCHER_CREATE,
+        { ...rest, sellerId },
+        "create shop voucher",
+      ),
     );
   }
 
-  async deactivateVoucher(id: number): Promise<unknown> {
-    return this.errorHandledSend(
-      ORDER_MESSAGE_PATTERN.VOUCHER_DEACTIVATE,
-      { id },
-      "deactivate voucher",
+  async listVouchers(
+    page: number,
+    limit: number,
+    sellerId: number | null = null,
+  ): Promise<unknown> {
+    return this.exposeUserReferences(
+      await this.errorHandledSend(
+        ORDER_MESSAGE_PATTERN.VOUCHER_LIST,
+        { page, limit, sellerId },
+        "list vouchers",
+      ),
+    );
+  }
+
+  /**
+   * VOUCHER-EDIT-01. `sellerId` non-null scopes the edit to that shop's own
+   * vouchers; admin passes nothing and may edit any voucher.
+   */
+  async updateVoucher(
+    id: number,
+    dto: UpdateVoucherDto,
+    sellerId: number | null = null,
+  ): Promise<unknown> {
+    return this.exposeUserReferences(
+      await this.errorHandledSend(
+        ORDER_MESSAGE_PATTERN.VOUCHER_UPDATE,
+        { ...dto, id, sellerId },
+        "update voucher",
+      ),
+    );
+  }
+
+  async deactivateVoucher(
+    id: number,
+    sellerId: number | null = null,
+  ): Promise<unknown> {
+    return this.exposeUserReferences(
+      await this.errorHandledSend(
+        ORDER_MESSAGE_PATTERN.VOUCHER_DEACTIVATE,
+        { id, sellerId },
+        "deactivate voucher",
+      ),
     );
   }
 
