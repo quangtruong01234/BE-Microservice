@@ -5,6 +5,19 @@ import { ORDER_MESSAGE } from "libs/constant/response-message.constant";
 import { Cart } from "./entity/cart.entity";
 import { CartItem } from "./entity/cart-item.entity";
 
+/**
+ * Shape returned when the user has no cart row yet. The KEY SET is identical to
+ * `Cart` — an endpoint must not answer with two different shapes (SHAPE-01
+ * rule 2), so the timestamps are present and `null` rather than absent.
+ */
+export interface EmptyCart {
+  id: null;
+  userId: number;
+  createdAt: null;
+  updatedAt: null;
+  items: CartItem[];
+}
+
 @Injectable()
 export class CartService {
   private readonly logger = new Logger(CartService.name);
@@ -16,13 +29,17 @@ export class CartService {
     private readonly cartItemRepository: Repository<CartItem>,
   ) {}
 
+  private emptyCart(userId: number): EmptyCart {
+    return { id: null, userId, createdAt: null, updatedAt: null, items: [] };
+  }
+
   async addItem(payload: {
     userId: number;
     productId: number;
     skuId?: number | null;
     skuTierIdx?: string | null;
     quantity: number;
-  }): Promise<Cart> {
+  }): Promise<Cart | EmptyCart> {
     const { userId, productId, skuId, skuTierIdx, quantity } = payload;
 
     let cart = await this.cartRepository.findOne({
@@ -59,17 +76,32 @@ export class CartService {
       await this.cartItemRepository.save(newItem);
     }
 
-    return this.cartRepository.findOne({
+    // Not `as Promise<Cart>`: the re-read can legitimately miss if the row was
+    // deleted between the write and here (a concurrent clear/remove-last-item
+    // drops the cart row), and casting that away puts `data: null` back on
+    // `POST /api/cart` — the exact shape SHAPE-01 exists to remove.
+    const saved = await this.cartRepository.findOne({
       where: { id: cart.id },
       relations: ["items"],
-    }) as Promise<Cart>;
+    });
+    return saved ?? this.emptyCart(userId);
   }
 
-  async getCart(userId: number): Promise<Cart | null> {
-    return this.cartRepository.findOne({
+  /**
+   * An empty cart is an EMPTY CART, not the absence of one (SHAPE-01). The row
+   * is deleted once the last item is removed, and returning `null` for that
+   * made `data.items` a crash for any caller that did not guard — the same
+   * "collection came back null" class the response-shape rules ban. A user
+   * always has a cart conceptually, so answer with the empty shape and let the
+   * row stay an implementation detail. `id` and both timestamps are null while
+   * no row exists — same keys either way, so the caller types one shape.
+   */
+  async getCart(userId: number): Promise<Cart | EmptyCart> {
+    const cart = await this.cartRepository.findOne({
       where: { userId },
       relations: ["items"],
     });
+    return cart ?? this.emptyCart(userId);
   }
 
   private async findOwnedCartItem(
