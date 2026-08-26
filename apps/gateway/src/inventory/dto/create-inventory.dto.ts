@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { IsInt, IsOptional, IsString, Min, IsNotEmpty } from "class-validator";
 import { IsPublicId } from "../../common/validators/is-public-id.validator";
+import { IsOptionalNotNull } from "../../common/validators/is-optional-not-null.validator";
 import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 
 export class CreateInventoryDto {
@@ -51,7 +52,8 @@ export class CreateInventoryDto {
     type: "integer",
     required: false,
   })
-  @IsOptional()
+  // NOT NULL with a default — omitting it is fine, sending `null` is not.
+  @IsOptionalNotNull()
   @IsInt()
   @Min(0)
   minimumStock?: number;

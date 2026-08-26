@@ -8,7 +8,14 @@ import {
   Min,
   IsBoolean,
 } from "class-validator";
+import { IsOptionalNotNull } from "../../common/validators/is-optional-not-null.validator";
 
+/**
+ * `location` is the only nullable column on `inventory_v2`, so it is the only
+ * field here where `null` legitimately means "clear it". The rest map to NOT
+ * NULL columns and take `@IsOptionalNotNull()` — a `null` reached
+ * `repository.update()` and surfaced as a driver 500 instead of a 400.
+ */
 export class UpdateInventoryDto {
   @ApiProperty({
     description:
@@ -17,7 +24,7 @@ export class UpdateInventoryDto {
     maxLength: 100,
     required: false,
   })
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsString()
   @IsNotEmpty()
   @MaxLength(100)
@@ -30,7 +37,7 @@ export class UpdateInventoryDto {
     type: "integer",
     required: false,
   })
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsInt()
   @Min(0)
   availableStock?: number;
@@ -42,7 +49,7 @@ export class UpdateInventoryDto {
     type: "integer",
     required: false,
   })
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsInt()
   @Min(0)
   reservedStock?: number;
@@ -54,7 +61,7 @@ export class UpdateInventoryDto {
     type: "integer",
     required: false,
   })
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsInt()
   @Min(0)
   minimumStock?: number;
@@ -75,7 +82,7 @@ export class UpdateInventoryDto {
     type: "boolean",
     required: false,
   })
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsBoolean()
   isActive?: boolean;
 }
