@@ -214,6 +214,19 @@ export class GhnService {
     401, 403, 408, 429,
   ]);
 
+  // GHN reports "I do not serve this destination" through two very different
+  // strings: a retired ward is named plainly, but a ward its hub mapping cannot
+  // resolve comes back as "Lỗi hệ thống - không lấy được thông tin kho", which
+  // the buyer reads as OUR system failing. Both are deterministic refusals of
+  // the ADDRESS, so they are matched on substring — GHN prefixes and reworks the
+  // surrounding text, and there is no error code to key on. Kept as narrow as
+  // the observed wording allows: this runs for waybill actions too, and a bare
+  // "không còn hoạt động" would also swallow an order-state refusal.
+  private static readonly UNSERVICEABLE_DESTINATION_SIGNATURES = [
+    "không lấy được thông tin kho",
+    "người nhận không còn hoạt động",
+  ];
+
   // An outage is "GHN did not answer" (timeout / DNS / connection refused), or
   // answered 5xx / an operational fault. Any other 4xx is GHN rejecting THIS
   // request — a bad address, a waybill in the wrong state — which says nothing
@@ -256,6 +269,13 @@ export class GhnService {
   // reason ("Trạng thái đơn hàng không hợp lệ", "context deadline exceeded") in
   // response.data.message; before this, the AxiosError escaped uncaught and the
   // seller only ever saw "Internal server error".
+  private static isUnserviceableDestination(ghnMessage: string): boolean {
+    const normalized = ghnMessage.toLowerCase();
+    return GhnService.UNSERVICEABLE_DESTINATION_SIGNATURES.some((signature) =>
+      normalized.includes(signature),
+    );
+  }
+
   private toGhnDomainError(
     error: unknown,
     buildMessage: (message: string) => string,
@@ -263,10 +283,22 @@ export class GhnService {
     if (error instanceof HttpException) {
       return error;
     }
-    const message = buildMessage(this.extractGhnErrorMessage(error));
-    return GhnService.isGhnOutage(error)
-      ? new ServiceUnavailableException(message)
-      : new BadRequestException(message);
+    const ghnMessage = this.extractGhnErrorMessage(error);
+    if (GhnService.isGhnOutage(error)) {
+      return new ServiceUnavailableException(buildMessage(ghnMessage));
+    }
+    // Only after the outage check: an unreachable GHN must stay a 503 no matter
+    // what text it echoed back, otherwise an outage would masquerade as a bad
+    // address and the buyer would be sent to edit an address that is fine.
+    if (GhnService.isUnserviceableDestination(ghnMessage)) {
+      // The raw wording is the only clue to WHICH destination rule GHN applied,
+      // so keep it in the log even though the response no longer carries it.
+      this.logger.warn(
+        `[GHN] Unserviceable destination, GHN said: ${ghnMessage}`,
+      );
+      return new BadRequestException(GHN_MESSAGE.DESTINATION_NOT_SERVICEABLE);
+    }
+    return new BadRequestException(buildMessage(ghnMessage));
   }
 
   private buildHeaders(): Record<string, string> {
@@ -440,10 +472,13 @@ export class GhnService {
 
   async listWards(districtId: number): Promise<{ id: string; name: string }[]> {
     const wards = await this.getWards(districtId);
-    return wards.map((ward) => ({
-      id: ward.WardCode,
-      name: ward.WardName,
-    }));
+    // Never offer a ward GHN will refuse at checkout — see isDeliverableWard().
+    return wards
+      .filter((ward) => this.isDeliverableWard(ward))
+      .map((ward) => ({
+        id: ward.WardCode,
+        name: ward.WardName,
+      }));
   }
 
   async cancelShippingOrder(ghnOrderCode: string): Promise<boolean> {
@@ -754,6 +789,25 @@ export class GhnService {
     return wards;
   }
 
+  /**
+   * GHN's ward master data includes wards GHN itself refuses to deliver to.
+   * Vietnam's 2025 ward merger is the live example: district 1450 (Quận 8)
+   * lists the three merged wards 910374/910375/910376 alongside the legacy
+   * ones, and quoting a fee for any of them comes back
+   * `400 "phường/xã người nhận không còn hoạt động"`. They are distinguishable
+   * in the payload — a deliverable ward carries `Status: 1`, a dead one
+   * `Status: 3` — so filter them out instead of letting a buyer pick one from
+   * the dropdown and hit the refusal at checkout.
+   *
+   * Fail-open on a missing field: if GHN ever stops sending `Status`, keep
+   * every ward rather than emptying the dropdown.
+   */
+  private isDeliverableWard(ward: GhnWard): boolean {
+    return (
+      ward.Status === undefined || ward.Status === null || ward.Status === 1
+    );
+  }
+
   // Normalize a Vietnamese address part for tolerant matching: strip diacritics,
   // lowercase, drop administrative-unit prefixes (TP., Tỉnh, Quận, Phường, ...),
   // then remove every non-alphanumeric character. e.g. "TP. Hồ Chí Minh" and
@@ -874,10 +928,20 @@ export class GhnService {
     }
 
     const target = wardCode.trim();
-    if (!wards.some((ward) => ward.WardCode?.trim() === target)) {
+    const selected = wards.find((ward) => ward.WardCode?.trim() === target);
+    if (!selected) {
       throw new BadRequestException(
         GHN_MESSAGE.WARD_NOT_IN_DISTRICT(target, districtId),
       );
+    }
+
+    // The ward belongs to the district but GHN has retired it. Saying so beats
+    // the alternatives: WARD_NOT_IN_DISTRICT would be a lie, and letting it
+    // through only defers the failure to GHN's own Vietnamese refusal.
+    // Reachable via an address saved before the ward was retired, since the
+    // dropdown no longer offers one.
+    if (!this.isDeliverableWard(selected)) {
+      throw new BadRequestException(GHN_MESSAGE.WARD_INACTIVE(target));
     }
   }
 
@@ -912,8 +976,11 @@ export class GhnService {
       );
       for (const district of districtCandidates) {
         const wards = await this.getWards(district.DistrictID);
+        // Resolving free text onto a retired ward would hand the caller an id
+        // that only fails later, so those are not candidates at all — a merged
+        // ward's name usually still matches a live sibling in the same district.
         const [ward] = this.rankMasterDataMatches(
-          wards,
+          wards.filter((candidate) => this.isDeliverableWard(candidate)),
           wardName,
           (w) => w.WardName,
           (w) => w.NameExtension,

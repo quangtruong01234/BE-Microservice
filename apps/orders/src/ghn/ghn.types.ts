@@ -68,6 +68,11 @@ export interface GhnWard {
   DistrictID: number;
   WardName: string;
   NameExtension?: string[];
+  // GHN publishes wards it does not deliver to yet: the 2025 merged wards come
+  // back with Status 3 and are refused at preview with "phường/xã người nhận
+  // không còn hoạt động". 1 = live. Optional because only /master-data/ward
+  // carries it — a ward built from any other source is treated as live.
+  Status?: number;
 }
 
 export interface CacheEntry<T> {
