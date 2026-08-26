@@ -206,6 +206,70 @@ Error (from `HttpExceptionFilter`):
 }
 ```
 
+## Backend: Data-Shape Hygiene (SHAPE-01 — 4 luật ở biên response/request)
+
+FE runs on a typed contract; a field that arrives `null` where the contract says
+"collection", or a 500 where a 400 belongs, is a *class* of bug that has already
+whitened pages in this project. These four rules exist so the next endpoint does
+not re-create it. Full rationale + the cases that were declined:
+`ai-docs/agent-context/known-behaviors.md` → SHAPE-01.
+
+**1. A field the contract declares as a COLLECTION is never `null`.**
+Empty array ⇒ `[]`. If a read has "no row yet", answer with the empty shape, not
+`null` — a user always conceptually has a cart / a wishlist / a list of orders.
+```typescript
+// ❌ Wrong — the caller's `data.items.length` is a TypeError
+return this.cartRepository.findOne({ where: { userId }, relations: ["items"] });
+// ✅ Correct — SAME KEY SET as the real row, nulls where there is no value yet
+return cart ?? { id: null, userId, createdAt: null, updatedAt: null, items: [] };
+```
+The empty shape must declare **every key the populated shape has**, or you have
+shipped one endpoint with two shapes — which is exactly what rule 2 bans. And
+the guard belongs on every path that can return the entity, not just the read:
+`findOne(...) as Promise<Cart>` after a write is a cast, not a guarantee, and a
+concurrent delete turns it back into `data: null`.
+Deliberately NOT extended to objects: a missing single relation stays `null`
+(`inventory: null`, `brand: null`, `author: null`). `{}` is worse — it makes
+"absent" indistinguishable from "present but blank", and `{}.name` is
+`undefined`, which renders empty instead of tripping the caller's guard.
+
+**2. `required` never means `null`; nullable is declared up front and forever.**
+A response field is part of the contract the moment it ships:
+- Renaming, removing, or re-typing one (number ⇔ string id included) is release
+  class **C** — open a `../.agent-local/release-gate.md` hold, never ship ahead
+  of the FE. Adding an optional field is class B.
+- A field that CAN be absent must be nullable from its first release
+  (`imageUrls: string[] | null`), never "non-null that sometimes isn't".
+  Retrofitting nullability later is the same breaking change as removing it.
+
+**3. Bad input is a 4xx with a message — never a 500.**
+A 500 tells the caller "the backend is broken" and carries nothing to attach to
+a form field. The recurring trap is `@IsOptional()`, which skips every other
+validator on `undefined` **and on `null`**, so an explicit `null` reaches the
+service and dies at `.toFixed()` / the NOT NULL column.
+```typescript
+// Field maps to a NULLABLE column — `null` means "clear it"
+@IsOptional() @IsString() sellerNotes?: string | null;
+// Field maps to a NOT NULL column — `null` is a client mistake ⇒ 400
+@IsOptionalNotNull() @IsInt() @Min(0) availableStock?: number;
+```
+`IsOptionalNotNull` lives at
+`apps/gateway/src/common/validators/is-optional-not-null.validator.ts`.
+**Rule of thumb: check the column before you pick the decorator.** Nullable ⇒
+`@IsOptional()`; NOT NULL ⇒ `@IsOptionalNotNull()`. Applies to new/touched DTO
+fields — do NOT sweep this across DTOs where `null` is currently tolerated and
+answers 200, because tightening a passing call into a 400 is class C.
+
+**4. A batch READ is partial-tolerant; a batch WRITE is all-or-nothing.**
+- **Read** (`POST /products/with-inventory/multiple`, any `*.findByIds`): an id
+  that no longer resolves is SKIPPED, and the caller reads absence as "deleted".
+  One stale id must never 404 the whole response — that leaves the client with a
+  blank page instead of the rows that do exist. Resolve the batch with one `IN`
+  query, not one query per id.
+- **Write**: reject the whole batch with a 400 naming the offending ids. Partial
+  success on a write is worse than a clean failure — the caller cannot tell what
+  landed and retrying double-applies the half that did.
+
 ## Backend: Authentication
 
 - All routes are JWT-protected by default via global `JwtAuthGuard`

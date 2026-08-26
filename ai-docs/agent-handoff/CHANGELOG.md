@@ -6,6 +6,191 @@
 
 ## Completed Milestones
 
+- **SHAPE-01 hậu kiểm — the FE read the diff, and both of its two asks were
+  real (2026-08-27). Release class B, no migration.** Closes the
+  `backend-handoff.md` entry the FE filed after reviewing the uncommitted
+  SHAPE-01 working tree. Two code fixes, one latent defect of the same class
+  found by re-reading my own diff, and three documentation claims corrected
+  after being measured instead of assumed.
+  - **The empty-cart shape was one endpoint with two key sets — the thing rule 2
+    bans.** A real cart carries `createdAt`/`updatedAt`; the empty shape omitted
+    them ("the row does not exist yet"). `EmptyCart` now declares
+    `createdAt: null` and `updatedAt: null`, so `GET /api/cart` answers the same
+    five keys either way. Verified: empty →
+    `{"id":null,"userId":"usr_…","createdAt":null,"updatedAt":null,"items":[]}`,
+    populated → the same keys with real values.
+  - **`CartService.addItem` still had the null hole SHAPE-01 exists to close.**
+    It ended with `findOne(...) as Promise<Cart>` — a cast, not a guarantee. If
+    a concurrent clear/remove-last-item deletes the row between the write and
+    the re-read, that resolves `null` and `POST /api/cart` answers `data: null`,
+    the exact crash shape fixed on the read path. Now returns
+    `Cart | EmptyCart` via the shared `emptyCart()` helper. Found by re-reading
+    the diff's neighbourhood, not by the self-test — the race is not reachable
+    from a single-client curl.
+  - **`resolveProductIds` order is now part of the contract.** The first cut
+    partitioned numeric/public ids and appended the DB's row order, so the
+    result no longer followed the input. Harmless today (the one caller keys by
+    id) and a trap for the next one. It now resolves public ids through a
+    `Map` and rebuilds the list in INPUT order. Measured consequence, stated so
+    nobody re-derives it: the *endpoint* still answers in DB order, because
+    `findProductsByIds` is a bare `IN` with no `ORDER BY` — requesting
+    `[charger, earbuds, redmi]` returns `[redmi, earbuds, charger]`. Documented
+    on both functions rather than silently sorted at the gateway.
+  - **Three claims corrected in the SHAPE-01 entry above and in both handoff
+    files.** (1) The pre-fix batch failure was **`200` with `data: []`**, not a
+    404 — proved by stashing the fix and re-polling; the product service's 404
+    was swallowed by the gateway's pre-existing `.catch()` that degrades to an
+    empty list, which is *worse* than a 404 because the FE had no error to
+    catch. (2) A **malformed** `prod_` id was never part of what the fix
+    changed: `@IsPublicId(…, {each:true})` 400s it at the gateway DTO
+    (`"productIds must match prod_<16 alphanumeric characters>"`). Only
+    well-formed-but-unknown ids are skipped. (3) "`resolveProductIds` has
+    exactly one caller" was true of the method but not of the pattern —
+    `PRODUCT_FIND_BY_IDS` has 7 call sites, six of which pass `Number(...)`-ed
+    ids and take the numeric path.
+  - **FE confirmations accepted, no work:** the inventory/address
+    `@IsOptionalNotNull()` tightening is zero-impact (the FE has no inventory
+    write path, and the address form never sends `null`), and
+    `EmptyCart.userId: number` does not leak an internal id — the gateway's
+    `exposeUserIds` maps both cart branches, confirmed live (`usr_…` on the
+    empty shape).
+  - **Verified live on localhost:3000** (admin account): empty cart key-set,
+    add-item → 201 with matching keys, remove-last-item → empty shape again;
+    batch 1 live + 1 well-formed-dead → **200** with just the live row, all-dead
+    → **200 `[]`**, malformed → **400**; `GET /api/products/:id/stock-check` →
+    200 (a second `PRODUCT_FIND_BY_IDS` consumer, unaffected). `tsc --noEmit`
+    clean, eslint clean.
+
+- **SHAPE-01 — data-shape hygiene at the response/request boundary
+  (2026-08-26). Release class B, no migration.** Answers the FE's four
+  commitments filed in `backend-handoff.md` ("6 dạng response đã làm FE trắng
+  trang"). Three of the four asks were accepted as stated, one was accepted only
+  in half; the durable half of the work is the rule now living in
+  `conventions.md` → **Backend: Data-Shape Hygiene**, which is auto-loaded every
+  session so the next endpoint does not re-create the class.
+  - **Ask 1 — a collection is never `null`. ACCEPTED for arrays, DECLINED for
+    the "empty object ⇒ `{}`" half.** `GET /api/cart` answered `data: null`
+    after the last item was removed, because `removeItem`/`updateItem` delete
+    the cart row when it empties — so `data.items.length` was a TypeError for
+    any caller that did not guard. `CartService.getCart`
+    (`apps/orders/src/cart.service.ts`) now returns `cart ?? { id: null, userId,
+    items: [] }` (exported `EmptyCart` interface; `id` is null while no row
+    exists, and the non-empty response is unchanged). The object half is
+    declined on purpose: this codebase uses `null` for a missing single relation
+    (`inventory: null`, `brand: null`, `author: null`), and `{}` makes "absent"
+    indistinguishable from "present but blank" while `{}.name` is `undefined`,
+    which renders empty instead of tripping the caller's guard. Ask 2 covers
+    that case correctly instead.
+  - **Ask 2 — `required` never means `null`; nullability is declared up front.
+    ACCEPTED as a rule, no code change.** It is already the release-gate
+    process: re-typing or removing a shipped response field (number ⇔ string id
+    included) is class **C** and holds in `../.agent-local/release-gate.md`;
+    adding an optional field is class B. Written down in `conventions.md` so it
+    is not re-litigated per endpoint.
+  - **Ask 3 — bad input is a 4xx, never a 500. ACCEPTED, applied where `null`
+    provably 500s today.** Same `@IsOptional()` trap as VOUCHER-NULL-01, so the
+    primitive already existed: `@IsOptionalNotNull()`. Swapped in
+    `UpdateUserAddressDto` (all 10 fields — every column on `user_addresses` is
+    NOT NULL and `updateAddress` does `Object.assign(address, dto)`),
+    `UpdateInventoryDto` (`sku`, `availableStock`, `reservedStock`,
+    `minimumStock`, `isActive`; `location` is the only nullable column and stays
+    `@IsOptional()`), and `CreateInventoryDto.minimumStock` (NOT NULL with a DB
+    default — `repository.create()` inserts an explicit `null` rather than
+    falling back to the default). **A blanket sweep was declined**: ~140
+    `@IsOptional()` fields across 31 gateway DTO files are declared non-nullable,
+    and tightening one that currently answers 200 turns a succeeding call into a
+    400 — class C, for no reported benefit.
+  - **Ask 4 — batch endpoints are partial-tolerant. ACCEPTED for READS,
+    qualified for WRITES.** `resolveProductIds`
+    (`apps/product/src/product.service.ts`) was
+    `Promise.all(ids.map(resolveProductId))`, and the singular resolver throws
+    `NotFoundException` on an unknown or malformed public id — so one product
+    deleted after the client cached its id blanked the entire
+    `POST /api/products/with-inventory/multiple` response and the FE got nothing
+    instead of the rows that still exist. **Measured, not assumed (hậu kiểm
+    2026-08-26): the old failure was `200` with `data: []`, NOT a 404** — the
+    thrown 404 was swallowed by the pre-existing `.catch()` in
+    `getProductsWithInventory` (`apps/gateway/src/product/product.service.ts`)
+    that degrades a product-service failure to an empty list. Worse than a 404
+    for the caller, since there was no error to catch. It now partitions numeric vs public
+    ids, resolves the public half in **one `IN` query** (was N queries), and
+    skips what does not resolve — matching `findProductsByIds`, which already
+    dropped missing numeric ids. Batch WRITES deliberately stay all-or-nothing
+    with a 400 naming the offending ids: silent partial success on a write is
+    worse than a clean failure, because the caller cannot tell what landed and a
+    retry double-applies the half that did.
+  - **Change-impact review caught one class-C regression before it shipped.**
+    `CreateUserAddressDto.isDefault` was tightened in the first pass, but
+    `createAddress` computes the flag (`existingCount === 0 || dto.isDefault ===
+    true`) and overwrites whatever arrives, so `isDefault: null` had always
+    answered **201**. Reverted to `@IsOptional()` with the reason in-file — same
+    create-vs-update asymmetry as VOUCHER-NULL-01. Blast radius otherwise clear:
+    `resolveProductIds` has exactly one caller (`PRODUCT_FIND_BY_IDS` →
+    `findProductsByIds`, which looks up by `IN` and is order-independent, so the
+    new result ordering is inert), and `CartService.getCart` has exactly one
+    consumer (gateway `exposeProductIds`, which handles the empty shape).
+    **Re-checked in hậu kiểm and stated more precisely:** the *pattern*
+    `PRODUCT_FIND_BY_IDS` has **7 call sites**, not one — `cart/cart.service.ts:104`,
+    `inventory/inventory.service.ts:78` and `:273`, `order/order.service.ts:1915`,
+    `product/product.service.ts:324` and `:1477`, plus the product controller. Six
+    of them pass ids they already coerced with `Number(...)`, so they take the
+    numeric fast path and cannot observe the change; only the gateway batch route
+    (`:1477`) sends `prod_` strings. The "one caller" claim was true of the
+    *method*, not of the pattern.
+  - **Verified live on localhost:3000** (admin account): `PATCH
+    /api/user/me/addresses/:id {"recipientName":null}` → **400** naming the field
+    (was 500); `PUT /api/inventory/9 {"availableStock":null}` → **400** (was
+    500) while `{"location":null}` still → **200** (nullable carve-out intact);
+    `POST /api/products/with-inventory/multiple` with one live + one dead
+    `prod_` id → **200** returning just the live product, all-dead → **200
+    `[]`** (before the fix the same request answered **200 with `data: []`** —
+    measured by stashing the fix and re-polling, so the live row was being
+    silently dropped, not 404'd); `GET /api/cart` with no cart row → **200
+    `{"id":null,"userId":"usr_…","items":[]}`** (was `data: null`), and the
+    non-empty cart response is byte-identical to before; `POST
+    /api/user/me/addresses {"isDefault":null}` → **201** (regression leg, after
+    the revert). `tsc --noEmit` clean, eslint clean.
+
+- **VOUCHER-NULL-01 — a `null` on a voucher edit is a 400, not a 500
+  (2026-08-26). Release class B, no migration.** Closes the voucher entry the FE
+  filed in `backend-handoff.md`: `PATCH /api/order/admin/vouchers/:id` with
+  `{"minOrderAmount": null}` answered `500 Internal Server Error` with nothing
+  the caller could act on. The FE had already shipped a mitigation
+  (`diffMinOrderAmount()` in `frontend/src/features/admin/voucherAdmin.ts` never
+  sends `null`), so this is pure robustness for any other client.
+  - **Root cause was at the pipe, not in the service.** class-validator's
+    `@IsOptional()` skips every other validator when the value is `undefined`
+    **or `null`**, so `null` passed the gateway `ValidationPipe` untouched. It
+    then surfaced three different ways: percent voucher →
+    `input.minOrderAmount.toFixed(2)` → `TypeError` → 500; **fixed** voucher →
+    the VOUCHER-GUARD-01 comparison coerced `null` to 0 and returned a
+    *misleading* 400 `FIXED_VALUE_EXCEEDS_MIN_ORDER`; `isActive: null` → NOT
+    NULL column → driver error → 500. One honest 400 now covers all three.
+  - **The fix is one small decorator, reusable.**
+    `@IsOptionalNotNull()` (`apps/gateway/src/common/validators/is-optional-not-null.validator.ts`)
+    is `ValidateIf((_, value) => value !== undefined)` — identical to
+    `@IsOptional()` on `undefined`, but `null` falls through to
+    `@IsNumber()`/`@IsBoolean()` and produces a validation message. Applied to
+    exactly the two `UpdateVoucherDto` fields backed by NOT NULL columns
+    (`minOrderAmount`, `isActive`); the other six stay `@IsOptional()` because
+    `null` there genuinely means "clear it". No service change — the orders
+    input type already says `number | undefined`, and the gateway is its only
+    caller.
+  - **`CreateVoucherDto` deliberately untouched** — `createVoucher` coerces with
+    `?? 0` / `?? true`, so a `null` there is a harmless 201. Tightening it would
+    flip a succeeding call to a 400 (class C) for no reported benefit. See
+    `known-behaviors.md` → VOUCHER-NULL-01.
+  - **Verified live on localhost:3000**, admin + shop routes: the reported bug
+    `{"minOrderAmount":null}` → **400** `"minOrderAmount must not be less than
+    0, minOrderAmount must be a number — send 0 to remove the threshold, not
+    null"` (was 500); `{"isActive":null}` → **400** `"isActive must be a boolean
+    — true or false, not null"`; regression legs all unchanged —
+    `{"minOrderAmount":0}` → 200, `{"isActive":false}` → 200, all six nullables
+    to `null` + reactivate → 200, `{}` → 200 no-op, string-for-number still 400,
+    `POST` with `minOrderAmount:null` still **201** (coerced to 0). Unit tests:
+    `apps/gateway/src/common/validators` 2 suites / 14 tests green;
+    `orders.service.spec.ts -t "oucher"` 31 passed.
+
 - **GHN-WARD-01 — stop offering wards GHN refuses to deliver to (2026-08-26).
   Release class B, no migration.** Closes the first half of PRODTEST-0806 defect
   #3, which the prod voucher sweep re-opened: of the 19 wards

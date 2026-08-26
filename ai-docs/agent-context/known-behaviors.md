@@ -795,3 +795,49 @@ a post deleted between the two queries — it is no longer what filters orphans.
 Consequence to expect: `total` on this endpoint can be LOWER than the raw
 `post_reports` row count for that status, and that is correct. Anyone reconciling
 the endpoint against the table directly must join `posts` too.
+
+## `null` is a 400 on a voucher edit, but still a 201 on a voucher create (VOUCHER-NULL-01, 2026-08-26)
+
+`PATCH /api/order/vouchers/:id` and `PATCH /api/order/admin/vouchers/:id` now
+reject an explicit `null` on `minOrderAmount` and on `isActive` with a 400. Those
+two are the only fields on `UpdateVoucherDto` backed by NOT NULL columns
+(`min_order_amount decimal(12,2) default 0`, `is_active boolean default true`),
+so `null` was never "clear it" — it was a client mistake that used to reach the
+service. The other six fields (`description`, `maxDiscountAmount`, `usageLimit`,
+`perUserLimit`, `startsAt`, `expiresAt`) are genuinely nullable and still take
+`null` to clear.
+
+**Why it was a 500 and not a 400 before:** class-validator's `@IsOptional()`
+skips every other validator when the value is `undefined` **or `null`**, so the
+gateway pipe waved `null` through. Downstream it surfaced three different ways
+depending on the voucher — `minOrderAmount: null` on a percent voucher hit
+`input.minOrderAmount.toFixed(2)` → `TypeError` → 500; on a **fixed** voucher it
+hit the VOUCHER-GUARD-01 comparison first, where `null` coerces to 0, and
+returned a *misleading* 400 `FIXED_VALUE_EXCEEDS_MIN_ORDER`; `isActive: null`
+reached a NOT NULL column → driver error → 500. All three collapse into one
+honest validation 400 now.
+
+The fix is a decorator, not a service guard: `@IsOptionalNotNull()`
+(`apps/gateway/src/common/validators/is-optional-not-null.validator.ts`) is
+`ValidateIf(value !== undefined)` — it skips on `undefined` exactly like
+`@IsOptional()`, but lets `null` fall through to `@IsNumber()`/`@IsBoolean()`.
+Reuse it on any future DTO field that is optional but maps to a NOT NULL column;
+do not add runtime null checks in the microservice, whose input type already
+says the field is `number | undefined`.
+
+**The 400 body carries two clauses**, because `@Min(0)` also fires on `null`:
+
+```
+"minOrderAmount must not be less than 0, minOrderAmount must be a number — send 0 to remove the threshold, not null"
+```
+
+Cosmetic, and the actionable clause is present — do not chase decorator ordering
+to suppress the first one.
+
+**Deliberate asymmetry — do NOT "fix" it:** `POST /api/order/vouchers` and
+`POST /api/order/admin/vouchers` still ACCEPT `minOrderAmount: null` /
+`isActive: null` and answer 201, because `createVoucher` already coerces with
+`?? 0` / `?? true`. Nothing crashes and nothing is stored wrong. Tightening
+create would turn a currently-succeeding call into a 400 — release class C,
+needing an FE hold — for zero reported benefit. Create is forgiving, update is
+strict, and that is the intended state.

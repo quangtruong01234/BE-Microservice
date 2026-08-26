@@ -130,9 +130,10 @@ work is the two class-C sub-items under #4. Kept in full for the audit trail:
    one of the following values: approve, reject`.
 
 Observations (not defects): `/ready` reports `database:not_configured` and
-`rabbitmq:not_checked`, so readiness stays green even if RMQ is down;
-`GET /api/cart` returns `data:null` after the last item is removed (cart row is
-deleted) rather than an empty cart. The `shippingFee: 0` observation is CLOSED —
+`rabbitmq:not_checked`, so readiness stays green even if RMQ is down. The
+`GET /api/cart` → `data:null` observation is CLOSED — SHAPE-01 (2026-08-26) now
+answers `{"id":null,"userId","items":[]}` for a user with no cart row. The
+`shippingFee: 0` observation is CLOSED —
 the GHN dev gateway returns zero for every destination/weight on both fee
 endpoints; see `ops-runtime.md` → GHN.
 
@@ -585,6 +586,27 @@ See `CHANGELOG.md` 2026-08-26.
   the alternative is letting a shop tighten the rules of a campaign buyers are
   already playing. Also deliberate: an empty `{}` body is a 200 no-op, and
   `expiresAt` before `startsAt` is still accepted, exactly as on create.
+- VOUCHER-NULL-01: on `PATCH .../vouchers/:id`, `minOrderAmount` and `isActive`
+  reject an explicit `null` with a 400 (they map to NOT NULL columns — send
+  `0` / `false`). The other six fields still take `null` as "clear it".
+  Deliberate asymmetry: `POST .../vouchers` still coerces a `null` on those two
+  to the default (0 / true) and answers 201 — tightening create would turn a
+  currently-succeeding call into a 400 (class C) for no reported benefit.
+- SHAPE-01 residuals (deliberate, 2026-08-26; hậu kiểm 2026-08-27): the
+  empty-cart shape is `{id:null, userId, createdAt:null, updatedAt:null,
+  items:[]}` — the SAME KEY SET as a real cart. The first cut omitted both
+  timestamps ("the row does not exist"); the FE pointed out that is one endpoint
+  with two shapes, which is what rule 2 bans, and it was fixed.
+  `resolveProductIds` preserves INPUT order; `findProductsByIds` does not (plain
+  `IN`, no ORDER BY), so `POST /api/products/with-inventory/multiple` answers in
+  DB order — callers must key by id, verified 2026-08-27.
+  A missing single relation still comes back `null`
+  (`inventory`, `brand`, `author`), NOT `{}` — the FE asked for `{}` and it was
+  declined. `@IsOptionalNotNull()` was applied only where `null` provably 500s
+  today; ~140 other `@IsOptional()` gateway DTO fields still accept a `null` and
+  answer 200 — do NOT sweep them, tightening a passing call is class C.
+  `POST /api/user/me/addresses {"isDefault":null}` stays a 201 for that exact
+  reason (create computes the flag), while the PATCH is a 400.
 - REPORT-TOTAL-01: `deletePost` hard-removes the post and never deletes its
   `post_reports` rows, so orphan reports accumulate forever. Deliberate — the
   rows are the moderation audit trail. Since 2026-08-21 they are invisible to
