@@ -6,6 +6,24 @@
 
 ## Completed Milestones
 
+- **Released to production 2026-08-26 (`ccb8f9a..e10506f`)** — VOUCHER-SHOP-01
+  phase 1, VOUCHER-GUARD-01 and VOUCHER-EDIT-01, all release class B. The CD run
+  applied both owed voucher migrations (`nodeA-20260818-001-add-voucher-indexes`,
+  `nodeA-20260825-001-add-voucher-seller-id`) before restarting pm2; the indexes
+  one ABORTS on duplicates, so its exiting 0 also proves prod held no duplicate
+  `vouchers.code` and no duplicate `(voucher_id, order_id)`. Verified live on
+  prod as `shop1`: `GET /api/order/vouchers/mine` → 200 (empty, and a
+  `seller_id` filter would have 500'd on a missing column); `POST
+  /api/order/vouchers/available` for a 498,000₫ basket returns the seeded
+  `TRYBUY10` with `sellerId: null`, `scope: "platform"`, `isEligible: true`,
+  `discountAmount: 49800` (10%, under the 50,000₫ cap) — i.e. pre-existing rows
+  behave exactly as before the column was added. Both negative paths confirmed
+  on prod without writing any row: a fixed voucher with `discountValue ==
+  minOrderAmount` → 400 `FIXED_VALUE_EXCEEDS_MIN_ORDER`, and a shop passing an
+  explicit `sellerId` → 400 `SELLER_NOT_ASSIGNABLE`. Note for a future session:
+  on the shop route a *numeric* `sellerId` is rejected earlier, by the `usr_`
+  public-id validator, so the message differs from the one above — both are 400.
+
 - **VOUCHER-EDIT-01 — a voucher can be edited, and a deactivated one switched
   back on (2026-08-26). Release class B, no migration.** Closes the last **Open**
   entry in `backend-handoff.md` (2026-08-18, "voucher admin: không có route sửa

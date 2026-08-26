@@ -103,26 +103,6 @@ deleted) rather than an empty cart. The `shippingFee: 0` observation is CLOSED �
 the GHN dev gateway returns zero for every destination/weight on both fee
 endpoints; see `ops-runtime.md` → GHN.
 
-### VOUCHER migrations owed on PROD (2 files, DEV-applied only)
-
-Both ship with the next deploy — the workflow migrates before
-`pm2 startOrRestart` under `set -euo pipefail`. Details in `ops-runtime.md`.
-
-- `nodeA-20260818-001-add-voucher-indexes` (VOUCHER-CONC-01, class A, DONE
-  2026-08-18). Nothing breaks if it lags: the code degrades to the pre-existing
-  behaviour (slower lookups, `createVoucher` still guarded by its
-  check-then-act, per-user re-check served by a scan). The two UNIQUE indexes
-  ABORT rather than skip if prod holds duplicates — if the migrate step fails,
-  dedupe `vouchers.code` / `voucher_redemptions (voucher_id, order_id)` on prod
-  first.
-- `nodeA-20260825-001-add-voucher-seller-id` (VOUCHER-SHOP-01 phase 1, class B,
-  DONE 2026-08-25). Adds `vouchers.seller_id INT NULL` +
-  `idx_vouchers_seller_active`. **This one is NOT optional — the code deployed
-  with it selects `seller_id`, so shipping the code without the column breaks
-  every voucher read.** Purely additive and guarded, so it cannot abort on
-  existing data; existing rows become platform vouchers (`NULL`), which is
-  exactly today's behaviour.
-
 ### RESIL-01..03 — resilience patterns borrowed from a flash-sale reference (2026-08-10)
 
 Reviewed a high-concurrency flash-sale/seckill reference architecture against
@@ -394,8 +374,8 @@ notifies nobody. Decided shape — implement as-is, the design work is done:
 
 Phase 1 (per-shop vouchers + basket eligibility list) and VOUCHER-GUARD-01 (the
 fixed-value-vs-threshold guard) are IMPLEMENTED, self-tested and release **class
-B** — see `CHANGELOG.md` 2026-08-25. `nodeA-20260825-001-add-voucher-seller-id`
-is DEV-only and owed on prod (above). What shipped, in one line each: a shop can
+B** — see `CHANGELOG.md` 2026-08-25. **RELEASED TO PROD 2026-08-26** (`e10506f`),
+migration applied and verified live. What shipped, in one line each: a shop can
 create/list/deactivate its own vouchers (`/api/order/vouchers*`, new RBAC
 resource `voucher`), an admin can assign one to a shop; `POST
 /api/order/vouchers/available` prices every relevant voucher against the basket
