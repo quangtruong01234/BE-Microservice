@@ -342,6 +342,13 @@ export const GHN_MESSAGE = {
     `GHN does not know district ${districtId} — pick a district from GET /api/shipping/districts`,
   WARD_NOT_IN_DISTRICT: (wardCode: string, districtId: number): string =>
     `Ward ${wardCode} does not belong to GHN district ${districtId} — pick a ward from GET /api/shipping/wards`,
+  WARD_INACTIVE: (wardCode: string): string =>
+    `GHN no longer delivers to ward ${wardCode} — pick another ward from GET /api/shipping/wards`,
+  // GHN answers an unserviceable destination with its own internal wording,
+  // which reaches the buyer as "Lỗi hệ thống ..." and reads like OUR outage.
+  // Collapse those into one stable, actionable message the storefront can map.
+  DESTINATION_NOT_SERVICEABLE:
+    "GHN cannot deliver to this ward — pick another shipping address",
   INVALID_WEBHOOK_AUTH: "Invalid webhook authentication",
   MASTER_DATA_ERROR: (message: string): string =>
     `GHN address lookup error: ${message}`,
