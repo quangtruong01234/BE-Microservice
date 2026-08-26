@@ -852,6 +852,71 @@ export class OrdersService {
   }
 
   /**
+   * Give a canceled order's voucher redemption back (VOUCHER-CANCEL-01).
+   *
+   * Until now only a checkout that failed mid-flight returned its slot, so the
+   * `voucher_redemptions` row and `used_count` outlived every cancellation: a
+   * buyer who placed and canceled twice on a `perUserLimit: 2` code was locked
+   * out of that code forever, and each canceled order permanently burned one of
+   * `usage_limit`. A canceled order was never fulfilled, so neither counter
+   * should keep counting it.
+   *
+   * The DELETE is the concurrency guard. Two racing cancels can both read the
+   * row, but the second one's delete reports `affected: 0` once the first
+   * commits, so `used_count` cannot be decremented twice for one order — and a
+   * re-cancel of an already-canceled order is a no-op for the same reason.
+   *
+   * Non-fatal: a cancel must not fail because the voucher bookkeeping did. The
+   * worst case is a counter that stays high, which is exactly the pessimistic
+   * state VOUCHER-CONC-01 already tolerates.
+   */
+  private async releaseVoucherRedemption(order: Order): Promise<void> {
+    if (!order.voucherCode) {
+      return;
+    }
+    try {
+      const releasedVoucherId = await this.orderRepository.manager.transaction(
+        async (manager): Promise<number | null> => {
+          const redemption = await manager.findOne(VoucherRedemption, {
+            where: { orderId: order.id },
+          });
+          if (!redemption) {
+            return null;
+          }
+          const deleted = await manager.delete(VoucherRedemption, {
+            id: redemption.id,
+          });
+          if (!deleted.affected) {
+            return null;
+          }
+          // GREATEST floors the counter at 0 so a manual DB fixup that already
+          // decremented cannot drive used_count negative and make the voucher
+          // look like it has more room than usage_limit allows.
+          await manager
+            .createQueryBuilder()
+            .update(Voucher)
+            .set({ usedCount: () => "GREATEST(used_count - 1, 0)" })
+            .where("id = :id", { id: redemption.voucherId })
+            .execute();
+          return redemption.voucherId;
+        },
+      );
+      if (releasedVoucherId === null) {
+        return;
+      }
+      await this.releaseVoucherQuota(releasedVoucherId);
+      this.logger.log(
+        `[ORDERS] Voucher ${order.voucherCode} redemption returned by canceled order ${order.id}`,
+      );
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "unknown error";
+      this.logger.error(
+        `[ORDERS] Could not return the redemption of voucher ${order.voucherCode} for canceled order ${order.id}: ${message}`,
+      );
+    }
+  }
+
+  /**
    * Buyer-facing preview: validate a code against a goods subtotal and return
    * the discount it would produce, without consuming a redemption.
    */
@@ -1584,6 +1649,10 @@ export class OrdersService {
       order.reservationKey,
       true,
     );
+    // The order and its redemption were already committed before the payment
+    // leg failed, so the slot has to be handed back here — the pre-commit
+    // release in createOrder never runs for this path.
+    await this.releaseVoucherRedemption(order);
   }
 
   /**
@@ -2989,6 +3058,7 @@ export class OrdersService {
     await this.updateOrderStatus(order.id, OrderStatus.CANCELED);
     order.status = OrderStatus.CANCELED;
     await this.releaseReservedItems(order.items, order.reservationKey, true);
+    await this.releaseVoucherRedemption(order);
 
     // Push the cancel to GHN so the shipping order stops too. Detached on
     // purpose: the local cancel is already committed at this point, so awaiting
@@ -3040,6 +3110,7 @@ export class OrdersService {
    */
   private async finalizeGhnCancellation(order: Order): Promise<void> {
     await this.releaseReservedItems(order.items, order.reservationKey, true);
+    await this.releaseVoucherRedemption(order);
     this.publishOrderCanceledEvent(order);
   }
 
