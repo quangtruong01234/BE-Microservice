@@ -6,6 +6,109 @@
 
 ## Completed Milestones
 
+- **ENRICH-FAIL-01 — a user-service outage no longer renders as "this shop does
+  not exist" (2026-08-28). Release class B, no migration.** Closes the
+  `backend-handoff.md` entry the FE filed 2026-08-27 after scanning
+  `apps/gateway/src` for the BATCH-FAIL-01 class. The FE found exactly three
+  sites where a gateway read downgraded a **microservice error** into data the
+  client cannot tell apart from "there was never anything there". All three are
+  now fixed — by removing the swallow, not by adding a flag.
+  - **`social.service.ts` `fetchAuthorMap` — the worst of the three, and the one
+    the FE could not see from outside.** It ended in a bare
+    `catch { return new Map(); }` with **no log at all**. That is not a degraded
+    embed: `exposeReferences` resolves EVERY user reference — `userId`,
+    `actorId`, `reporterId`, `followerId`, `resolvedBy`, 16 keys — through this
+    same map (`exposed[key] = summary?.id ?? null`), so an empty map nulled every
+    user id in a `200` response. `getFollowers`/`getFollowing` drop the id key
+    entirely and embed `user`, so an outage rendered a follower list where every
+    row was `user: null`. It now warns and throws, which also makes it consistent
+    with the post-id and comment-id legs of the same `Promise.all`, which never
+    swallowed theirs.
+  - **`product.service.ts` `enrichProductWithUserInfo` /
+    `enrichProductsWithUserInfo`** dropped their inner `catchError(() => of(null))`
+    / `of([])` and their outer `return product(s)`, and route the failure through
+    `MicroserviceErrorHandler.handleError` instead. The batch variant is the one
+    that mattered: one failed leg blanked the seller on the WHOLE list at once,
+    which is never "each of these sellers happens to be deleted".
+  - **Throwing costs no availability that was not already lost — and this
+    corrects the FE's premise.** The FE assumed a user-service outage currently
+    yields "Shop Official" on every card. It does not: every enrichment caller
+    then runs `exposeProductReferences` → `exposeUserReferences`, which hits the
+    SAME user service with no catch, so a real outage already answered 502.
+    Verified by killing `dist/apps/user/main` — the pre-fix build 502'd too. The
+    swallow only made the FLAKY case (one leg times out, the other does not)
+    answer 200 with a silently missing seller, which is the harder bug to notice.
+  - **The three FE asks, answered:** (1) "#3 must at least log" — done, it warns
+    with the ids and the error; (2) "give us an `authorsUnavailable` /
+    `sellersUnavailable` flag" — declined, an honest error status needs no new
+    response field and no FE branch, and a flag would have to be threaded through
+    every one of the 13 `fetchAuthorMap` call sites; (3) "consider actually
+    throwing on #2" — accepted, and extended to #1 and #3 for the reasons above.
+  - **A missing user is still `null`, and that is load-bearing.** Checked in
+    `apps/user/src`: `getInfo` returns `null` for an unknown id and
+    `getUsersByIds` filters the row — neither throws — so the catch branch is
+    purely an infrastructure branch. Removing the swallow cannot turn "seller
+    deleted" into a 404. `exposeSubmittedBy` keeps its catch on purpose
+    (moderation-queue decoration, not the answer) and its test still passes.
+  - **Verified live** (`tsc --noEmit` clean, eslint clean, jest 18/18 — 3 new
+    tests in `product.service.spec.ts` + a new `social.service.spec.ts`): happy
+    paths unchanged — `GET /api/products` 200 with `user`, `GET /api/products/:id`
+    200, `POST /products/with-inventory/multiple` 200 (stale id still skipped),
+    `GET /api/social/posts` + `/comments` 200 with `author`, `GET
+    /api/products/wishlist` 200. With `dist/apps/user/main` killed, all three
+    now answer `502 {"error":"Bad Gateway","message":"Service unavailable"}`
+    where the social feed previously answered 200 with every `userId: null`.
+    User service restarted and re-verified (login 201, `/api/user/me` 200).
+  - Residual recorded in `snapshot.md` Known Issues: a social **write** exposed
+    through `exposeReferences` now 502s on a user-service outage even though the
+    write committed — pre-existing for the post-id leg, accepted for this one.
+  - FE-facing note in `frontend-handoff.md`: the fabricated `'Shop Official'`
+    fallback (`ProductDetail.tsx:118`, `useProducts.ts:30`) can go — a blank
+    seller now means the seller is genuinely gone.
+
+- **BATCH-FAIL-01 — a product-service outage no longer answers "your cart is
+  empty" (2026-08-27). Release class B, no migration.** Closes the
+  `backend-handoff.md` entry the FE filed the same day, which itself came out of
+  correction #1 in the SHAPE-01 hậu kiểm: the gateway's batch product read wrapped
+  its TCP call in `.catch(() => [])`, so **every** product-service failure —
+  process down, timeout, DB error, a new 500 — reached the client as `200` with
+  `data: []`. To a buyer, an infrastructure incident rendered as an empty cart:
+  not an error, but a false statement about their own data, and nothing for the
+  FE to `catch`.
+  - **The fix is one leg, not both.** `getProductsWithInventory`
+    (`apps/gateway/src/product/product.service.ts`) now routes the product call
+    through `MicroserviceErrorHandler.handleError(...)` like every other gateway
+    read, so an outage surfaces as `502 {"statusCode":502,"error":"Bad
+    Gateway","message":"Service unavailable"}`. The **inventory** call keeps its
+    `.catch(() => [])` on purpose — SHAPE-01 rule 1: the product rows are the
+    answer, stock is an enrichment, and `inventory: null` is already a declared
+    part of the shape. Degrading there loses nothing the caller can't branch on;
+    degrading on the product leg destroys the answer itself.
+  - **Why this is the load-bearing half of SHAPE-01 rule 4.** "A batch read
+    skips an id that no longer resolves" is only safe while an empty answer
+    means *the catalog says these are gone*. While any failure could also
+    produce `[]`, the two were indistinguishable and the rule had no ground to
+    stand on. `61670ff` made the product service partial-tolerant; this makes
+    the gateway honest about the difference between "gone" and "unreachable".
+  - **A latent raw-500 closed on the way past.** The `Array.isArray(products)`
+    guard sat *below* a `products.map(...)`, so a malformed batch response threw
+    a `TypeError` into the outer catch and came back as an unmapped 500. The
+    normalization now happens once, before anything indexes into the list. Same
+    change skips a pointless inventory round-trip when nothing resolved.
+  - **Verified live** (`tsc --noEmit` clean, eslint clean, jest 11/11 including
+    4 new failure-mode tests in `product.service.spec.ts`): happy path `200` /
+    2 items; 1 live + 1 stale id → `200` / 1 item; all ids stale → `200` `[]`;
+    **product service killed → `502`**, where the pre-fix build answered
+    `200 []`. The kill test also confirmed inventory is never asked when the
+    product leg fails.
+  - **Deliberately NOT done:** sorting the response into request order. All four
+    FE consumers key by id (the FE checked and said so explicitly in the same
+    entry), so the endpoint still answers in DB order — `findProductsByIds` is a
+    bare `IN` with no `ORDER BY`. Documented, not silently changed.
+  - FE-facing note in `frontend-handoff.md`; the FE's `fetchBatchTolerant`
+    trigger-2 rationale changes as a result — an empty array is now the
+    catalog's honest answer and no longer needs a verification fan-out.
+
 - **SHAPE-01 hậu kiểm — the FE read the diff, and both of its two asks were
   real (2026-08-27). Release class B, no migration.** Closes the
   `backend-handoff.md` entry the FE filed after reviewing the uncommitted

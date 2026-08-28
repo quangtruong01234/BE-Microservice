@@ -607,6 +607,26 @@ See `CHANGELOG.md` 2026-08-26.
   answer 200 — do NOT sweep them, tightening a passing call is class C.
   `POST /api/user/me/addresses {"isDefault":null}` stays a 201 for that exact
   reason (create computes the flag), while the PATCH is a 400.
+- BATCH-FAIL-01: on `POST /api/products/with-inventory/multiple`, a
+  product-service failure is now a **502**, not `200 []` — `[]` means "the
+  catalog resolved none of these ids", which is what makes SHAPE-01 rule 4
+  (skip a stale id) safe to rely on. The **inventory** leg still degrades
+  silently to `inventory: null` on an outage, deliberately: the product rows
+  are the answer, stock is an enrichment, and a `null` there is already part of
+  the contract. So a client cannot distinguish "no inventory row" from
+  "inventory service down" — that is on purpose, do not re-open it as a gap.
+- ENRICH-FAIL-01: the seller/author embed no longer swallows a user-service
+  failure. A seller/author that does not RESOLVE is still `user: null` /
+  `author: null` (the user-service handlers return null or filter the row, they
+  never throw) — only a transport/service failure now surfaces, as the usual
+  502/408. Residual, deliberate: a social **write** (`createPost`, like, follow,
+  report) exposes its response through `exposeReferences`, so a user-service
+  outage in that window turns a committed write into a 502 and a retry can
+  duplicate it. That was already true of the sibling post-id/comment-id legs of
+  the same `Promise.all`, which never swallowed theirs; the alternative is
+  answering 200 with every user id nulled. Untouched on purpose:
+  `exposeSubmittedBy` still drops `submittedBy` on a user-service failure so the
+  moderation queue stays usable — that field is decoration, not the answer.
 - REPORT-TOTAL-01: `deletePost` hard-removes the post and never deletes its
   `post_reports` rows, so orphan reports accumulate forever. Deliberate — the
   rows are the moderation audit trail. Since 2026-08-21 they are invisible to
