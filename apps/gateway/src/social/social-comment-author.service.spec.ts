@@ -142,7 +142,11 @@ describe("SocialGatewayService comment authors", () => {
     );
   });
 
-  it("degrades to author:null when the user service is unreachable", async () => {
+  // ENRICH-FAIL-01 reversed what this pair asserts: an unreachable user service
+  // used to be flattened into the same `author: null` a deleted commenter
+  // produces, which made an outage look like a comment list of ghosts. The two
+  // must stay distinguishable — the outage is an error, the missing user is data.
+  it("throws instead of degrading to author:null when the user service is unreachable", async () => {
     routeSocial({
       data: [comment(1, 7)],
       total: 1,
@@ -154,6 +158,22 @@ describe("SocialGatewayService comment authors", () => {
     userClient.send.mockReturnValue(
       throwError(() => new Error("user service down")),
     );
+
+    await expect(service.getComments("post_5", 1, 10)).rejects.toMatchObject({
+      status: 502,
+    });
+  });
+
+  it("keeps author:null when the commenter no longer exists", async () => {
+    routeSocial({
+      data: [comment(1, 7)],
+      total: 1,
+      page: 1,
+      limit: 10,
+      totalPages: 1,
+      hasNext: false,
+    });
+    userClient.send.mockReturnValue(of([]));
 
     const result = (await service.getComments("post_5", 1, 10)) as {
       data: Array<{ author: unknown; content: string }>;
