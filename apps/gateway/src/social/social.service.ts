@@ -1,4 +1,4 @@
-import { Inject, Injectable } from "@nestjs/common";
+import { Inject, Injectable, Logger } from "@nestjs/common";
 import { ClientProxy } from "@nestjs/microservices";
 import { firstValueFrom, Observable, timeout } from "rxjs";
 import {
@@ -25,6 +25,8 @@ const HYDRATED_USER_KEY_BY_REFERENCE: Record<string, string> = {
 
 @Injectable()
 export class SocialGatewayService {
+  private readonly logger = new Logger(SocialGatewayService.name);
+
   constructor(
     @Inject(NAME_SERVICE_TCP.SOCIAL_SERVICE)
     private readonly socialClient: ClientProxy,
@@ -34,6 +36,20 @@ export class SocialGatewayService {
     private readonly productClient: ClientProxy,
   ) {}
 
+  /**
+   * ENRICH-FAIL-01 — this used to end in a bare `catch { return new Map(); }`.
+   * That was not a degraded embed, it was a corrupted answer: `exposeReferences`
+   * resolves EVERY user reference (`userId`, `actorId`, `reporterId`, …) through
+   * this map, so an empty map turns each of those ids into `null` while the
+   * response still says 200 — and it logged nothing, so a user-service outage
+   * left no trace in the gateway log at all.
+   *
+   * A missing user is still `null` (the user-service handlers return null /
+   * filter the row, they do not throw), so only an actual TRANSPORT/service
+   * failure reaches the catch. It now throws, matching the post-id and
+   * comment-id legs of the same `Promise.all` in `exposeReferences`, which never
+   * swallowed theirs.
+   */
   private async fetchAuthorMap(
     userIds: number[],
   ): Promise<Map<number, UserInfo>> {
@@ -59,8 +75,17 @@ export class SocialGatewayService {
           },
         ]),
       );
-    } catch {
-      return new Map();
+    } catch (error: unknown) {
+      this.logger.warn(
+        `Could not resolve author info for userIds ${JSON.stringify(userIds)}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      MicroserviceErrorHandler.handleError(
+        error,
+        `resolve author info for ${userIds.length} user id(s)`,
+        "User Service",
+      );
     }
   }
 

@@ -1,6 +1,6 @@
 import { ForbiddenException, Injectable, Inject, Logger } from "@nestjs/common";
 import { ClientProxy } from "@nestjs/microservices";
-import { firstValueFrom, timeout, catchError, of } from "rxjs";
+import { firstValueFrom, timeout, catchError } from "rxjs";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
 import { PRODUCT_MESSAGE } from "libs/constant/response-message.constant";
@@ -1829,6 +1829,19 @@ export class ProductService {
   // USER INFORMATION ENRICHMENT
   // ============================================================================
 
+  /**
+   * ENRICH-FAIL-01 — a seller that does not resolve is `user: null` (the
+   * user-service handler returns null for a deleted/unknown id, it does not
+   * throw), but a user-service FAILURE is no longer downgraded to that same
+   * `null`. The two are indistinguishable to the client, and the FE fills the
+   * blank with a fabricated shop name.
+   *
+   * Throwing here costs nothing that was not already lost: every caller runs
+   * `exposeProductReferences` → `exposeUserReferences` on the same response,
+   * which hits the SAME user service with no catch, so a real outage already
+   * answered 502 — the swallow only made the flaky case (one leg times out,
+   * the other does not) answer 200 with a silently missing seller.
+   */
   private async enrichProductWithUserInfo(
     product: ProductData,
   ): Promise<ProductData> {
@@ -1852,17 +1865,7 @@ export class ProductService {
       const user = (await firstValueFrom(
         this.userClient
           .send({ cmd: USER_MESSAGE_PATTERN.GET_USER_INFO }, userId)
-          .pipe(
-            timeout(TCP_TIMEOUT_MS.WRITE),
-            retryOnTransportError(),
-            catchError((err: unknown) => {
-              this.logger.warn(
-                `Failed to fetch user info for userId: ${userId}`,
-                err instanceof Error ? err.message : String(err),
-              );
-              return of(null);
-            }),
-          ),
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE), retryOnTransportError()),
       )) as UserData | null;
       this.logger.debug(
         `Single user response for userId ${userId}: ${user ? "found" : "not found"}`,
@@ -1880,14 +1883,24 @@ export class ProductService {
           : null,
       };
     } catch (error) {
-      this.logger.debug(
+      this.logger.warn(
         `User enrichment failed for product ${String(product.id ?? "")}, userId: ${String(product.userId ?? "")}`,
         error instanceof Error ? error.message : String(error),
       );
-      return product;
+      MicroserviceErrorHandler.handleError(
+        error,
+        `fetch seller info for product ID: ${String(product.id ?? "")}`,
+        "User Service",
+      );
     }
   }
 
+  /**
+   * ENRICH-FAIL-01 — same rule as the single-product variant, and the case that
+   * mattered most: this one leg failing used to blank the seller on the WHOLE
+   * list at once, which is never "each of these sellers happens to be deleted".
+   * See `enrichProductWithUserInfo` for why throwing does not cost availability.
+   */
   private async enrichProductsWithUserInfo(
     products: ProductData[],
   ): Promise<ProductData[]> {
@@ -1921,17 +1934,7 @@ export class ProductService {
             { cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS },
             { userIds, includeProvince: true },
           )
-          .pipe(
-            timeout(TCP_TIMEOUT_MS.WRITE),
-            retryOnTransportError(),
-            catchError((err: unknown) => {
-              this.logger.warn(
-                `Failed to fetch users by ids: ${JSON.stringify(userIds)}`,
-                err instanceof Error ? err.message : String(err),
-              );
-              return of([] as UserData[]);
-            }),
-          ),
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE), retryOnTransportError()),
       )) as UserData[];
 
       // Create user map for quick lookup
@@ -1965,8 +1968,11 @@ export class ProductService {
       });
     } catch (error) {
       this.logger.error("Error enriching products with user info:", error);
-      // Return original products if enrichment fails
-      return products;
+      MicroserviceErrorHandler.handleError(
+        error,
+        `fetch seller info for ${products.length} product(s)`,
+        "User Service",
+      );
     }
   }
 }

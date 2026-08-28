@@ -222,3 +222,84 @@ describe("ProductService getProductsWithInventory failure modes", () => {
     expect(inventoryClient.send).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * ENRICH-FAIL-01 — the seller embed used to swallow a user-service failure into
+ * the same `user: null` a deleted seller produces. The two must stay
+ * distinguishable: a missing seller is data, an unreachable user service is an
+ * error.
+ */
+describe("ProductService seller enrichment failure modes", () => {
+  const productClient = { send: jest.fn() };
+  const inventoryClient = { send: jest.fn() };
+  const userClient = { send: jest.fn() };
+  const ordersClient = { send: jest.fn() };
+  const cached = { get: jest.fn(), set: jest.fn(), del: jest.fn() };
+  let service: ProductService;
+
+  const liveProduct = {
+    id: 7,
+    publicId: "prod_aaaaaaaaaaaaaaaa",
+    name: "Áo thun",
+    userId: 31,
+    price: 100000,
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = new ProductService(
+      productClient as unknown as ClientProxy,
+      inventoryClient as unknown as ClientProxy,
+      userClient as unknown as ClientProxy,
+      ordersClient as unknown as ClientProxy,
+      cached as unknown as CachedService,
+    );
+    productClient.send.mockReturnValue(of([liveProduct]));
+    inventoryClient.send.mockReturnValue(of([]));
+  });
+
+  it("throws instead of blanking the seller when the user service is down", async () => {
+    userClient.send.mockReturnValue(
+      throwError(() => new Error("user service down")),
+    );
+
+    await expect(
+      service.getProductsWithInventory(["prod_aaaaaaaaaaaaaaaa"]),
+    ).rejects.toMatchObject({ status: 502 });
+  });
+
+  it("still answers 200 with user:null when the seller no longer exists", async () => {
+    userClient.send.mockReturnValue(of([]));
+
+    const products = (await service.getProductsWithInventory([
+      "prod_aaaaaaaaaaaaaaaa",
+    ])) as unknown as Array<Record<string, unknown>>;
+
+    expect(products).toHaveLength(1);
+    expect(products[0].user).toBeNull();
+    expect(products[0].name).toBe("Áo thun");
+  });
+
+  it("embeds the seller when the user service answers", async () => {
+    userClient.send.mockReturnValue(
+      of([
+        {
+          id: 31,
+          publicId: "usr_aaaaaaaaaaaaaaaa",
+          name: "Shop A",
+          username: "shopa",
+          avatar: null,
+        },
+      ]),
+    );
+
+    const products = (await service.getProductsWithInventory([
+      "prod_aaaaaaaaaaaaaaaa",
+    ])) as unknown as Array<Record<string, unknown>>;
+
+    expect(products[0].user).toMatchObject({
+      id: "usr_aaaaaaaaaaaaaaaa",
+      name: "Shop A",
+    });
+  });
+});
