@@ -3,6 +3,28 @@ import { COMMON_MESSAGE } from "libs/constant/response-message.constant";
 import { ErrorLike } from "./microservice-error.types";
 import { isTransportError } from "./transport-error";
 
+/** Per-call-site knobs for failures whose semantics differ from the default. */
+export interface MicroserviceErrorOptions {
+  /**
+   * When `false`, the status is taken ONLY from what the microservice actually
+   * declared — a numeric `statusCode`/`status`, or a known exception name.
+   * Anything else (a DB driver message, a stray library error) becomes a 502
+   * instead of being guessed from keywords in its text, and its text is logged
+   * rather than reported.
+   *
+   * Use it wherever a WRONG guess is worse than a blunt 502. The batch product
+   * read is the reason it exists: `extractStatusCode` maps any message
+   * containing "not found" to a 404, and the FE reads a 404 there as "the whole
+   * batch is gone, fan out per id" — so an infrastructure error carrying those
+   * two words in its text collapsed back into the silent empty list that
+   * BATCH-FAIL-01 exists to prevent. Reported by the FE, 2026-08-27.
+   *
+   * Defaults to `true` (keyword guessing on) — every other call site is
+   * unchanged.
+   */
+  guessStatusFromMessage?: boolean;
+}
+
 export class MicroserviceErrorHandler {
   private static readonly logger = new Logger(MicroserviceErrorHandler.name);
 
@@ -10,6 +32,7 @@ export class MicroserviceErrorHandler {
     error: unknown,
     operation: string,
     serviceName: string = "Microservice",
+    options: MicroserviceErrorOptions = {},
   ): never {
     if (error == null) {
       this.logger.error(
@@ -55,14 +78,34 @@ export class MicroserviceErrorHandler {
         : null) ??
       err;
 
-    const statusCode = this.extractStatusCode(rpcError);
+    const declaredStatus = this.extractDeclaredStatusCode(rpcError);
+
+    // The microservice did not say what this is, and this call site asked not
+    // to have it guessed. Answer "the service could not answer" rather than
+    // inventing a 4xx the client would act on.
+    if (declaredStatus === null && options.guessStatusFromMessage === false) {
+      this.logger.error(
+        `${serviceName} ${operation} failed with an undeclared error, reported as 502: ${this.extractErrorMessage(rpcError)}`,
+      );
+      throw new HttpException(
+        COMMON_MESSAGE.SERVICE_UNAVAILABLE,
+        HttpStatus.BAD_GATEWAY,
+      );
+    }
+
+    const statusCode = declaredStatus ?? this.guessStatusFromMessage(rpcError);
     const message = this.extractErrorMessage(rpcError);
 
     this.logger.debug(`Throwing HttpException with status: ${statusCode}`);
     throw new HttpException(message, statusCode);
   }
 
-  private static extractStatusCode(error: ErrorLike): number {
+  /**
+   * The status the failing side actually stated — a numeric field it set, or an
+   * exception class name it threw. `null` when nothing was stated, which is the
+   * signal that the only thing left is guessing from the message text.
+   */
+  private static extractDeclaredStatusCode(error: ErrorLike): number | null {
     if (typeof error.statusCode === "number") {
       return error.statusCode;
     }
@@ -101,9 +144,18 @@ export class MicroserviceErrorHandler {
         case "RpcException.UnprocessableEntityException":
         case "Unprocessable Entity":
           return HttpStatus.UNPROCESSABLE_ENTITY;
+        // rxjs `timeout()` — a named class, so it is a declared condition and
+        // not a keyword accident. Same 408 the matcher below already produced.
+        case "TimeoutError":
+          return HttpStatus.REQUEST_TIMEOUT;
       }
     }
 
+    return null;
+  }
+
+  /** Last resort: infer the status from words in the error text. */
+  private static guessStatusFromMessage(error: ErrorLike): number {
     const errorMessage =
       typeof error.message === "string" ? error.message.toLowerCase() : "";
 

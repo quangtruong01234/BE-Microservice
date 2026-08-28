@@ -221,6 +221,49 @@ describe("ProductService getProductsWithInventory failure modes", () => {
     expect(products).toEqual([]);
     expect(inventoryClient.send).not.toHaveBeenCalled();
   });
+
+  // The back door the FE found in the hậu kiểm of BATCH-FAIL-01: the status
+  // matcher reads keywords out of the error TEXT, so an infrastructure failure
+  // that merely says "not found" used to answer 404 — which the FE treats as
+  // "the batch is gone", retries per id, and ends up with the empty list again.
+  it("reports an undeclared product-service error as 502 even when its text says 'not found'", async () => {
+    productClient.send.mockReturnValue(
+      throwError(
+        () =>
+          new Error(
+            'QueryFailedError: relation "products" does not exist / column not found',
+          ),
+      ),
+    );
+
+    await expect(
+      service.getProductsWithInventory(["prod_aaaaaaaaaaaaaaaa"]),
+    ).rejects.toMatchObject({ status: 502 });
+  });
+
+  it("keeps a status the product service actually declared", async () => {
+    productClient.send.mockReturnValue(
+      throwError(() => ({ statusCode: 400, message: "Invalid product id" })),
+    );
+
+    await expect(
+      service.getProductsWithInventory(["prod_aaaaaaaaaaaaaaaa"]),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("keeps 408 for a timeout instead of flattening it into 502", async () => {
+    productClient.send.mockReturnValue(
+      throwError(() =>
+        Object.assign(new Error("Timeout has occurred"), {
+          name: "TimeoutError",
+        }),
+      ),
+    );
+
+    await expect(
+      service.getProductsWithInventory(["prod_aaaaaaaaaaaaaaaa"]),
+    ).rejects.toMatchObject({ status: 408 });
+  });
 });
 
 /**

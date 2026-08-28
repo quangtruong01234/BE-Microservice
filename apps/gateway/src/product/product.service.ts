@@ -1493,6 +1493,13 @@ export class ProductService {
           err,
           `fetch products by IDs [${productIds.join(", ")}]`,
           "Product Service",
+          // Never let the keyword matcher guess a status here. A product-service
+          // error whose text happens to contain "not found" (a DB failure, say)
+          // would become a 404, which the FE reads as "the batch is gone" — it
+          // then retries per id, every sub-call fails the same way, and the
+          // caller is handed the empty list this whole branch exists to prevent.
+          // A declared business status still passes through untouched.
+          { guessStatusFromMessage: false },
         ),
       );
       // Normalize once, before anything indexes into the list: the guard used
