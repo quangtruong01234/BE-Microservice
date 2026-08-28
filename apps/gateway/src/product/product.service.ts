@@ -1465,24 +1465,53 @@ export class ProductService {
         return [];
       }
 
-      // Fetch products (one batched call — PERF-02: was N per-id sends) and
-      // inventory data in parallel. Inventory is optional context — if the
-      // inventory service is unavailable we degrade to `inventory: null`
-      // instead of failing the whole request with a raw 500. Missing product
-      // ids are skipped by the batch handler (treated as deleted).
+      // Fetch products (one batched call — PERF-02: was N per-id sends), then
+      // inventory for whatever resolved.
+      //
+      // The two legs fail DIFFERENTLY on purpose (BATCH-FAIL-01). A product id
+      // that no longer resolves is skipped by the batch handler and the caller
+      // reads absence as "deleted" (SHAPE-01 rule 4) — but that only holds when
+      // the response really is the catalog's answer. Swallowing a product
+      // service outage into `[]` says "all of these are deleted", which is a
+      // lie the client cannot detect: a cart or wishlist rendered from this
+      // endpoint would silently show up empty and the user would re-add items
+      // that were never gone. An outage must surface as an error status, so the
+      // failure propagates through MicroserviceErrorHandler.
+      //
+      // Inventory is different: it is optional context hanging off a product
+      // that DID resolve, so an inventory outage degrades to `inventory: null`
+      // (SHAPE-01 rule 1 — a missing single relation stays null) rather than
+      // failing a read the catalog can already answer.
       const products = await firstValueFrom(
         this.productClient
           .send<
             ProductData[]
           >(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_IDS, productIds)
           .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
-      ).catch((err: unknown) => {
-        this.logger.warn(
-          `Product service error for IDs [${productIds.join(", ")}]: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        return [] as ProductData[];
-      });
-      const internalProductIds = products.map((product) => Number(product.id));
+      ).catch((err: unknown) =>
+        MicroserviceErrorHandler.handleError(
+          err,
+          `fetch products by IDs [${productIds.join(", ")}]`,
+          "Product Service",
+        ),
+      );
+      // Normalize once, before anything indexes into the list: the guard used
+      // to sit further down (`validProducts`) while `products.map` above it
+      // already assumed an array, so a malformed batch response threw a
+      // TypeError into the outer catch and came back as a raw 500.
+      const resolvedProducts = Array.isArray(products)
+        ? products.filter((product) => product !== null)
+        : [];
+      if (resolvedProducts.length === 0) {
+        // Every requested id is gone from the catalog — a legitimate empty
+        // answer now that the product service really was reached. No point
+        // asking inventory about an empty id list.
+        return [];
+      }
+
+      const internalProductIds = resolvedProducts.map((product) =>
+        Number(product.id),
+      );
       const inventoryItems = await firstValueFrom(
         this.inventoryClient
           .send<
@@ -1518,11 +1547,8 @@ export class ProductService {
       // Enrich products with user information (single pass — PERF-02: was
       // double-enriched via getProductById + a second whole-list pass), then
       // expose a flat categoryIds[] (P1-04) to match the per-id read shape.
-      const validProducts = Array.isArray(products)
-        ? products.filter((p) => p !== null)
-        : [];
       const enrichedProducts =
-        await this.enrichProductsWithUserInfo(validProducts);
+        await this.enrichProductsWithUserInfo(resolvedProducts);
 
       // Combine products with their inventory data
       const results = enrichedProducts.map((product) => ({

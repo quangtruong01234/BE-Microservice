@@ -137,3 +137,88 @@ describe("ProductService submittedBy exposure", () => {
     expect(brand?.status).toBe("active");
   });
 });
+
+/**
+ * BATCH-FAIL-01 — `POST /products/with-inventory/multiple` is a partial-tolerant
+ * batch read (SHAPE-01 rule 4): an id that no longer resolves is skipped. That
+ * contract only holds while an EMPTY answer means "the catalog says these are
+ * gone". A product-service outage must therefore not be flattened into `[]`,
+ * while an inventory outage still degrades to `inventory: null`.
+ */
+describe("ProductService getProductsWithInventory failure modes", () => {
+  const productClient = { send: jest.fn() };
+  const inventoryClient = { send: jest.fn() };
+  const userClient = { send: jest.fn() };
+  const ordersClient = { send: jest.fn() };
+  const cached = { get: jest.fn(), set: jest.fn(), del: jest.fn() };
+  let service: ProductService;
+
+  const liveProduct = {
+    id: 7,
+    publicId: "prod_aaaaaaaaaaaaaaaa",
+    name: "Áo thun",
+    userId: 31,
+    price: 100000,
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = new ProductService(
+      productClient as unknown as ClientProxy,
+      inventoryClient as unknown as ClientProxy,
+      userClient as unknown as ClientProxy,
+      ordersClient as unknown as ClientProxy,
+      cached as unknown as CachedService,
+    );
+    userClient.send.mockReturnValue(of([]));
+  });
+
+  it("throws instead of answering [] when the product service is down", async () => {
+    productClient.send.mockReturnValue(
+      throwError(() => new Error("product service down")),
+    );
+
+    await expect(
+      service.getProductsWithInventory(["prod_aaaaaaaaaaaaaaaa"]),
+    ).rejects.toThrow();
+    expect(inventoryClient.send).not.toHaveBeenCalled();
+  });
+
+  it("still returns the product with inventory:null when inventory is down", async () => {
+    productClient.send.mockReturnValue(of([liveProduct]));
+    inventoryClient.send.mockReturnValue(
+      throwError(() => new Error("inventory service down")),
+    );
+
+    const products = await service.getProductsWithInventory([
+      "prod_aaaaaaaaaaaaaaaa",
+    ]);
+
+    expect(products).toHaveLength(1);
+    expect(products[0].inventory).toBeNull();
+  });
+
+  it("skips an id the catalog no longer resolves and keeps the live one", async () => {
+    productClient.send.mockReturnValue(of([liveProduct]));
+    inventoryClient.send.mockReturnValue(of([]));
+
+    const products = await service.getProductsWithInventory([
+      "prod_aaaaaaaaaaaaaaaa",
+      "prod_bbbbbbbbbbbbbbbb",
+    ]);
+
+    expect(products).toHaveLength(1);
+    expect(products[0].id).toBe("prod_aaaaaaaaaaaaaaaa");
+  });
+
+  it("answers [] without asking inventory when no id resolves", async () => {
+    productClient.send.mockReturnValue(of([]));
+
+    const products = await service.getProductsWithInventory([
+      "prod_bbbbbbbbbbbbbbbb",
+    ]);
+
+    expect(products).toEqual([]);
+    expect(inventoryClient.send).not.toHaveBeenCalled();
+  });
+});
