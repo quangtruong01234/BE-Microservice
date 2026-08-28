@@ -59,6 +59,15 @@
     now answer `502 {"error":"Bad Gateway","message":"Service unavailable"}`
     where the social feed previously answered 200 with every `userId: null`.
     User service restarted and re-verified (login 201, `/api/user/me` 200).
+  - **CI caught one stale assertion the targeted local run did not** (2026-08-28,
+    commit `21ea1dc`): `social-comment-author.service.spec.ts` (SOCIAL-AUTHOR-01,
+    `237f710`) encoded the OLD contract — "degrades to author:null when the user
+    service is unreachable" — so reversing that contract turned it red. Split
+    into two tests that keep the distinction explicit: an outage rejects with
+    502, a commenter who no longer exists still renders `author: null`. Lesson
+    for the next contract reversal: run the FULL `npx jest`, not the specs you
+    touched — a deliberate behaviour change is exactly what an OLDER spec is
+    most likely to assert the opposite of. Full suite now 38/38, 395 tests.
   - Residual recorded in `snapshot.md` Known Issues: a social **write** exposed
     through `exposeReferences` now 502s on a user-service outage even though the
     write committed — pre-existing for the post-id leg, accepted for this one.
