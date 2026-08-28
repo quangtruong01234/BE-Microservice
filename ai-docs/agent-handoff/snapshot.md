@@ -608,13 +608,20 @@ See `CHANGELOG.md` 2026-08-26.
   `POST /api/user/me/addresses {"isDefault":null}` stays a 201 for that exact
   reason (create computes the flag), while the PATCH is a 400.
 - BATCH-FAIL-01: on `POST /api/products/with-inventory/multiple`, a
-  product-service failure is now a **502**, not `200 []` — `[]` means "the
+  product-service failure is now an **error status**, not `200 []` — `[]` means "the
   catalog resolved none of these ids", which is what makes SHAPE-01 rule 4
   (skip a stale id) safe to rely on. The **inventory** leg still degrades
   silently to `inventory: null` on an outage, deliberately: the product rows
   are the answer, stock is an enrichment, and a `null` there is already part of
   the contract. So a client cannot distinguish "no inventory row" from
   "inventory service down" — that is on purpose, do not re-open it as a gap.
+  Which error status: `502` unreachable, `408` timeout (rxjs `TimeoutError` is
+  NOT a transport error — don't grep the logs for a 502 that was never there),
+  and since BATCH-STATUS-01 anything the product service did not explicitly
+  declare is forced to `502` on this ONE call site
+  (`handleError(..., { guessStatusFromMessage: false })`) so a DB error whose
+  text says "not found" can no longer surface as a 404. Every other call site
+  still uses the keyword matcher — deliberate, do not sweep it.
 - ENRICH-FAIL-01: the seller/author embed no longer swallows a user-service
   failure. A seller/author that does not RESOLVE is still `user: null` /
   `author: null` (the user-service handlers return null or filter the row, they

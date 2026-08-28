@@ -6,6 +6,51 @@
 
 ## Completed Milestones
 
+- **BATCH-STATUS-01 — the batch product read no longer lets a keyword matcher
+  guess a 404 out of an infrastructure failure (2026-08-28). Release class B, no
+  migration.** Closes the `backend-handoff.md` hậu kiểm the FE filed on
+  BATCH-FAIL-01: they confirmed the fix by reading the diff, and found one back
+  door left open plus one wrong claim in my write-up.
+  - **The back door.** `MicroserviceErrorHandler.extractStatusCode` infers a
+    status from words in the error TEXT when the microservice declared none, and
+    `"not found"` / `"does not exist"` map to **404**. The FE reads a 404 on this
+    endpoint as "the whole batch is gone", fans out one call per id, watches
+    every sub-call fail the same way, and `Promise.allSettled` filters them all —
+    so a DB error whose text happens to contain those two words walked straight
+    back to the empty list BATCH-FAIL-01 had just closed. Low probability
+    (SHAPE-01 removed the product service's own 404 branch), but the same lie
+    through a different door.
+  - **Fix: `MicroserviceErrorOptions.guessStatusFromMessage`.** New optional 4th
+    arg on `handleError`. When `false`, the status comes ONLY from what the
+    failing side declared — a numeric `statusCode`/`status` or a known exception
+    name — and anything undeclared becomes a `502` whose text is logged, not
+    reported. `getProductsWithInventory` is the only call site that passes it;
+    the default keeps all ~200 other call sites byte-identical. A declared
+    business status (400/403/404 the product service really threw) still passes
+    through untouched.
+  - **Correction the FE was right about: a timeout is `408`, not `502`.** The
+    BATCH-FAIL-01 entry generalized from the `kill PID 3006` case (ECONNREFUSED
+    ⇒ `isTransportError` ⇒ 502) to "every failure ⇒ 502". An rxjs `TimeoutError`
+    carries no `code` and its message matches none of the four constants in
+    `transport-error.ts`, so it fell through to the keyword matcher and came out
+    408. Still a real error, still catchable, goal still met — but the entry
+    would have sent the next reader hunting for a 502 that was never logged. The
+    entry is amended, and `"TimeoutError"` is now a **named** case in the
+    declared-status switch (same 408, no longer an accident of wording — which
+    is also what keeps a timeout from being flattened into 502 on the new
+    strict branch).
+  - **Not done, deliberately:** the strict mode was not swept across other call
+    sites. Everywhere else the keyword guess is the best signal available and a
+    wrong guess is merely imprecise; here it was actively harmful because the FE
+    branches on the status. Turning other endpoints' 404s into 502s would be
+    class C for no reported benefit.
+  - **Verified:** `tsc --noEmit` clean, eslint clean, full `npx jest` 38 suites /
+    **398** tests (3 new: a `"does not exist"` DB error ⇒ 502, a declared 400 ⇒
+    400, a `TimeoutError` ⇒ 408). The failure branch cannot be induced against
+    prod, so there is no live curl for it — the happy paths of the same endpoint
+    were verified on prod after the 2026-08-28 deploy (1 live + 1 stale id →
+    `200` with exactly 1 row).
+
 - **ENRICH-FAIL-01 — a user-service outage no longer renders as "this shop does
   not exist" (2026-08-28). Release class B, no migration.** Closes the
   `backend-handoff.md` entry the FE filed 2026-08-27 after scanning
@@ -88,7 +133,10 @@
     (`apps/gateway/src/product/product.service.ts`) now routes the product call
     through `MicroserviceErrorHandler.handleError(...)` like every other gateway
     read, so an outage surfaces as `502 {"statusCode":502,"error":"Bad
-    Gateway","message":"Service unavailable"}`. The **inventory** call keeps its
+    Gateway","message":"Service unavailable"}` — but do NOT go looking for a 502
+    for every failure: a **timeout** answers `408` (correction from the FE's hậu
+    kiểm, see BATCH-STATUS-01 above; rxjs `TimeoutError` is not a transport
+    error). The **inventory** call keeps its
     `.catch(() => [])` on purpose — SHAPE-01 rule 1: the product rows are the
     answer, stock is an enrichment, and `inventory: null` is already a declared
     part of the shape. Degrading there loses nothing the caller can't branch on;
