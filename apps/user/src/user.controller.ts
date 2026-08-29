@@ -108,6 +108,24 @@ export class UserController {
     );
   }
 
+  // CHG-PW-01: `userId` is the numeric JWT id the gateway already trusts — the
+  // caller can only ever change its own password.
+  @MessagePattern({ cmd: USER_MESSAGE_PATTERN.CHANGE_PASSWORD })
+  async changePassword(
+    @Payload()
+    payload: {
+      userId: number;
+      currentPassword: string;
+      newPassword: string;
+    },
+  ) {
+    return await this.userService.changePassword(
+      payload.userId,
+      payload.currentPassword,
+      payload.newPassword,
+    );
+  }
+
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.GET_ME })
   async getMe(@Payload() data: { userId: number }) {
     return this.userService.getMe(data.userId);

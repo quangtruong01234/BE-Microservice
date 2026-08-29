@@ -319,6 +319,47 @@ export class UserService {
     return { success: true };
   }
 
+  /**
+   * CHG-PW-01: password change for a session that already knows the old
+   * password — no emailed code, no `PATCH /user/:id` (that path whitelists
+   * profile fields and would store the value unhashed).
+   *
+   * A wrong `currentPassword` is a 401 like `login()`, NOT an expired session;
+   * the gateway's cookie is left alone, so the caller stays logged in whether
+   * the change succeeds or fails.
+   */
+  async changePassword(
+    userId: number,
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<{ success: true }> {
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException(USER_MESSAGE.NOT_FOUND);
+    }
+    const isCurrentPasswordValid = await bcrypt.compare(
+      currentPassword,
+      user.password,
+    );
+    if (!isCurrentPasswordValid) {
+      this.logger.warn(
+        `changePassword: wrong current password for user ${userId}`,
+      );
+      throw new UnauthorizedException(USER_MESSAGE.CURRENT_PASSWORD_INCORRECT);
+    }
+    if (currentPassword === newPassword) {
+      throw new BadRequestException(USER_MESSAGE.NEW_PASSWORD_SAME_AS_CURRENT);
+    }
+    user.password = await bcrypt.hash(newPassword, 10);
+    await this.userRepository.save(user);
+    // Any pending forgot-password code is now meaningless — drop it so an old
+    // emailed code cannot be replayed against the new password.
+    await this.cachedService.del(`user:pwreset:code:${user.id}`);
+    await this.cachedService.del(`user:pwreset:attempts:${user.id}`);
+    this.logger.log(`changePassword: password updated for user ${userId}`);
+    return { success: true };
+  }
+
   async getInfo(
     userId: number,
     includeEmail = false,
