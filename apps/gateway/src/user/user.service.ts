@@ -5,6 +5,7 @@ import {
   LoginUserDto,
   ForgotPasswordDto,
   ResetPasswordDto,
+  ChangePasswordDto,
   UpdateUserGatewayDto,
 } from "./dto/user.dto";
 import {
@@ -193,6 +194,43 @@ export class UserService {
       MicroserviceErrorHandler.handleError(
         error,
         "reset password",
+        "User Service",
+      );
+    }
+  }
+
+  /**
+   * CHG-PW-01: the logged-in password change. The account is identified by the
+   * JWT alone — no email/id in the body — and the issued cookie is deliberately
+   * left untouched: the JWT is stateless, so rotating it here would refresh
+   * this session without revoking any other one.
+   */
+  async changePassword(
+    userId: number,
+    dto: ChangePasswordDto,
+  ): Promise<unknown> {
+    try {
+      return (await firstValueFrom(
+        this.userClient
+          .send(
+            { cmd: USER_MESSAGE_PATTERN.CHANGE_PASSWORD },
+            {
+              userId,
+              currentPassword: dto.currentPassword,
+              newPassword: dto.newPassword,
+            },
+          )
+          .pipe(
+            timeout(TCP_TIMEOUT_MS.WRITE),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      )) as unknown;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "change password",
         "User Service",
       );
     }

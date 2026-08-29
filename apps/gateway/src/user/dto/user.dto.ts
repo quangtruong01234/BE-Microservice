@@ -4,6 +4,7 @@ import {
   IsBoolean,
   IsEmail,
   IsInt,
+  IsNotEmpty,
   IsOptional,
   IsString,
   Length,
@@ -66,6 +67,21 @@ export class ResetPasswordDto {
   @Length(6, 6)
   @Matches(/^\d{6}$/, { message: "code must be a 6-digit number" })
   declare code: string;
+
+  @ApiProperty({ example: "newPassword123", minLength: 6 })
+  @IsString()
+  @MinLength(6)
+  declare newPassword: string;
+}
+
+export class ChangePasswordDto {
+  @ApiProperty({
+    example: "currentPassword123",
+    description: "The password the account is logged in with",
+  })
+  @IsString()
+  @IsNotEmpty()
+  declare currentPassword: string;
 
   @ApiProperty({ example: "newPassword123", minLength: 6 })
   @IsString()

@@ -19,6 +19,7 @@ import {
   LoginUserDto,
   ForgotPasswordDto,
   ResetPasswordDto,
+  ChangePasswordDto,
   ListUsersQueryDto,
   FeaturedSellersQueryDto,
   UpdateUserGatewayDto,
@@ -117,6 +118,33 @@ export class UserController {
   })
   async resetPassword(@Body() dto: ResetPasswordDto) {
     return await this.userService.resetPassword(dto);
+  }
+
+  @Post("change-password")
+  @UseGuards(JwtAuthGuard)
+  @RateLimit({ limit: 5, ttl: 60 })
+  @ApiOperation({
+    summary:
+      "Change the current user's password (knows the old one — no email code)",
+  })
+  @ApiBody({ type: ChangePasswordDto })
+  @ApiResponse({ status: 201, description: "Password updated." })
+  @ApiResponse({
+    status: 400,
+    description:
+      "newPassword is shorter than 6 characters or equal to currentPassword.",
+  })
+  @ApiResponse({
+    status: 401,
+    description:
+      "currentPassword is wrong (NOT an expired session — the cookie stays valid).",
+  })
+  @ApiResponse({ status: 429, description: "Too many attempts." })
+  async changePassword(
+    @Body() dto: ChangePasswordDto,
+    @Request() req: { user: { id: number } },
+  ) {
+    return this.userService.changePassword(req.user.id, dto);
   }
 
   @Post("logout")
