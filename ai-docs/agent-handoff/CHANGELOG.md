@@ -6,6 +6,70 @@
 
 ## Completed Milestones
 
+- **CHG-PW-01 — `POST /api/user/change-password`, the logged-in password change
+  (2026-08-29). New endpoint, no migration, release class B.** Filed by the FE
+  agent in `backend-handoff.md`: a logged-in user had no way to change their
+  password at all. Neither existing path could be widened —
+  `PATCH /api/user/:id` whitelists `name`/`email`/`avatar` and its
+  `Object.assign(user, dto)` + `save` would have written the password
+  **unhashed**, breaking `bcrypt.compare` on the next login; `POST
+  /api/user/reset-password` hashes correctly but demands a 6-digit emailed code,
+  which is the wrong ceremony for someone who knows their old password.
+  - **Contract:** `POST /api/user/change-password`, `JwtAuthGuard`,
+    `@RateLimit({limit:5, ttl:60})`. Body `{currentPassword, newPassword}` —
+    no email, no id; the cookie identifies the account. `201 {"success":true}`.
+    `401` wrong `currentPassword` · `400` `newPassword` < 6 chars, equal to
+    `currentPassword`, `null`, or an extra field (global
+    `forbidNonWhitelisted`) · `429` rate limit (keyed `user:<id>`, so it is
+    per-account, not per-IP).
+  - **Files:** `libs/constant/message-pattern.constant.ts` (+`CHANGE_PASSWORD`),
+    `libs/constant/response-message.constant.ts` (+2 messages),
+    `apps/gateway/src/user/dto/user.dto.ts` (`ChangePasswordDto`),
+    `apps/gateway/src/user/user.controller.ts`,
+    `apps/gateway/src/user/user.service.ts`,
+    `apps/user/src/user.controller.ts`, `apps/user/src/user.service.ts`.
+  - **The two questions the FE asked, answered in code:** (1) the session is
+    **not** touched — no rotation, no revocation. The JWT is stateless with no
+    denylist, so issuing a fresh cookie would refresh only the calling device
+    while every other one keeps its old token until expiry; that is a false
+    "logged out everywhere", so it was left alone deliberately. FE keeps its
+    assumption: no logout, no redirect. (2) `401` **is** kept for a wrong
+    `currentPassword`, so FE's `skipUnauthorizedRedirect` stays; it is
+    distinguishable from a session 401 by `message` only ("Current password is
+    incorrect" vs the guard's "Access token is required" / "Unauthorized").
+  - **One thing added beyond the request:** a successful change deletes the
+    pending `user:pwreset:code:<id>` / `user:pwreset:attempts:<id>` Redis keys,
+    so a reset code emailed minutes earlier cannot be replayed against the new
+    password.
+  - **Verified** (10 curl assertions, local gateway, account `chgpw_test`):
+    `201 {"success":true}` happy path · `401 "Current password is incorrect"` ·
+    `400` for a 3-char `newPassword`, for `newPassword === currentPassword`, for
+    `currentPassword: null` (SHAPE-01 rule 3 — a 4xx, not a 500), and for an
+    extra `confirmPassword` field · `429` on the 6th attempt in a minute ·
+    `GET /api/user/me` still `200` on the SAME cookie after the change (session
+    survives) · login with the old password `401`, with the new one `201`.
+
+- **SCALE-06 — closed as WILL NOT DO (2026-08-29). No code change.** The
+  remaining half was never code, it was measurement: re-run
+  `scripts/load/baseline.mjs` behind nginx on the target VPS to attribute the
+  SCALE-03 gains, and re-measure `GATEWAY_INSTANCES>1` there because the
+  dev-machine cluster probe was noisy with no stable gain. Both require a bigger
+  VPS and a paid Aiven tier; the user has decided the project stays on the free
+  tier, so the evidence cannot be produced and the item is dropped rather than
+  left open forever.
+  - **Kept:** the runner itself (`scripts/load/baseline.mjs`, profiles
+    `smoke|500|1k|5k`, scenarios S1–S5) and the 16 result files under
+    `scripts/load/results/`. Still usable for local smoke runs; nothing was
+    deleted.
+  - **The numbers that stand as final** (post-SCALE-04, dev machine, in the
+    script header): anon product list 798 req/s, product detail 1692 req/s,
+    c=500 survives at ~3.6% error, authenticated ~102 req/s.
+  - **The ceiling that matters:** Aiven free ≈ 76 connections ≈ 300 req/s
+    across ALL ten services. Any "handles N concurrent" claim above that is
+    unfounded for this deployment — the gate rule in the script header still
+    applies to whatever is claimed.
+  - Re-open only if the infrastructure budget changes.
+
 - **BATCH-STATUS-01 — the batch product read no longer lets a keyword matcher
   guess a 404 out of an infrastructure failure (2026-08-28). Release class B, no
   migration.** Closes the `backend-handoff.md` hậu kiểm the FE filed on

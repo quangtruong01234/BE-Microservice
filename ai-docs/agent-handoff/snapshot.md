@@ -346,15 +346,21 @@ the design.
   classification); image-download util with Cloudinary-host allowlist. All AI
   paths are best-effort: catalog CRUD must never fail because Gemini failed.
 
-### SCALE-06 — load-test evidence (remainder)
+### SCALE-06 — CLOSED 2026-08-29, will not be finished (do not re-open)
 
-Script shipped: `scripts/load/baseline.mjs` (autocannon; profiles
-`smoke|500|1k|5k`; baselines recorded in the script header — post-SCALE-04:
-anon list 798 req/s, detail 1692 req/s, c=500 survives ~3.6% err; auth ~102
-req/s). Remaining: re-run behind nginx on the target VPS (attributes SCALE-03
-gains) and re-measure `GATEWAY_INSTANCES>1` there — the dev-machine cluster
-probe was noisy/no stable gain. Aiven-free hard wall ≈ 76 conns ≈ 300 req/s
-across ALL services; true 10k sustained likely needs a bigger VPS/Aiven tier.
+The remaining half was measurement, not code: re-run the baseline behind nginx
+on the target VPS and re-measure `GATEWAY_INSTANCES>1` there. Both need a
+bigger VPS and a paid Aiven tier — the project stays on the free tier by the
+user's decision, so the evidence can never be produced and the work is dropped.
+
+What stays true and does not need re-deriving: `scripts/load/baseline.mjs`
+(autocannon; profiles `smoke|500|1k|5k`) is KEPT and still usable for local
+smoke runs; recorded baselines live in its header (post-SCALE-04: anon list 798
+req/s, detail 1692 req/s, c=500 survives ~3.6% err; auth ~102 req/s); the
+dev-machine cluster probe was noisy with no stable gain. **Aiven-free hard wall
+≈ 76 connections ≈ 300 req/s across ALL services** — that is the ceiling this
+deployment has, and any "handles N concurrent" claim above it is unfounded.
+Re-open only if the infrastructure budget changes.
 
 ### SOCIAL-LIKE-NTF-01 — liking a post notifies nobody (product decision, not a bug)
 
@@ -639,6 +645,18 @@ See `CHANGELOG.md` 2026-08-26.
   rows are the moderation audit trail. Since 2026-08-21 they are invisible to
   `GET /social/admin/reports` (both the page and `total` inner-join `posts`),
   so this is a storage-only residue, not a contract bug.
+- CHG-PW-01: `POST /api/user/change-password` deliberately does NOT revoke or
+  rotate anything. The JWT is stateless with no blacklist, so a new cookie would
+  only refresh THIS session while every other device keeps its old token until
+  it expires (5h, or 7d with `rememberMe`) — a false sense of "logged out
+  everywhere". Changing that needs a token version/denylist, which is a separate
+  decision. Consequence to state plainly if asked: after a password change the
+  attacker's stolen session is still live. Also deliberate: a wrong
+  `currentPassword` is a **401** (same class as `login()`), distinguishable from
+  a session 401 only by `message` — ours is "Current password is incorrect",
+  the guard's are "Access token is required" / "Unauthorized". The change also
+  drops the pending `user:pwreset:code:*` / `attempts:*` Redis keys so an
+  already-emailed reset code cannot be replayed afterwards.
 
 ## Ops / Runtime Reference
 
