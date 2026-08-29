@@ -47,6 +47,9 @@ export const USER_MESSAGE = {
   EMAIL_TAKEN: "Email is already registered",
   ADDRESS_NOT_FOUND: "Address not found",
   CANNOT_UPDATE_ANOTHER_USER: "Cannot update another user",
+  CURRENT_PASSWORD_INCORRECT: "Current password is incorrect",
+  NEW_PASSWORD_SAME_AS_CURRENT:
+    "New password must be different from the current password",
 } as const;
 
 export const INVENTORY_MESSAGE = {
