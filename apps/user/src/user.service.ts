@@ -64,7 +64,12 @@ export class UserService {
     private readonly cloudinaryService: CloudinaryService,
   ) {}
 
-  private static readonly PASSWORD_RESET_CODE_TTL_SECONDS = 600;
+  // Must stay >= the resend cooldown below. If the code died before a resend
+  // were allowed, the user would be stuck holding neither a usable code nor the
+  // right to ask for a new one. Equal is the tightest safe value: the code
+  // expires at the exact moment the resend unlocks. The duration quoted in the
+  // email is derived from this constant, never hardcoded.
+  private static readonly PASSWORD_RESET_CODE_TTL_SECONDS = 60;
   private static readonly PASSWORD_RESET_MAX_ATTEMPTS = 5;
   private static readonly PASSWORD_RESET_RESEND_COOLDOWN_SECONDS = 60;
 
@@ -222,7 +227,7 @@ export class UserService {
 
   /**
    * Starts the forgot-password flow: generates a 6-digit code, stores it in
-   * Redis (10 min TTL) and emails it to the registered address. Always
+   * Redis (1 min TTL) and emails it to the registered address. Always
    * returns the same generic message so callers cannot probe which emails
    * are registered. A 60s per-user cooldown throttles resends.
    */
