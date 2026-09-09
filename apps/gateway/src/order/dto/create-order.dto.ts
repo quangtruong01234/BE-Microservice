@@ -63,8 +63,12 @@ export class CreateOrderDto {
   declare paymentMethod: PaymentMethod;
 
   @ApiProperty({
-    description: "Full shipping address",
-    example: "123 Nguyen Hue, District 1, Ho Chi Minh City",
+    description:
+      'Shipping address, pipe-delimited for GHN: "name|phone|addr|ward|district|province". ' +
+      "The name and phone segments become the GHN waybill receiver, so a free-text " +
+      "address without them is refused by GHN at checkout.",
+    example:
+      "Nguyen Van A|0987654321|123 Nguyen Hue|Phuong Ben Nghe|Quan 1|Ho Chi Minh",
   })
   @IsString()
   @IsNotEmpty()
