@@ -32,7 +32,9 @@ import {
   PaginatedResponse,
   generatePublicId,
   isPublicId,
+  renderPasswordResetEmail,
 } from "@app/common";
+import { ERROR_CODE } from "libs/constant/error-code.constant";
 import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 import { CachedService } from "@app/cached";
 import * as bcrypt from "bcryptjs";
@@ -252,12 +254,21 @@ export class UserService {
       UserService.PASSWORD_RESET_CODE_TTL_SECONDS,
     );
     await this.cachedService.del(`user:pwreset:attempts:${user.id}`);
+    // A fresh code re-opens the flow: drop the "attempts used up" marker, or
+    // `resetPassword` would keep reporting RESET_CODE_EXHAUSTED against a code
+    // that is perfectly valid. Only reached once the cooldown was claimed, so
+    // a throttled resend correctly leaves the marker in place.
+    await this.cachedService.del(`user:pwreset:exhausted:${user.id}`);
     try {
+      const email = renderPasswordResetEmail(
+        code,
+        Math.round(UserService.PASSWORD_RESET_CODE_TTL_SECONDS / 60),
+      );
       await this.mailerService.sendMail(
         user.email,
-        "TryBuy - Ma xac nhan dat lai mat khau",
-        `Ma xac nhan dat lai mat khau cua ban la: ${code}\n` +
-          `Ma co hieu luc trong 10 phut. Neu ban khong yeu cau, hay bo qua email nay.`,
+        email.subject,
+        email.text,
+        email.html,
       );
     } catch (error) {
       // Code stays valid in Redis; the user can retry the request after the
@@ -273,6 +284,11 @@ export class UserService {
   /**
    * Completes the forgot-password flow: verifies the emailed code (max 5
    * attempts, then the code is invalidated) and sets the new password.
+   *
+   * Every rejection keeps the same 400 and the same wording, on purpose. The
+   * one case that also carries `RESET_CODE_EXHAUSTED` is the code being burned
+   * by the attempt limit, because that is the only one where retrying is
+   * pointless — see MAIL-UI-01 and `ERROR_CODE.RESET_CODE_EXHAUSTED`.
    */
   async resetPassword(
     email: string,
@@ -282,12 +298,26 @@ export class UserService {
     const invalidCodeError = new BadRequestException(
       USER_MESSAGE.INVALID_OR_EXPIRED_VERIFICATION_CODE,
     );
+    // Object response so the code reaches the client through the RPC filter →
+    // gateway chain, exactly like CHG-PW-02 does for the 401.
+    const exhaustedCodeError = new BadRequestException({
+      message: USER_MESSAGE.INVALID_OR_EXPIRED_VERIFICATION_CODE,
+      errorCode: ERROR_CODE.RESET_CODE_EXHAUSTED,
+    });
     const user = await this.userRepository.findOne({ where: { email } });
     if (!user) {
       throw invalidCodeError;
     }
     const codeKey = `user:pwreset:code:${user.id}`;
     const attemptsKey = `user:pwreset:attempts:${user.id}`;
+    const exhaustedKey = `user:pwreset:exhausted:${user.id}`;
+    // Checked BEFORE the code lookup: the burned code is already gone from
+    // Redis, so without this marker every attempt after the one that tripped
+    // the limit would fall into the generic branch below and the client would
+    // lose the signal the moment the user reloads or switches tab.
+    if (await this.cachedService.get(exhaustedKey)) {
+      throw exhaustedCodeError;
+    }
     const storedCode = await this.cachedService.get(codeKey);
     if (!storedCode) {
       throw invalidCodeError;
@@ -302,10 +332,15 @@ export class UserService {
     if (attempts > UserService.PASSWORD_RESET_MAX_ATTEMPTS) {
       await this.cachedService.del(codeKey);
       await this.cachedService.del(attemptsKey);
+      await this.cachedService.set(
+        exhaustedKey,
+        "1",
+        UserService.PASSWORD_RESET_CODE_TTL_SECONDS,
+      );
       this.logger.warn(
         `resetPassword: attempt limit exceeded for user ${user.id} — code invalidated`,
       );
-      throw invalidCodeError;
+      throw exhaustedCodeError;
     }
     if (storedCode !== code) {
       throw invalidCodeError;
@@ -345,7 +380,12 @@ export class UserService {
       this.logger.warn(
         `changePassword: wrong current password for user ${userId}`,
       );
-      throw new UnauthorizedException(USER_MESSAGE.CURRENT_PASSWORD_INCORRECT);
+      // Object response so the code survives the gateway's production 401
+      // sanitizer, which flattens `message` to "Unauthorized" (CHG-PW-02).
+      throw new UnauthorizedException({
+        message: USER_MESSAGE.CURRENT_PASSWORD_INCORRECT,
+        errorCode: ERROR_CODE.INVALID_CURRENT_PASSWORD,
+      });
     }
     if (currentPassword === newPassword) {
       throw new BadRequestException(USER_MESSAGE.NEW_PASSWORD_SAME_AS_CURRENT);
@@ -356,6 +396,7 @@ export class UserService {
     // emailed code cannot be replayed against the new password.
     await this.cachedService.del(`user:pwreset:code:${user.id}`);
     await this.cachedService.del(`user:pwreset:attempts:${user.id}`);
+    await this.cachedService.del(`user:pwreset:exhausted:${user.id}`);
     this.logger.log(`changePassword: password updated for user ${userId}`);
     return { success: true };
   }

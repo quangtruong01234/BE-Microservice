@@ -32,15 +32,23 @@ export class AllRpcExceptionFilter extends BaseRpcExceptionFilter {
     if (exception instanceof HttpException) {
       const status = exception.getStatus();
       const response = exception.getResponse();
+      const body =
+        typeof response === "object" && response !== null
+          ? (response as { message?: string | string[]; errorCode?: unknown })
+          : null;
 
       const rpcException = new RpcException({
         statusCode: status,
         message:
           typeof response === "string"
             ? response
-            : ((response as { message?: string | string[] }).message ??
-              exception.message),
+            : (body?.message ?? exception.message),
         error: this.getErrorName(status),
+        // Forwarded only when the thrower set one, so every other exception
+        // crosses TCP with exactly the payload it had before (CHG-PW-02).
+        ...(typeof body?.errorCode === "string"
+          ? { errorCode: body.errorCode }
+          : {}),
         timestamp: new Date().toISOString(),
       });
 
