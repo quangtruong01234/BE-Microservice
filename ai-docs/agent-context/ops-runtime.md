@@ -68,7 +68,7 @@
   `<svc>.error-N.log` header lines. Use `pm2 logs --lines 200 --nostream |
   grep -v 'last .* lines:' | grep "$(date +%F)"`, or `pm2 flush` before a deploy
   self-test. `redis-cli` is NOT installed on the host (Redis is containerized) —
-  use `docker exec trybuy-redis redis-cli ping`.
+  use `docker exec redis redis-cli ping`.
 - **Deploy runtime**: host PM2 runs compiled NestJS apps from
   `ecosystem.config.js`; Docker Compose runs Redis/RabbitMQ only
   (`docker compose up -d redis rabbitmq`); MySQL/PostgreSQL are external Aiven.
@@ -379,11 +379,16 @@ the seed script.
   (`@Public`, 10/60s, `{email, code, newPassword}`). 6-digit crypto code stored
   PLAINTEXT in Redis `user:pwreset:code:<userId>` (TTL 600s — deliberate:
   short TTL + attempt cap `user:pwreset:attempts:<userId>` max 5 + 60s resend
-  cooldown; enables self-test via `docker exec trybuy-redis redis-cli GET ...`).
+  cooldown; enables self-test via `docker exec redis redis-cli GET ...`).
   Email via dependency-free `MailerService` (`libs/common/src/mailer/`,
   implicit-TLS SMTPS, e.g. Gmail :465 app password; env `SMTP_*` — keys in
   `local/nodeA/.env.example` only; the real `.env` is write-denied to agents).
   SMTP unconfigured → user service logs the code, endpoint still 201.
+  **Live since 2026-08-29** on a Gmail app password (:465 implicit TLS — the
+  mailer does not speak STARTTLS, so :587 hangs to the 15s timeout). The mail
+  is HTML (`renderPasswordResetEmail`, MAIL-UI-01) with the code in the subject;
+  `nest start --watch` does NOT re-read `.env`, so after editing SMTP keys touch
+  a source file of the user AND notification services or they keep the old env.
 - **Order email notifications** (F7, 2026-07-12, no migration): notification
   service mirrors order in-app notifications to email, best-effort. Handlers:
   `order_created` (buyer — NEW consumer; also a new in-app notification type/WS
@@ -391,6 +396,12 @@ the seed script.
   `order.return_requested` (seller), `order.return_approved|rejected` (buyer).
   `emailUser` NEVER throws — TCP/mail failure logs a warn, RMQ ack/nack
   unchanged. Needs `SMTP_*` in the notification service env for real delivery.
+  **HTML since MAIL-UI-02 (2026-09-08)** — one template for all nine events,
+  with a "Xem chi tiết đơn hàng" button built from `FRONTEND_URL` entry [0]
+  (buyer ⇒ `/order/<publicId>`, seller ⇒ `/sell/orders`). That is why
+  `ecosystem.config.js` injects `FRONTEND_URL` into the notification service;
+  unset ⇒ the mail still ships, just without the button. `nest start --watch`
+  does NOT re-read `.env`, so touch a notification source file after editing it.
 - **Checkout addressing** (2026-07-01): GHN master-data proxy
   `GET /api/shipping/{provinces,districts?provinceId=,wards?districtId=}`
   (JwtAuthGuard; items `{id,name}`, id = GHN code — number for province/district,

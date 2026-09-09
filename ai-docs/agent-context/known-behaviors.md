@@ -865,3 +865,130 @@ alone.
 - `/chat` and `/notifications` are separate Socket.IO namespaces that both use a
   `user:<id>` room name. The registries are per-namespace, so there is no
   cross-talk between chat messages and notifications.
+
+## The reset-code email has no copy button, and the code is in the subject (MAIL-UI-01, 2026-08-29)
+
+`renderPasswordResetEmail()` (`libs/common/src/mailer/email-templates.ts`) is
+written against three constraints of the medium. Do not "modernise" it — every
+one of these was checked before the template was written:
+
+- **No JavaScript in email, ever.** Every client strips `<script>`, so a real
+  copy-to-clipboard button is impossible. What ships instead: the code alone on
+  its line, 32px monospace with wide letter-spacing and `user-select:all`, so a
+  long-press/double-click selects exactly the six digits and nothing around
+  them, plus the hint "Chạm giữ (hoặc bôi đen) dãy số để sao chép".
+- **The code is repeated in the subject** (`"493709 là mã đặt lại mật khẩu
+  TryBuy"`) — the Google/GitHub pattern. It is what actually makes the code
+  "quick to copy": it is readable from the lock-screen notification and the
+  inbox list without opening the mail. Accepted trade-off: anyone who can see
+  the notification preview sees the code. It expires in 10 minutes, is
+  single-use, and still requires the account's email address to be useful.
+- **No deep-link CTA button, on purpose.** The storefront forgot-password flow
+  is a two-step in-page form on `/login`
+  (`../frontend/src/features/auth/ForgotPasswordForm.tsx`, `useState<'email' |
+  'reset'>`); the router has no `/reset-password` route. A link would drop the
+  user at step 1 with the email field empty, and re-requesting the code there
+  invalidates the one they were just emailed. Add the button only if the FE
+  grows a real route that accepts the email as a query param.
+- **Tables + inline styles, no external assets.** Gmail strips `<style>` blocks
+  in several clients and supports no flex/grid; a remote logo would be blocked
+  by image proxying until "show images", so the wordmark is text.
+
+**Transport note (same change).** `MailerService.sendMail()` takes an optional
+4th arg `html`; with it the message goes out as `multipart/alternative` with
+**both parts base64-encoded**. That is not decoration: it sidesteps the RFC 5321
+998-octet line limit (one markup line easily exceeds it) and dot-stuffing in a
+single move. The plain part comes FIRST because clients render the LAST
+alternative they understand. Callers that pass no `html` (notification service,
+order-status mails) still get the byte-identical single-part message — except
+that the body's line endings are now normalised to CRLF, which they always
+should have been; Gmail tolerated the bare LFs, a stricter MTA may not.
+
+## `errorCode` is optional, closed-set, and survives the 401 sanitizer (CHG-PW-02, 2026-09-08)
+
+An error envelope may carry an `errorCode` from
+`libs/constant/error-code.constant.ts`. Four properties define it — none of
+them is an accident:
+
+- **Optional and additive.** The key appears ONLY when the thrower set one, so
+  every response that existed before this change still has its exact key set.
+  A non-string or empty value is dropped rather than echoed
+  (`HttpExceptionFilter.normalizeErrorCode`) — the field is a contract, not a
+  passthrough for whatever a thrower parked under that name.
+- **It survives the production 401 sanitizer, on purpose.** That sanitizer
+  still flattens `message` and `error` to `"Unauthorized"` so an auth failure
+  cannot be used as an account-existence oracle. The code is exempt because it
+  is a closed set we author: `UNAUTHENTICATED` (guard: no token / bad token)
+  and `INVALID_CURRENT_PASSWORD` (change-password) disclose nothing about
+  whether an account exists. Without it, those two 401s were byte-identical and
+  the FE had to probe `GET /user/me` to tell them apart. The prod 5xx sanitizer
+  DOES clear it — nothing about an unexpected server failure is a contract.
+- **`message` is still not a contract.** The code is the only part of a 4xx a
+  client may branch on. Do not answer a future "tell these two apart" request by
+  un-flattening a message.
+- **Only the user service forwards it over TCP.** Its `AllRpcExceptionFilter` is
+  the one microservice filter wired for it; the shared
+  `HttpToRpcExceptionFilter` is not. So a code thrown inside another service
+  reaches the gateway as a normal error and the response simply has no
+  `errorCode`. That is fine — extend the filter for that service when a real
+  need appears, and do NOT bulk-tag existing errors with codes: every new code
+  is a permanent contract.
+
+## Order emails: one template, and the CTA depends on who is reading (MAIL-UI-02, 2026-09-08)
+
+`renderOrderNotificationEmail()` renders ALL nine order lifecycle mails
+(placed/paid/shipped/delivering/delivered, canceled, and the three return
+outcomes). Adding an event needs no template and no wording decision here: the
+in-app notification message is the headline, and the `#ord_…` label is lifted
+out of the sentence into its own row. Do not fork it per event.
+
+- **Audience decides the link, not the event.** Buyer ⇒
+  `<origin>/order/<publicId>`; buyer on a pre-PUBID row ⇒ `<origin>/orders`;
+  seller ⇒ `<origin>/sell/orders`, because the buyer's order page is
+  owner-scoped and a seller following a deep link would get a 403.
+- **`<origin>` is `FRONTEND_URL` entry [0]**, the storefront — the same ordering
+  contract payments depends on for its return URL, which is why
+  `ecosystem.config.js` now injects `FRONTEND_URL` into the notification service
+  too. Unset, non-http(s) or unparseable ⇒ **the mail ships without a button**
+  rather than with a dead link, and a sub-path in entry [0] is reduced to its
+  origin.
+- **The mail stays best-effort.** `emailUser()` never throws, so an SMTP or
+  user-service failure cannot change the RabbitMQ handler's ack/nack outcome —
+  the in-app notification and the WS push are already saved by then.
+
+## Only ONE of the five reset-password rejections is told apart (RESET-EXHAUST-01, 2026-09-08)
+
+`POST /api/user/reset-password` answers `400 "Invalid or expired verification
+code"` for five different causes: wrong digits, expired after 10 minutes,
+unknown email, never requested a code, and **the code destroyed by the 5-attempt
+limit**. Only the last one carries `errorCode: "RESET_CODE_EXHAUSTED"`; the
+other four stay code-less, and `message` is identical in all five.
+
+- **Why only that one.** It is the only cause where retyping can never succeed —
+  the code is gone from Redis, so the user must request a new one. The other
+  four all lead to the same "check the code and try again" action, and
+  separating "unknown email" or "never requested" from "wrong digits" is exactly
+  the account-existence oracle the flow is built to avoid. Do not add codes to
+  them on a future "tell these apart" request.
+- **The signal outlives the attempt that produced it.** The branch that trips
+  the limit deletes the code key, so attempts 7, 8, … would otherwise fall into
+  the generic "no stored code" branch and the client would lose the signal on a
+  reload or a tab switch. A separate marker key
+  `user:pwreset:exhausted:<userId>` is written when the limit trips and is
+  checked BEFORE the code lookup — that ordering is the whole mechanism, do not
+  move the check below it.
+- **The marker gets the FULL 600s code TTL, not the code's remaining TTL**, because
+  `CachedService` has no `ttl` read. So it can outlive the original code's own
+  expiry by up to ~10 minutes. Harmless: while it is set, the truthful answer is
+  still "this code is dead, ask for a new one", and `forgotPassword` clears it
+  the moment a new code is actually issued.
+- **A resend throttled by the 60s cooldown does NOT clear it.** The clear
+  happens only after the cooldown is claimed and a code is really sent, so a
+  user hammering "resend" keeps seeing `RESET_CODE_EXHAUSTED` until a new code
+  exists — which is correct, nothing changed for them yet.
+- `changePassword` deletes the marker along with the code/attempts keys it
+  already cleared (same reason as CHG-PW-01: a self-service password change must
+  not leave a pending reset flow in a stuck state).
+- **Redis down adds no new failure mode.** The marker read fails the same way
+  the existing code read does; the endpoint degrades to the pre-change behaviour
+  (a plain code-less 400), never to a 500.

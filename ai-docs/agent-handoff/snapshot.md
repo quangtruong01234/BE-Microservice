@@ -645,6 +645,14 @@ See `CHANGELOG.md` 2026-08-26.
   rows are the moderation audit trail. Since 2026-08-21 they are invisible to
   `GET /social/admin/reports` (both the page and `total` inner-join `posts`),
   so this is a storage-only residue, not a contract bug.
+- MAIL-UI-01: the reset-code email has **no copy button** — email clients strip
+  `<script>`, so it is impossible; the code is instead select-friendly (32px
+  monospace, `user-select:all`) and repeated in the SUBJECT line so it reads
+  from the notification. Accepted trade-off: a notification preview shows the
+  code (10-min, single-use). No deep-link CTA either — the FE flow is a two-step
+  in-page form on `/login` and a link would drop the user at step 1. SMTP is now
+  live on a Gmail app password, :465 implicit TLS only (no STARTTLS, so :587
+  hangs to the 15s timeout).
 - CHG-PW-01: `POST /api/user/change-password` deliberately does NOT revoke or
   rotate anything. The JWT is stateless with no blacklist, so a new cookie would
   only refresh THIS session while every other device keeps its old token until
@@ -652,11 +660,42 @@ See `CHANGELOG.md` 2026-08-26.
   everywhere". Changing that needs a token version/denylist, which is a separate
   decision. Consequence to state plainly if asked: after a password change the
   attacker's stolen session is still live. Also deliberate: a wrong
-  `currentPassword` is a **401** (same class as `login()`), distinguishable from
-  a session 401 only by `message` — ours is "Current password is incorrect",
-  the guard's are "Access token is required" / "Unauthorized". The change also
-  drops the pending `user:pwreset:code:*` / `attempts:*` Redis keys so an
+  `currentPassword` is a **401** (same class as `login()`); since CHG-PW-02 it
+  is told apart from a session 401 by `errorCode`, not by `message`. The change
+  also drops the pending `user:pwreset:code:*` / `attempts:*` Redis keys so an
   already-emailed reset code cannot be replayed afterwards.
+- CHG-PW-02: error responses may now carry an OPTIONAL `errorCode`
+  (`libs/constant/error-code.constant.ts`) — emitted only when the thrower set
+  one, so every other envelope keeps its exact key set. It deliberately SURVIVES
+  the production 401 sanitizer that flattens `message`/`error` to
+  `"Unauthorized"`: the codes are a closed set we chose, so they disclose
+  nothing, while without them a wrong current password and a dead session were
+  byte-identical. Only the user service forwards it over TCP (its
+  `AllRpcExceptionFilter` is the only one wired); a microservice whose filter
+  does not forward `errorCode` simply produces a response without the key. Do
+  not "sanitize" it away and do not add codes to bulk-tag existing errors —
+  `message` stays the human text and is NOT a contract.
+- MAIL-UI-02: order emails are HTML now, one template for all nine lifecycle
+  events (`renderOrderNotificationEmail`). The CTA URL is built from
+  `FRONTEND_URL` entry **[0]** (storefront) — buyer ⇒ `/order/<publicId>`,
+  seller ⇒ `/sell/orders` (a seller cannot open the buyer's owner-scoped order
+  page). `FRONTEND_URL` unset/non-http ⇒ the mail ships WITHOUT a button rather
+  than with a dead link, which is why the notification service now gets
+  `FRONTEND_URL` injected in `ecosystem.config.js`. A sub-path in entry [0] is
+  reduced to its origin.
+- RESET-EXHAUST-01: `POST /api/user/reset-password` carries
+  `errorCode: "RESET_CODE_EXHAUSTED"` on exactly ONE of its five rejection
+  causes — the code destroyed by the 5-attempt limit, the only one where
+  retrying is hopeless. The other four (wrong digits, expired, unknown email,
+  never requested) stay a pooled, code-less `400` on purpose: same user action,
+  and splitting them would make the endpoint an account oracle. Status and
+  `message` are unchanged in every branch. Residuals, deliberate: the
+  `user:pwreset:exhausted:*` marker is set for a FULL 600s, so for a code burned
+  near its expiry the answer stays "exhausted" past the point where "expired"
+  would also have been true — both mean "request a new code", and the burn is
+  the more precise reason. A throttled resend (inside the 60s cooldown) does NOT
+  clear the marker, because it issues no new code. Redis down ⇒ the marker check
+  throws exactly where the code lookup already did, so no new failure mode.
 
 ## Ops / Runtime Reference
 

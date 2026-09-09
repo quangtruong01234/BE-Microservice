@@ -6,6 +6,185 @@
 
 ## Completed Milestones
 
+- **RESET-EXHAUST-01 — `reset-password` now says when the code is DEAD, not just
+  "invalid" (2026-09-08). No migration, additive, release class B.** Second use
+  of the CHG-PW-02 `errorCode` channel, filed by the FE agent on the MAIL-UI-01
+  thread. `POST /api/user/reset-password` answered one identical
+  `400 "Invalid or expired verification code"` for five different causes, one of
+  which is **unrecoverable**: after 5 wrong attempts the code is deleted from
+  Redis, so retrying it can never work. The FE was counting 400s in tab-local
+  state to guess at that case — a guess that cannot see attempts from another
+  tab, and that a resend silently resets server-side.
+  - **What shipped:** a single new code, `ERROR_CODE.RESET_CODE_EXHAUSTED`,
+    emitted ONLY on the burned-code branch. Status stays `400`, `message` stays
+    byte-identical, no field was renamed or removed — the four other causes
+    (wrong digits, expired, unknown email, never requested) deliberately stay
+    pooled under a code-less 400, because they all lead to the same "type it
+    again" action and separating them would turn the endpoint into an
+    account-existence oracle.
+  - **The non-obvious half: the signal has to OUTLIVE the attempt that trips
+    it.** The limit branch deletes the code key, so every later attempt falls
+    into the plain `!storedCode` path and the client loses the signal on the
+    next reload. Tagging only the tripping request would have failed the exact
+    requirement the FE asked for ("kể cả khi người dùng đổi tab giữa chừng").
+    Fix: a `user:pwreset:exhausted:<userId>` marker (TTL = the 600s code TTL),
+    checked BEFORE the code lookup, so any tab/device asking during that window
+    gets the same answer. `forgotPassword` drops the marker when it actually
+    issues a new code — and only then, so a resend refused by the 60s cooldown
+    correctly leaves it standing. `changePassword` drops it alongside the code
+    and attempt keys it already cleared.
+  - **Files:** `libs/constant/error-code.constant.ts` (+`RESET_CODE_EXHAUSTED`),
+    `apps/user/src/user.service.ts` (`resetPassword` marker check + set,
+    `forgotPassword` + `changePassword` clear). No gateway change — the
+    CHG-PW-02 plumbing is status-agnostic and carried the 400 unmodified.
+  - **Verified, 13 runtime assertions** against the local gateway (account
+    `chgpw_test`, code read from Redis): wrong attempts 1–5 → `400` with **no**
+    `errorCode` key · attempt 6 → `400` + `RESET_CODE_EXHAUSTED` · attempt 7
+    with the **correct** code → still `RESET_CODE_EXHAUSTED` (the code really is
+    gone) · resend during cooldown → marker survives, no new code · resend after
+    cooldown → marker cleared + new code · wrong code on the fresh code → back
+    to a code-less `400` · correct code → `201 {"success":true}` and every
+    `user:pwreset:*` key cleaned · login with the new password `201` · unknown
+    email → code-less `400` (no oracle) · DTO failure → code-less `400` ·
+    `change-password` wrong current → `401 INVALID_CURRENT_PASSWORD` unchanged
+    (CHG-PW-02 regression) · `change-password` success clears the marker.
+    `tsc --noEmit` + eslint clean, full `npx jest` 39 suites / 405 tests green.
+
+- **CHG-PW-02 — an optional `errorCode` on error responses, so two unrelated
+  401s stop being byte-identical (2026-09-08). No migration, additive, release
+  class B.** Filed by the FE agent from a PROD measurement: on
+  `POST /api/user/change-password`, a wrong `currentPassword` (session alive)
+  and a dead/absent session both returned
+  `401 {"statusCode":401,"status":"error","error":"Unauthorized","message":"Unauthorized",…}`
+  — identical to the byte. So every wrong password showed "Phiên đăng nhập đã
+  hết hạn" and pushed the user to re-login, and the FE had to probe
+  `GET /user/me` (`isSessionAlive()`) on the error branch to tell them apart.
+  Dev never showed it: the flattening is the production-only 401 sanitizer in
+  `HttpExceptionFilter`.
+  - **Why a code and not the other two options FE offered.** Un-flattening the
+    401 `message` was rejected — the sanitizer exists so an auth failure cannot
+    be used as an account-existence oracle, and `message` is human text that
+    any future edit may reword, i.e. a string the FE must never branch on.
+    Moving the wrong-password case to 400/422 was rejected as release class C
+    (it changes a status a shipped FE already handles). An additive optional
+    field breaks nothing and is the only class-B answer.
+  - **Files:** `libs/constant/error-code.constant.ts` (NEW — `ERROR_CODE`
+    `{UNAUTHENTICATED, INVALID_CURRENT_PASSWORD}` + `ErrorCode` type),
+    `apps/user/src/user.service.ts` (object-form `UnauthorizedException`),
+    `apps/user/src/filters/rpc-exception.filter.ts` (forward over TCP),
+    `apps/gateway/src/common/exception/microservice-error.{handler,types}.ts`
+    (`extractErrorCode`, object-form rethrow ONLY when a code exists),
+    `apps/gateway/src/common/filters/http-exception.filter.ts` (capture in both
+    branches, emit conditionally), `apps/gateway/src/common/guards/jwt-auth.guard.ts`
+    (both 401 throws carry `UNAUTHENTICATED`), + `http-exception.filter.spec.ts` (NEW).
+  - **The one design decision worth remembering:** the code SURVIVES the
+    production 401 sanitizer while `message`/`error` are still flattened. That
+    is deliberate — the codes are a closed set we author, so they leak nothing
+    about whether an account exists, and they are what makes the two 401s
+    distinguishable at all. Every other sanitizer branch clears it: nothing
+    about an unexpected 5xx is a stable contract.
+  - **Additive by construction:** a thrower that sets no code produces the
+    exact envelope it produced before (no `errorCode` key), and only the user
+    service's `AllRpcExceptionFilter` forwards the field, so no other service's
+    responses changed. A non-string value under that key is dropped, not echoed.
+  - **Verified:** 7 unit tests on the filter (prod 401 keeps the code while the
+    message flattens; the two bodies differ; a code-less 401 omits the key; prod
+    5xx drops it; dev reports real message + code; the bare-microservice-object
+    branch picks it up; a numeric `errorCode` is dropped) + 5 runtime curls
+    against the local gateway: wrong password → `401 INVALID_CURRENT_PASSWORD`,
+    no cookie → `401 UNAUTHENTICATED`, garbage cookie → `401 UNAUTHENTICATED`,
+    correct change → `201 {"success":true}` with no `errorCode` key, and an
+    unrelated 404/400 unchanged. `tsc --noEmit` + eslint clean.
+
+- **MAIL-UI-02 — order notification emails got the same HTML treatment as the
+  reset-code mail (2026-09-08). No migration, no API contract change, release
+  class A.** Follow-up to MAIL-UI-01, prompted by a screenshot of a
+  "đơn hàng đang được giao" mail arriving as three lines of bare plain text.
+  - **Files:** `libs/common/src/mailer/email-templates.ts`
+    (`renderOrderNotificationEmail(message, orderLabel, actionUrl)` — subject
+    `TryBuy — <message>`, text + HTML parts), `apps/notification/src/notification.controller.ts`
+    (`storefrontOrigin()`, `orderActionUrl()`, `sendOrderEmail(userId, message, {label, publicId, audience})`
+    — 9 call sites), `apps/notification/src/notification.service.ts` (`emailUser`
+    takes the optional `html`), `ecosystem.config.js` (notification now gets
+    `FRONTEND_URL`).
+  - **One template for all nine order events on purpose:** the notification
+    message already IS the headline, so a new lifecycle event needs no new
+    template and no new wording decision. The `#ord_…` label is lifted out of
+    the sentence into its own row so the mail reads like an order update rather
+    than a log line; a caller whose label is not inside the message keeps the
+    full sentence.
+  - **CTA routing:** `FRONTEND_URL` entry [0] (the storefront — same ordering
+    contract payments relies on). Buyer ⇒ `/order/<publicId>`, buyer on a
+    pre-PUBID row ⇒ `/orders`, seller ⇒ `/sell/orders`, because the buyer's
+    order page is owner-scoped and a seller would get a 403. All three are real
+    routes in `../frontend/src/router.tsx`. Unset / non-http(s) / unparseable
+    `FRONTEND_URL` ⇒ the mail renders WITHOUT a button instead of with a dead
+    link.
+  - **Verified at runtime, both legs.** (1) Rendered and really sent through the
+    compiled `MailerService`: `SMTP configured: true`, `Email sent to
+    quang5552013@gmail.com: "TryBuy — Đơn hàng #ord_9Kq2mZ7xTb4aVn1P đang được
+    giao đến bạn"`, CTA `http://localhost:5173/order/ord_9Kq2mZ7xTb4aVn1P`.
+    (2) Through the LIVE notification service: published one `order_created`
+    envelope to that service's own queue only (default exchange, routing key =
+    queue name — never to `order.fanout`, so no inventory/payments/rewards
+    consumer could act on a synthetic order); `GET /api/notifications` then
+    returned the new row `ntf_gppzIKeuJKqBCD1r`, proving the handler on the
+    running build executed the new mail path. `POST /api/order` itself was NOT
+    used: it 502s on the local dev stack for reasons unrelated to this diff
+    (GHN preview, orders read, product+inventory batch and the brokers all
+    answer — the failure is inside orders `createOrder`, and the pm2-era `logs/`
+    are stale, so it is recorded rather than chased here).
+  - **Branch check beyond the happy path** (the URL rules and the template's
+    escaping, exercised directly): buyer+publicId / legacy buyer / seller URLs
+    correct; unset, empty, `javascript:` and unparseable `FRONTEND_URL` all
+    yield no button and no `<a href` in the HTML; a sub-path in entry [0] is
+    reduced to its origin; a label the message does not contain leaves the
+    headline intact; markup in the message/label/URL comes out escaped.
+
+- **MAIL-UI-01 — real SMTP delivery + an HTML reset-code email (2026-08-29). No
+  migration, no API contract change, release class A/B.** Two things in one
+  session. (1) The forgot-password feature had been complete since 2026-07-12
+  but had never sent a single real email — `SMTP_*` was unset, so every code
+  went to the log. Wired a Gmail app password into `local/nodeA/.env` (the file
+  is Edit-denied to agents; the user pasted it) and proved delivery end to end.
+  (2) The mail that then arrived was bare plain text, so it got an actual UI.
+  - **Files:** `libs/common/src/mailer/email-templates.ts` (NEW —
+    `renderPasswordResetEmail(code, ttlMinutes) -> {subject, text, html}`),
+    `libs/common/src/mailer/mailer.service.ts` (optional 4th `html` arg;
+    extracted `buildMessage()` + `encodeBase64Body()`),
+    `libs/common/src/index.ts`, `apps/user/src/user.service.ts`
+    (`forgotPassword` renders the template), `local/nodeA/.env.example`
+    (+`SMTP_*` block — the 2026-07-12 entry claimed these keys were there and
+    they were not).
+  - **Why multipart/alternative with BOTH parts base64:** it sidesteps the RFC
+    5321 998-octet line limit (one markup line exceeds it easily) and
+    dot-stuffing in a single move. Plain part FIRST — clients render the LAST
+    alternative they understand.
+  - **Design decisions, all forced by the medium** (full rationale in
+    `known-behaviors.md` → MAIL-UI-01): no copy button (email strips
+    `<script>`) → 32px monospace code with `user-select:all` + the code in the
+    subject line, Google/GitHub style, so it is readable from the notification;
+    no deep-link CTA, because the storefront flow is a two-step in-page form on
+    `/login` holding the email in React state — a link would drop the user at
+    step 1 and a resend would invalidate the emailed code.
+  - **Verified end to end on a real inbox** (`quang5552013@gmail.com`, appended
+    to `test-accounts.md` — the only test account whose mail actually lands):
+    register → 201 (`usr_NmeFvrSBZoLqNPAd`); forgot-password → 201 in 3.97s
+    (tens of ms when SMTP is unconfigured — the timing IS the evidence the TLS
+    dialogue ran, since the endpoint always answers 201); code read back from
+    Redis; reset-password → 201; login with the new password → 201.
+  - **Change-impact review caught one real defect** in the code this change
+    touched: the plain-text branch wrote the body with bare `\n` into SMTP DATA,
+    where CRLF is required. Gmail tolerated it; a stricter MTA need not. Now
+    normalised before dot-stuffing. The other caller
+    (`notification.service.ts:72`, order-status mails, no `html` arg) was
+    re-verified against the real compiled mailer: output differs from
+    pre-change ONLY by LF→CRLF, no bare LF remains, dot-stuffing intact, and the
+    message still delivers.
+  - Two doc drifts fixed in passing: `ops-runtime.md` said the Redis container
+    is `trybuy-redis` (it is `redis`), and `.env.example` was missing the
+    `SMTP_*` keys it was documented as having.
+
 - **CHG-PW-01 — `POST /api/user/change-password`, the logged-in password change
   (2026-08-29). New endpoint, no migration, release class B.** Filed by the FE
   agent in `backend-handoff.md`: a logged-in user had no way to change their
