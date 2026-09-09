@@ -45,14 +45,17 @@ export class NotificationService {
   ) {}
 
   /**
-   * Best-effort email channel: resolves the user's email over TCP and sends a
-   * plain-text mail. Never throws — email failure must not nack the RabbitMQ
-   * message that triggered it (in-app notification + WS push already saved).
+   * Best-effort email channel: resolves the user's email over TCP and sends the
+   * mail. With `html` it goes out as multipart/alternative, `text` being the
+   * fallback every client can render. Never throws — email failure must not
+   * nack the RabbitMQ message that triggered it (in-app notification + WS push
+   * already saved).
    */
   async emailUser(
     userId: number,
     subject: string,
     text: string,
+    html?: string,
   ): Promise<void> {
     try {
       const user = await firstValueFrom(
@@ -69,7 +72,7 @@ export class NotificationService {
         );
         return;
       }
-      await this.mailerService.sendMail(user.email, subject, text);
+      await this.mailerService.sendMail(user.email, subject, text, html);
     } catch (err) {
       this.logger.warn(
         `[NOTIFICATION] emailUser failed for user ${userId}: ${String(err)}`,

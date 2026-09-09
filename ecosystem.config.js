@@ -84,6 +84,9 @@ const PG_POOL = { inventory: 5, payments: 4, rewards: 3 };
 //     entry, so EVERY browser origin must be listed (storefront, GHN console).
 //   - payments (apps/payments/src/payments.service.ts) takes entry [0] only and
 //     builds `<origin>/payment-result`, so the STOREFRONT must come first.
+//   - notification (apps/notification/src/notification.controller.ts) takes
+//     entry [0] the same way, for the "Xem chi tiết đơn hàng" link in order
+//     emails. Unset ⇒ the mail simply ships without a button.
 // Entry [0] is the TryBuy storefront; entry [1] is the GHN shipping console,
 // which never handles payments — append further origins, never prepend.
 // Matching is exact-string, not wildcard: a Vercel/Workers PREVIEW deployment
@@ -117,7 +120,10 @@ module.exports = {
     service("user", { MYSQL_POOL_SIZE: MYSQL_POOL.user }),
     service("product", { MYSQL_POOL_SIZE: MYSQL_POOL.product }),
     service("social", { MYSQL_POOL_SIZE: MYSQL_POOL.social }),
-    service("notification", { MYSQL_POOL_SIZE: MYSQL_POOL.notification }),
+    service("notification", {
+      MYSQL_POOL_SIZE: MYSQL_POOL.notification,
+      FRONTEND_URL,
+    }),
     service("chat", { MYSQL_POOL_SIZE: MYSQL_POOL.chat }),
     // Node B
     service("inventory", { PG_POOL_SIZE: PG_POOL.inventory }),

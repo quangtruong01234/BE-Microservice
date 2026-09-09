@@ -16,7 +16,11 @@ import {
 import { firstValueFrom, Observable, timeout } from "rxjs";
 import { NotificationService } from "./notification.service";
 import { EVENT } from "@app/common/constants/event";
-import { HttpToRpcExceptionFilter, RmqService } from "@app/common";
+import {
+  HttpToRpcExceptionFilter,
+  renderOrderNotificationEmail,
+  RmqService,
+} from "@app/common";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import {
   NOTIFICATION_MESSAGE_PATTERN,
@@ -24,6 +28,9 @@ import {
 } from "libs/constant/message-pattern.constant";
 import { ORDER_MESSAGE } from "libs/constant/response-message.constant";
 import { OrderInfo } from "./notification.types";
+
+/** Who an order mail is addressed to — decides where its CTA points. */
+type OrderEmailAudience = "buyer" | "seller";
 
 @UseFilters(HttpToRpcExceptionFilter)
 @Controller()
@@ -37,14 +44,66 @@ export class NotificationController {
     private readonly ordersClient: ClientProxy,
   ) {}
 
+  /**
+   * Storefront origin for the email CTA: entry [0] of `FRONTEND_URL`, the same
+   * ordering contract payments relies on to build its return URL. `null` when
+   * the variable is unset or not http(s) — the mail then renders without a
+   * button instead of with a dead link.
+   */
+  private static storefrontOrigin(): string | null {
+    const configured = (process.env.FRONTEND_URL ?? "").split(",")[0]?.trim();
+    if (!configured) {
+      return null;
+    }
+    try {
+      const url = new URL(configured);
+      return url.protocol === "http:" || url.protocol === "https:"
+        ? url.origin
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Where the CTA sends this recipient. A seller cannot open the buyer's order
+   * page (it is owner-scoped), so they land on their own order list; a buyer
+   * deep-links to the order when we know its public id, and falls back to the
+   * order list for a pre-PUBID row.
+   */
+  private static orderActionUrl(
+    audience: OrderEmailAudience,
+    publicId: string | null,
+  ): string | null {
+    const origin = NotificationController.storefrontOrigin();
+    if (origin === null) {
+      return null;
+    }
+    if (audience === "seller") {
+      return `${origin}/sell/orders`;
+    }
+    return publicId === null
+      ? `${origin}/orders`
+      : `${origin}/order/${publicId}`;
+  }
+
   // Best-effort email mirror of an order notification — never throws, so a
   // mail/TCP failure cannot change the handler's ack/nack outcome.
-  private async sendOrderEmail(userId: number, message: string): Promise<void> {
-    await this.notificationService.emailUser(
-      userId,
-      `TryBuy — ${message}`,
-      `${message}.\n\nXem chi tiết trong mục Đơn hàng của bạn trên TryBuy.`,
+  private async sendOrderEmail(
+    userId: number,
+    message: string,
+    options: {
+      label: string;
+      publicId: string | null;
+      audience: OrderEmailAudience;
+    },
+  ): Promise<void> {
+    const { subject, text, html } = renderOrderNotificationEmail(
+      message,
+      options.label,
+      NotificationController.orderActionUrl(options.audience, options.publicId),
     );
+    await this.notificationService.emailUser(userId, subject, text, html);
   }
 
   /**
@@ -117,7 +176,11 @@ export class NotificationController {
         {},
         publicId,
       );
-      await this.sendOrderEmail(userId, message);
+      await this.sendOrderEmail(userId, message, {
+        label,
+        publicId,
+        audience: "buyer",
+      });
       // The seller's only signal that there is work to do. Multi-seller
       // checkout publishes one event per sub-order, so each seller is told
       // about their own order exactly once.
@@ -131,7 +194,11 @@ export class NotificationController {
           {},
           publicId,
         );
-        await this.sendOrderEmail(Number(sellerId), sellerMessage);
+        await this.sendOrderEmail(Number(sellerId), sellerMessage, {
+          label,
+          publicId,
+          audience: "seller",
+        });
       }
       this.rmqService.ack(context);
     } catch (err) {
@@ -163,7 +230,8 @@ export class NotificationController {
       if (!order) {
         throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
       }
-      const message = `Đơn hàng ${this.orderLabel(orderId, order.publicId)} đã thanh toán thành công`;
+      const label = this.orderLabel(orderId, order.publicId);
+      const message = `Đơn hàng ${label} đã thanh toán thành công`;
       await this.notificationService.saveNotification(
         order.userId,
         "payment_completed",
@@ -172,7 +240,11 @@ export class NotificationController {
         {},
         order.publicId,
       );
-      await this.sendOrderEmail(order.userId, message);
+      await this.sendOrderEmail(order.userId, message, {
+        label,
+        publicId: order.publicId,
+        audience: "buyer",
+      });
       this.rmqService.ack(context);
     } catch (err) {
       this.logger.error(
@@ -218,7 +290,11 @@ export class NotificationController {
         {},
         order.publicId,
       );
-      await this.sendOrderEmail(order.userId, message);
+      await this.sendOrderEmail(order.userId, message, {
+        label,
+        publicId: order.publicId,
+        audience: "buyer",
+      });
       // The seller may already be preparing the parcel — tell them to stop.
       if (
         order.sellerId != null &&
@@ -233,7 +309,11 @@ export class NotificationController {
           {},
           order.publicId,
         );
-        await this.sendOrderEmail(Number(order.sellerId), sellerMessage);
+        await this.sendOrderEmail(Number(order.sellerId), sellerMessage, {
+          label,
+          publicId: order.publicId,
+          audience: "seller",
+        });
       }
       this.rmqService.ack(context);
     } catch (err) {
@@ -271,10 +351,8 @@ export class NotificationController {
     );
     try {
       const publicId = data.publicId ?? null;
-      const message = this.statusChangedMessage(
-        status,
-        this.orderLabel(orderId, publicId),
-      );
+      const label = this.orderLabel(orderId, publicId);
+      const message = this.statusChangedMessage(status, label);
       // Statuses with their own dedicated event (canceled, returns) produce no
       // message here — ack so the broker does not redeliver a no-op.
       if (message === null) {
@@ -290,7 +368,11 @@ export class NotificationController {
         publicId,
       );
       if (NotificationController.EMAILED_STATUSES.has(status)) {
-        await this.sendOrderEmail(Number(userId), message);
+        await this.sendOrderEmail(Number(userId), message, {
+          label,
+          publicId,
+          audience: "buyer",
+        });
       }
       this.rmqService.ack(context);
     } catch (err) {
@@ -323,7 +405,8 @@ export class NotificationController {
         throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
       }
       // Notify the seller that a buyer opened a return request to review.
-      const message = `Đơn hàng ${this.orderLabel(orderId, order.publicId)} có yêu cầu trả hàng cần duyệt`;
+      const label = this.orderLabel(orderId, order.publicId);
+      const message = `Đơn hàng ${label} có yêu cầu trả hàng cần duyệt`;
       await this.notificationService.saveNotification(
         order.sellerId,
         "order_return_requested",
@@ -332,7 +415,11 @@ export class NotificationController {
         {},
         order.publicId,
       );
-      await this.sendOrderEmail(order.sellerId, message);
+      await this.sendOrderEmail(order.sellerId, message, {
+        label,
+        publicId: order.publicId,
+        audience: "seller",
+      });
       this.rmqService.ack(context);
     } catch (err) {
       this.logger.error(
@@ -369,7 +456,8 @@ export class NotificationController {
         throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
       }
       // Notify the buyer that their return request was approved and refunded.
-      const message = `Yêu cầu trả hàng cho đơn ${this.orderLabel(orderId, order.publicId)} đã được duyệt và hoàn tiền`;
+      const label = this.orderLabel(orderId, order.publicId);
+      const message = `Yêu cầu trả hàng cho đơn ${label} đã được duyệt và hoàn tiền`;
       await this.notificationService.saveNotification(
         order.userId,
         "order_return_approved",
@@ -378,7 +466,11 @@ export class NotificationController {
         {},
         order.publicId,
       );
-      await this.sendOrderEmail(order.userId, message);
+      await this.sendOrderEmail(order.userId, message, {
+        label,
+        publicId: order.publicId,
+        audience: "buyer",
+      });
       this.rmqService.ack(context);
     } catch (err) {
       this.logger.error(
@@ -415,7 +507,8 @@ export class NotificationController {
         throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
       }
       // Notify the buyer that their return request was rejected.
-      const message = `Yêu cầu trả hàng cho đơn ${this.orderLabel(orderId, order.publicId)} đã bị từ chối`;
+      const label = this.orderLabel(orderId, order.publicId);
+      const message = `Yêu cầu trả hàng cho đơn ${label} đã bị từ chối`;
       await this.notificationService.saveNotification(
         order.userId,
         "order_return_rejected",
@@ -424,7 +517,11 @@ export class NotificationController {
         {},
         order.publicId,
       );
-      await this.sendOrderEmail(order.userId, message);
+      await this.sendOrderEmail(order.userId, message, {
+        label,
+        publicId: order.publicId,
+        audience: "buyer",
+      });
       this.rmqService.ack(context);
     } catch (err) {
       this.logger.error(
