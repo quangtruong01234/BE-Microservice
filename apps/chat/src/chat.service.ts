@@ -17,6 +17,7 @@ import {
   ConversationWithMeta,
   MessageWithParentMeta,
   SendMessagePayload,
+  SentMessageWithParticipants,
 } from "./chat.types";
 
 @Injectable()
@@ -257,7 +258,7 @@ export class ChatService {
   async sendMessage(
     userId: number,
     payload: SendMessagePayload,
-  ): Promise<MessageWithParentMeta> {
+  ): Promise<SentMessageWithParticipants> {
     const conversationId = await this.resolveConversationId(
       payload.conversationId,
     );
@@ -293,7 +294,14 @@ export class ChatService {
       publicId: generatePublicId(PUBLIC_ID_PREFIXES.MESSAGE),
     });
     const saved = await this.messageRepo.save(message);
-    return { ...saved, parentMessagePublicId };
+    // CHAT-ROOM-01: hand the gateway both members so it can deliver the message
+    // to each participant's user room. The conversation row is already loaded
+    // for the membership check above, so this costs no extra query.
+    return {
+      ...saved,
+      parentMessagePublicId,
+      participantIds: [conversation.user1Id, conversation.user2Id],
+    };
   }
 
   @Cron("0 2 * * *")

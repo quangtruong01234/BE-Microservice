@@ -8,6 +8,7 @@ import {
   ConversationWithMeta,
   MessageWithParentMeta,
   SendMessagePayload,
+  SentMessageWithParticipants,
 } from "./chat.types";
 
 @UseFilters(new HttpToRpcExceptionFilter())
@@ -62,7 +63,7 @@ export class ChatController {
       userId: number;
       dto: SendMessagePayload;
     },
-  ): Promise<MessageWithParentMeta> {
+  ): Promise<SentMessageWithParticipants> {
     return this.chatService.sendMessage(data.userId, data.dto);
   }
 

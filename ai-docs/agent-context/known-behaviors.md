@@ -841,3 +841,27 @@ to suppress the first one.
 create would turn a currently-succeeding call into a 400 — release class C,
 needing an FE hold — for zero reported benefit. Create is forgiving, update is
 strict, and that is the intended state.
+
+## Chat `new_message` targets a room UNION (CHAT-ROOM-01, 2026-08-15)
+
+`ChatWsGateway.handleSendMessage` emits to `chatMessageRooms(...)` =
+`["user:<a>", "user:<b>", "conv:<publicId>"]`, not to the conversation room
+alone.
+
+- **A recipient no longer needs `join`.** Every socket enters `user:<id>` at
+  connect, so `new_message` arrives wherever the user is in the app. The `join`
+  handler is kept and unchanged — a client that still joins per conversation
+  keeps working, it is simply redundant now.
+- **No duplicate.** Socket.IO delivers the union of the targeted rooms and
+  dedupes per socket, so a client in both `user:` and `conv:` gets exactly one
+  copy. Do not "fix" this by emitting per room in a loop — that WOULD duplicate.
+- **`participantIds` is internal.** It rides on the `chat.send_message` TCP reply
+  only. `exposeChatMessage` builds an explicit field list (no spread), so it can
+  never reach the wire; a future field added to the TCP shape is dropped the same
+  way. Do not assert it in a WS payload test.
+- **Fallback:** when the chat service sends no `participantIds`, the helper
+  returns the conversation room alone — i.e. the pre-2026-08-15 behaviour. A
+  gateway newer than the chat service degrades, it does not break.
+- `/chat` and `/notifications` are separate Socket.IO namespaces that both use a
+  `user:<id>` room name. The registries are per-namespace, so there is no
+  cross-talk between chat messages and notifications.

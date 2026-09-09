@@ -8,6 +8,12 @@ export interface ChatMessageTcp {
   parentMessageId: number | string | null;
   parentMessagePublicId?: string | null;
   createdAt: string | Date;
+  /**
+   * Both members of the conversation. Present on the send-message reply only,
+   * so the WS gateway can target each participant's user room (CHAT-ROOM-01).
+   * Internal numeric ids — never exposed; `exposeChatMessage` drops them.
+   */
+  participantIds?: number[];
 }
 
 export interface ChatLastMessageTcp {
@@ -92,6 +98,24 @@ export function exposeChatMessage(
         : null,
     createdAt: message.createdAt,
   };
+}
+
+/**
+ * CHAT-ROOM-01 — rooms a `new_message` must reach: every participant's user
+ * room (joined at connect, so no `join` round trip is needed) plus the legacy
+ * conversation room, kept so clients that still join per conversation keep
+ * working. Socket.IO unions the rooms, so a socket sitting in several of them
+ * receives exactly one emit. Falls back to the conversation room alone when the
+ * chat service is older than this change and sends no participants.
+ */
+export function chatMessageRooms(
+  participantIds: number[] | undefined,
+  conversationPublicId: string,
+): string[] {
+  const userRooms = [
+    ...new Set((participantIds ?? []).map(Number).filter(Boolean)),
+  ].map((participantId) => `user:${participantId}`);
+  return [...userRooms, `conv:${conversationPublicId}`];
 }
 
 export function exposeChatConversation(

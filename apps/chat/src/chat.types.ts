@@ -23,6 +23,15 @@ export interface MessageWithParentMeta extends Message {
 }
 
 /**
+ * Send-message reply: the saved row plus both members of the conversation, so
+ * the WS gateway can fan `new_message` out to each participant's user room
+ * without a second round trip. Internal ids — the gateway never emits them.
+ */
+export interface SentMessageWithParticipants extends MessageWithParentMeta {
+  participantIds: number[];
+}
+
+/**
  * TCP send payload — `conversationId`/`parentMessageId` accept either the
  * internal numeric id or the opaque public id (`conv_...` / `msg_...`).
  */
