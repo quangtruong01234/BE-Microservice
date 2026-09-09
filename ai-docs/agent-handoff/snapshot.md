@@ -690,12 +690,20 @@ See `CHANGELOG.md` 2026-08-26.
   never requested) stay a pooled, code-less `400` on purpose: same user action,
   and splitting them would make the endpoint an account oracle. Status and
   `message` are unchanged in every branch. Residuals, deliberate: the
-  `user:pwreset:exhausted:*` marker is set for a FULL 600s, so for a code burned
-  near its expiry the answer stays "exhausted" past the point where "expired"
-  would also have been true — both mean "request a new code", and the burn is
-  the more precise reason. A throttled resend (inside the 60s cooldown) does NOT
-  clear the marker, because it issues no new code. Redis down ⇒ the marker check
-  throws exactly where the code lookup already did, so no new failure mode.
+  `user:pwreset:exhausted:*` marker is set for the FULL code TTL **counted from
+  the burn**, so for a code burned near its expiry the answer stays "exhausted"
+  past the point where "expired" would also have been true — both mean "request
+  a new code", and the burn is the more precise reason. A throttled resend
+  (inside the 60s cooldown) does NOT clear the marker, because it issues no new
+  code. Redis down ⇒ the marker check throws exactly where the code lookup
+  already did, so no new failure mode.
+  **RESET-TTL-01 (2026-09-09) shrank that TTL 600s → 60s**, so the window above
+  is now at most a minute, and the cap itself is much harder to reach — the code
+  usually expires before anyone gets 5 wrong tries in, which makes
+  `RESET_CODE_EXHAUSTED` a rare signal rather than a common one. Not a
+  regression; do not "restore" 600. **Not on prod yet** — release class C, held
+  until the storefront stops hardcoding "10 phút" (`release-gate.md` →
+  `RESET-TTL-01`).
 
 ## Ops / Runtime Reference
 

@@ -377,16 +377,32 @@ the seed script.
 - **Forgot-password** (2026-07-11, no migration): `POST /api/user/forgot-password`
   (`@Public`, 5/60s, always generic 201) + `POST /api/user/reset-password`
   (`@Public`, 10/60s, `{email, code, newPassword}`). 6-digit crypto code stored
-  PLAINTEXT in Redis `user:pwreset:code:<userId>` (TTL 600s — deliberate:
-  short TTL + attempt cap `user:pwreset:attempts:<userId>` max 5 + 60s resend
-  cooldown; enables self-test via `docker exec redis redis-cli GET ...`).
+  PLAINTEXT in Redis `user:pwreset:code:<userId>` (**TTL 60s** as of 2026-09-09,
+  was 600s — **not on prod yet**, held as release class C until the storefront
+  stops hardcoding "10 phút"; until that push lands, prod still expires at 600s
+  — deliberate: short TTL + attempt cap `user:pwreset:attempts:<userId>`
+  max 5 + 60s resend cooldown; enables self-test via
+  `docker exec redis redis-cli GET ...`). The TTL must never drop BELOW the 60s
+  resend cooldown, or the code dies while the user is still barred from asking
+  for a new one; equal is the tightest safe value. The duration quoted in the
+  email is derived from that constant (`Math.round(TTL / 60)` → "1 phút"), so
+  changing the constant changes the mail — never hardcode it in the template.
   Email via dependency-free `MailerService` (`libs/common/src/mailer/`,
   implicit-TLS SMTPS, e.g. Gmail :465 app password; env `SMTP_*` — keys in
   `local/nodeA/.env.example` only; the real `.env` is write-denied to agents).
   SMTP unconfigured → user service logs the code, endpoint still 201.
-  **Live since 2026-08-29** on a Gmail app password (:465 implicit TLS — the
-  mailer does not speak STARTTLS, so :587 hangs to the 15s timeout). The mail
-  is HTML (`renderPasswordResetEmail`, MAIL-UI-01) with the code in the subject;
+  **Live on prod since 2026-09-09**, on a Gmail app password (:465 implicit TLS
+  — the mailer does not speak STARTTLS, so :587 hangs to the 15s timeout).
+  Correction: this entry previously read "Live since 2026-08-29", which was
+  never true of PROD — the box had no `SMTP_*` at all until 2026-09-09, and
+  every reset mail before that was only logged. Do not trust that date if it
+  resurfaces elsewhere. How to actually verify, since the endpoint answers a
+  generic 201 either way and `pm2 env <id>` cannot see what `dotenv` loaded:
+  time the send branch against the 60s-cooldown branch of the same endpoint —
+  ~0.3s delta means SMTP is UNSET (the config resolves to null with zero I/O),
+  ~4s means a real Gmail session.
+  The mail is HTML (`renderPasswordResetEmail`, MAIL-UI-01) with the code in the
+  subject;
   `nest start --watch` does NOT re-read `.env`, so after editing SMTP keys touch
   a source file of the user AND notification services or they keep the old env.
 - **Order email notifications** (F7, 2026-07-12, no migration): notification
