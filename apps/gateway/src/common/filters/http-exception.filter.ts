@@ -47,6 +47,15 @@ export class HttpExceptionFilter implements ExceptionFilter {
       : label;
   }
 
+  /**
+   * Accept an `errorCode` only when it is a non-empty string. Anything else a
+   * thrower happened to put under that key is dropped rather than echoed —
+   * the field is a contract, not a passthrough.
+   */
+  private static normalizeErrorCode(code: unknown): string | null {
+    return typeof code === "string" && code.trim() !== "" ? code : null;
+  }
+
   catch(exception: unknown, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
@@ -61,6 +70,10 @@ export class HttpExceptionFilter implements ExceptionFilter {
     // a gateway-local one reported `"Not Found"` (PRODTEST-0806 #5) — and a raw
     // `TypeError` name is an internal detail the client should never see.
     let error: string | null = null;
+    // Optional machine-readable code (`libs/constant/error-code.constant.ts`).
+    // Emitted only when the thrower set one, so every other response keeps its
+    // exact key set (CHG-PW-02).
+    let errorCode: string | null = null;
 
     if (exception instanceof HttpException) {
       // Handle NestJS HTTP exceptions
@@ -76,9 +89,11 @@ export class HttpExceptionFilter implements ExceptionFilter {
         const body = exceptionResponse as {
           message?: string | string[];
           error?: string;
+          errorCode?: unknown;
         };
         message = body.message ?? exception.message;
         error = this.normalizeErrorLabel(body.error);
+        errorCode = HttpExceptionFilter.normalizeErrorCode(body.errorCode);
       } else {
         message = exception.message;
       }
@@ -93,6 +108,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
         status?: unknown;
         message?: string | string[];
         error?: string;
+        errorCode?: unknown;
       };
 
       if (typeof errorObj.statusCode === "number") {
@@ -105,6 +121,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
 
       message = errorObj.message ?? errorObj.error ?? "Internal server error";
       error = this.normalizeErrorLabel(errorObj.error);
+      errorCode = HttpExceptionFilter.normalizeErrorCode(errorObj.errorCode);
 
       this.logger.error(
         `Microservice error: Status=${status}`,
@@ -148,7 +165,15 @@ export class HttpExceptionFilter implements ExceptionFilter {
       // prod and dev report the same `error` for the same status
       // (PRODTEST-0806 #5).
       error = HttpExceptionFilter.reasonPhrase(status);
+      // Nothing about an unexpected server failure is a stable contract.
+      errorCode = null;
     } else if (isProduction() && status === 401) {
+      // Every 401 message is flattened so an authentication failure cannot be
+      // used as an account-existence oracle. `errorCode` deliberately SURVIVES
+      // this: it is a closed set we chose, so it discloses nothing, and without
+      // it two unrelated 401s came back byte-identical — which is what made the
+      // FE probe `GET /user/me` to tell "wrong current password" from "dead
+      // session" (CHG-PW-02).
       message = "Unauthorized";
       error = "Unauthorized";
     }
@@ -158,6 +183,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
       statusCode: status,
       status: "error",
       error: error ?? HttpExceptionFilter.reasonPhrase(status),
+      ...(errorCode === null ? {} : { errorCode }),
       message: Array.isArray(message) ? message.join(", ") : message,
       data: null,
       timestamp: new Date().toISOString(),

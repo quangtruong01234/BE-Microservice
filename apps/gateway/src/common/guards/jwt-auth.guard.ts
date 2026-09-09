@@ -7,6 +7,7 @@ import {
 import { Reflector } from "@nestjs/core";
 import { JwtService } from "@nestjs/jwt";
 import { Request } from "express";
+import { ERROR_CODE } from "libs/constant/error-code.constant";
 import { AUTH_MESSAGE } from "libs/constant/response-message.constant";
 import { IS_PUBLIC_KEY } from "../decorators/public.decorator";
 import { JwtPayload } from "./auth-guard.types";
@@ -35,8 +36,16 @@ export class JwtAuthGuard implements CanActivate {
     const request = context.switchToHttp().getRequest<Request>();
     const token = this.extractToken(request);
 
+    // Both branches carry the same code on purpose: "no usable session" is one
+    // thing to the client, and in production the two messages are flattened to
+    // an identical "Unauthorized" anyway. It lets a caller recognise a dead
+    // session positively instead of inferring it from the absence of another
+    // endpoint's code (CHG-PW-02).
     if (!token) {
-      throw new UnauthorizedException(AUTH_MESSAGE.ACCESS_TOKEN_REQUIRED);
+      throw new UnauthorizedException({
+        message: AUTH_MESSAGE.ACCESS_TOKEN_REQUIRED,
+        errorCode: ERROR_CODE.UNAUTHENTICATED,
+      });
     }
 
     try {
@@ -49,7 +58,10 @@ export class JwtAuthGuard implements CanActivate {
       };
       return true;
     } catch {
-      throw new UnauthorizedException(AUTH_MESSAGE.UNAUTHORIZED);
+      throw new UnauthorizedException({
+        message: AUTH_MESSAGE.UNAUTHORIZED,
+        errorCode: ERROR_CODE.UNAUTHENTICATED,
+      });
     }
   }
 

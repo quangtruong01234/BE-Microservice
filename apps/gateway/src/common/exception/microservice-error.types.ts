@@ -5,4 +5,6 @@ export type ErrorLike = {
   name?: unknown;
   message?: unknown;
   error?: unknown;
+  /** Optional stable code from `libs/constant/error-code.constant.ts`. */
+  errorCode?: unknown;
 };

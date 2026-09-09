@@ -95,9 +95,34 @@ export class MicroserviceErrorHandler {
 
     const statusCode = declaredStatus ?? this.guessStatusFromMessage(rpcError);
     const message = this.extractErrorMessage(rpcError);
+    const errorCode = this.extractErrorCode(rpcError);
 
     this.logger.debug(`Throwing HttpException with status: ${statusCode}`);
-    throw new HttpException(message, statusCode);
+    // Only a microservice that explicitly set a code gets the object form —
+    // every other call site keeps throwing the plain string it always did, so
+    // the envelope it produces is unchanged (CHG-PW-02).
+    throw errorCode === null
+      ? new HttpException(message, statusCode)
+      : new HttpException({ message, errorCode }, statusCode);
+  }
+
+  /**
+   * The stable `errorCode` the microservice declared, if any. It is the one
+   * part of a 4xx the client may branch on: unlike `message` it is a closed
+   * set, and unlike `message` it survives the gateway's production 401
+   * sanitizer (CHG-PW-02).
+   */
+  private static extractErrorCode(error: ErrorLike): string | null {
+    if (typeof error.errorCode === "string" && error.errorCode !== "") {
+      return error.errorCode;
+    }
+
+    const response = error.response as ErrorLike | undefined;
+    if (typeof response?.errorCode === "string" && response.errorCode !== "") {
+      return response.errorCode;
+    }
+
+    return null;
   }
 
   /**
