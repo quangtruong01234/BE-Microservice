@@ -42,7 +42,7 @@ export class InventoryController {
   async create(
     @Body(ValidationPipe) body: CreateInventoryDto,
     @Req() req: Request,
-  ) {
+  ): Promise<unknown> {
     return this.inventoryService.create(
       body,
       req.user?.id ?? 0,
@@ -62,7 +62,7 @@ export class InventoryController {
       "Inventory rows with availableStock <= minimumStock (max 100, lowest stock first).",
   })
   @ApiResponse({ status: 403, description: "Forbidden - shop/admin only." })
-  async getLowStock(@Req() req: Request) {
+  async getLowStock(@Req() req: Request): Promise<unknown> {
     return this.inventoryService.getLowStock(
       req.user?.id ?? 0,
       req.user?.role ?? "user",
@@ -88,7 +88,7 @@ export class InventoryController {
   async findByProductId(
     @Param("productId", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.PRODUCT))
     productId: string,
-  ) {
+  ): Promise<unknown> {
     return this.inventoryService.findByProductId(productId);
   }
 
@@ -109,7 +109,7 @@ export class InventoryController {
     @Param("id", ParseIntPipe) id: number,
     @Body(ValidationPipe) body: UpdateInventoryDto,
     @Req() req: Request,
-  ) {
+  ): Promise<unknown> {
     return this.inventoryService.update(
       id,
       body,

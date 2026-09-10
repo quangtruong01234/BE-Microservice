@@ -40,7 +40,7 @@ function collectValidationMessages(errors: ValidationError[]): string[] {
   return messages.length > 0 ? messages : ["Validation failed"];
 }
 
-async function bootstrap() {
+async function bootstrap(): Promise<void> {
   const logger = new Logger("GatewayBootstrap");
   dotenv.config({ path: "./local/nodeA/.env" });
   // Fail fast: the gateway is the only JWT-signing/verifying service, so an

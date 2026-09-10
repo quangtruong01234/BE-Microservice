@@ -50,8 +50,11 @@ import {
   ProductRiskBackfillResult,
   ProductRiskFeedbackResult,
   ProductRiskSummary,
+  ProductData,
+  ProductWithInventory,
 } from "./product.types";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
+import { PaginatedResponse } from "@app/common";
 
 @ApiTags("Products")
 @Controller("products")
@@ -72,7 +75,10 @@ export class ProductController {
     description: "Bad Request - Invalid input data.",
   })
   @ApiResponse({ status: 409, description: "Conflict - SKU already exists." })
-  async createProduct(@Body() dto: CreateProductDto, @Req() req: Request) {
+  async createProduct(
+    @Body() dto: CreateProductDto,
+    @Req() req: Request,
+  ): Promise<unknown> {
     const userId = (req.user as { id: number }).id;
     return await this.productService.createProduct(dto, userId);
   }
@@ -85,7 +91,9 @@ export class ProductController {
     status: 400,
     description: "Bad Request - Invalid query parameters.",
   })
-  async getAllProducts(@Query(ValidationPipe) query: GetProductsQueryDto) {
+  async getAllProducts(
+    @Query(ValidationPipe) query: GetProductsQueryDto,
+  ): Promise<PaginatedResponse<ProductData>> {
     return await this.productService.getAllProducts(query);
   }
 
@@ -189,7 +197,9 @@ export class ProductController {
     status: 400,
     description: "Bad Request - Missing search query.",
   })
-  async searchProducts(@Query(ValidationPipe) query: GetProductsQueryDto) {
+  async searchProducts(
+    @Query(ValidationPipe) query: GetProductsQueryDto,
+  ): Promise<unknown> {
     return await this.productService.searchProducts(query);
   }
 
@@ -205,7 +215,7 @@ export class ProductController {
   async getProductsByCategory(
     @Param("categoryId", ParseIntPipe) categoryId: number,
     @Query(ValidationPipe) query: GetProductsQueryDto,
-  ) {
+  ): Promise<unknown> {
     return await this.productService.getProductsByCategory(categoryId, query);
   }
 
@@ -221,7 +231,7 @@ export class ProductController {
   async getProductsByBrand(
     @Param("brandId", ParseIntPipe) brandId: number,
     @Query(ValidationPipe) query: GetProductsQueryDto,
-  ) {
+  ): Promise<unknown> {
     return await this.productService.getProductsByBrand(brandId, query);
   }
 
@@ -231,7 +241,7 @@ export class ProductController {
   @ApiParam({ name: "sku", description: "Product SKU", type: String })
   @ApiResponse({ status: 200, description: "Product retrieved successfully." })
   @ApiResponse({ status: 404, description: "Product not found." })
-  async getProductBySku(@Param("sku") sku: string) {
+  async getProductBySku(@Param("sku") sku: string): Promise<unknown> {
     return await this.productService.getProductBySku(sku);
   }
 
@@ -243,7 +253,7 @@ export class ProductController {
   @Public()
   @ApiOperation({ summary: "Get all active brands" })
   @ApiResponse({ status: 200, description: "Brands retrieved successfully." })
-  async getAllBrands() {
+  async getAllBrands(): Promise<unknown> {
     return await this.productService.getAllBrands();
   }
 
@@ -255,7 +265,7 @@ export class ProductController {
     description: "Pending brands retrieved successfully.",
   })
   @ApiResponse({ status: 403, description: "Forbidden." })
-  async getPendingBrands() {
+  async getPendingBrands(): Promise<unknown> {
     return await this.productService.getPendingBrands();
   }
 
@@ -271,7 +281,10 @@ export class ProductController {
     status: 409,
     description: "Conflict - brand already exists or is pending review.",
   })
-  async createBrand(@Body() dto: CreateBrandDto, @Req() req: Request) {
+  async createBrand(
+    @Body() dto: CreateBrandDto,
+    @Req() req: Request,
+  ): Promise<unknown> {
     const userId = (req.user as { id: number }).id;
     return await this.productService.createBrand(dto, userId);
   }
@@ -287,7 +300,7 @@ export class ProductController {
   async reviewBrand(
     @Param("id", ParseIntPipe) id: number,
     @Body() dto: ReviewBrandDto,
-  ) {
+  ): Promise<unknown> {
     return await this.productService.reviewBrand(id, dto);
   }
 
@@ -297,7 +310,7 @@ export class ProductController {
   @ApiParam({ name: "id", description: "Brand ID", type: Number })
   @ApiResponse({ status: 200, description: "Brand retrieved successfully." })
   @ApiResponse({ status: 404, description: "Brand not found." })
-  async getBrandById(@Param("id", ParseIntPipe) id: number) {
+  async getBrandById(@Param("id", ParseIntPipe) id: number): Promise<unknown> {
     return await this.productService.getBrandById(id);
   }
 
@@ -312,7 +325,7 @@ export class ProductController {
     status: 200,
     description: "Categories retrieved successfully.",
   })
-  async getAllCategories() {
+  async getAllCategories(): Promise<unknown> {
     return await this.productService.getAllCategories();
   }
 
@@ -324,7 +337,7 @@ export class ProductController {
     description: "Pending categories retrieved successfully.",
   })
   @ApiResponse({ status: 403, description: "Forbidden." })
-  async getPendingCategories() {
+  async getPendingCategories(): Promise<unknown> {
     return await this.productService.getPendingCategories();
   }
 
@@ -340,7 +353,10 @@ export class ProductController {
     status: 409,
     description: "Conflict - category already exists or is pending review.",
   })
-  async createCategory(@Body() dto: CreateCategoryDto, @Req() req: Request) {
+  async createCategory(
+    @Body() dto: CreateCategoryDto,
+    @Req() req: Request,
+  ): Promise<unknown> {
     const userId = (req.user as { id: number }).id;
     return await this.productService.createCategory(dto, userId);
   }
@@ -356,7 +372,7 @@ export class ProductController {
   async reviewCategory(
     @Param("id", ParseIntPipe) id: number,
     @Body() dto: ReviewCategoryDto,
-  ) {
+  ): Promise<unknown> {
     return await this.productService.reviewCategory(id, dto);
   }
 
@@ -366,7 +382,9 @@ export class ProductController {
   @ApiParam({ name: "id", description: "Category ID", type: Number })
   @ApiResponse({ status: 200, description: "Category retrieved successfully." })
   @ApiResponse({ status: 404, description: "Category not found." })
-  async getCategoryById(@Param("id", ParseIntPipe) id: number) {
+  async getCategoryById(
+    @Param("id", ParseIntPipe) id: number,
+  ): Promise<unknown> {
     return await this.productService.getCategoryById(id);
   }
 
@@ -440,7 +458,7 @@ export class ProductController {
   async getProductReviews(
     @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.PRODUCT)) id: string,
     @Query() query: ReviewQueryDto,
-  ) {
+  ): Promise<unknown> {
     return this.productService.getProductReviews(
       id,
       query.page ?? 1,
@@ -462,7 +480,7 @@ export class ProductController {
     @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.PRODUCT)) id: string,
     @Body() dto: CreateReviewDto,
     @Req() req: Request,
-  ) {
+  ): Promise<unknown> {
     const userId = (req as unknown as { user: { id: number } }).user.id;
     return this.productService.createProductReview(id, userId, dto);
   }
@@ -477,7 +495,7 @@ export class ProductController {
   async deleteProductReview(
     @Param("reviewId", ParseIntPipe) reviewId: number,
     @Req() req: Request,
-  ) {
+  ): Promise<void> {
     const userId = (req as unknown as { user: { id: number } }).user.id;
     await this.productService.deleteProductReview(reviewId, userId);
   }
@@ -494,7 +512,7 @@ export class ProductController {
   @ApiResponse({ status: 404, description: "Product not found." })
   async getSkusByProduct(
     @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.PRODUCT)) id: string,
-  ) {
+  ): Promise<unknown> {
     return await this.productService.getSkusByProduct(id);
   }
 
@@ -506,7 +524,7 @@ export class ProductController {
   @ApiResponse({ status: 404, description: "Product not found." })
   async getProductById(
     @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.PRODUCT)) id: string,
-  ) {
+  ): Promise<unknown> {
     return await this.productService.getProductById(id);
   }
 
@@ -529,7 +547,7 @@ export class ProductController {
     @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.PRODUCT)) id: string,
     @Body() dto: UpdateProductDto,
     @Req() req: Request,
-  ) {
+  ): Promise<unknown> {
     return await this.productService.updateProduct(
       id,
       dto,
@@ -551,7 +569,7 @@ export class ProductController {
   async deleteProduct(
     @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.PRODUCT)) id: string,
     @Req() req: Request,
-  ) {
+  ): Promise<unknown> {
     return await this.productService.deleteProduct(
       id,
       req.user?.id ?? 0,
@@ -572,7 +590,11 @@ export class ProductController {
     description: "Shop stats retrieved successfully.",
   })
   @ApiResponse({ status: 401, description: "Unauthorized." })
-  async getShopStats(@Req() req: Request) {
+  async getShopStats(@Req() req: Request): Promise<{
+    productCount: number;
+    totalStock: number;
+    lowStockCount: number;
+  }> {
     const sellerId = req.user?.id ?? 0;
     return await this.productService.getShopStats(sellerId);
   }
@@ -586,7 +608,7 @@ export class ProductController {
   })
   async getAllProductsWithInventory(
     @Query(ValidationPipe) query: GetProductsQueryDto,
-  ) {
+  ): Promise<PaginatedResponse<ProductWithInventory>> {
     return await this.productService.getAllProductsWithInventory(query);
   }
 
@@ -601,7 +623,7 @@ export class ProductController {
   @ApiResponse({ status: 404, description: "Product not found." })
   async getProductWithInventoryById(
     @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.PRODUCT)) id: string,
-  ) {
+  ): Promise<ProductWithInventory | null> {
     return await this.productService.getProductWithInventoryById(id);
   }
 
@@ -622,7 +644,9 @@ export class ProductController {
     status: 400,
     description: "Bad Request - Invalid product IDs.",
   })
-  async getProductsWithInventory(@Body() body: GetProductsWithInventoryDto) {
+  async getProductsWithInventory(
+    @Body() body: GetProductsWithInventoryDto,
+  ): Promise<ProductWithInventory[]> {
     return await this.productService.getProductsWithInventory([
       ...new Set(body.productIds),
     ]);
@@ -645,7 +669,7 @@ export class ProductController {
   async checkProductStock(
     @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.PRODUCT)) id: string,
     @Query("quantity", ParseIntPipe) quantity: number,
-  ) {
+  ): Promise<unknown> {
     return await this.productService.checkProductStock(id, quantity);
   }
 }

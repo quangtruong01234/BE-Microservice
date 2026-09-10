@@ -1377,7 +1377,12 @@ export class ProductService {
     }
   }
 
-  private enrichInventoryData(inventory: InventoryData) {
+  private enrichInventoryData(inventory: InventoryData): InventoryData & {
+    totalStock: number;
+    isLowStock: boolean;
+    stockStatus: string;
+    lastUpdated: InventoryData["updatedAt"];
+  } {
     return {
       ...inventory,
       totalStock:

@@ -62,7 +62,7 @@ export class UserController {
   @ApiBody({ type: RegisterUserDto })
   @ApiResponse({ status: 201, description: "User registered successfully." })
   @ApiResponse({ status: 400, description: "Bad Request." })
-  async register(@Body() dto: RegisterUserDto) {
+  async register(@Body() dto: RegisterUserDto): Promise<unknown> {
     return await this.userService.register(dto);
   }
 
@@ -100,7 +100,7 @@ export class UserController {
       "Generic acknowledgement (does not reveal whether the email exists).",
   })
   @ApiResponse({ status: 400, description: "Bad Request." })
-  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+  async forgotPassword(@Body() dto: ForgotPasswordDto): Promise<unknown> {
     return await this.userService.forgotPassword(dto);
   }
 
@@ -116,7 +116,7 @@ export class UserController {
     status: 400,
     description: "Invalid or expired verification code.",
   })
-  async resetPassword(@Body() dto: ResetPasswordDto) {
+  async resetPassword(@Body() dto: ResetPasswordDto): Promise<unknown> {
     return await this.userService.resetPassword(dto);
   }
 
@@ -143,7 +143,7 @@ export class UserController {
   async changePassword(
     @Body() dto: ChangePasswordDto,
     @Request() req: { user: { id: number } },
-  ) {
+  ): Promise<unknown> {
     return this.userService.changePassword(req.user.id, dto);
   }
 
@@ -151,7 +151,7 @@ export class UserController {
   @Public()
   @ApiOperation({ summary: "Logout — clears access_token cookie" })
   @ApiResponse({ status: 200, description: "Logged out." })
-  logout(@Res({ passthrough: true }) res: Response) {
+  logout(@Res({ passthrough: true }) res: Response): { message: string } {
     res.clearCookie(AUTH_COOKIE_NAME, getClearAuthCookieOptions());
     return { message: AUTH_MESSAGE.LOGOUT_SUCCESS };
   }
@@ -161,7 +161,9 @@ export class UserController {
   @ApiOperation({ summary: "Get paginated users (admin only)" })
   @ApiResponse({ status: 200, description: "Paginated user list." })
   @ApiResponse({ status: 403, description: "Forbidden." })
-  async getUsersPaginated(@Query(ValidationPipe) query: ListUsersQueryDto) {
+  async getUsersPaginated(
+    @Query(ValidationPipe) query: ListUsersQueryDto,
+  ): Promise<unknown> {
     return await this.userService.getUsersPaginated(
       query.page ?? 1,
       query.limit ?? 20,
@@ -180,7 +182,7 @@ export class UserController {
   @ApiResponse({ status: 401, description: "Unauthorized." })
   async getFeaturedSellers(
     @Query(ValidationPipe) query: FeaturedSellersQueryDto,
-  ) {
+  ): Promise<unknown> {
     return this.userService.getFeaturedSellers(query.limit ?? 5);
   }
 
@@ -189,7 +191,7 @@ export class UserController {
   @ApiOperation({ summary: "Get current authenticated user" })
   @ApiResponse({ status: 200, description: "Current user profile." })
   @ApiResponse({ status: 401, description: "Unauthorized." })
-  async getMe(@Request() req: { user: { id: number } }) {
+  async getMe(@Request() req: { user: { id: number } }): Promise<unknown> {
     return this.userService.getMe(req.user.id);
   }
 
@@ -198,7 +200,9 @@ export class UserController {
   @ApiOperation({ summary: "List the current user's saved shipping addresses" })
   @ApiResponse({ status: 200, description: "Array of saved addresses." })
   @ApiResponse({ status: 401, description: "Unauthorized." })
-  async listAddresses(@Request() req: { user: { id: number } }) {
+  async listAddresses(
+    @Request() req: { user: { id: number } },
+  ): Promise<unknown> {
     return this.userService.listAddresses(req.user.id);
   }
 
@@ -212,7 +216,7 @@ export class UserController {
   async createAddress(
     @Body() dto: CreateUserAddressDto,
     @Request() req: { user: { id: number } },
-  ) {
+  ): Promise<unknown> {
     return this.userService.createAddress(req.user.id, dto);
   }
 
@@ -228,7 +232,7 @@ export class UserController {
     addressId: string,
     @Body() dto: UpdateUserAddressDto,
     @Request() req: { user: { id: number } },
-  ) {
+  ): Promise<unknown> {
     return this.userService.updateAddress(req.user.id, addressId, dto);
   }
 
@@ -244,7 +248,7 @@ export class UserController {
     @Param("addressId", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.ADDRESS))
     addressId: string,
     @Request() req: { user: { id: number } },
-  ) {
+  ): Promise<unknown> {
     return this.userService.setDefaultAddress(req.user.id, addressId);
   }
 
@@ -258,7 +262,7 @@ export class UserController {
     @Param("addressId", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.ADDRESS))
     addressId: string,
     @Request() req: { user: { id: number } },
-  ) {
+  ): Promise<unknown> {
     return this.userService.deleteAddress(req.user.id, addressId);
   }
 
@@ -269,7 +273,7 @@ export class UserController {
   @ApiResponse({ status: 404, description: "User not found." })
   async getUserInfo(
     @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.USER)) id: string,
-  ) {
+  ): Promise<unknown> {
     return await this.userService.getUserInfo(id);
   }
 
@@ -285,7 +289,7 @@ export class UserController {
     @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.USER)) id: string,
     @Body() dto: UpdateUserGatewayDto,
     @Request() req: { user: { id: number } },
-  ) {
+  ): Promise<unknown> {
     return this.userService.updateUser(req.user.id, id, dto);
   }
 }

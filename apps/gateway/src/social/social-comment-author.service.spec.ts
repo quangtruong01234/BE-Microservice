@@ -24,7 +24,7 @@ describe("SocialGatewayService comment authors", () => {
   ];
 
   /** Route the social client by message pattern; unknown patterns must fail. */
-  const routeSocial = (payload: unknown) => {
+  const routeSocial = (payload: unknown): void => {
     socialClient.send.mockImplementation((pattern: string) => {
       if (pattern === SOCIAL_MESSAGE_PATTERN.GET_POST_PUBLIC_IDS_BY_IDS) {
         return of([{ id: 5, publicId: "post_5" }]);
