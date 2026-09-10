@@ -12,7 +12,13 @@ import {
   RmqContext,
 } from "@nestjs/microservices";
 import { OrdersService } from "./orders.service";
-import type { AnalyticsQuery, OrderAnalytics } from "./orders.types";
+import type {
+  AnalyticsQuery,
+  OrderAnalytics,
+  ReturnRequestView,
+  AvailableVoucher,
+  VoucherPreview,
+} from "./orders.types";
 import { EVENT } from "@app/common/constants/event";
 import {
   HttpToRpcExceptionFilter,
@@ -23,7 +29,7 @@ import {
 import { ORDER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { Order, OrderStatus } from "./entity/order.entity";
 import { ReturnRequestStatus } from "./entity/order-return-request.entity";
-import { VoucherDiscountType } from "./entity/voucher.entity";
+import { VoucherDiscountType, Voucher } from "./entity/voucher.entity";
 import { GhnResolvedAddress } from "./ghn/ghn.types";
 
 // Build the exact GHN location pair from a checkout payload only when both the
@@ -69,7 +75,7 @@ export class OrdersController {
       }[];
       voucherCode?: string | null;
     },
-  ) {
+  ): Promise<Order> {
     this.logger.log(
       `[ORDERS] Received create_order request with payload: ${JSON.stringify(payload)}`,
     );
@@ -126,7 +132,7 @@ export class OrdersController {
       status?: OrderStatus[];
       q?: string;
     },
-  ) {
+  ): Promise<PaginatedResponse<Order>> {
     return await this.ordersService.getOrdersByUser(
       payload.userId,
       payload.page,
@@ -283,7 +289,9 @@ export class OrdersController {
   }
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.GET_ORDER_BY_ID)
-  async getOrderById(@Payload() orderId: number | string) {
+  async getOrderById(
+    @Payload() orderId: number | string,
+  ): Promise<Order | null> {
     const resolvedOrderId = await this.ordersService.resolveOrderId(orderId);
     return await this.ordersService.getOrderById(resolvedOrderId);
   }
@@ -303,7 +311,7 @@ export class OrdersController {
       callerId: number;
       callerRole: string;
     },
-  ) {
+  ): Promise<Order> {
     const orderId = await this.ordersService.resolveOrderId(payload.orderId);
     return await this.ordersService.cancelOrder(
       orderId,
@@ -476,7 +484,7 @@ export class OrdersController {
       userId: number;
       reason: string;
     },
-  ) {
+  ): Promise<ReturnRequestView> {
     const orderId = await this.ordersService.resolveOrderId(data.orderId);
     return this.ordersService.requestReturn(orderId, data.userId, data.reason);
   }
@@ -484,7 +492,7 @@ export class OrdersController {
   @MessagePattern(ORDER_MESSAGE_PATTERN.RETURN_REQUEST_LIST_USER)
   async handleGetUserReturnRequests(
     @Payload() data: { userId: number; page: number; limit: number },
-  ) {
+  ): Promise<PaginatedResponse<ReturnRequestView>> {
     return this.ordersService.getUserReturnRequests(
       data.userId,
       data.page,
@@ -502,7 +510,7 @@ export class OrdersController {
       limit: number;
       status?: ReturnRequestStatus;
     },
-  ) {
+  ): Promise<PaginatedResponse<ReturnRequestView>> {
     return this.ordersService.getManagedReturnRequests(
       data.sellerId,
       data.isAdmin,
@@ -522,7 +530,7 @@ export class OrdersController {
       decision: "approve" | "reject";
       rejectReason?: string;
     },
-  ) {
+  ): Promise<ReturnRequestView> {
     return this.ordersService.reviewReturnRequest(
       data.requestId,
       data.reviewerId,
@@ -541,7 +549,7 @@ export class OrdersController {
       itemsTotal: number;
       sellerId?: number | null;
     },
-  ) {
+  ): Promise<VoucherPreview> {
     return this.ordersService.previewVoucher(
       data.userId,
       data.code,
@@ -557,7 +565,7 @@ export class OrdersController {
       userId: number;
       items: Array<{ price: number; quantity: number; sellerId: number }>;
     },
-  ) {
+  ): Promise<{ itemsTotal: number; vouchers: AvailableVoucher[] }> {
     return this.ordersService.listAvailableVouchers(data.userId, data.items);
   }
 
@@ -578,7 +586,7 @@ export class OrdersController {
       isActive?: boolean;
       sellerId?: number | null;
     },
-  ) {
+  ): Promise<Voucher> {
     return this.ordersService.createVoucher(data);
   }
 
@@ -590,7 +598,7 @@ export class OrdersController {
       limit: number;
       sellerId?: number | null;
     },
-  ) {
+  ): Promise<PaginatedResponse<Voucher>> {
     return this.ordersService.listVouchers(
       data.page,
       data.limit,
@@ -613,7 +621,7 @@ export class OrdersController {
       expiresAt?: string | null;
       isActive?: boolean;
     },
-  ) {
+  ): Promise<Voucher> {
     const { id, sellerId, ...changes } = data;
     return this.ordersService.updateVoucher(id, changes, sellerId ?? null);
   }
@@ -621,7 +629,7 @@ export class OrdersController {
   @MessagePattern(ORDER_MESSAGE_PATTERN.VOUCHER_DEACTIVATE)
   async handleDeactivateVoucher(
     @Payload() data: { id: number; sellerId?: number | null },
-  ) {
+  ): Promise<Voucher> {
     return this.ordersService.deactivateVoucher(data.id, data.sellerId ?? null);
   }
 
@@ -629,7 +637,7 @@ export class OrdersController {
   async handlePaymentCompleted(
     @Payload() data: { orderId: number },
     @Ctx() context: RmqContext,
-  ) {
+  ): Promise<void> {
     const orderId = data.orderId;
     this.logger.log(`[ORDERS] payment_completed received for order ${orderId}`);
     try {

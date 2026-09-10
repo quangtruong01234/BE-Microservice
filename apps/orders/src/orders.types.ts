@@ -192,6 +192,15 @@ export interface VoucherEvaluation {
   amountToAdd: number;
 }
 
+/** What a single-seller voucher preview answers with. */
+export interface VoucherPreview {
+  code: string;
+  discountType: VoucherDiscountType;
+  discountAmount: number;
+  itemsTotal: number;
+  finalItemsTotal: number;
+}
+
 /** One row of the buyer-facing basket voucher list. */
 export interface AvailableVoucher {
   code: string;

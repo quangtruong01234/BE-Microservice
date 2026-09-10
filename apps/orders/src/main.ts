@@ -7,7 +7,7 @@ import { PORT_TCP, TCP_HOST } from "libs/constant/port-tcp.constant";
 import { RmqService } from "@app/common";
 import { EXCHANGE } from "@app/common/constants/exchange";
 
-async function bootstrap() {
+async function bootstrap(): Promise<void> {
   dotenv.config({ path: "./local/nodeA/.env" });
 
   const app = await NestFactory.create(OrdersModule);

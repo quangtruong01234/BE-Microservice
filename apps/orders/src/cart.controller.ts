@@ -1,8 +1,9 @@
 import { Controller, Logger, UseFilters } from "@nestjs/common";
 import { MessagePattern, Payload } from "@nestjs/microservices";
 import { HttpToRpcExceptionFilter } from "@app/common";
-import { CartService } from "./cart.service";
+import { CartService, EmptyCart } from "./cart.service";
 import { CART_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
+import { Cart } from "./entity/cart.entity";
 
 @UseFilters(new HttpToRpcExceptionFilter())
 @Controller()
@@ -21,7 +22,7 @@ export class CartController {
       skuTierIdx?: string | null;
       quantity: number;
     },
-  ) {
+  ): Promise<Cart | EmptyCart> {
     this.logger.log(
       `[CART] addItem userId=${payload.userId} productId=${payload.productId}`,
     );
@@ -29,7 +30,9 @@ export class CartController {
   }
 
   @MessagePattern(CART_MESSAGE_PATTERN.CART_GET)
-  async getCart(@Payload() payload: { userId: number }) {
+  async getCart(
+    @Payload() payload: { userId: number },
+  ): Promise<Cart | EmptyCart> {
     return this.cartService.getCart(payload.userId);
   }
 

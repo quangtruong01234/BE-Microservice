@@ -92,6 +92,7 @@ import {
   AvailableVoucher,
   VoucherEvaluation,
   VoucherEvaluationContext,
+  VoucherPreview,
 } from "./orders.types";
 
 /**
@@ -925,13 +926,7 @@ export class OrdersService {
     code: string,
     itemsTotal: number,
     sellerId?: number | null,
-  ): Promise<{
-    code: string;
-    discountType: VoucherDiscountType;
-    discountAmount: number;
-    itemsTotal: number;
-    finalItemsTotal: number;
-  }> {
+  ): Promise<VoucherPreview> {
     // The gateway keeps this endpoint single-seller, so the seller's slice is
     // the whole subtotal. An absent sellerId leaves the map empty, which makes
     // every shop voucher WRONG_SELLER — a platform voucher still previews.
