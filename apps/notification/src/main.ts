@@ -6,7 +6,7 @@ import { RmqService } from "@app/common";
 import { EXCHANGE } from "@app/common/constants/exchange";
 import { NotificationModule } from "./notification.module";
 
-async function bootstrap() {
+async function bootstrap(): Promise<void> {
   dotenv.config({ path: "./local/nodeA/.env" });
 
   const app = await NestFactory.create(NotificationModule);
