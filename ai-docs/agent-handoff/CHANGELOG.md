@@ -6,6 +6,35 @@
 
 ## Completed Milestones
 
+- **PRODTEST-0806 — the prod API sweep and its nine defects: CLOSED (2026-09-10).**
+  The 2026-08-06 full workflow sweep of all 141 gateway routes on prod
+  (auth → catalog → moderation → cart → checkout → GHN → fulfilment → returns →
+  social → chat/WS → notifications → admin → callbacks) passed functionally and
+  produced nine defects, none of them blockers. All nine are now resolved or
+  formally declined; the item is closed and removed from `snapshot.md`:
+  - Duplicate register → 500, role-entity leak, inconsistent pagination — fixed
+    and verified on prod 2026-08-10 (`b0e982d`); see the 2026-08-06 entry below.
+  - #1 opaque GHN 500/502 → **RESIL-01** (error mapping + circuit breaker),
+    deployed 2026-08-12.
+  - #2 order create swallowing a waybill failure → **GHN-CREATE-01**, 2026-08-13.
+    A GHN *outage* still fails open (fee 0, order placed) and `readyToShip`
+    re-creates the missing waybill — deliberate.
+  - #3 "our address proxy yields unshippable selections" → half fixed by
+    **GHN-WARD-01** (retired `Status: 3` wards filtered out of
+    `GET /api/shipping/wards`); the other half is **GHN-MSG-01**, GHN-side and
+    not ours to fix. Details and the do-NOT-do warning live in
+    `known-behaviors.md`.
+  - #4 numeric internal ids leaking on PUBID domains → **IDLEAK-01** (2026-08-13)
+    and **IDLEAK-02** (class C, released 2026-08-16, `6bcb6da..44d976e`). Nothing
+    left to implement; the class-C hold is over.
+  - #5 envelope inconsistency → **ENVELOPE-01**, 2026-08-13.
+  - #6 `@IsEnum([...])` with array literals → **ENUM-MSG-01**, 2026-08-13.
+  - Observations that were never defects: `GET /api/cart` → `data:null` closed by
+    SHAPE-01; `shippingFee: 0` is the GHN dev gateway (`ops-runtime.md` → GHN);
+    `/ready` reporting `database:not_configured` / `rabbitmq:not_checked` — so
+    readiness stays green even if RMQ is down — remains true and is the only
+    piece of this item still worth acting on, tracked in `snapshot.md`.
+
 - **RESET-EXHAUST-01 — `reset-password` now says when the code is DEAD, not just
   "invalid" (2026-09-08). No migration, additive, release class B.** Second use
   of the CHG-PW-02 `errorCode` channel, filed by the FE agent on the MAIL-UI-01

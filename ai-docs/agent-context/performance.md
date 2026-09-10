@@ -4,6 +4,23 @@ These rules apply whenever code is **added or edited**, not only during a dedica
 Goal: write performant code by default so an audit finds little to fix.
 A change that improves perf but silently alters behaviour is a bug — see "Regression discipline" below.
 
+## The ceiling this deployment actually has
+
+**Aiven free tier is a hard wall at ≈76 DB connections ≈300 req/s across ALL
+services.** Any "handles N concurrent users" claim above that is unfounded. The
+per-service pool budget is already sized to fit under it (MySQL 20+16+16+6+4+6 =
+68 < 76; PostgreSQL 5+4+3 = 12 < 20) — raising any pool without lowering another
+takes the whole system over the wall.
+
+`scripts/load/baseline.mjs` (autocannon; profiles `smoke|500|1k|5k`) is the
+measurement tool; recorded baselines live in its header. Post-SCALE-04: anon
+list 798 req/s, detail 1692 req/s, c=500 survives ~3.6% err, auth ~102 req/s.
+A dev-machine `GATEWAY_INSTANCES>1` cluster probe was noisy with no stable gain.
+
+SCALE-06 (re-measure behind nginx on a bigger VPS) is **CLOSED, will-not-do** —
+it needs infrastructure the project will not buy. Re-open only if the budget
+changes.
+
 ## Complexity budget
 
 - No hidden N+1. Any I/O call (TCP `.send()`, TypeORM query, Redis get) inside a `for` / `map` / `forEach` is a 🔴 smell — batch it.

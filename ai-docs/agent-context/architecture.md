@@ -52,6 +52,8 @@ async handleOrderCreated(data: OrderCreatedEvent): Promise<void> { ... }
 - **Constants-first**: every message pattern, queue name, and port number lives in `@app/constant` or `@app/common/src/constants/`.
 - **Node grouping**: Node A runs gateway + orders + user + product + social + notification + chat. Node B runs inventory + payments + rewards.
 - **Production schema control**: production must use explicit SQL migrations, not TypeORM `synchronize:true`; current migration runner is incremental-only and does not bootstrap an empty Aiven database.
+- **Hybrid TCP/RabbitMQ is settled (2026-06-30) — do NOT migrate everything to RabbitMQ.** TCP for commands/queries needing an immediate result (gateway reads, auth, checkout stock check/reserve/release/consume); RabbitMQ fanout for post-commit integration events (`order_created`, `payment_completed`, `order_canceled`, notification/rewards). Orders = lifecycle coordinator; Inventory = stock/reservation owner; Payments = payment-state owner. Reserved stock is consumed at COMPLETED; cancel/return releases it. Consumers stay idempotent via `orderId` / `reservationKey` / unique constraints.
+- **All TCP client registrations use `customClass: ResilientClientTCP`** (`libs/common/src/resilience/`), never `transport: Transport.TCP`. It reconnects-and-republishes an unsent packet (safe on writes), fails a send on an already-closed socket immediately instead of hanging out the caller's timeout, and sets TCP keep-alive.
 
 ## Run Commands
 

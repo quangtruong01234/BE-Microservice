@@ -128,8 +128,8 @@
   production run 2026-08-06**, sha `19309f6`):
   SSHes into the EC2 and repeats the proven manual sequence — `git reset --hard
   origin/main` → `npm ci` → `db:migrate:nodeA`+`nodeB` (always BEFORE restart;
-  migrations are additive) → `npm run build` → `pm2 flush` → `pm2 restart
-  ecosystem.config.js --env production` → `pm2 save` → poll
+  migrations are additive) → `npm run build` → `pm2 flush` → `pm2 startOrRestart
+  ecosystem.config.js --env production --update-env` → `pm2 save` → poll
   `http://127.0.0.1:3000/live` (10×5s). **Triggers on CI completion for `main`**
   (`workflow_run`; the job's `if:` drops runs whose CI conclusion is not
   `success`), so merging a PR into `main` releases. `workflow_dispatch` remains
@@ -139,9 +139,11 @@
   (reset + `npm ci` + build + restart + `/live`); the marker is deleted before
   `cd` on every run, so an early failure aborts loudly instead of resetting to a
   stale sha. Asserts Node major 22 on the box and sources `~/.nvm/nvm.sh`
-  (non-interactive SSH shell reads no login profile). A pure `pm2 restart` does
-  NOT refresh pm2's env snapshot — env changes still need manual `pm2 delete` +
-  `pm2 start`.
+  (non-interactive SSH shell reads no login profile). **Env changes need no
+  manual pm2 step** — the workflow's `startOrRestart … --update-env` re-reads
+  `ecosystem.config.js`, proven 2026-08-10 (see "Production runtime" above). It
+  is a plain `pm2 restart` that replays the spawn-time snapshot; the workflow
+  does not use one.
 - **CD box facts** (verified 2026-08-06): checkout is `/opt/trybuy/api` (NOT
   `~/MCR/api` — older notes are wrong), owned by `ubuntu`, which is also the
   user pm2 runs under, so the workflow's `pm2 restart` hits the right daemon.

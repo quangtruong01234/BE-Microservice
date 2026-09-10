@@ -15,6 +15,18 @@ references to converted domains (`userId`, `sellerId`, `productId`, `postId`,
 `commentId`, `actorId`, and similar fields) also use opaque ids at HTTP and
 WebSocket boundaries.
 
+A numeric id on a converted route param is a **400**. Internals stay numeric:
+PKs, FKs, TCP/RMQ payloads, and `req.user.id` from the JWT.
+
+Utils: `libs/common/src/public-id/public-id.util.ts` +
+`libs/constant/public-id.constant.ts`. Note the `@app/constant` alias is NOT
+declared in `tsconfig` — import as `libs/constant/...`.
+
+**Deliberately NOT converted** (do not "finish the job"): `order_items`,
+`product_skus`, `product_reviews`, `wishlist_items`, `cart_items`, `brands`,
+`categories`, vouchers (addressed by `code`), roles/resources, inventory,
+payments, `reward_points`, `shipping_history`, `voucher_redemptions`.
+
 ---
 
 ## Auth Zones

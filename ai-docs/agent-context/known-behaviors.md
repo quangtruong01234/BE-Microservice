@@ -959,7 +959,7 @@ out of the sentence into its own row. Do not fork it per event.
 ## Only ONE of the five reset-password rejections is told apart (RESET-EXHAUST-01, 2026-09-08)
 
 `POST /api/user/reset-password` answers `400 "Invalid or expired verification
-code"` for five different causes: wrong digits, expired after 10 minutes,
+code"` for five different causes: wrong digits, expired after the code TTL,
 unknown email, never requested a code, and **the code destroyed by the 5-attempt
 limit**. Only the last one carries `errorCode: "RESET_CODE_EXHAUSTED"`; the
 other four stay code-less, and `message` is identical in all five.
@@ -977,9 +977,9 @@ other four stay code-less, and `message` is identical in all five.
   `user:pwreset:exhausted:<userId>` is written when the limit trips and is
   checked BEFORE the code lookup — that ordering is the whole mechanism, do not
   move the check below it.
-- **The marker gets the FULL 600s code TTL, not the code's remaining TTL**, because
+- **The marker gets the FULL code TTL, not the code's remaining TTL**, because
   `CachedService` has no `ttl` read. So it can outlive the original code's own
-  expiry by up to ~10 minutes. Harmless: while it is set, the truthful answer is
+  expiry. Harmless: while it is set, the truthful answer is
   still "this code is dead, ask for a new one", and `forgotPassword` clears it
   the moment a new code is actually issued.
 - **A resend throttled by the 60s cooldown does NOT clear it.** The clear
@@ -992,3 +992,220 @@ other four stay code-less, and `message` is identical in all five.
 - **Redis down adds no new failure mode.** The marker read fails the same way
   the existing code read does; the endpoint degrades to the pre-change behaviour
   (a plain code-less 400), never to a 500.
+
+## The reset code lives 60 seconds, not 600 (RESET-TTL-01, 2026-09-09)
+
+`RESET-TTL-01` shrank the password-reset code TTL from 600s to **60s**. Two
+consequences that read like regressions but are not:
+
+- The exhausted-marker overhang described above is now at most a minute.
+- `RESET_CODE_EXHAUSTED` became a **rare** signal rather than a common one — the
+  code usually expires before anyone can get 5 wrong tries in, so most failures
+  land in the pooled code-less 400. Do not "restore" 600 because the exhausted
+  branch stopped showing up in testing.
+
+**Live on prod since 2026-09-10**, verified end-to-end with a real email. The
+class-C hold is closed: the storefront dropped the hardcoded "10 phút" and now
+lets the email state the lifetime, so the copy cannot drift from the constant
+again (`../.agent-local/release-gate.md` → `RESET-TTL-01`).
+
+## `change-password` revokes nothing (CHG-PW-01, 2026-09-08)
+
+`POST /api/user/change-password` deliberately does NOT revoke or rotate
+anything. The JWT is stateless with no blacklist, so issuing a new cookie would
+only refresh THIS session while every other device keeps its old token until it
+expires (5h, or 7d with `rememberMe`) — a false sense of "logged out
+everywhere". Changing that needs a token version/denylist, which is a separate
+decision.
+
+**State this plainly if asked:** after a password change, an attacker's stolen
+session is still live until its own expiry.
+
+Also deliberate:
+- A wrong `currentPassword` is a **401** (same class as `login()`). Since
+  CHG-PW-02 it is told apart from a dead-session 401 by `errorCode`, not by
+  `message`.
+- The change drops the pending `user:pwreset:code:*` / `attempts:*` Redis keys,
+  so an already-emailed reset code cannot be replayed afterwards.
+
+## `PATCH /api/products/:id` — `null` clears exactly six columns
+
+`null` clears only the six NULLABLE columns: `description`, `sku`, `brandId`,
+`sellerNotes`, `weight`, `imageUrls`. A `null` on any other field is a **400 by
+design**, not an oversight — those map to NOT NULL columns and the alternative
+is a 500 at the driver. See SHAPE-01 rule 3 in `conventions.md` for the general
+decorator rule (`@IsOptional()` for nullable, `@IsOptionalNotNull()` for NOT
+NULL).
+
+## The orders crons were never scheduled before 2026-08-13 (ORD-CRON-01)
+
+`apps/orders/src/main.ts` called neither `listen()` nor `init()`, so no NestJS
+lifecycle hook ran and **no `@Cron` in the orders service had ever fired**. The
+RESIL-02 fix added the missing `await app.init()`.
+
+Consequence, live on prod since the 2026-08-15 deploy: `sweepStaleReservations()`
+started running hourly for the first time with a backlog to clear (58 sweepable
+orders on DEV; prod count unknown). It cancels abandoned
+PENDING/CONFIRMED/PROCESSING orders with no GHN code older than
+`ORDER_STALE_RESERVATION_TTL_HOURS` (24) and releases their stock. Capped at 25
+orders/tick, so a backlog drains over hours rather than in one burst. Buyers of
+those orders get a cancel notification — expected, but it looked like a wave on
+the first day after the deploy. Do not re-diagnose that wave as a bug.
+
+Related, same fix: `init()` also started running `OrdersService.onModuleInit()`,
+whose eager `client.connect()` calls crashed the process when a peer was not
+listening yet — orders and product each refused to boot while the other was
+down. Both warmups are best-effort now (warn + lazy connect on first send).
+
+## Only `order_created` is durable; the rest are best-effort (OUTBOX-SCOPE-01)
+
+Every RMQ publish site in all 6 publishing services guards with the shared
+`isRmqPublisherLive()` (`libs/common/src/rmq/rmq-publisher.util.ts`), so a
+broker outage produces a log naming the dropped event instead of a silent no-op.
+Payments had NO guard at all before 2026-08-15 and now logs at **error** level,
+because a lost `payment_completed` leaves a paid order unflipped and needs
+manual reconciliation.
+
+What is unchanged and deliberate: only `order_created` is DURABLE (the RESIL-02
+outbox). The rest stay best-effort — their state-critical work already ran
+synchronously before the publish, so the events are notification-grade, and
+routing them through the outbox would risk duplicate notifications
+(`order.status_changed` has no idempotency key). **Do not re-open this as a
+silent-loss bug**; re-open only if one of those events becomes state-critical.
+
+## SHAPE-01 residuals (2026-08-26; hậu kiểm 2026-08-27)
+
+The four data-shape rules themselves live in `conventions.md` → SHAPE-01. What
+follows is what was deliberately NOT done, and the edges that surprised people:
+
+- **The empty-cart shape is `{id:null, userId, createdAt:null, updatedAt:null,
+  items:[]}`** — the SAME KEY SET as a real cart. The first cut omitted both
+  timestamps ("the row does not exist"); the FE pointed out that is one endpoint
+  with two shapes, which is exactly what rule 2 bans, and it was fixed.
+- **`POST /api/products/with-inventory/multiple` answers in DB order.**
+  `resolveProductIds` preserves INPUT order; `findProductsByIds` does not (plain
+  `IN`, no `ORDER BY`). Callers must key by id, not by position — verified
+  2026-08-27.
+- **A missing single relation still comes back `null`** (`inventory`, `brand`,
+  `author`), NOT `{}`. The FE asked for `{}` and it was declined: `{}` makes
+  "absent" indistinguishable from "present but blank", and `{}.name` is
+  `undefined`, which renders empty instead of tripping the caller's guard.
+- **`@IsOptionalNotNull()` was applied only where `null` provably 500s today.**
+  ~140 other `@IsOptional()` gateway DTO fields still accept a `null` and answer
+  200 — do NOT sweep them, tightening a passing call into a 400 is class C.
+  `POST /api/user/me/addresses {"isDefault":null}` stays a **201** for that exact
+  reason (create computes the flag), while the PATCH is a 400.
+
+## Batch product read — the product leg errors, the inventory leg degrades (BATCH-FAIL-01)
+
+On `POST /api/products/with-inventory/multiple`, a **product-service** failure is
+an error status, not `200 []`. That matters because `[]` has to keep meaning
+"the catalog resolved none of these ids", which is what makes SHAPE-01 rule 4
+(skip a stale id) safe to rely on.
+
+The **inventory** leg still degrades silently to `inventory: null` on an outage,
+deliberately: the product rows are the answer, stock is an enrichment, and
+`null` there is already part of the contract. So a client cannot distinguish "no
+inventory row" from "inventory service down" — that is on purpose, do not
+re-open it as a gap.
+
+Which error status: `502` unreachable, `408` timeout (an rxjs `TimeoutError` is
+NOT a transport error — don't grep the logs for a 502 that was never there).
+Since BATCH-STATUS-01, anything the product service did not explicitly declare
+is forced to `502` on **this one call site**
+(`handleError(..., { guessStatusFromMessage: false })`) so a DB error whose text
+says "not found" can no longer surface as a 404. Every other call site still
+uses the keyword matcher — deliberate, do not sweep it.
+
+## The seller/author embed no longer swallows a transport failure (ENRICH-FAIL-01)
+
+A seller/author that does not RESOLVE is still `user: null` / `author: null` —
+the user-service handlers return null or filter the row, they never throw. Only
+a transport/service failure now surfaces, as the usual 502/408.
+
+Residual, deliberate: a social **write** (`createPost`, like, follow, report)
+exposes its response through `exposeReferences`, so a user-service outage in
+that window turns a committed write into a 502 and a retry can duplicate it.
+That was already true of the sibling post-id/comment-id legs of the same
+`Promise.all`, which never swallowed theirs; the alternative is answering 200
+with every user id nulled.
+
+Untouched on purpose: `exposeSubmittedBy` still DROPS `submittedBy` on a
+user-service failure so the moderation queue stays usable — that field is
+decoration, not the answer.
+
+## Cancelling an order gives the voucher back (VOUCHER-CANCEL-01, 2026-08-26)
+
+`releaseVoucherRedemption()` deletes the `voucher_redemptions` row, decrements
+`used_count` and drops the Redis quota mirror on every cancel path.
+
+Residuals, deliberate:
+- A **returned** order reaches CANCELED through `applyGhnStatus`, so a return
+  also gives the voucher back.
+- The release is non-fatal: if it throws, the cancel still succeeds and the
+  counter stays pessimistically high (the same tolerated state as
+  VOUCHER-CONC-01).
+- **Cancel-farming a limited code is now possible by design.** The alternative
+  was permanently burning a slot for an order that was never fulfilled.
+
+## A loosening voucher edit cannot be walked back (VOUCHER-EDIT-01, 2026-08-26)
+
+On a REDEEMED voucher only LOOSENING is allowed (`isStricterCap()` in
+`orders.service.ts`); an untouched voucher edits freely. So the reverse of a
+loosening edit is by definition a tightening, which the same rule 400s: bump
+`usageLimit` 3 → 20 by mistake and the only remedy is deactivate + reissue (the
+FE has been told to confirm before widening).
+
+Deliberate — the alternative is letting a shop tighten the rules of a campaign
+buyers are already playing.
+
+Also deliberate: an empty `{}` body is a **200 no-op**, and `expiresAt` before
+`startsAt` is still accepted, exactly as on create. `code` / `discountType` /
+`discountValue` are absent from `UpdateVoucherDto` on purpose — immutable, so
+the gateway whitelist 400s them before orders is reached. Changing `usageLimit`
+drops the VOUCHER-CONC-01 Redis quota key so the next claim re-seeds instead of
+enforcing the old cap for up to 300s.
+
+## Shop-voucher residuals (VOUCHER-SHOP-01, deliberate)
+
+- The admin `sellerId` on `POST /api/order/admin/vouchers` is only checked to be
+  an EXISTING user (404 otherwise), **not** a `shop`-role one — assigning it to
+  a buyer just yields a voucher no basket ever matches.
+- `GET /api/order/vouchers/available` caps at 50 vouchers and is uncached (it
+  prices against the live basket).
+- A shop's 403 on another shop's voucher carries NO code in the message, on
+  purpose — otherwise walking numeric voucher ids harvests other shops' codes.
+- An explicit `sellerId: null` on voucher create is a **platform voucher**, not a
+  `404 User not found`.
+
+## 12 of 19 Quận 8 wards cannot be ordered to (GHN-MSG-01, prod, 2026-08-26)
+
+Probing all 19 wards that `GET /api/shipping/wards?districtId=1450` returns
+against `POST /api/order/shipping-fee` on prod: only **7 quote a fee**.
+Deterministic 400s, no 503 anywhere. Two distinct causes:
+
+- `910376` / `910375` / `910374` (Rạch Ông, Hưng Phú, Xóm Củi — the 2025
+  merged-ward ids) → `phường/xã người nhận không còn hoạt động`. **FIXED by
+  GHN-WARD-01**: GHN's own ward payload carries `Status` (1 = live, 3 = retired)
+  and these three are the only `Status: 3` rows, so the endpoint filters them
+  out server-side at zero extra GHN calls. `?districtId=1450` returns 16 wards.
+- `20801`,`20802`,`20803`,`20808`..`20813` → `Lỗi hệ thống - không lấy được
+  thông tin kho`. **NOT ours to fix.** These are `Status: 1`, i.e.
+  indistinguishable from a good ward. Calling GHN directly ruled out every
+  variable on our side (`service_type_id` 2 and 5, explicit
+  `from_district_id`/`from_ward_code`, 5kg parcel — all fail identically; the
+  shop record is healthy and `available-services` offers both services for the
+  lane). What DID change: the buyer now gets
+  `GHN_MESSAGE.DESTINATION_NOT_SERVICEABLE` instead of GHN's internal system
+  error.
+
+**Do NOT "fix" the second half by quoting from `/shipping-order/fee`**, which
+answers 200 for those wards: `create` fails with the same warehouse error, so
+that would just re-create the GHN-CREATE-01 bug (an unshippable order booked at
+fee 0).
+
+This is live on prod, not a dev-only quirk — prod points at the same
+`dev-online-gateway` shop `200481`. Re-probe once real GHN credentials exist;
+only if it persists is a per-district shippable-ward cache built from preview
+probes worth considering. Known-good pair for any manual prod test: district
+`1450` + ward `20816`.
