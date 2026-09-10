@@ -1,9 +1,10 @@
-export type HealthStatus =
-  | "ok"
-  | "degraded"
-  | "error"
-  | "not_checked"
-  | "not_configured";
+/**
+ * There is deliberately no `not_checked` member. A dependency that is
+ * configured but never probed makes the whole readiness answer meaningless —
+ * that was the bug this union now prevents. A dependency is either absent
+ * (`not_configured`) or actually probed.
+ */
+export type HealthStatus = "ok" | "degraded" | "error" | "not_configured";
 
 export interface DependencyStatus {
   required: boolean;
