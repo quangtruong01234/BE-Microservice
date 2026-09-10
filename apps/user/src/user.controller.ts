@@ -10,6 +10,9 @@ import {
 } from "./dto/user-address.dto";
 import { USER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { USER_MESSAGE } from "libs/constant/response-message.constant";
+import { UserAddress } from "./entity/user-address.entity";
+import { User } from "./entity/user.entity";
+import { SafeUser } from "./user.types";
 
 @Controller()
 export class UserController {
@@ -33,7 +36,7 @@ export class UserController {
   }
 
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.REGISTER_USER })
-  async register(@Payload() payload: RegisterUserDto) {
+  async register(@Payload() payload: RegisterUserDto): Promise<SafeUser> {
     return await this.userService.register(payload);
   }
 
@@ -93,14 +96,16 @@ export class UserController {
   }
 
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.FORGOT_PASSWORD })
-  async forgotPassword(@Payload() payload: { email: string }) {
+  async forgotPassword(
+    @Payload() payload: { email: string },
+  ): Promise<{ message: string }> {
     return await this.userService.forgotPassword(payload.email);
   }
 
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.RESET_PASSWORD })
   async resetPassword(
     @Payload() payload: { email: string; code: string; newPassword: string },
-  ) {
+  ): Promise<{ success: true }> {
     return await this.userService.resetPassword(
       payload.email,
       payload.code,
@@ -118,7 +123,7 @@ export class UserController {
       currentPassword: string;
       newPassword: string;
     },
-  ) {
+  ): Promise<{ success: true }> {
     return await this.userService.changePassword(
       payload.userId,
       payload.currentPassword,
@@ -127,7 +132,7 @@ export class UserController {
   }
 
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.GET_ME })
-  async getMe(@Payload() data: { userId: number }) {
+  async getMe(@Payload() data: { userId: number }): Promise<SafeUser> {
     return this.userService.getMe(data.userId);
   }
 
@@ -142,7 +147,7 @@ export class UserController {
       targetId?: number | string;
       dto: UpdateUserDto;
     },
-  ) {
+  ): Promise<User> {
     if (data.targetId !== undefined) {
       const resolvedTargetId = await this.userService.resolveUserId(
         data.targetId,
@@ -155,14 +160,16 @@ export class UserController {
   }
 
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.ADDRESS_LIST })
-  async listAddresses(@Payload() data: { userId: number }) {
+  async listAddresses(
+    @Payload() data: { userId: number },
+  ): Promise<UserAddress[]> {
     return this.userService.listAddresses(data.userId);
   }
 
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.ADDRESS_CREATE })
   async createAddress(
     @Payload() data: { userId: number; dto: CreateUserAddressDto },
-  ) {
+  ): Promise<UserAddress> {
     return this.userService.createAddress(data.userId, data.dto);
   }
 
@@ -174,7 +181,7 @@ export class UserController {
       addressId: number | string;
       dto: UpdateUserAddressDto;
     },
-  ) {
+  ): Promise<UserAddress> {
     return this.userService.updateAddress(
       data.userId,
       data.addressId,
@@ -185,14 +192,14 @@ export class UserController {
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.ADDRESS_DELETE })
   async deleteAddress(
     @Payload() data: { userId: number; addressId: number | string },
-  ) {
+  ): Promise<{ success: true }> {
     return this.userService.deleteAddress(data.userId, data.addressId);
   }
 
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.ADDRESS_SET_DEFAULT })
   async setDefaultAddress(
     @Payload() data: { userId: number; addressId: number | string },
-  ) {
+  ): Promise<UserAddress> {
     return this.userService.setDefaultAddress(data.userId, data.addressId);
   }
 }

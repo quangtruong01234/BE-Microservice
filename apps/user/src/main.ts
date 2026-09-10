@@ -5,7 +5,7 @@ import * as dotenv from "dotenv";
 import { PORT_TCP, TCP_HOST } from "libs/constant/port-tcp.constant";
 import { AllRpcExceptionFilter } from "./filters/rpc-exception.filter";
 
-async function bootstrap() {
+async function bootstrap(): Promise<void> {
   dotenv.config();
   const app = await NestFactory.createMicroservice<MicroserviceOptions>(
     UserModule,

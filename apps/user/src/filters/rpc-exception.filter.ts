@@ -6,6 +6,7 @@ import {
   Logger,
 } from "@nestjs/common";
 import { BaseRpcExceptionFilter, RpcException } from "@nestjs/microservices";
+import { Observable } from "rxjs";
 
 type ErrorLike = {
   constructor?: { name?: string };
@@ -17,7 +18,7 @@ type ErrorLike = {
 export class AllRpcExceptionFilter extends BaseRpcExceptionFilter {
   private readonly logger = new Logger(AllRpcExceptionFilter.name);
 
-  catch(exception: unknown, host: ArgumentsHost) {
+  catch(exception: unknown, host: ArgumentsHost): Observable<unknown> {
     const exc = exception as ErrorLike;
     this.logger.debug(
       `Handling exception: ${exc?.constructor?.name}`,
