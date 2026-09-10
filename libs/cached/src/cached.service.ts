@@ -5,12 +5,6 @@ import Redis from "ioredis";
 export class CachedService {
   constructor(@Inject("REDIS_CLIENT") private readonly redis: Redis) {}
 
-  async setFooBar() {
-    await this.redis.set("foo", "bar");
-    const result = await this.redis.get("foo");
-    console.log(result);
-  }
-
   async get(key: string): Promise<string | null> {
     return await this.redis.get(key);
   }
