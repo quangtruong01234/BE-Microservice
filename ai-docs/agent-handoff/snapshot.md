@@ -132,7 +132,9 @@ stolen session survives it), CHG-PW-02 (optional `errorCode`, survives the prod
 401 sanitizer), RESET-EXHAUST-01, RESET-TTL-01 (60s, live on prod since
 2026-09-10),
 MAIL-UI-01 (no copy button — email clients strip `<script>`; SMTP is :465 only),
-MAIL-UI-02 (order emails build their CTA from `FRONTEND_URL` entry [0]).
+MAIL-UI-02 (order emails build their CTA from `FRONTEND_URL` entry [0]),
+MAIL-BOUNCE-01 (mail to `@trybuy.com` / RFC-reserved domains is dropped before
+SMTP — it bounced back to the sender for 45h).
 
 **Ops / probes** — READY-01 (`/ready` now really probes RabbitMQ, but
 `required:false` so a broker outage stays a 200; `database:not_configured` is

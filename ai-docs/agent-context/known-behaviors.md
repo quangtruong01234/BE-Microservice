@@ -1239,3 +1239,38 @@ i.e. the health check would become the outage).
 
 `buildRabbitMqUrl()` returns `null` unless HOST/PORT/USER/PASS are all set, so a
 machine with no broker configured reports `not_configured` instead of flapping.
+
+## Mail to a fixture address is dropped before SMTP (MAIL-BOUNCE-01, 2026-09-11)
+
+`MailerService.sendMail()` refuses recipients whose domain cannot accept mail
+and logs the body instead — the same fallback the no-SMTP path already used. It
+returns `false`; it does not throw, so no caller's status code changes.
+
+**Why it exists.** A relay does not reject an undeliverable address at
+`RCPT TO` — Gmail answers `250`, queues the message, discovers the failure
+asynchronously, and then mails a bounce notice back to `SMTP_USER`, **retrying
+for ~45h**. So every reset code sent to a fixture account like
+`chgpw_test@trybuy.com` turned into a stream of "Delivery incomplete" mail in
+the project owner's own inbox. That is what the flood on 2026-09-10 was — not
+duplicate sends: the 60s `user:pwreset:cooldown:<id>` guard was working the
+whole time, and there is no retry on the gateway's TCP leg.
+
+- **The list is `DEFAULT_UNDELIVERABLE_MAIL_DOMAINS`** in
+  `libs/common/src/mailer/mailer.constants.ts`: `trybuy.com` (this project's
+  fixture domain — most of `test-accounts.md` uses it) plus the RFC 2606/6761
+  reserved names. Matching is exact **or** on a dot-suffix and case-insensitive,
+  so `foo.invalid` and `TryBuy.COM` are both covered.
+- **`MAIL_UNDELIVERABLE_DOMAINS` REPLACES the defaults, it does not extend
+  them.** Unset ⇒ defaults; `""` ⇒ guard off; a value ⇒ exactly that list, so
+  setting it to one domain un-blocks `trybuy.com`.
+- **An address with no `@` is passed through** to the SMTP path on purpose.
+  `@IsEmail` on the DTO already rejects that shape, and guessing here would
+  swallow mail on a string this method cannot judge.
+- **It is silent to the caller.** `forgotPassword` still answers the same
+  generic 201, because saying "that address is undeliverable" would be exactly
+  the account-existence oracle RESET-EXHAUST-01 avoids. The user service also
+  still writes the code to Redis first, so a fixture account can still be reset
+  by reading the code out of the log — which is how dev used it anyway.
+- Locked by `libs/common/src/mailer/mailer.service.spec.ts` (9 cases, no
+  sockets: SMTP is left unconfigured and the branch is identified by the warn
+  message, since both branches return `false`).

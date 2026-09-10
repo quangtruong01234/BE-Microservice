@@ -6,6 +6,44 @@
 
 ## Completed Milestones
 
+- **MAIL-BOUNCE-01 — reset mail to fixture addresses stopped flooding the
+  sender's inbox (2026-09-11). No migration, no contract change, release class
+  A.** Reported as "sao có nhiều mail gửi forget password thế", with a
+  screenshot showing a reset code sent to `chgpw_test@trybuy.com` followed by a
+  Gmail "Quá trình gửi không hoàn tất — sẽ thử lại sau 45 giờ" bounce.
+  - **The backend was not sending duplicates, and it was worth proving that
+    before changing anything.** `forgotPassword` claims
+    `user:pwreset:cooldown:<userId>` with `SET NX EX 60` before it generates a
+    code, `CachedService.setNx` returns `"OK"`-or-false with no fail-open
+    branch, the gateway's TCP leg has `timeout(WRITE)` and **no** `retry`
+    operator, and `@RateLimit({ limit: 5, ttl: 60 })` sits in front. Ceiling:
+    one mail per account per minute.
+  - **The real multiplier was outside the process.** A relay does not reject an
+    undeliverable recipient at `RCPT TO` — Gmail answers `250`, queues, fails
+    asynchronously, and mails a bounce notice back to `SMTP_USER`, retrying for
+    ~45h. `SMTP_USER` is the project owner's own Gmail, and most of
+    `test-accounts.md` uses the `@trybuy.com` fixture domain, which has no
+    mailbox. One dev reset request ⇒ a stream of delivery-failure mail.
+  - **Fix**: `MailerService.sendMail()` now drops the message before opening the
+    socket when the recipient's domain is on
+    `DEFAULT_UNDELIVERABLE_MAIL_DOMAINS` (`trybuy.com` + the RFC 2606/6761
+    reserved names), logging the body exactly like the existing no-SMTP
+    fallback and returning `false`. It never throws, and both callers
+    (`user.forgotPassword`, `notification.emailUser`) already ignored the
+    return value inside a try/catch — so no status code, anywhere, moved.
+    `MAIL_UNDELIVERABLE_DOMAINS` overrides the list (replaces, not extends);
+    `""` disables the guard.
+  - **Verified**: 9 new cases in `libs/common/src/mailer/mailer.service.spec.ts`
+    (fixture domain, reserved domain, dot-suffix, mixed case, deliverable
+    domain, no-`@` string, guard-off, override) — SMTP left unconfigured so no
+    test opens a socket, and the branch is identified by the warn message
+    because both branches return `false`. Full suite 418/418, `tsc --noEmit`
+    clean, `check:conventions` 354 files OK, build clean. End-to-end on local:
+    `POST /api/user/forgot-password` with `chgpw_test@trybuy.com` → the
+    unchanged generic `201`, with the mail dropped.
+  - Residual behaviour + the "REPLACES, not extends" trap: `known-behaviors.md`
+    → MAIL-BOUNCE-01.
+
 - **LINT-GATE-01 — the four housekeeping items that were quietly rotting the
   lint gate, all four fixed (2026-09-10). No migration, no FE-visible change,
   release class A.** Asked as "cần sửa gì không" → four items, all reaffirmed
