@@ -51,9 +51,12 @@ conclude a push is blocked.
 
 ### Worth a decision, not yet work
 
-- **`/ready` cannot fail.** It reports `database:not_configured` and
-  `rabbitmq:not_checked`, so readiness stays green even if RabbitMQ is down.
-  The last live remnant of the PRODTEST-0806 sweep.
+- **The 7 `apps/*/test/app.e2e-spec.ts` are dead scaffolds.** Identical untouched
+  Nest boilerplate asserting `GET / → "Hello World!"` against services that are
+  TCP-only and have no HTTP server. They never run (jest's `testRegex` wants a
+  literal `.spec.ts`; these are `-spec.ts`) and would fail if wired up. Either
+  delete them or write a real TCP e2e — leaving them is a test suite that lies
+  about its coverage.
 - **CD-03 — build-on-runner deploy variant.** Only if the EC2 gets
   smaller/slower (CI-built `dist/` rsync + `npm ci --omit=dev` + restart). Not
   needed while CD-01 works.
@@ -130,6 +133,10 @@ stolen session survives it), CHG-PW-02 (optional `errorCode`, survives the prod
 2026-09-10),
 MAIL-UI-01 (no copy button — email clients strip `<script>`; SMTP is :465 only),
 MAIL-UI-02 (order emails build their CTA from `FRONTEND_URL` entry [0]).
+
+**Ops / probes** — READY-01 (`/ready` now really probes RabbitMQ, but
+`required:false` so a broker outage stays a 200; `database:not_configured` is
+correct; the probe is cached 10s).
 
 **Messaging** — OUTBOX-SCOPE-01 (only `order_created` is durable; the rest are
 best-effort by design), REPORT-TOTAL-01 (orphan `post_reports` are the audit

@@ -6,6 +6,95 @@
 
 ## Completed Milestones
 
+- **LINT-GATE-01 — the four housekeeping items that were quietly rotting the
+  lint gate, all four fixed (2026-09-10). No migration, no FE-visible change,
+  release class A.** Asked as "cần sửa gì không" → four items, all reaffirmed
+  with "làm cả 4 đi". Each one was a check that *looked* green and was not.
+  - **1. `/ready` could not fail.** It reported `rabbitmq: not_checked`, so
+    readiness stayed green with the broker down — a probe that always says OK is
+    not a probe. `health.service.ts` now runs a real AMQP connect, cached for
+    `rabbitProbeTtlMs = 10_000` so a k8s/nginx poll cannot hammer the broker.
+    Three landmines handled: the probe chains `closeQuietly` onto the **original**
+    connect promise (chaining onto the cached one leaks a socket per waiter);
+    `closeQuietly` attaches an `'error'` no-op **before** `close()` (amqplib emits
+    on a half-dead connection and an unhandled `'error'` takes the process down);
+    and `buildRabbitMqUrl()` returns `null` unless HOST/PORT/USER/PASS are all
+    set, so a machine that genuinely has no broker reports `not_configured`
+    rather than flapping. RabbitMQ is `required: false` — the gateway serves
+    reads without it — so a broker outage now shows up in the body without
+    turning `/ready` into a 503 and pulling the box out of rotation. The
+    `not_checked` member is gone from the `HealthStatus` union, so the state
+    cannot come back by accident. Verified: `rabbitmq: {required: false, status: "ok"}`.
+  - **2. `npx eslint .` failed with 19 parsing errors.** Anyone running the bare
+    command got what looked like a broken checkout: `dist/**` was being
+    type-checked against the tsconfig that produced it, and the plain-JS tooling
+    (`ecosystem.config.js`, the postman generators, `scripts/*.mjs`) is
+    deliberately outside every tsconfig so the type-aware rules could not resolve
+    it. Fixed in `eslint.config.mjs`: an `ignores` block for generated output, a
+    `disableTypeChecked` block for `**/*.{js,mjs}` (they are real source and
+    worth the syntactic rules — `no-console` off, they are CLI tools), and
+    `sourceType: "commonjs"` for `ecosystem.config.js`, which pm2 `require()`s.
+  - **3. Three dead DTOs deleted** —
+    `apps/gateway/src/inventory/dto/stock-operations.dto.ts`, zero importers.
+  - **4. The 142 `explicit-function-return-type` + 7 `no-unsafe-argument`
+    warnings are gone, and both rules are now `error`.** This is the item worth
+    reading about, below.
+  - **How 142 sites were swept without hand-editing 44 files.** A throwaway
+    codemod over the TypeScript compiler API: for each site eslint reports, ask
+    `checker.getReturnTypeOfSignature` what tsc already infers and write that
+    down. Two things made it actually work. First, eslint anchors the rule
+    somewhere between the first non-decorator modifier and the method name, and
+    `ts.getTokenPosOfNode` lands on neither for a decorated method — matching a
+    *set* of candidate lines instead of guessing one took it from 14 to 75
+    resolvable sites. Second, the checker prints cross-file types as
+    `import("C:/…/product.entity").Product`; a resolver that turns those back
+    into a module specifier (`@app/common` for aliased libs, a bare package name
+    under `node_modules/`, a relative path otherwise — and `null`, i.e. leave it
+    alone, for anything that would need a banned `../../../` import) and merges
+    the name into the file's existing import block took it to 139. The codemod
+    **refuses to guess**: >120 chars of type text, or one identifier it cannot
+    resolve, and it reports the site instead of mangling it. 3 of 142 needed
+    hands.
+  - **What the sweep flushed out — the reason this was worth doing.** Writing a
+    return type down forces you to look at it:
+    - The 6 `apps/*/src/filters/rpc-exception.filter.ts` overrides infer Nest's
+      own `Observable<any>` — a `no-explicit-any` **error** the moment it is
+      written explicitly. Now `Observable<unknown>` (method bivariance keeps the
+      override legal).
+    - `orders.service.previewVoucher` and `orders.controller.handleValidateVoucher`
+      were about to get the same 5-field inline shape twice, which is how two
+      copies of a contract start drifting. Extracted as `VoucherPreview` in
+      `apps/orders/src/orders.types.ts`.
+    - `product.service.enrichInventoryData` was the one genuinely interesting
+      inference (an intersection adding `totalStock` / `isLowStock` /
+      `stockStatus` / `lastUpdated`); written by hand and then checked against a
+      live response field-for-field rather than trusted.
+  - **Both rules promoted to `error`**, and `conventions.md`'s table row rewritten
+    accordingly — a warn with a 142-item backlog is a rule nobody has to fix,
+    which is how it became a 142-item backlog. `no-unsafe-argument` came along
+    for free: the 7 hits were all `request(app.getHttpServer())` in e2e scaffolds
+    (Nest types `getHttpServer()` as `any`), fixed with `as App` from
+    `supertest/types`.
+  - **`scripts/check-conventions.mjs` also got a real robustness fix**, found by
+    the sweep: it feeds `git ls-files` straight to `readFileSync`, and git still
+    lists a file deleted-but-not-staged — so any normal mid-refactor tree (item 3
+    above, before staging) crashed the check with an ENOENT stack trace instead
+    of reporting a violation. Now filtered through `existsSync`.
+  - **Gate:** `tsc --noEmit` clean · `npx eslint .` exit 0, **zero** errors and
+    warnings · prettier clean · `check-conventions` OK (354 files) · `npx jest`
+    **40 suites / 409 tests** green · `npm run build` all 10 services. 54 files,
+    +971/−432. Runtime re-verified on the touched legs: product list, product
+    `with-inventory` (all four enrich fields correct), cart (full SHAPE-01 key
+    set), `user/me`, addresses, `inventory/product/:id`, `inventory/low-stock`,
+    `admin/orders`, `social/posts`, `voucher/validate` (exactly the five
+    `VoucherPreview` fields), `/ready`.
+  - **Known, not fixed:** the 7 `apps/*/test/app.e2e-spec.ts` files are identical
+    untouched Nest scaffolds asserting `GET / → "Hello World!"` against services
+    that are TCP-only and have no HTTP server. They never run — jest's
+    `testRegex` wants a literal `.spec.ts` and these are `-spec.ts` — and would
+    fail if they were ever wired up. Typed, not deleted, to stay inside the
+    approved scope.
+
 - **PRODTEST-0806 — the prod API sweep and its nine defects: CLOSED (2026-09-10).**
   The 2026-08-06 full workflow sweep of all 141 gateway routes on prod
   (auth → catalog → moderation → cart → checkout → GHN → fulfilment → returns →
@@ -31,9 +120,10 @@
   - #6 `@IsEnum([...])` with array literals → **ENUM-MSG-01**, 2026-08-13.
   - Observations that were never defects: `GET /api/cart` → `data:null` closed by
     SHAPE-01; `shippingFee: 0` is the GHN dev gateway (`ops-runtime.md` → GHN);
-    `/ready` reporting `database:not_configured` / `rabbitmq:not_checked` — so
-    readiness stays green even if RMQ is down — remains true and is the only
-    piece of this item still worth acting on, tracked in `snapshot.md`.
+    `/ready` reporting `rabbitmq:not_checked` — the last piece of this item still
+    worth acting on — was fixed by LINT-GATE-01 item 1 (2026-09-10), so the probe
+    can now genuinely fail. `database:not_configured` is correct and stays: the
+    gateway owns no DB.
 
 - **RESET-EXHAUST-01 — `reset-password` now says when the code is DEAD, not just
   "invalid" (2026-09-08). No migration, additive, release class B.** Second use

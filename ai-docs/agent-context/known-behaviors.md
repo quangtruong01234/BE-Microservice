@@ -1209,3 +1209,33 @@ This is live on prod, not a dev-only quirk — prod points at the same
 only if it persists is a per-district shippable-ward cache built from preview
 probes worth considering. Known-good pair for any manual prod test: district
 `1450` + ward `20816`.
+
+## `/ready` probes RabbitMQ but does not fail on it (READY-01, 2026-09-10)
+
+Before LINT-GATE-01 the readiness probe reported `rabbitmq: not_checked` and
+could therefore never fail. It now runs a real AMQP connect. Three deliberate
+choices survive, and each one looks like a bug if you don't know why:
+
+- **`required: false`.** A broker outage shows in `dependencies.rabbitmq.status`
+  but `/ready` still answers **200**. The gateway serves every read and most
+  writes without RabbitMQ (events are best-effort by design — see
+  OUTBOX-SCOPE-01), so 503-ing would pull a healthy box out of nginx/pm2
+  rotation over a degradation users cannot see. Only Redis is `required: true`.
+  Do NOT "fix" this by flipping the flag without also deciding what should
+  happen to traffic during a broker restart.
+- **`database: not_configured` is correct, permanently.** The gateway owns no
+  DB connection; every read goes over TCP to a service that does. There is
+  nothing to probe.
+- **The result is cached for 10s** (`rabbitProbeTtlMs`). A k8s/nginx poll every
+  second must not open a connection per poll. So the probe can lag a broker
+  failure by up to 10 seconds — that is the trade, not a race.
+
+Two amqplib landmines are handled in `probeRabbitMq`/`closeQuietly` and must not
+be "simplified" away: the close is chained onto the **original** connect promise
+(chaining onto the cached promise leaks one socket per concurrent waiter), and an
+`'error'` no-op handler is attached **before** `close()` (amqplib emits `'error'`
+on a half-dead connection, and an unhandled one takes the gateway process down —
+i.e. the health check would become the outage).
+
+`buildRabbitMqUrl()` returns `null` unless HOST/PORT/USER/PASS are all set, so a
+machine with no broker configured reports `not_configured` instead of flapping.

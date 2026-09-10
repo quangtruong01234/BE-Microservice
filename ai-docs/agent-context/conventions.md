@@ -15,7 +15,8 @@ and remember:
 | No implicit `any` from an untyped param | `noImplicitAny` |
 | Required DTO properties need `declare` | `strictPropertyInitialization` |
 | ES modules only — never `require()` | `@typescript-eslint/no-require-imports` (error) |
-| Explicit return types on methods | `@typescript-eslint/explicit-function-return-type` — **warn**, not error: 144 pre-existing violations as of 2026-09-10. New code must not add more. |
+| Explicit return types on methods | `@typescript-eslint/explicit-function-return-type` (error) — the 142-violation backlog was swept on 2026-09-10 |
+| No `any` reaching a typed parameter | `@typescript-eslint/no-unsafe-argument` (error) |
 
 What is still yours to judge, because no linter can:
 
