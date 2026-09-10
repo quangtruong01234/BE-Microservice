@@ -7,7 +7,7 @@ import { EXCHANGE } from "@app/common/constants/exchange";
 import { PORT_TCP, TCP_HOST } from "libs/constant/port-tcp.constant";
 import { AllRpcExceptionFilter } from "./filters/rpc-exception.filter";
 
-async function bootstrap() {
+async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(ProductModule);
 
   const rmqService = app.get<RmqService>(RmqService);

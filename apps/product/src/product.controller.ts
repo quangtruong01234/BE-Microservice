@@ -36,6 +36,9 @@ import {
   ProductRiskSummary,
 } from "./product-risk.types";
 import { Product } from "./entity/product.entity";
+import { ProductSku } from "./entity/product-sku.entity";
+import { Category } from "./entity/category.entity";
+import { Brand } from "./entity/brand.entity";
 
 @UseFilters(HttpToRpcExceptionFilter)
 @Controller()
@@ -52,31 +55,37 @@ export class ProductController {
   // ============================================================================
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_CREATE)
-  async createProduct(@Payload() createProductDto: CreateProductDto) {
+  async createProduct(
+    @Payload() createProductDto: CreateProductDto,
+  ): Promise<Product> {
     return this.productService.createProduct(createProductDto);
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_ALL)
-  async findAllProducts(@Payload() query: GetProductsQueryDto) {
+  async findAllProducts(
+    @Payload() query: GetProductsQueryDto,
+  ): Promise<PaginatedResponse<Product>> {
     return this.productService.findAllProducts(query);
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_ID)
-  async findProductById(@Payload() id: number | string) {
+  async findProductById(@Payload() id: number | string): Promise<Product> {
     return this.productService.findProductById(
       await this.productService.resolveProductId(id),
     );
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_IDS)
-  async findProductsByIds(@Payload() ids: (number | string)[]) {
+  async findProductsByIds(
+    @Payload() ids: (number | string)[],
+  ): Promise<Product[]> {
     return this.productService.findProductsByIds(
       await this.productService.resolveProductIds(ids),
     );
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_SKU)
-  async findProductBySku(@Payload() sku: string) {
+  async findProductBySku(@Payload() sku: string): Promise<Product> {
     return this.productService.findProductBySku(sku);
   }
 
@@ -87,7 +96,7 @@ export class ProductController {
       id: number | string;
       updateProductDto: UpdateProductDto;
     },
-  ) {
+  ): Promise<Product> {
     const { id, updateProductDto } = data;
     return this.productService.updateProduct(
       await this.productService.resolveProductId(id),
@@ -96,7 +105,9 @@ export class ProductController {
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_DELETE)
-  async deleteProduct(@Payload() id: number | string) {
+  async deleteProduct(
+    @Payload() id: number | string,
+  ): Promise<{ success: boolean }> {
     return this.productService.deleteProduct(
       await this.productService.resolveProductId(id),
     );
@@ -105,7 +116,7 @@ export class ProductController {
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_CATEGORY)
   async findProductsByCategory(
     @Payload() data: { categoryId: number; query: GetProductsQueryDto },
-  ) {
+  ): Promise<PaginatedResponse<Product>> {
     const { categoryId, query } = data;
     return this.productService.findProductsByCategory(categoryId, query);
   }
@@ -120,13 +131,15 @@ export class ProductController {
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_BRAND)
   async findProductsByBrand(
     @Payload() data: { brandId: number; query: GetProductsQueryDto },
-  ) {
+  ): Promise<PaginatedResponse<Product>> {
     const { brandId, query } = data;
     return this.productService.findProductsByBrand(brandId, query);
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_SEARCH)
-  async searchProducts(@Payload() query: GetProductsQueryDto) {
+  async searchProducts(
+    @Payload() query: GetProductsQueryDto,
+  ): Promise<PaginatedResponse<Product>> {
     return this.productService.findAllProducts(query);
   }
 
@@ -190,7 +203,7 @@ export class ProductController {
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.BRAND_CREATE)
   async createBrand(
     @Payload() payload: CreateBrandDto & { submittedBy: number },
-  ) {
+  ): Promise<Brand> {
     const { submittedBy, ...dto } = payload;
     return this.productService.createBrand(dto, submittedBy);
   }
@@ -198,12 +211,12 @@ export class ProductController {
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.BRAND_FIND_ALL)
   async findAllBrands(
     @Payload() payload: { status?: "pending" | "active" | "rejected" },
-  ) {
+  ): Promise<Brand[]> {
     return this.productService.findAllBrands(payload?.status);
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.BRAND_FIND_BY_ID)
-  async findBrandById(@Payload() id: number) {
+  async findBrandById(@Payload() id: number): Promise<Brand> {
     return this.productService.findBrandById(id);
   }
 
@@ -215,7 +228,7 @@ export class ProductController {
       action: "approve" | "reject";
       note?: string;
     },
-  ) {
+  ): Promise<Brand> {
     return this.productService.reviewBrand(
       payload.id,
       payload.action,
@@ -230,7 +243,7 @@ export class ProductController {
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.CATEGORY_CREATE)
   async createCategory(
     @Payload() payload: CreateCategoryDto & { submittedBy: number },
-  ) {
+  ): Promise<Category> {
     const { submittedBy, ...dto } = payload;
     return this.productService.createCategory(dto, submittedBy);
   }
@@ -238,12 +251,12 @@ export class ProductController {
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.CATEGORY_FIND_ALL)
   async findAllCategories(
     @Payload() payload: { status?: "pending" | "active" | "rejected" },
-  ) {
+  ): Promise<Category[]> {
     return this.productService.findAllCategories(payload?.status);
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.CATEGORY_FIND_BY_ID)
-  async findCategoryById(@Payload() id: number) {
+  async findCategoryById(@Payload() id: number): Promise<Category> {
     return this.productService.findCategoryById(id);
   }
 
@@ -255,7 +268,7 @@ export class ProductController {
       action: "approve" | "reject";
       note?: string;
     },
-  ) {
+  ): Promise<Category> {
     return this.productService.reviewCategory(
       payload.id,
       payload.action,
@@ -268,14 +281,16 @@ export class ProductController {
   // ============================================================================
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.SKU_FIND_BY_PRODUCT)
-  async findSkusByProduct(@Payload() productId: number | string) {
+  async findSkusByProduct(
+    @Payload() productId: number | string,
+  ): Promise<ProductSku[]> {
     return this.productService.findSkusByProduct(
       await this.productService.resolveProductId(productId),
     );
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.SKU_FIND_BY_ID)
-  async findSkuById(@Payload() id: number) {
+  async findSkuById(@Payload() id: number): Promise<ProductSku> {
     return this.productService.findSkuById(id);
   }
 

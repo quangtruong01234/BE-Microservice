@@ -1760,11 +1760,17 @@ export class ProductService {
     return { success: true };
   }
 
-  async findProductsByCategory(categoryId: number, query: GetProductsQueryDto) {
+  async findProductsByCategory(
+    categoryId: number,
+    query: GetProductsQueryDto,
+  ): Promise<PaginatedResponse<Product>> {
     return this.findAllProducts({ ...query, categoryIds: [categoryId] });
   }
 
-  async findProductsByBrand(brandId: number, query: GetProductsQueryDto) {
+  async findProductsByBrand(
+    brandId: number,
+    query: GetProductsQueryDto,
+  ): Promise<PaginatedResponse<Product>> {
     return this.findAllProducts({ ...query, brandIds: [brandId] });
   }
 
