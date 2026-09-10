@@ -1274,3 +1274,12 @@ whole time, and there is no retry on the gateway's TCP leg.
 - Locked by `libs/common/src/mailer/mailer.service.spec.ts` (9 cases, no
   sockets: SMTP is left unconfigured and the branch is identified by the warn
   message, since both branches return `false`).
+- **Verifying it on prod without inbox or SSH access: use the latency.** The
+  response body is deliberately identical either way, so only timing separates
+  the branches. `POST /api/user/forgot-password` for a **registered** account
+  measured on 2026-09-11: `e2eprod0806@trybuy.com` (blocked domain) → 201 in
+  **0.36s**, `quang5552013@gmail.com` (deliverable) → 201 in **4.07s**. The ~4s
+  is the SMTP dialogue; its absence is the proof the guard fired. Both accounts
+  must be registered — an unknown address returns early and is fast regardless,
+  which proves nothing. Mind the 60s `user:pwreset:cooldown:<id>`: a second call
+  inside the window also short-circuits and reads as a false pass.
