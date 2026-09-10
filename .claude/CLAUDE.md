@@ -49,6 +49,7 @@ Load on demand — read with the Read tool when the task touches the relevant ar
 | `ai-docs/agent-context/backend.md` | NestJS / TCP / RabbitMQ / @MessagePattern / @EventPattern detail |
 | `ai-docs/agent-context/ops-runtime.md` | deploy / pm2 / nginx / prod env / EC2 / cloudinary / GHN ops / applied migration / seed |
 | `ai-docs/agent-context/known-behaviors.md` | residual behavior / known issue / 409 version / skuList / paymentUrl / compensation |
+| `ai-docs/agent-context/planned-work.md` | planned / roadmap / next feature / AI feature / Gemini / visual search / ETA / voucher stacking / phase 2 |
 
 Do NOT use `@` for the on-demand group above — load them explicitly with the Read tool.
 
@@ -66,6 +67,7 @@ Match keywords in the prompt → read the corresponding file with the Read tool.
 | performance, slow, N+1, index, cache, pagination, query | `ai-docs/agent-context/performance.md` |
 | deploy, pm2, nginx, prod, EC2, cloudinary, GHN ops, applied migration, seed | `ai-docs/agent-context/ops-runtime.md` |
 | known issue, residual behavior, version 409, skuList, paymentUrl, compensation | `ai-docs/agent-context/known-behaviors.md` |
+| planned, roadmap, next feature, AI feature, Gemini, visual search, ETA, voucher stacking, phase 2 | `ai-docs/agent-context/planned-work.md` |
 
 - No keyword match → use only the 3 always-loaded files; do not load extras.
 - Multiple keywords match → load all matching files.
@@ -143,7 +145,9 @@ try {
 
 ## Import Rules
 
-- Always use path aliases — never use relative imports deeper than 2 levels (`../../`)
+- Always use path aliases — never use relative imports deeper than 2 levels
+  (`../../`). Enforced by eslint `no-restricted-imports`; two RBAC files carry a
+  documented override.
 - `@app/constant` → `libs/constant`
 - `@app/common` → `libs/common`
 - `@app/cached` → `libs/cached`
@@ -195,8 +199,14 @@ When debugging, run `/debug` — full protocol in `commands/debug.md`.
 ## Quick Validation
 
 ```bash
-npm run build && npm run lint && npm run test
+npm run check:conventions && npm run build && npm run lint && npm run test
 ```
+
+`check:conventions` (`scripts/check-conventions.mjs`) enforces the three TCP
+invariants eslint cannot express: client registrations use
+`customClass: ResilientClientTCP`, a message pattern has the same shape on the
+handler and the sender, and every microservice controller converts HTTP
+exceptions to RPC ones. Each cost a real 500/502 before it was mechanized.
 
 ## Shell Rules
 

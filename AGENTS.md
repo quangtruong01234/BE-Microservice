@@ -63,6 +63,7 @@ If a referenced context file does not exist, search nearby `ai-docs/` paths once
 | `ai-docs/agent-context/backend.md` | NestJS / TCP / RabbitMQ / @MessagePattern / @EventPattern detail |
 | `ai-docs/agent-context/ops-runtime.md` | deploy / pm2 / nginx / prod env / EC2 / cloudinary / GHN ops / applied migration / seed |
 | `ai-docs/agent-context/known-behaviors.md` | residual behavior / known issue / 409 version / skuList / paymentUrl / compensation |
+| `ai-docs/agent-context/planned-work.md` | planned / roadmap / next feature / AI feature / Gemini / visual search / ETA / voucher stacking / phase 2 |
 
 ## Auto-context (when user does not tag a context file)
 
@@ -78,6 +79,7 @@ Match keywords in the prompt → read the corresponding file with the Read tool.
 | performance, slow, N+1, index, cache, pagination, query | `ai-docs/agent-context/performance.md` |
 | deploy, pm2, nginx, prod, EC2, cloudinary, GHN ops, applied migration, seed | `ai-docs/agent-context/ops-runtime.md` |
 | known issue, residual behavior, version 409, skuList, paymentUrl, compensation | `ai-docs/agent-context/known-behaviors.md` |
+| planned, roadmap, next feature, AI feature, Gemini, visual search, ETA, voucher stacking, phase 2 | `ai-docs/agent-context/planned-work.md` |
 
 - No keyword match → use only the 3 always-loaded files; do not load extras.
 - Multiple keywords match → load all matching files.
@@ -127,7 +129,9 @@ try {
 
 ## Import Rules
 
-- Always use path aliases — never use relative imports deeper than 2 levels (`../../`)
+- Always use path aliases — never use relative imports deeper than 2 levels
+  (`../../`). Enforced by eslint `no-restricted-imports`; two RBAC files carry a
+  documented override.
 - `@app/constant` → `libs/constant`
 - `@app/common` → `libs/common`
 - `@app/cached` → `libs/cached`
@@ -184,6 +188,7 @@ Spawn them only when the user explicitly requests subagents or parallel agent wo
 
 ```bash
 npx tsc --noEmit
+npm run check:conventions   # TCP invariants eslint cannot express
 npm run build
 npm run lint
 npm run test

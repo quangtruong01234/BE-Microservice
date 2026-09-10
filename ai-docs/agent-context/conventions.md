@@ -2,32 +2,26 @@
 
 ## TypeScript Rules
 
-- **No `any`** — use proper types or generics everywhere. When the shape is unknown (e.g. external callbacks), use `unknown` then narrow with a local interface cast — never `any` in method signatures or interface params:
+These were prose here until 2026-09-10. They are now enforced by the compiler
+and eslint, so they fail in CI instead of in review. **Do not re-document them
+below** — a rule a machine checks does not belong in a file an agent has to read
+and remember:
 
-  ```typescript
-  // ❌ Wrong
-  verifyCallback(payload: any): Promise<...>
-  // ✅ Correct
-  interface CallbackPayload { data: string; mac: string }
-  verifyCallback(payload: unknown): Promise<...> {
-    const p = payload as CallbackPayload;
-  }
-  ```
+| Rule | Enforced by |
+|---|---|
+| No `any` | `@typescript-eslint/no-explicit-any` (error) |
+| No `!` non-null assertion — entity files exempt | `@typescript-eslint/no-non-null-assertion` + a `files:` override for `**/entity/**` |
+| Typed catch blocks — `catch (err: unknown)`, narrow before use | `useUnknownInCatchVariables` |
+| No implicit `any` from an untyped param | `noImplicitAny` |
+| Required DTO properties need `declare` | `strictPropertyInitialization` |
+| ES modules only — never `require()` | `@typescript-eslint/no-require-imports` (error) |
+| Explicit return types on methods | `@typescript-eslint/explicit-function-return-type` — **warn**, not error: 144 pre-existing violations as of 2026-09-10. New code must not add more. |
 
-- **No `!` non-null assertion** — except inside TypeORM entity files (where column decorators guarantee initialization); use optional chaining (`?.`) or an explicit null check instead
-- **Explicit return types** on all methods — `async createOrder(dto: CreateOrderDto): Promise<Order>`
-- **Typed catch blocks** — `catch (error: unknown)`, then narrow with `instanceof` before accessing properties:
+What is still yours to judge, because no linter can:
 
-  ```typescript
-  catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-  }
-  ```
-
-- **No implicit `any` from untyped params** — always type function parameters explicitly
-- **DTO as source of truth** — never use raw `object` or `Record<string, any>` when a DTO exists
-- **ES modules only** — never use `require()`; always `import`
-- Run `tsc --noEmit` after every change; never mark a task done with TS errors
+- **DTO as source of truth** — never take a raw `object` or `Record<string, any>` where a DTO already exists.
+- **Narrow, don't cast away.** The fix for a `no-explicit-any` or an `unknown` error is `instanceof` narrowing or a local interface cast. `as any` and `// eslint-disable-next-line` are not fixes; they move the failure to runtime.
+- Verify with `npx tsc --noEmit`, `npm run lint:check`, and `npm run check:conventions` (the TCP invariants at the bottom of this file).
 
 ## Naming Rules
 
@@ -105,46 +99,30 @@ async handleOrderCreated(@Payload() data: unknown): Promise<void> {
 
 ## Backend: TypeORM Entity Rules
 
-TypeORM hydrates properties at runtime, not in the constructor. Use `!` (definite assignment assertion) on every decorated column so TypeScript's `strictPropertyInitialization` does not error.
+TypeORM hydrates properties at runtime, not in the constructor, so every
+decorated column takes `!` (definite assignment assertion). This is the one
+exception to the no-`!` rule, and eslint encodes it as a `files:` override for
+`**/entity/**` — you do not have to remember it. Omitting `!` is a compiler
+error (`strictPropertyInitialization`), so that half is self-enforcing too.
+Computed getters need no `!`.
 
-| Column config | Correct | Wrong |
-|---|---|---|
-| `nullable: false` | `name!: string` | `name: string` (TS error) |
-| `nullable: true` | `name!: string \| null` | `name?: string` (hides null) |
-| `@PrimaryGeneratedColumn` | `id!: number` | `id: number` (TS error) |
-| `@CreateDateColumn` | `createdAt!: Date` | `createdAt: Date` (TS error) |
+What the compiler will NOT catch, and what actually causes runtime bugs:
 
 ```typescript
-// ✅ Correct
-@Entity()
-export class User {
-  @PrimaryGeneratedColumn()
-  id!: number;
-
-  @Column({ nullable: false })
-  name!: string;
-
-  @Column({ nullable: true })
-  avatar!: string | null;
-
-  @CreateDateColumn({ name: 'created_at' })
-  createdAt!: Date;
-}
-
-// ❌ Wrong — missing ! causes TS error
-@Column({ nullable: false })
-name: string;
-
-// ❌ Wrong — ? hides null, causes runtime bugs
+// ❌ `?` on a nullable column hides the null from every caller
 @Column({ nullable: true })
 avatar?: string;
 
-// ❌ Wrong — initializer bypasses TypeORM hydration
+// ✅ declare the null — callers are then forced to handle it
+@Column({ nullable: true })
+avatar!: string | null;
+
+// ❌ an initializer is overwritten by TypeORM hydration, so it lies about the default
 @Column({ nullable: true })
 avatar: string | null = null;
 ```
 
-**Rule**: `!` in entity files is definite assignment assertion — TypeORM assigns at runtime. This is the one exception to the "no `!`" rule. Computed properties (getters) do not need `!`.
+**Rule**: `nullable: true` ⇒ `!: T | null`, never `?: T`, never an initializer.
 
 ## Backend: DTOs
 
@@ -164,11 +142,10 @@ export class UpdateProductDto extends PartialType(CreateProductDto) {}
 // ❌ Wrong — do not redeclare all fields from CreateDto
 ```
 
-**Required DTO property initialization:**
-- Use `declare` for required properties in DTO classes to avoid `strictPropertyInitialization` errors
-- ❌ `name: string` (TS error under strict mode)
-- ❌ `name!: string` (violates no-`!` rule — `!` is reserved for TypeORM entities)
-- ✅ `declare name: string`
+**Required DTO property initialization:** `declare name: string`. Not
+`name: string` (a `strictPropertyInitialization` error) and not `name!: string`
+(`!` is reserved for entities — eslint errors outside `**/entity/**`). Both
+wrong forms fail CI, so this is a reminder of the fix, not a rule to police.
 
 **Gateway DTO file naming:**
 - File name: `<domain>.dto.ts` — no suffixes like `-simple`, `-gateway`
@@ -278,7 +255,8 @@ answers 200, because tightening a passing call into a 400 is class C.
 
 ## Backend: Logging & Error Handling
 
-- `console.log()` is banned in production code — use NestJS `Logger` instead:
+- `console.log()` is an eslint error outside `apps/*/src/main.ts` (the startup
+  banner runs before a Logger context means anything). Use NestJS `Logger`:
 
 ```typescript
 private readonly logger = new Logger(ServiceName.name);
@@ -307,19 +285,31 @@ throw new NotFoundException('resource not found');
 
 ## Common TCP Bugs (đã gặp, phải tránh)
 
-### 1. @MessagePattern — dùng string, không dùng { cmd: } wrapper
-❌ Sai: `@MessagePattern({ cmd: ORDER_MESSAGE_PATTERN.GET_ORDER_INVOICE })`
-✅ Đúng: `@MessagePattern(ORDER_MESSAGE_PATTERN.GET_ORDER_INVOICE)`
+> Bugs 1 and 2 below are checked mechanically by
+> `npm run check:conventions` (`scripts/check-conventions.mjs`), which also runs
+> in CI. They are kept here for the *why*, not as something to verify by hand.
 
-Gateway gọi `.send(PATTERN_STRING, data)` → chỉ match với `@MessagePattern(string)`.
-`{ cmd: }` wrapper gây mismatch → TCP server trả "no matching handler" ngay lập tức → gateway 500.
-Kiểm tra cả 2 phía (controller + gateway send) mỗi khi tạo TCP handler mới.
+### 1. @MessagePattern và .send() phải CÙNG SHAPE ở cả 2 phía
+`.send(PATTERN, data)` chỉ match `@MessagePattern(PATTERN)`, và
+`.send({ cmd: PATTERN }, data)` chỉ match `@MessagePattern({ cmd: PATTERN })`.
+Cả hai shape đều hợp lệ — sai là khi 2 phía **không thống nhất**.
+
+Mismatch không phải lỗi cú pháp, cũng không phải lỗi type: TCP server trả
+"no matching handler" lúc runtime → gateway 500.
+
+Thực tế trong repo (2026-09-10): `apps/user` dùng `{ cmd: ... }` trên cả 17
+handler và gateway `.send({ cmd: ... })` khớp theo — chạy đúng. Các service còn
+lại dùng bare string ở cả 2 phía. **Đừng "sửa" một phía cho hợp với tài liệu** —
+đổi 1 phía là làm hỏng route đang chạy. Muốn đổi thì đổi cả 2 phía cùng lúc.
 
 ### 2. HttpToRpcExceptionFilter — bắt buộc trên mọi microservice controller
-Mọi `@Controller` trong microservice phải có `@UseFilters(new HttpToRpcExceptionFilter())`.
-Nếu thiếu: `ForbiddenException`/`BadRequestException` bị NestJS swallow → gateway nhận 500/502 thay vì 403/400.
-Filter nằm tại: `libs/common/src/filters/http-to-rpc-exception.filter.ts`
-Coverage (2026-06-28): payments, inventory, rewards, product, notification controllers all have the filter; user is covered by its global `AllRpcExceptionFilter`. Gateway is HTTP-facing and uses `HttpExceptionFilter` instead. No remaining gap.
+Mọi `@Controller` trong microservice phải có `@UseFilters(HttpToRpcExceptionFilter)`
+(dạng class hoặc `new ...()` đều được), HOẶC app đó đăng ký global
+`AllRpcExceptionFilter` trong `main.ts`.
+Nếu thiếu: `ForbiddenException`/`BadRequestException` bị NestJS swallow → gateway
+nhận 500/502 thay vì 403/400.
+Filter nằm tại: `libs/common/src/filters/http-to-rpc-exception.filter.ts`.
+Gateway là HTTP-facing nên dùng `HttpExceptionFilter` thay thế.
 
 ### 3. DECIMAL column từ TypeORM trả về string
 TypeORM serialize DECIMAL/NUMERIC columns thành string (`"222.00"`), không phải number.
