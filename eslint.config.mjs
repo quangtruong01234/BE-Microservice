@@ -6,7 +6,11 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["eslint.config.mjs"],
+    // Build output and coverage are generated, never authored. Without this,
+    // a bare `npx eslint .` tries to type-check `dist/**/main.js` against the
+    // tsconfig that produced it and reports "not found by the project service"
+    // — 10 parse errors that look like a broken checkout and are not.
+    ignores: ["eslint.config.mjs", "dist/**", "coverage/**", ".temp/**"],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
@@ -56,11 +60,11 @@ export default tseslint.config(
           ],
         },
       ],
-      // "Explicit return types on all methods." 144 pre-existing violations as
-      // of 2026-09-10, so this cannot be an error yet without a sweep. Kept at
-      // warn so new code is nudged and the backlog stays visible.
+      // "Explicit return types on all methods." The 142-violation backlog was
+      // swept on 2026-09-10, so this is an error now: a warn nobody has to fix
+      // is a rule that decays back into a backlog.
       "@typescript-eslint/explicit-function-return-type": [
-        "warn",
+        "error",
         {
           allowExpressions: true,
           allowTypedFunctionExpressions: true,
@@ -68,7 +72,7 @@ export default tseslint.config(
         },
       ],
       "@typescript-eslint/no-floating-promises": "warn",
-      "@typescript-eslint/no-unsafe-argument": "warn",
+      "@typescript-eslint/no-unsafe-argument": "error",
     },
   },
   {
@@ -95,6 +99,32 @@ export default tseslint.config(
     ],
     rules: {
       "no-restricted-imports": "off",
+    },
+  },
+  {
+    // Plain-JS tooling: the pm2 process file, the postman generators, and the
+    // scripts/ helpers. These are real source and worth linting, but they are
+    // deliberately outside every tsconfig, so the type-aware rules cannot
+    // resolve them and fail with a parse error instead of a lint message.
+    // Lint them with the syntactic rules only.
+    files: ["**/*.mjs", "**/*.js"],
+    extends: [tseslint.configs.disableTypeChecked],
+    languageOptions: {
+      sourceType: "module",
+      ecmaVersion: "latest",
+    },
+    rules: {
+      // These are CLI tools; stdout IS their output channel, so the NestJS
+      // Logger rule does not apply.
+      "no-console": "off",
+      "@typescript-eslint/explicit-function-return-type": "off",
+    },
+  },
+  {
+    // pm2 reads this with require(), so it stays CommonJS.
+    files: ["ecosystem.config.js"],
+    languageOptions: {
+      sourceType: "commonjs",
     },
   },
 );

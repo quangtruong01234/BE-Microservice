@@ -10,18 +10,22 @@
  * Run: node scripts/check-conventions.mjs   (wired into CI and `npm run check:conventions`)
  * Exit 0 = clean, 1 = at least one violation.
  */
-import { readFileSync } from "fs";
-import { globSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { execSync } from "child_process";
 
 const violations = [];
 const report = (rule, file, line, message) =>
   violations.push({ rule, file, line, message });
 
-/** All tracked .ts files, repo-relative, forward slashes. */
+/**
+ * All tracked .ts files, repo-relative, forward slashes.
+ * `git ls-files` still lists a file deleted in the working tree but not yet
+ * staged, so filter to what is actually on disk — otherwise a normal
+ * mid-refactor tree crashes the check with an ENOENT stack trace.
+ */
 const files = execSync("git ls-files apps libs", { encoding: "utf8" })
   .split("\n")
-  .filter((f) => f.endsWith(".ts"));
+  .filter((f) => f.endsWith(".ts") && existsSync(f));
 
 const read = (f) => readFileSync(f, "utf8");
 const lineOf = (src, index) => src.slice(0, index).split("\n").length;
@@ -96,7 +100,8 @@ for (const [constant, uses] of shapeOf) {
   const shapes = new Set(uses.map((u) => u.shape));
   if (shapes.size < 2) continue;
   const hasBoth =
-    uses.some((u) => u.kind === "handler") && uses.some((u) => u.kind === "sender");
+    uses.some((u) => u.kind === "handler") &&
+    uses.some((u) => u.kind === "sender");
   if (!hasBoth) continue; // only one side present — nothing to disagree with
   const where = uses
     .map((u) => `${u.file}:${u.line} ${u.kind} uses ${u.shape}`)

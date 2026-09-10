@@ -27,7 +27,8 @@ function req(name, method, path, opts = {}) {
       disabled: q.disabled ?? false,
       description: q.description ?? "",
     }));
-    url.raw += "?" + opts.query.map((q) => `${q.key}=${q.value ?? ""}`).join("&");
+    url.raw +=
+      "?" + opts.query.map((q) => `${q.key}=${q.value ?? ""}`).join("&");
   }
   const request = {
     method,
@@ -80,11 +81,19 @@ const user = folder(
   "User / Auth",
   [
     req("Register", "POST", "user/register", {
-      body: { username: "john_doe", email: "john@example.com", password: "password123" },
+      body: {
+        username: "john_doe",
+        email: "john@example.com",
+        password: "password123",
+      },
       description: "Public. Rate-limited 10/60s.",
     }),
     req("Login", "POST", "user/login", {
-      body: { username: "{{username}}", password: "{{password}}", rememberMe: false },
+      body: {
+        username: "{{username}}",
+        password: "{{password}}",
+        rememberMe: false,
+      },
       event: loginEvent,
       description:
         "Public. Sets the HttpOnly `access_token` cookie — Postman stores it automatically and reuses it for the rest of the collection.",
@@ -93,7 +102,11 @@ const user = folder(
       body: { email: "john@example.com" },
     }),
     req("Reset password", "POST", "user/reset-password", {
-      body: { email: "john@example.com", code: "123456", newPassword: "newPassword123" },
+      body: {
+        email: "john@example.com",
+        code: "123456",
+        newPassword: "newPassword123",
+      },
     }),
     req("Logout", "POST", "user/logout"),
     req("List users (admin)", "GET", "user", {
@@ -125,7 +138,11 @@ const user = folder(
     req("Update address", "PATCH", "user/me/addresses/{{addressId}}", {
       body: { addressLine: "456 Tran Hung Dao" },
     }),
-    req("Set default address", "PATCH", "user/me/addresses/{{addressId}}/default"),
+    req(
+      "Set default address",
+      "PATCH",
+      "user/me/addresses/{{addressId}}/default",
+    ),
     req("Delete address", "DELETE", "user/me/addresses/{{addressId}}"),
     req("Get user by id", "GET", "user/{{userId}}", {
       description: "userId = usr_... public id.",
@@ -164,7 +181,8 @@ const product = folder("Products", [
       weight: 500,
       imageUrls: [],
     },
-    description: "shop role. For variation products omit price/stock and send variations + skuList.",
+    description:
+      "shop role. For variation products omit price/stock and send variations + skuList.",
   }),
   req("List products", "GET", "products", {
     query: [
@@ -186,14 +204,27 @@ const product = folder("Products", [
     ],
     description: "admin.",
   }),
-  req("Admin risk rescore", "POST", "products/admin/risk/{{productId}}/rescore"),
+  req(
+    "Admin risk rescore",
+    "POST",
+    "products/admin/risk/{{productId}}/rescore",
+  ),
   req("Admin risk backfill", "POST", "products/admin/risk/backfill"),
   req("Duplicate check", "POST", "products/risk/duplicate-check", {
-    body: { imageUrls: ["https://res.cloudinary.com/demo/image/upload/v1/trybuy/products/a.jpg"] },
+    body: {
+      imageUrls: [
+        "https://res.cloudinary.com/demo/image/upload/v1/trybuy/products/a.jpg",
+      ],
+    },
   }),
-  req("Admin risk feedback", "POST", "products/admin/risk/{{productId}}/feedback", {
-    body: { decision: "approve" },
-  }),
+  req(
+    "Admin risk feedback",
+    "POST",
+    "products/admin/risk/{{productId}}/feedback",
+    {
+      body: { decision: "approve" },
+    },
+  ),
   req("Search products", "GET", "products/search", {
     query: [
       { key: "q", value: "iphone" },
@@ -201,25 +232,41 @@ const product = folder("Products", [
     ],
     description: "Public.",
   }),
-  req("By category", "GET", "products/category/{{categoryId}}", { description: "Public." }),
-  req("By brand", "GET", "products/brand/{{brandId}}", { description: "Public." }),
+  req("By category", "GET", "products/category/{{categoryId}}", {
+    description: "Public.",
+  }),
+  req("By brand", "GET", "products/brand/{{brandId}}", {
+    description: "Public.",
+  }),
   req("By SKU", "GET", "products/sku/{{sku}}", { description: "Public." }),
   req("List brands", "GET", "products/brands", { description: "Public." }),
-  req("Pending brands", "GET", "products/brands/pending", { description: "admin." }),
+  req("Pending brands", "GET", "products/brands/pending", {
+    description: "admin.",
+  }),
   req("Create brand", "POST", "products/brands", { body: { name: "Apple" } }),
   req("Review brand", "PATCH", "products/brands/{{brandId}}/review", {
     body: { status: "active" },
     description: "admin.",
   }),
-  req("Get brand", "GET", "products/brands/{{brandId}}", { description: "Public." }),
-  req("List categories", "GET", "products/categories", { description: "Public." }),
-  req("Pending categories", "GET", "products/categories/pending", { description: "admin." }),
-  req("Create category", "POST", "products/categories", { body: { name: "Phones" } }),
+  req("Get brand", "GET", "products/brands/{{brandId}}", {
+    description: "Public.",
+  }),
+  req("List categories", "GET", "products/categories", {
+    description: "Public.",
+  }),
+  req("Pending categories", "GET", "products/categories/pending", {
+    description: "admin.",
+  }),
+  req("Create category", "POST", "products/categories", {
+    body: { name: "Phones" },
+  }),
   req("Review category", "PATCH", "products/categories/{{categoryId}}/review", {
     body: { status: "active" },
     description: "admin.",
   }),
-  req("Get category", "GET", "products/categories/{{categoryId}}", { description: "Public." }),
+  req("Get category", "GET", "products/categories/{{categoryId}}", {
+    description: "Public.",
+  }),
   req("My wishlist", "GET", "products/wishlist"),
   req("Add to wishlist", "POST", "products/wishlist/{{productId}}"),
   req("Remove from wishlist", "DELETE", "products/wishlist/{{productId}}"),
@@ -234,16 +281,26 @@ const product = folder("Products", [
     body: { rating: 5, comment: "Great product" },
     description: "Must have a COMPLETED order containing the product.",
   }),
-  req("Delete review", "DELETE", "products/reviews/{{reviewId}}", { description: "Owner only." }),
-  req("Product SKUs", "GET", "products/{{productId}}/skus", { description: "Public." }),
-  req("Get product", "GET", "products/{{productId}}", { description: "Public." }),
+  req("Delete review", "DELETE", "products/reviews/{{reviewId}}", {
+    description: "Owner only.",
+  }),
+  req("Product SKUs", "GET", "products/{{productId}}/skus", {
+    description: "Public.",
+  }),
+  req("Get product", "GET", "products/{{productId}}", {
+    description: "Public.",
+  }),
   req("Update product", "PATCH", "products/{{productId}}", {
     body: { name: "iPhone 14 Pro Max (updated)", price: 1249.99 },
   }),
   req("Delete product", "DELETE", "products/{{productId}}"),
   req("Shop stats", "GET", "products/shop/stats", { description: "shop." }),
-  req("With-inventory (all)", "GET", "products/with-inventory/all", { description: "Public." }),
-  req("With-inventory (one)", "GET", "products/{{productId}}/with-inventory", { description: "Public." }),
+  req("With-inventory (all)", "GET", "products/with-inventory/all", {
+    description: "Public.",
+  }),
+  req("With-inventory (one)", "GET", "products/{{productId}}/with-inventory", {
+    description: "Public.",
+  }),
   req("With-inventory (multiple)", "POST", "products/with-inventory/multiple", {
     body: { productIds: [1, 2, 3] },
     description: "Max 50 ids. Public.",
@@ -262,27 +319,59 @@ const order = folder("Orders", [
     ],
     description: "admin.",
   }),
-  req("Admin GHN: list", "GET", "order/admin/ghn/orders", { description: "shipping role." }),
-  req("Admin GHN: history", "GET", "order/admin/ghn/orders/{{orderId}}/history"),
+  req("Admin GHN: list", "GET", "order/admin/ghn/orders", {
+    description: "shipping role.",
+  }),
+  req(
+    "Admin GHN: history",
+    "GET",
+    "order/admin/ghn/orders/{{orderId}}/history",
+  ),
   req("Admin GHN: detail", "GET", "order/admin/ghn/orders/{{orderId}}"),
   req("Admin GHN: sync", "POST", "order/admin/ghn/orders/{{orderId}}/sync"),
   req("Admin GHN: cancel", "POST", "order/admin/ghn/orders/{{orderId}}/cancel"),
   req("Admin GHN: return", "POST", "order/admin/ghn/orders/{{orderId}}/return"),
-  req("Admin GHN: update COD", "POST", "order/admin/ghn/orders/{{orderId}}/update-cod", {
-    body: { codAmount: 250000 },
-  }),
-  req("Admin GHN: update receiver", "POST", "order/admin/ghn/orders/{{orderId}}/update-receiver", {
-    body: { toName: "Nguyen Van B", toPhone: "0912345678", toAddress: "456 Tran Hung Dao" },
-  }),
-  req("Admin GHN: demo status", "POST", "order/admin/ghn/orders/{{orderId}}/demo-status", {
-    body: { ghnStatus: "delivering" },
-    description: "Demo only — needs GHN_DEMO_ENDPOINTS_ENABLED=true.",
-  }),
+  req(
+    "Admin GHN: update COD",
+    "POST",
+    "order/admin/ghn/orders/{{orderId}}/update-cod",
+    {
+      body: { codAmount: 250000 },
+    },
+  ),
+  req(
+    "Admin GHN: update receiver",
+    "POST",
+    "order/admin/ghn/orders/{{orderId}}/update-receiver",
+    {
+      body: {
+        toName: "Nguyen Van B",
+        toPhone: "0912345678",
+        toAddress: "456 Tran Hung Dao",
+      },
+    },
+  ),
+  req(
+    "Admin GHN: demo status",
+    "POST",
+    "order/admin/ghn/orders/{{orderId}}/demo-status",
+    {
+      body: { ghnStatus: "delivering" },
+      description: "Demo only — needs GHN_DEMO_ENDPOINTS_ENABLED=true.",
+    },
+  ),
   req("Create order", "POST", "order", {
     body: {
       paymentMethod: "cod",
-      shippingAddress: "Nguyen Van A|0987654321|123 Nguyen Hue|Phuong Ben Nghe|Quan 1|Ho Chi Minh",
-      items: [{ productId: "{{productId}}", productName: "iPhone 15 Pro", quantity: 1 }],
+      shippingAddress:
+        "Nguyen Van A|0987654321|123 Nguyen Hue|Phuong Ben Nghe|Quan 1|Ho Chi Minh",
+      items: [
+        {
+          productId: "{{productId}}",
+          productName: "iPhone 15 Pro",
+          quantity: 1,
+        },
+      ],
       voucherCode: "SALE10",
     },
     description: "Optionally send Idempotency-Key header.",
@@ -290,7 +379,13 @@ const order = folder("Orders", [
   req("Validate voucher", "POST", "order/voucher/validate", {
     body: {
       code: "SALE10",
-      items: [{ productId: "{{productId}}", productName: "iPhone 15 Pro", quantity: 1 }],
+      items: [
+        {
+          productId: "{{productId}}",
+          productName: "iPhone 15 Pro",
+          quantity: 1,
+        },
+      ],
     },
   }),
   req("Admin: create voucher", "POST", "order/admin/vouchers", {
@@ -314,10 +409,15 @@ const order = folder("Orders", [
     ],
     description: "admin.",
   }),
-  req("Admin: deactivate voucher", "PATCH", "order/admin/vouchers/{{voucherId}}/deactivate"),
+  req(
+    "Admin: deactivate voucher",
+    "PATCH",
+    "order/admin/vouchers/{{voucherId}}/deactivate",
+  ),
   req("Shipping fee preview", "POST", "order/shipping-fee", {
     body: {
-      shippingAddress: "Nguyen Van A|0987654321|123 Nguyen Hue|Phuong Ben Nghe|Quan 1|Ho Chi Minh",
+      shippingAddress:
+        "Nguyen Van A|0987654321|123 Nguyen Hue|Phuong Ben Nghe|Quan 1|Ho Chi Minh",
       items: [{ productName: "iPhone 15 Pro", quantity: 1, weight: 300 }],
     },
   }),
@@ -332,16 +432,27 @@ const order = folder("Orders", [
       { key: "interval", value: "day", disabled: true },
     ],
   }),
-  req("Admin analytics", "GET", "order/admin/analytics", { description: "shipping read:any." }),
+  req("Admin analytics", "GET", "order/admin/analytics", {
+    description: "shipping read:any.",
+  }),
   req("Seller order detail", "GET", "order/seller/{{orderId}}"),
   req("My return requests", "GET", "order/return-requests/mine"),
   req("Return requests (seller/admin)", "GET", "order/return-requests", {
     query: [{ key: "status", value: "pending_review", disabled: true }],
   }),
-  req("Approve return", "POST", "order/return-requests/{{returnRequestId}}/approve"),
-  req("Reject return", "POST", "order/return-requests/{{returnRequestId}}/reject", {
-    body: { reason: "Item not eligible" },
-  }),
+  req(
+    "Approve return",
+    "POST",
+    "order/return-requests/{{returnRequestId}}/approve",
+  ),
+  req(
+    "Reject return",
+    "POST",
+    "order/return-requests/{{returnRequestId}}/reject",
+    {
+      body: { reason: "Item not eligible" },
+    },
+  ),
   req("Get order", "GET", "order/{{orderId}}"),
   req("User order status counts", "GET", "order/user/{{userId}}/status-counts"),
   req("User orders", "GET", "order/user/{{userId}}", {
@@ -373,8 +484,12 @@ const inventory = folder("Inventory", [
       location: "WAREHOUSE-A1",
     },
   }),
-  req("Low stock", "GET", "inventory/low-stock", { description: "shop / admin." }),
-  req("By product", "GET", "inventory/product/{{productId}}", { description: "Public." }),
+  req("Low stock", "GET", "inventory/low-stock", {
+    description: "shop / admin.",
+  }),
+  req("By product", "GET", "inventory/product/{{productId}}", {
+    description: "Public.",
+  }),
   req("Update inventory", "PUT", "inventory/{{inventoryId}}", {
     body: { availableStock: 40 },
   }),
@@ -421,7 +536,11 @@ const chat = folder("Chat", [
       { key: "limit", value: "50", disabled: true },
     ],
   }),
-  req("Mark conversation read", "POST", "chat/conversations/{{conversationId}}/read"),
+  req(
+    "Mark conversation read",
+    "POST",
+    "chat/conversations/{{conversationId}}/read",
+  ),
 ]);
 
 const upload = folder("Upload", [
@@ -439,7 +558,11 @@ const upload = folder("Upload", [
 const social = folder("Social", [
   folder("Posts", [
     req("Create post", "POST", "social/posts", {
-      body: { content: "Hello world", imageUrls: [], productId: "{{productId}}" },
+      body: {
+        content: "Hello world",
+        imageUrls: [],
+        productId: "{{productId}}",
+      },
     }),
     req("Update post", "PATCH", "social/posts/{{postId}}", {
       body: { content: "Edited content" },
@@ -491,13 +614,20 @@ const social = folder("Social", [
 const callbacks = folder(
   "Callbacks & Webhooks (un-prefixed)",
   [
-    req("ZaloPay callback", "POST", "zalopay/callback", { base: "root", body: {} }),
-    req("VNPay callback (POST)", "POST", "vnpay/callback", { base: "root", body: {} }),
+    req("ZaloPay callback", "POST", "zalopay/callback", {
+      base: "root",
+      body: {},
+    }),
+    req("VNPay callback (POST)", "POST", "vnpay/callback", {
+      base: "root",
+      body: {},
+    }),
     req("VNPay callback (GET)", "GET", "vnpay/callback", { base: "root" }),
     req("GHN webhook", "POST", "ghn/webhook", {
       base: "root",
       body: { OrderCode: "GHN123", Status: "delivering" },
-      description: "Send x-ghn-webhook-token header. Also served at /api/ghn/webhook.",
+      description:
+        "Send x-ghn-webhook-token header. Also served at /api/ghn/webhook.",
     }),
   ],
   "Called by external providers (not the frontend). Un-prefixed — use {{rootUrl}}.",
@@ -526,7 +656,8 @@ const collection = {
       "IDs like `{{orderId}}`, `{{productId}}`, `{{userId}}` are collection variables — fill in a real " +
       "public id (`ord_...`, `prod_...`, `usr_...`) before sending. Numeric-id params (cart items, " +
       "inventory, brands, categories) take plain integers.",
-    schema: "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    schema:
+      "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
   },
   item: [
     health,
@@ -587,12 +718,20 @@ writeFileSync(
 );
 writeFileSync(
   `${OUT_DIR}/TryBuy-local.postman_environment.json`,
-  JSON.stringify(env("TryBuy Local", "http://localhost:3000/api", "http://localhost:3000"), null, 2),
+  JSON.stringify(
+    env("TryBuy Local", "http://localhost:3000/api", "http://localhost:3000"),
+    null,
+    2,
+  ),
 );
 writeFileSync(
   `${OUT_DIR}/TryBuy-prod.postman_environment.json`,
   JSON.stringify(
-    env("TryBuy Prod", "https://api.yourdomain.com/api", "https://api.yourdomain.com"),
+    env(
+      "TryBuy Prod",
+      "https://api.yourdomain.com/api",
+      "https://api.yourdomain.com",
+    ),
     null,
     2,
   ),
