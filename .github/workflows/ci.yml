@@ -102,6 +102,51 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
 
+      # Project invariants eslint cannot express (TCP client resilience,
+      # message-pattern shape agreement, RPC exception filters). Each one was
+      # prose in ai-docs/agent-context/conventions.md and each cost a real
+      # 500/502 before it was mechanized.
+      - name: Check project conventions
+        run: npm run check:conventions
+
+      # The prod DDNS host must never enter the repo — it points a reader
+      # straight at the live box. The value is compared from the secret, so it
+      # is never written down here, and only file names are printed on failure
+      # (a matched LINE would echo the host into a public log).
+      - name: Guard against committed production hostname
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          host="${EC2_HOST:-}"
+          host="${host,,}"
+          # Fork PRs get no secrets — nothing to compare against, so pass.
+          if [[ -z "$host" ]]; then
+            echo "EC2_HOST secret unavailable (fork PR?) — skipping hostname guard."
+            exit 0
+          fi
+          needles=("$host")
+          # Also catch the bare registrable domain: a stray `example.com` in a
+          # comment is the leak a search for the full hostname misses.
+          if [[ "$host" =~ ^[a-z0-9.-]+\.[a-z]{2,}$ && ! "$host" =~ ^[0-9.]+$ ]]; then
+            needles+=("$(awk -F. '{ print $(NF-1) "." $NF }' <<<"$host")")
+          fi
+          status=0
+          for needle in "${needles[@]}"; do
+            # A blank needle would match every file in the repo.
+            if [[ -z "$needle" ]]; then
+              continue
+            fi
+            if matches=$(git grep -ril --fixed-strings -- "$needle" 2>/dev/null); then
+              echo "::error::Production hostname (or its registrable domain) is committed. Replace it with the placeholder <PROD_API_DOMAIN>."
+              echo "Offending files:"
+              echo "$matches"
+              status=1
+            fi
+          done
+          exit $status
+
       - name: Unit tests
         run: npm test -- --runInBand --passWithNoTests
 
