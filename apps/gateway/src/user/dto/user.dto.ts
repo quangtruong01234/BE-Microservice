@@ -18,25 +18,25 @@ import { IsCloudinaryUrl } from "../../common/validators/is-cloudinary-url.valid
 export class RegisterUserDto {
   @ApiProperty({ example: "john_doe" })
   @IsString()
-  username: string;
+  declare username: string;
 
   @ApiProperty({ example: "john@example.com" })
   @IsEmail()
-  email: string;
+  declare email: string;
 
   @ApiProperty({ example: "password123" })
   @IsString()
-  password: string;
+  declare password: string;
 }
 
 export class LoginUserDto {
   @ApiProperty({ example: "john_doe" })
   @IsString()
-  username: string;
+  declare username: string;
 
   @ApiProperty({ example: "password123" })
   @IsString()
-  password: string;
+  declare password: string;
 
   @ApiPropertyOptional({
     example: true,

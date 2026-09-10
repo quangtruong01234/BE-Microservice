@@ -9,7 +9,7 @@ export class CheckStockDto {
   })
   @IsInt()
   @IsNotEmpty()
-  productId: number;
+  declare productId: number;
 
   @ApiPropertyOptional({
     description: "Product SKU ID when checking variant stock",
@@ -29,7 +29,7 @@ export class CheckStockDto {
   })
   @IsInt()
   @Min(1)
-  quantity: number;
+  declare quantity: number;
 }
 
 export class ReserveStockDto {
@@ -40,7 +40,7 @@ export class ReserveStockDto {
   })
   @IsInt()
   @IsNotEmpty()
-  productId: number;
+  declare productId: number;
 
   @ApiPropertyOptional({
     description: "Product SKU ID when reserving variant stock",
@@ -60,7 +60,7 @@ export class ReserveStockDto {
   })
   @IsInt()
   @Min(1)
-  quantity: number;
+  declare quantity: number;
 }
 
 export class ReleaseStockDto {
@@ -71,7 +71,7 @@ export class ReleaseStockDto {
   })
   @IsInt()
   @IsNotEmpty()
-  productId: number;
+  declare productId: number;
 
   @ApiPropertyOptional({
     description: "Product SKU ID when releasing variant stock",
@@ -91,5 +91,5 @@ export class ReleaseStockDto {
   })
   @IsInt()
   @Min(1)
-  quantity: number;
+  declare quantity: number;
 }

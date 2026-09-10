@@ -28,7 +28,7 @@ export class GhnWebhookService {
       );
     } catch (err) {
       this.logger.error(
-        `GHN webhook TCP failed for order ${ghnOrderCode}: ${err}`,
+        `GHN webhook TCP failed for order ${ghnOrderCode}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }

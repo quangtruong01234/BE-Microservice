@@ -64,22 +64,6 @@ const HYDRATED_USER_KEY_BY_REFERENCE: Record<string, string> = {
   reviewedBy: "reviewer",
 };
 
-export abstract class BaseAggregatorService {
-  protected logger = new Logger(BaseAggregatorService.name);
-
-  protected async aggregate<T>(tasks: Array<Promise<T>>): Promise<T[]> {
-    return Promise.all(tasks);
-  }
-
-  protected handleError(err: any, serviceName: string) {
-    MicroserviceErrorHandler.handleError(
-      err,
-      "service communication",
-      serviceName,
-    );
-  }
-}
-
 @Injectable()
 export class OrderService {
   private readonly logger = new Logger(OrderService.name);
