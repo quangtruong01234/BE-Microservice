@@ -14,7 +14,14 @@
     "skipLibCheck": true,
     "strictNullChecks": true,
     "forceConsistentCasingInFileNames": true,
-    "noImplicitAny": false,
+    // These three replace prose rules that used to live in conventions.md.
+    // noImplicitAny: "always type function parameters explicitly".
+    // strictPropertyInitialization: entity columns need `!`, required DTO
+    //   properties need `declare` — now a compiler error, not a review note.
+    // useUnknownInCatchVariables: `catch (error: unknown)`, narrow before use.
+    "noImplicitAny": true,
+    "strictPropertyInitialization": true,
+    "useUnknownInCatchVariables": true,
     "strictBindCallApply": false,
     "noFallthroughCasesInSwitch": false,
     "paths": {
