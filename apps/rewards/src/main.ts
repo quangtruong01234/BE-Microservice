@@ -5,7 +5,7 @@ import { ValidationPipe } from "@nestjs/common";
 import { EXCHANGE } from "@app/common/constants/exchange";
 import { AllRpcExceptionFilter } from "./filters/rpc-exception.filter";
 
-async function bootstrap() {
+async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(RewardsModule, {
     logger: ["log", "error", "warn", "debug", "verbose"],
   });
