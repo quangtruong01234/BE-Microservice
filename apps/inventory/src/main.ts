@@ -7,7 +7,7 @@ import { AllRpcExceptionFilter } from "./filters/rpc-exception.filter";
 import { EXCHANGE } from "@app/common/constants/exchange";
 import { QUEUES } from "@app/common/constants/queues";
 
-async function bootstrap() {
+async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(InventoryModule);
 
   const rmqService = app.get<RmqService>(RmqService);

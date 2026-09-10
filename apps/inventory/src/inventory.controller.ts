@@ -12,9 +12,14 @@ import {
   RmqContext,
 } from "@nestjs/microservices";
 import { InventoryService } from "./inventory.service";
-import { CreateInventoryDto, UpdateInventoryDto } from "./inventory.types";
+import {
+  CreateInventoryDto,
+  UpdateInventoryDto,
+  StockCheckResult,
+} from "./inventory.types";
 import { EVENT } from "@app/common/constants/event";
 import { HttpToRpcExceptionFilter, RmqService } from "@app/common";
+import { Inventory } from "./inventory.entity";
 
 @UseFilters(HttpToRpcExceptionFilter)
 @Controller("inventory")
@@ -27,25 +32,25 @@ export class InventoryController {
   ) {}
 
   @MessagePattern("inventory.create")
-  async createInventory(data: CreateInventoryDto) {
+  async createInventory(data: CreateInventoryDto): Promise<Inventory> {
     this.logger.log(`[INVENTORY-TCP] Create inventory`, data);
     return this.inventoryService.create(data);
   }
 
   @MessagePattern("inventory.find_all")
-  async findAllInventory() {
+  async findAllInventory(): Promise<Inventory[]> {
     this.logger.log(`[INVENTORY-TCP] Find all inventory`);
     return this.inventoryService.findAll();
   }
 
   @MessagePattern("inventory.find_one")
-  async findOneInventory(id: number) {
+  async findOneInventory(id: number): Promise<Inventory> {
     this.logger.log(`[INVENTORY-TCP] Find inventory id ${id}`);
     return this.inventoryService.findOne(id);
   }
 
   @MessagePattern("inventory.find_by_product_id")
-  async findByProductId(productId: number) {
+  async findByProductId(productId: number): Promise<Inventory> {
     this.logger.log(
       `[INVENTORY-TCP] Find inventory by product id ${productId}`,
     );
@@ -53,13 +58,13 @@ export class InventoryController {
   }
 
   @MessagePattern("inventory.find_by_sku")
-  async findBySku(sku: string) {
+  async findBySku(sku: string): Promise<Inventory> {
     this.logger.log(`[INVENTORY-TCP] Find inventory by sku ${sku}`);
     return this.inventoryService.findBySku(sku);
   }
 
   @MessagePattern("inventory.get_by_product_ids")
-  async getInventoryByProductIds(productIds: number[]) {
+  async getInventoryByProductIds(productIds: number[]): Promise<Inventory[]> {
     this.logger.log(`[INVENTORY-TCP] Get inventory by product ids`, productIds);
     return this.inventoryService.getInventoryByProductIds(productIds);
   }
@@ -69,7 +74,7 @@ export class InventoryController {
     productId: number;
     quantity: number;
     skuId?: number;
-  }) {
+  }): Promise<StockCheckResult> {
     this.logger.log(
       `[INVENTORY-TCP] Check stock for product ${data.productId}, quantity ${data.quantity}`,
     );
@@ -86,7 +91,7 @@ export class InventoryController {
     quantity: number;
     skuId?: number;
     reservationKey?: string;
-  }) {
+  }): Promise<boolean> {
     this.logger.log(
       `[INVENTORY-TCP] Reserve stock for product ${data.productId}, quantity ${data.quantity}`,
     );
@@ -104,7 +109,7 @@ export class InventoryController {
     quantity: number;
     skuId?: number;
     reservationKey?: string;
-  }) {
+  }): Promise<boolean> {
     this.logger.log(
       `[INVENTORY-TCP] Release stock for product ${data.productId}, quantity ${data.quantity}`,
     );
@@ -122,7 +127,7 @@ export class InventoryController {
     quantity: number;
     skuId?: number;
     reservationKey?: string;
-  }) {
+  }): Promise<boolean> {
     this.logger.log(
       `[INVENTORY-TCP] Consume reserved stock for product ${data.productId}, quantity ${data.quantity}`,
     );
@@ -140,7 +145,7 @@ export class InventoryController {
     quantity: number;
     skuId?: number;
     reservationKey?: string;
-  }) {
+  }): Promise<boolean> {
     this.logger.log(
       `[INVENTORY-TCP] Restock returned stock for product ${data.productId}, quantity ${data.quantity}`,
     );
@@ -153,26 +158,33 @@ export class InventoryController {
   }
 
   @MessagePattern("inventory.get_low_stock")
-  async getLowStockItems(data?: { productIds?: number[] }) {
+  async getLowStockItems(data?: {
+    productIds?: number[];
+  }): Promise<Inventory[]> {
     this.logger.log(`[INVENTORY-TCP] Get low stock items`);
     return this.inventoryService.getLowStockItems(data?.productIds);
   }
 
   @MessagePattern("inventory.update")
-  async updateInventory(data: { id: number; update: UpdateInventoryDto }) {
+  async updateInventory(data: {
+    id: number;
+    update: UpdateInventoryDto;
+  }): Promise<Inventory> {
     this.logger.log(`[INVENTORY-TCP] Update inventory id ${data.id}`);
     return this.inventoryService.update(data.id, data.update);
   }
 
   @MessagePattern("inventory.remove")
-  async removeInventory(id: number) {
+  async removeInventory(id: number): Promise<{ success: boolean }> {
     this.logger.log(`[INVENTORY-TCP] Remove inventory id ${id}`);
     const success = await this.inventoryService.remove(id);
     return { success };
   }
 
   @MessagePattern("inventory.remove_by_product")
-  async removeInventoryByProduct(productId: number) {
+  async removeInventoryByProduct(
+    productId: number,
+  ): Promise<{ deleted: number }> {
     this.logger.log(
       `[INVENTORY-TCP] Remove all inventory for product ${productId}`,
     );
@@ -188,7 +200,7 @@ export class InventoryController {
       items: { productId: number; quantity: number; skuId?: number | null }[];
     },
     @Ctx() context: RmqContext,
-  ) {
+  ): Promise<void> {
     this.logger.log(
       `[INVENTORY] Processing order_canceled for order ${order.orderId}`,
     );
@@ -246,7 +258,7 @@ export class InventoryController {
       stockChangedSkuIds?: number[];
     },
     @Ctx() context: RmqContext,
-  ) {
+  ): Promise<void> {
     const stockChangedSkuIds = new Set(payload.stockChangedSkuIds ?? []);
     this.logger.log(
       `[INVENTORY] Processing sku_upserted for product ${payload.productId}: ${payload.skus.length} skus, ${payload.deletedSkuIds.length} deleted, ${stockChangedSkuIds.size} restocked`,

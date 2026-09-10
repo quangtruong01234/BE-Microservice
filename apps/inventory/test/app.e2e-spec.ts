@@ -1,6 +1,7 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { INestApplication } from "@nestjs/common";
 import * as request from "supertest";
+import { App } from "supertest/types";
 import { InventoryModule } from "./../src/inventory.module";
 
 describe("InventoryController (e2e)", () => {
@@ -16,7 +17,8 @@ describe("InventoryController (e2e)", () => {
   });
 
   it("/ (GET)", () => {
-    return request(app.getHttpServer())
+    // Nest types getHttpServer() as `any`; supertest wants a real server.
+    return request(app.getHttpServer() as App)
       .get("/")
       .expect(200)
       .expect("Hello World!");
