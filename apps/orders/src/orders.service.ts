@@ -400,7 +400,7 @@ export class OrdersService {
         order.ghnOrderCode = ghnCode;
       } catch (err) {
         this.logger.error(
-          `GHN createShippingOrder failed for order ${order.id}: ${err}`,
+          `GHN createShippingOrder failed for order ${order.id}: ${err instanceof Error ? err.message : String(err)}`,
         );
         // order already saved — return without ghnOrderCode, retry later
       }
@@ -1409,7 +1409,7 @@ export class OrdersService {
           order.ghnOrderCode = ghnCode;
         } catch (err) {
           this.logger.error(
-            `[ORDERS] GHN createShippingOrder failed for order ${order.id}: ${err}`,
+            `[ORDERS] GHN createShippingOrder failed for order ${order.id}: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
       }
@@ -3014,7 +3014,7 @@ export class OrdersService {
       this.logger.log(`[ORDERS] GHN order created for ${orderId}: ${ghnCode}`);
     } catch (err) {
       this.logger.error(
-        `[ORDERS] GHN createShippingOrder failed for order ${orderId}: ${err}`,
+        `[ORDERS] GHN createShippingOrder failed for order ${orderId}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }

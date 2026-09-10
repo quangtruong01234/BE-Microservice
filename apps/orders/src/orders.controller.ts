@@ -637,7 +637,7 @@ export class OrdersController {
       this.rmqService.ack(context);
     } catch (err) {
       this.logger.error(
-        `[ORDERS] handlePaymentCompleted failed for order ${orderId}: ${err}`,
+        `[ORDERS] handlePaymentCompleted failed for order ${orderId}: ${err instanceof Error ? err.message : String(err)}`,
       );
       const channel = context.getChannelRef() as {
         nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
