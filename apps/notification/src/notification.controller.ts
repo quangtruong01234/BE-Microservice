@@ -203,7 +203,7 @@ export class NotificationController {
       this.rmqService.ack(context);
     } catch (err) {
       this.logger.error(
-        `[NOTIFICATION] handleOrderCreated failed for order ${orderId}: ${err}`,
+        `[NOTIFICATION] handleOrderCreated failed for order ${orderId}: ${err instanceof Error ? err.message : String(err)}`,
       );
       const channel = context.getChannelRef() as {
         nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
@@ -248,7 +248,7 @@ export class NotificationController {
       this.rmqService.ack(context);
     } catch (err) {
       this.logger.error(
-        `[NOTIFICATION] handlePaymentCompleted failed for order ${orderId}: ${err}`,
+        `[NOTIFICATION] handlePaymentCompleted failed for order ${orderId}: ${err instanceof Error ? err.message : String(err)}`,
       );
       const channel = context.getChannelRef() as {
         nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
@@ -318,7 +318,7 @@ export class NotificationController {
       this.rmqService.ack(context);
     } catch (err) {
       this.logger.error(
-        `[NOTIFICATION] handleOrderCanceled failed for order ${orderId}: ${err}`,
+        `[NOTIFICATION] handleOrderCanceled failed for order ${orderId}: ${err instanceof Error ? err.message : String(err)}`,
       );
       const channel = context.getChannelRef() as {
         nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
@@ -377,7 +377,7 @@ export class NotificationController {
       this.rmqService.ack(context);
     } catch (err) {
       this.logger.error(
-        `[NOTIFICATION] handleOrderStatusChanged failed for order ${orderId}: ${err}`,
+        `[NOTIFICATION] handleOrderStatusChanged failed for order ${orderId}: ${err instanceof Error ? err.message : String(err)}`,
       );
       const channel = context.getChannelRef() as {
         nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
@@ -423,7 +423,7 @@ export class NotificationController {
       this.rmqService.ack(context);
     } catch (err) {
       this.logger.error(
-        `[NOTIFICATION] handleOrderReturnRequested failed for order ${orderId}: ${err}`,
+        `[NOTIFICATION] handleOrderReturnRequested failed for order ${orderId}: ${err instanceof Error ? err.message : String(err)}`,
       );
       const channel = context.getChannelRef() as {
         nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
@@ -474,7 +474,7 @@ export class NotificationController {
       this.rmqService.ack(context);
     } catch (err) {
       this.logger.error(
-        `[NOTIFICATION] handleOrderReturnApproved failed for order ${orderId}: ${err}`,
+        `[NOTIFICATION] handleOrderReturnApproved failed for order ${orderId}: ${err instanceof Error ? err.message : String(err)}`,
       );
       const channel = context.getChannelRef() as {
         nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
@@ -525,7 +525,7 @@ export class NotificationController {
       this.rmqService.ack(context);
     } catch (err) {
       this.logger.error(
-        `[NOTIFICATION] handleOrderReturnRejected failed for order ${orderId}: ${err}`,
+        `[NOTIFICATION] handleOrderReturnRejected failed for order ${orderId}: ${err instanceof Error ? err.message : String(err)}`,
       );
       const channel = context.getChannelRef() as {
         nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
@@ -569,7 +569,9 @@ export class NotificationController {
       );
       this.rmqService.ack(context);
     } catch (err) {
-      this.logger.error(`[NOTIFICATION] handleCommentCreated failed: ${err}`);
+      this.logger.error(
+        `[NOTIFICATION] handleCommentCreated failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
       const channel = context.getChannelRef() as {
         nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
       };
@@ -608,7 +610,9 @@ export class NotificationController {
       );
       this.rmqService.ack(context);
     } catch (err) {
-      this.logger.error(`[NOTIFICATION] handleReplyCreated failed: ${err}`);
+      this.logger.error(
+        `[NOTIFICATION] handleReplyCreated failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
       const channel = context.getChannelRef() as {
         nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
       };
@@ -649,7 +653,9 @@ export class NotificationController {
       );
       this.rmqService.ack(context);
     } catch (err) {
-      this.logger.error(`[NOTIFICATION] handleBrandReviewed failed: ${err}`);
+      this.logger.error(
+        `[NOTIFICATION] handleBrandReviewed failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
       const channel = context.getChannelRef() as {
         nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
       };
@@ -690,7 +696,9 @@ export class NotificationController {
       );
       this.rmqService.ack(context);
     } catch (err) {
-      this.logger.error(`[NOTIFICATION] handleCategoryReviewed failed: ${err}`);
+      this.logger.error(
+        `[NOTIFICATION] handleCategoryReviewed failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
       const channel = context.getChannelRef() as {
         nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
       };
