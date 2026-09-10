@@ -7,6 +7,7 @@ import {
   Query,
   SetMetadata,
   UseFilters,
+  CustomDecorator,
 } from "@nestjs/common";
 import {
   Ctx,
@@ -28,7 +29,7 @@ import {
 } from "@app/common";
 import { ZaloPayReturnQuery } from "./zalopay/zalopay.types";
 
-const Public = () => SetMetadata("isPublic", true);
+const Public = (): CustomDecorator<string> => SetMetadata("isPublic", true);
 
 @UseFilters(HttpToRpcExceptionFilter)
 @Controller()

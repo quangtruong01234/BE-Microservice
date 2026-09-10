@@ -8,7 +8,13 @@ function optionalEnv(key: string, fallback: string): string {
   return process.env[key]?.trim() || fallback;
 }
 
-export function getVNPayConfig() {
+export function getVNPayConfig(): {
+  tmnCode: string;
+  hashSecret: string;
+  url: string;
+  returnUrl: string;
+  ipnUrl: string;
+} {
   return {
     tmnCode: requireEnv("VNP_TMN_CODE"),
     hashSecret: requireEnv("VNP_HASH_SECRET"),

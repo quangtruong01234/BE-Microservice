@@ -11,7 +11,7 @@ import {
   TCP_HOST,
 } from "libs/constant/port-tcp.constant";
 
-async function bootstrap() {
+async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(PaymentsModule);
 
   // Enable global RPC exception filter for microservices

@@ -8,7 +8,13 @@ function optionalEnv(key: string, fallback: string): string {
   return process.env[key]?.trim() || fallback;
 }
 
-export function getZaloPayConfig() {
+export function getZaloPayConfig(): {
+  appId: number;
+  key1: string;
+  key2: string;
+  endpoint: string;
+  redirectUrl: string;
+} {
   return {
     appId: Number(requireEnv("ZALOPAY_APP_ID")),
     key1: requireEnv("ZALOPAY_KEY1"),
