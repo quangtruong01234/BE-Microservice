@@ -8,7 +8,14 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { InjectDataSource, InjectRepository } from "@nestjs/typeorm";
-import { DataSource, In, IsNull, QueryFailedError, Repository } from "typeorm";
+import {
+  DataSource,
+  In,
+  IsNull,
+  QueryFailedError,
+  Repository,
+  TreeRepository,
+} from "typeorm";
 import { Channel } from "amqplib";
 import { CachedService } from "@app/cached";
 import {
@@ -149,7 +156,7 @@ export class SocialService {
     }
   }
 
-  private get treeRepo() {
+  private get treeRepo(): TreeRepository<Comment> {
     return this.dataSource.getTreeRepository(Comment);
   }
 

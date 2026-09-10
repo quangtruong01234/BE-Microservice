@@ -4,7 +4,7 @@ import * as dotenv from "dotenv";
 import { PORT_TCP, TCP_HOST } from "libs/constant/port-tcp.constant";
 import { SocialModule } from "./social.module";
 
-async function bootstrap() {
+async function bootstrap(): Promise<void> {
   dotenv.config({ path: "./local/nodeA/.env" });
 
   const app = await NestFactory.create(SocialModule);
