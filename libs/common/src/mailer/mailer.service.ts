@@ -1,7 +1,11 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { randomUUID } from "crypto";
 import * as tls from "tls";
-import { DEFAULT_SMTP_PORT, SMTP_TIMEOUT_MS } from "./mailer.constants";
+import {
+  DEFAULT_SMTP_PORT,
+  DEFAULT_UNDELIVERABLE_MAIL_DOMAINS,
+  SMTP_TIMEOUT_MS,
+} from "./mailer.constants";
 import { SmtpConfig } from "./mailer.types";
 
 /**
@@ -25,8 +29,9 @@ export class MailerService {
    * Sends an email. With `html` the message goes out as multipart/alternative
    * (`text` is the fallback every client can render); without it, as plain
    * text. Returns true when the message was accepted by the SMTP server, false
-   * when SMTP is not configured (fallback logged). Throws on a
-   * transport/protocol failure with SMTP configured.
+   * when SMTP is not configured or the recipient domain cannot receive mail
+   * (fallback logged). Throws on a transport/protocol failure with SMTP
+   * configured.
    */
   async sendMail(
     to: string,
@@ -34,6 +39,14 @@ export class MailerService {
     text: string,
     html?: string,
   ): Promise<boolean> {
+    if (this.isUndeliverable(to)) {
+      // Same shape as the not-configured fallback below: log, never throw. The
+      // relay would accept this message and bounce it back to us for ~45h.
+      this.logger.warn(
+        `Undeliverable recipient domain — email to ${to} NOT sent. Subject: "${subject}". Body: ${text}`,
+      );
+      return false;
+    }
     const config = this.resolveConfig();
     if (!config) {
       // Log the TEXT part only — the HTML alternative carries the same
@@ -46,6 +59,36 @@ export class MailerService {
     await this.smtpSend(config, to, subject, text, html);
     this.logger.log(`Email sent to ${to}: "${subject}"`);
     return true;
+  }
+
+  /**
+   * True when the recipient's domain is on the undeliverable list. An address
+   * with no `@` is left alone — DTO-level `@IsEmail` already rejects those, and
+   * guessing here would swallow mail for a shape this method cannot judge.
+   */
+  private isUndeliverable(to: string): boolean {
+    const domain = this.extractAddress(to).split("@")[1]?.toLowerCase();
+    if (!domain) {
+      return false;
+    }
+    return this.resolveUndeliverableDomains().some(
+      (blocked) => domain === blocked || domain.endsWith(`.${blocked}`),
+    );
+  }
+
+  /**
+   * `MAIL_UNDELIVERABLE_DOMAINS` unset ⇒ defaults; set (even to "") ⇒ exactly
+   * what it says, so the guard can be turned off without a code change.
+   */
+  private resolveUndeliverableDomains(): string[] {
+    const configured = process.env.MAIL_UNDELIVERABLE_DOMAINS;
+    const domains =
+      configured === undefined
+        ? DEFAULT_UNDELIVERABLE_MAIL_DOMAINS
+        : configured.split(",");
+    return domains
+      .map((domain) => domain.trim().toLowerCase())
+      .filter((domain) => domain.length > 0);
   }
 
   private resolveConfig(): SmtpConfig | null {
