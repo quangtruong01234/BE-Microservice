@@ -233,6 +233,18 @@
   `GET /api/order/vouchers/mine` → 200 and `POST /api/order/vouchers/available`
   prices the seeded `TRYBUY10` with `sellerId: null` / `scope: "platform"`.
 
+- **`nodeA-20260911-001-add-expected-delivery-time-to-orders`** — GHN-ETA-01:
+  `orders.expected_delivery_time` DATETIME NULL. Additive, guarded by
+  INFORMATION_SCHEMA, no backfill (the ETA exists only in a GHN response, so
+  recovering it for old rows would cost one API call per order). Dev auto-created
+  the column via `synchronize:true`, so `db:migrate:status` reports it `[pending]`
+  on DEV — cosmetic ledger gap only. **NOT YET APPLIED TO PROD** as of
+  2026-09-11. Prod forces `synchronize:false`, so this must run before the code
+  that reads/writes the column deploys; the deploy workflow migrates under
+  `set -euo pipefail` before `pm2 startOrRestart`, so pushing the branch applies
+  it in the right order. Until then prod orders simply carry no such field —
+  every read still answers 200 (release class B).
+
 ### Pre-cutoff applied-migration history (fresh-DB reference only)
 
 All absorbed into the 2026-07-17 baseline; listed for context on WHY columns

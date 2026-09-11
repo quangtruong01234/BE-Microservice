@@ -44,6 +44,10 @@ conclude a push is blocked.
 
 ### Prod-owed
 
+- **Migration `nodeA-20260911-001-add-expected-delivery-time-to-orders` is NOT
+  applied to prod** (GHN-ETA-01, additive `orders.expected_delivery_time`). The
+  deploy workflow runs the migrate step before `pm2 startOrRestart`, so pushing
+  applies it in the right order — just do not hand-deploy the code without it.
 - **`METRICS_TOKEN` is UNSET in `local/nodeA/.env`**, so `GET /metrics` 404s on
   prod (verified 2026-08-15). Set it only when a scraper actually exists. Only
   the gateway is instrumented; the registry is per-process, so
@@ -70,8 +74,6 @@ Full designs (scope, shape, landmines, release class) live in
 `ai-docs/agent-context/planned-work.md` — load it with the Read tool when you
 pick one up. Do not re-derive them:
 
-- **GHN-ETA-01** — persist + expose the GHN delivery ETA (1 additive migration, class B).
-- **GHN-FAIL-NTF-01** — notify the buyer on a failed delivery attempt (class B, no migration).
 - **SOCIAL-LIKE-NTF-01** — liking a post notifies nobody (product decision, needs batching).
 - **VOUCHER-SHOP-01 phase 2** — Shopee-style stacking + multi-shop apportionment.
 - **AI-03 / AI-04** — Sell From Photo, Visual Search (Gemini; AI-04 adds 1 migration).
@@ -103,10 +105,14 @@ twice, single-seller checkout has no `paymentUrl` (`GET /:id/payment-url` →
 `orderUrl`), payment return URLs before 2026-08-07 keep a numeric id.
 
 **GHN** — GHN-FAIL-01 (`delivery_fail` deliberately moves no local status),
+GHN-FAIL-NTF-01 (the buyer is notified on the FIRST `delivery_fail` only, deduped
+via `shipping_history`; in-app only, no email, no seller copy),
 GHN-DIST-01 (unknown district / cross-district ward → 400, but validation is
 fail-open), GHN-MSG-01 (12 of 19 Quận 8 wards unshippable on the dev shop —
 **do not "fix" it by quoting from `/shipping-order/fee`**), free-text address is
-best-effort, `toWardCode` stays a string.
+best-effort, `toWardCode` stays a string, GHN-ETA-01 (the stored ETA is
+refreshed by the manual sync only — never by the webhook — and `create` vs
+`detail` name the same value `expected_delivery_time` vs `leadtime`).
 
 **Products / inventory** — SKU `skuList` is the full desired set not a delta,
 STOCK-SYNC-01 (two-way absolute stock sync), PATCH-ATOMIC-01 (product PATCH is
@@ -120,6 +126,9 @@ defaults `isActive:true`, approved returns restock via
 reads, `null` not `{}` for a missing relation, no `@IsOptionalNotNull()` sweep),
 BATCH-FAIL-01 (product leg errors, inventory leg degrades),
 ENRICH-FAIL-01 (a social write can 502 on a user-service outage),
+ENRICH-BATCH-01 (every seller embed labels with `username`; nullable
+`users.name` is not exposed anywhere and `GET /api/user/featured-sellers` is the
+one route that still passes it through),
 ENVELOPE-01, array query params `?x[]=` → 400.
 
 **Vouchers** — VOUCHER-CONC-01 (Redis quota gate fails open, can be

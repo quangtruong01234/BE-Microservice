@@ -6,6 +6,171 @@
 
 ## Completed Milestones
 
+- **ENRICH-BATCH-01 — the list/batch product read named a seller `null` that the
+  per-id read named correctly (2026-09-11). One source line. No migration,
+  release class B.** Reported by the FE from prod: for the *same* product and
+  the *same* seller, `GET /api/products/:id` answered
+  `user: { id: "usr_xU2Q7pGhhFpduGWz", name: "shop1", … }` while
+  `POST /api/products/with-inventory/multiple` answered `name: null`. The id
+  resolved on both paths, so it was never a lookup failure.
+  - **Root cause is one word.** The gateway has two seller-enrichment paths.
+    `enrichProductWithUserInfo` (single product) built its embed from
+    `user.username`; `enrichProductsWithUserInfo` (list/batch) built its user map
+    from `user.name`. `GET_USERS_BY_IDS` selects **both** columns, so the wrong
+    one was silently available and nothing ever failed loudly —
+    `apps/user/src/entity/user.entity.ts` has `username!: string` (NOT NULL,
+    unique) but `name!: string | null`, and `name` is simply unset on any account
+    that never filled in a display name. Fix: `name: user.username` in
+    `apps/gateway/src/product/product.service.ts`. `username` is also what every
+    other user embed in the gateway exposes (social, notification), so the two
+    product paths now agree with each other *and* with the house convention.
+  - **The batch endpoint was the smallest of four affected routes.** The FE could
+    only measure the one it calls, but that single line feeds all three call
+    sites of `enrichProductsWithUserInfo`: `GET /api/products` (+ shop lists) via
+    `fetchProductsPage`, `GET /api/products/with-inventory/all`, the batch
+    endpoint, and the wishlist envelope. Measured on the dev DB: **13 of 17 users
+    have `name IS NULL`** — ~76% of sellers were being labelled `null` on every
+    list read.
+  - **It also violated the gateway's own declared type.** `product.types.ts`
+    declares the embed as `user?: { id: string; name: string; avatar?: string }` —
+    `name` non-nullable. Nothing needed re-typing; runtime now matches the
+    contract that was already written down.
+  - **The existing unit test encoded the bug** — it asserted `name: "Shop A"`,
+    i.e. the value of `user.name`, so it would have stayed green forever.
+    Corrected to `"shopa"` (the mock's `username`) and joined by a regression
+    test for the case that actually broke on prod: a seller with `name: null`
+    and `username: "shop1"` must come back named `"shop1"`.
+  - **Verified with a before/after reproduction, not just a passing call.** The
+    first curls were non-discriminating (the sampled sellers could have had
+    `name === username`), so the DB was queried directly to prove
+    `name IS NULL` for `test1` / `testadmin`, and the one line was temporarily
+    reverted to reproduce `name: null` on the live gateway before restoring it.
+    Post-fix: batch vs detail agree on every field of the seller embed for three
+    products (one per seller); `with-inventory/all?limit=100` → 27 rows, no row
+    with `user.name === null`; authed wishlist → 200 with real names (test state
+    restored, DELETE → 204). `tsc --noEmit` clean, eslint clean, 18/18 jest
+    tests in `product.service.spec.ts`.
+  - **Left alone on purpose:** `GET /api/user/featured-sellers` spreads the whole
+    user row through `exposeUser`, so it returns `username` **and** a possibly
+    `null` `name`. That is not the same defect — no field there is declared
+    non-null and the non-null label is present in the same object — so it stays
+    untouched rather than becoming a drive-by change.
+- **GHN-FAIL-NTF-01 — a failed delivery attempt now tells the buyer, exactly
+  once (2026-09-11). No migration, no contract change to an existing shape,
+  release class B.** Left open by GHN-FAIL-01 (2026-08-16): `delivery_fail`
+  moved no local status and notified nobody, so a buyer whose parcel was missed
+  learned about it only if they opened the order and read the GHN badge — and
+  the one thing they can act on (wrong address, nobody home, unreachable phone)
+  is time-boxed to GHN's retries before the return family cancels the order.
+  - **Scope stayed at one status.** Of the ten
+    `GHN_STATUSES_WITHOUT_LOCAL_STATUS`, only `delivery_fail` is actionable by
+    the buyer. The in-transit legs are GHN-internal noise;
+    `exception`/`damage`/`lost` need a human decision first — telling a buyer
+    their parcel is lost before anyone has decided the remedy is worse than
+    silence. Pinned as `GHN_DELIVERY_FAIL_STATUS` in
+    `libs/constant/shipping.constant.ts` next to the set it is a member of.
+  - **The hard part was idempotency, and the fix needed no new storage.**
+    `applyGhnStatus` returns `changed:false` for this status, so unlike every
+    other order notification there is no transition to hang dedupe on, while GHN
+    retries ~3×, webhooks redeliver, and three entry points (webhook / manual
+    sync / demo-status) all funnel through the same function. Emitting naively
+    would have produced 3–5 identical lines per order. `shipping_history` is
+    already written on that path, so it doubles as the ledger: one
+    `exist({orderId, ghnStatus:'delivery_fail'})` **before** the caller writes
+    its own row means "no row yet" == "first attempt". No Redis, no column, no
+    migration. Rows written before this shipped count too, so an order that
+    already missed an attempt is never notified retroactively.
+  - **Its own event, not `order.status_changed`.**
+    `EVENT.ORDER_DELIVERY_ATTEMPT_FAILED_EVENT` (`order.delivery_attempt_failed`)
+    on the existing `order.fanout` exchange — fanout, so no binding change, and
+    inventory/payments/rewards discard it for want of a matching
+    `@EventPattern`. Reusing `order.status_changed` would have meant a payload
+    whose `status`/`previousStatus` mean `OrderStatus` carrying something that
+    is not a status.
+  - **Buyer only, in-app only, no email, and no CTA** — the one point the design
+    had left to a decision. `EMAILED_STATUSES` is milestones; mailing a
+    retryable event generates "is my order broken?" tickets, and a seller cannot
+    act on a missed attempt. No CTA because a buyer cannot self-serve an address
+    fix once the waybill exists (`update_receiver` is admin/`shipping_manager`),
+    so a button would dead-end or dump load on the shop. The notification
+    carries the order's public id, so the FE deep-links exactly as it does for
+    every other order notification. Wording reads as not-final by design:
+    *"Đơn hàng #… giao chưa thành công, đơn vị vận chuyển sẽ giao lại trong thời
+    gian tới"* — never a bare "thất bại".
+  - **Verified on dev, all three legs.** Demo-status `delivery_fail` on an order
+    with clean history → `201` and exactly one `order_delivery_attempt_failed`
+    notification; the same call repeated → still exactly one; the real webhook
+    (`POST /api/ghn/webhook`, header token) on a second order → notified, and
+    its repeat → silent; an order carrying an August `delivery_fail` row →
+    silent, proving pre-existing rows count. 424 unit tests pass, including four
+    new ones (first attempt publishes with the right payload and query, a repeat
+    publishes nothing, a rejecting ledger read neither throws nor publishes, and
+    the status still does not move).
+  - **The test-mock trap worth remembering:** the existing `delivery_fail` spec
+    would have kept passing for the wrong reason — the `shippingHistoryRepository`
+    mocks had no `exist`, so the new guard threw a TypeError straight into its
+    own best-effort catch. Both mocks now stub it.
+  - Residuals: `known-behaviors.md` → GHN-FAIL-NTF-01 (notably: two genuinely
+    concurrent redeliveries can still double-notify — closing that needs the
+    unique constraint this design avoided). FE entry written to
+    `frontend-handoff.md` (storefront; the GHN console reads the timeline, which
+    is unchanged).
+
+- **GHN-ETA-01 — the delivery ETA GHN quotes is now stored on the order and
+  returned on every read (2026-09-11). One additive migration, release class
+  B.** The estimate existed all along and was thrown away: `POST
+  /api/order/shipping-fee` showed it once at checkout, then
+  `createShippingOrder` read `order_code` out of the create response and dropped
+  the `expected_delivery_time` sitting beside it. A buyer reopening the order
+  saw no date anywhere.
+  - **Migration** `nodeA-20260911-001-add-expected-delivery-time-to-orders`:
+    `orders.expected_delivery_time` DATETIME NULL, guarded by
+    INFORMATION_SCHEMA, no backfill. Backfilling would mean one GHN call per
+    historical order for a value nothing reads. **Not yet applied to prod** —
+    tracked in `snapshot.md` Prod-owed and the ops-runtime ledger.
+  - **Write path**: `createShippingOrder` now returns `GhnCreatedOrder
+    {orderCode, expectedDeliveryTime}` instead of a bare string, and all four
+    waybill call sites (COD create, multi-seller checkout,
+    `handlePaymentCompleted`, `readyToShip`) route through one new private
+    helper `createAndPersistWaybill`, which writes both values in the same
+    `update` and mutates the in-memory order so a later `save` cannot clobber
+    them. The pair had been written by hand at each site; centralizing it is
+    what stops the ETA being forgotten at the fifth.
+  - **Refresh path**: `syncAdminGhnOrder` refreshes from the detail it already
+    fetched — free, no extra GHN call. The webhook deliberately does not
+    refresh; its payload has no ETA and fetching one per status event would put
+    a GHN call on every callback.
+  - **The bug that only runtime found.** The first cut read
+    `detail.expectedDeliveryTime` and was a silent no-op on every sync: GHN's
+    two endpoints name the same value differently — `/shipping-order/create`
+    answers `expected_delivery_time`, `/shipping-order/detail` leaves that field
+    `null` and puts the identical timestamp in `leadtime`. tsc, eslint and the
+    unit tests were all green over it, because both keys exist on the type.
+    Fixed to `detail.expectedDeliveryTime ?? detail.leadtime` and pinned by a
+    unit test.
+  - **Edges closed**: GHN's "no ETA" is the zero date `0001-01-01T00:00:00Z`,
+    below MySQL's DATETIME floor — normalized to `null` (as is anything
+    unparseable or pre-2000) so a decorative field can never fail a waybill
+    write. A refresh never blanks a stored value, and is wrapped in try/catch so
+    it cannot fail the status sync it rode in on.
+  - **Read path**: no gateway mapping change was needed — `exposeOrder` spreads
+    the order and strips only `publicId`/`reservationKey`, so declaring
+    `expectedDeliveryTime?: string | null` on `OrderResponse` was enough for
+    `POST /api/order`, `GET /:publicId` and `GET /user/:userPublicId`. Nullable
+    from its first release, per SHAPE-01 §2. The backend returns an **absolute
+    timestamp**, never a duration — a computed "3 days" goes stale the moment it
+    is serialized.
+  - **Verified on dev**: `POST /api/order` (COD) → `201` with
+    `ghnOrderCode: "L8WAXC"` + `expectedDeliveryTime:
+    "2026-09-13T16:59:59.000Z"`; the field present on both single and list
+    reads; a manual sync moved a pre-existing order from `null` to
+    `"2026-09-09T16:59:59.000Z"` with its status untouched, and a repeat sync
+    was a clean no-op (proving the read-back/compare leg). 113 unit tests pass,
+    including two new ones for the leadtime fallback and the never-blank rule.
+  - Residuals: `known-behaviors.md` → GHN-ETA-01. FE entry written to
+    `frontend-handoff.md` (storefront; the GHN console already receives the live
+    detail so it needs nothing).
+
 - **MAIL-BOUNCE-01 — reset mail to fixture addresses stopped flooding the
   sender's inbox (2026-09-11). No migration, no contract change, release class
   A.** Reported as "sao có nhiều mail gửi forget password thế", with a

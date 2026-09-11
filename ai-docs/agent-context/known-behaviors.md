@@ -216,11 +216,53 @@ status "<x>"` and now logs at **warn**, so a new GHN vocabulary word is loud.
   Forward-only — rows written before 2026-08-16 keep the old text.
 - Applies identically on all three entry points (webhook, admin manual sync,
   demo-status), because all three go through `applyGhnStatus`.
-- Still open as a **product** question, not a bug: whether a failed attempt
-  should notify the buyer. Nothing notifies today. The decided shape (scope,
-  the `shipping_history`-as-ledger dedupe, why not `order.status_changed`) is
-  written up as **GHN-FAIL-NTF-01** in `snapshot.md` — read that before
-  designing it again.
+- The status still does not move, but since 2026-09-11 it does notify the buyer
+  — see GHN-FAIL-NTF-01 immediately below.
+
+## A failed delivery attempt notifies the buyer ONCE (GHN-FAIL-NTF-01, 2026-09-11)
+
+`delivery_fail` is the only one of the ten `GHN_STATUSES_WITHOUT_LOCAL_STATUS`
+that reaches the buyer. The local status is untouched (GHN-FAIL-01 above stands);
+the notification is the entire effect.
+
+- **Scope is deliberately one status.** `delivery_fail` is the only one the buyer
+  can act on (wrong address / nobody home / phone unreachable) and the last
+  chance to fix it before the return family cancels the order. The in-transit
+  legs are GHN-internal noise. `exception`/`damage`/`lost` stay silent on
+  purpose — telling a buyer their parcel is lost before a human has decided the
+  remedy is worse than silence.
+- **Buyer only, in-app only, no email, no seller copy.** `EMAILED_STATUSES` is
+  milestones (`shipped`/`delivering`/`completed`); mailing a retryable event
+  generates "is my order broken?" tickets. A seller cannot act on a missed
+  attempt. **No CTA either** — a buyer cannot self-serve an address fix once the
+  waybill exists (`update_receiver` is admin/`shipping_manager`), so a button
+  would either dead-end or dump load on the shop. The notification carries
+  `orderId` like every other order notification, so the FE deep-links as usual.
+- **`shipping_history` IS the idempotency ledger.** `applyGhnStatus` returns
+  `changed:false` here, so there is no transition to hang dedupe on the way every
+  other order notification does — and GHN retries ~3×, webhooks redeliver, and
+  all three entry points (webhook / manual sync / demo-status) funnel through
+  `applyGhnStatus`. The guard runs BEFORE the caller writes its own history row,
+  so "no `delivery_fail` row for this order yet" means "first attempt". No Redis,
+  no new column, no migration. **Rows written before 2026-09-11 count** — an
+  order that already failed an attempt will never be notified retroactively
+  (verified: an order with an August `delivery_fail` row stayed silent).
+- **Later attempts still write history** for the console timeline; they just stop
+  pestering the buyer.
+- **Its own event, not `order.status_changed`** — that payload's
+  `status`/`previousStatus` mean `OrderStatus`, and a missed attempt is not one.
+  `EVENT.ORDER_DELIVERY_ATTEMPT_FAILED_EVENT` = `order.delivery_attempt_failed`
+  on the existing `order.fanout` exchange (fanout ⇒ no binding change; inventory
+  /payments/rewards have no matching `@EventPattern` and discard it).
+- **Residual — a genuinely concurrent redelivery can double-notify.** Two
+  webhook callbacks for the same order landing at the same instant can both read
+  zero rows before either writes one. Closing it needs a unique constraint, i.e.
+  the migration this design deliberately avoids. Accepted: the cost is one
+  duplicate in-app line, and GHN's retries are hours apart, not milliseconds.
+- **Both reads are best-effort.** A failing ledger query logs a warn and stays
+  SILENT (a webhook that already did its job must not fail over a notification,
+  and a failed read must not risk a duplicate); a dead RMQ channel logs a warn
+  and drops the notification — it is not on the outbox (OUTBOX-SCOPE-01).
 
 ## An unknown district/ward is a 400 (GHN-DIST-01, 2026-08-13; extended to order create by GHN-CREATE-01)
 
@@ -251,6 +293,38 @@ extra GHN calls) turns a silent 0 into `400 GHN_MESSAGE.DISTRICT_NOT_FOUND` /
   (Phường Mai Động, district `1490`) — mismatched hand-made data, both terminal
   with `ghn_order_code: null`, so no live path re-validates them. Every other
   stored pair (4 distinct, 16 orders) passes.
+
+## The stored delivery ETA is refreshed by the manual sync, never by the webhook (GHN-ETA-01, 2026-09-11)
+
+`orders.expected_delivery_time` holds the absolute timestamp GHN quotes. It is
+written at waybill create (the only place it arrives for free) and refreshed on
+`POST /api/order/admin/ghn/orders/:id/sync`. Four deliberate residuals:
+
+- **The GHN webhook does NOT refresh it.** Its payload carries only the order
+  code and the status — there is no ETA in it — so refreshing there would mean
+  an extra `/shipping-order/detail` call on *every* status callback. If GHN
+  reschedules and nobody syncs by hand, the stored value stays the one quoted at
+  waybill create. `setDemoGhnStatus` likewise does not refresh (its synthesized
+  detail has no ETA).
+- **The two GHN endpoints name the same value differently**, verified against
+  the live sandbox: `/v2/shipping-order/create` answers with
+  `expected_delivery_time`; `/v2/shipping-order/detail` leaves that field `null`
+  and puts the identical timestamp in `leadtime`. The sync therefore reads
+  `detail.expectedDeliveryTime ?? detail.leadtime`. Reading only the first made
+  every sync a silent no-op — no error, just a column that never moved.
+- **A refresh never blanks a stored value.** GHN omitting the field is not the
+  same as the delivery date being withdrawn, so a missing/unusable value leaves
+  the existing one alone. `null → value` is the only direction; the FE never has
+  to handle an ETA disappearing.
+- **GHN's "no ETA" is the zero date `0001-01-01T00:00:00Z`**, below MySQL's
+  DATETIME floor. It is normalized to `null` (as is anything before year 2000 or
+  unparseable) — writing it raw would fail the waybill write for a decorative
+  field. The refresh is additionally wrapped in try/catch: an ETA that cannot be
+  saved must never fail the status sync it rode in on.
+
+Not backfilled: orders created before 2026-09-11 keep `null` forever, because
+recovering the value would cost one GHN call per order and a past order's ETA
+has no reader.
 
 ## Order create rejects an undeliverable address, but still places on a GHN outage (GHN-CREATE-01, 2026-08-13)
 
@@ -1133,6 +1207,27 @@ with every user id nulled.
 Untouched on purpose: `exposeSubmittedBy` still DROPS `submittedBy` on a
 user-service failure so the moderation queue stays usable — that field is
 decoration, not the answer.
+
+## The seller label is `username`, never `users.name` (ENRICH-BATCH-01, 2026-09-11)
+
+`users` has two name columns: `username` (NOT NULL, unique) and `name`
+(nullable, a display name most accounts never set — 13 of 17 rows on dev are
+NULL). `GET_USERS_BY_IDS` selects both, so reading the wrong one fails silently:
+`enrichProductsWithUserInfo` used `user.name` and answered `user.name: null` for
+a seller that `enrichProductWithUserInfo` (using `username`) named correctly.
+
+**Rule for any new user embed: label with `username`.** That is what the product
+single/list/batch paths, social and notification all expose. A `name` embed field
+is typed `string` and must never be able to arrive `null` — the FE renders an
+empty seller label as *"Người bán không còn tồn tại"*, i.e. a live shop reads as
+deleted.
+
+Residual, deliberate: **`GET /api/user/featured-sellers` still passes `name`
+through** (nullable) alongside `username`. `exposeUser` spreads the whole row,
+nothing there is declared non-null, and the usable label ships in the same
+object — so it is a faithful row dump, not the same defect. Read `username`.
+`users.name` is otherwise unexposed; do not start surfacing it without making it
+NOT NULL first.
 
 ## Cancelling an order gives the voucher back (VOUCHER-CANCEL-01, 2026-08-26)
 

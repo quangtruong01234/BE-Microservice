@@ -8,69 +8,6 @@
 > keeps a one-line pointer per item; the reasoning lives here. When one of these
 > ships, move its entry to `CHANGELOG.md` and delete it from this file.
 
-## GHN-ETA-01 — persist + expose the GHN delivery ETA (1 additive migration, class B)
-
-GHN DOES return a delivery estimate, but as an **absolute timestamp**, not a
-duration and not a distance: `expected_delivery_time` (ISO 8601 UTC) on
-`/v2/shipping-order/preview` AND on `/v2/shipping-order/create`, computed from
-`from_district/ward → to_district/ward` + `service_type_id`. There is no km or
-hours/days field. Probed on the dev sandbox 2026-08-13: fee is 0 as always but
-`expected_delivery_time` carries a REAL value, so this is not blocked on prod
-GHN credentials. GHN also has a dedicated `POST /v2/shipping-order/leadtime`
-(`{leadtime, leadtime_order:{from_estimate_date,to_estimate_date}}`) — we do not
-call it and do not need to; preview already hands us the same value for free.
-
-Already wired: `previewShippingFee` (`ghn.service.ts:408`) → `POST
-/api/order/shipping-fee` returns `{shippingFee, expectedDeliveryTime}`, and
-`getOrderDetail` (`ghn.service.ts:657-658`) maps both `expectedDeliveryTime` and
-`leadtime` into `GhnOrderDetail` for the admin GHN console.
-
-Gap: `createShippingOrder` (`ghn.service.ts:365`) reads only `order_code` and
-DROPS the `expected_delivery_time` sitting in the same response; no column on
-`orders` stores it. So the buyer sees an ETA once at checkout and never again —
-`GET /api/order/:id` has no such field.
-
-To do: `orders.expected_delivery_time DATETIME NULL` (additive), write it at
-waybill create, refresh on webhook/manual sync, expose on the order read. FE
-renders "giao trong X ngày" by diffing against now — do NOT compute a duration
-server-side. Release class **B** (current FE keeps working).
-
-## GHN-FAIL-NTF-01 — notify the buyer on a failed delivery attempt (class B, no migration)
-
-Left open by GHN-FAIL-01 (2026-08-16): `delivery_fail` moves no local status and
-notifies nobody. Decided shape — implement as-is, the design work is done:
-
-- **Scope: `delivery_fail` ONLY**, of the ten `GHN_STATUSES_WITHOUT_LOCAL_STATUS`.
-  It is the only one the buyer can act on (wrong address / nobody home / phone
-  unreachable) and the last chance to fix it before the return family cancels the
-  order. The in-transit legs are GHN-internal noise. `exception`/`damage`/`lost`
-  deliberately do NOT auto-notify — telling a buyer their parcel is lost before a
-  human has decided the remedy is worse than silence; warn internally instead.
-- **Buyer only, in-app only, no email.** `EMAILED_STATUSES` is milestones only
-  (`shipped`/`delivering`/`completed`); emailing a retryable event generates
-  "is my order broken?" tickets. Seller can do nothing about a missed attempt.
-- **Dedupe is the hard part** — `applyGhnStatus` returns `changed:false`, so
-  there is NO transition to hang idempotency on (unlike every existing order
-  notification), GHN retries ~3×, webhooks redeliver, and all three entry points
-  (webhook / manual sync / demo-status) hit the same function. Emit naively and
-  one order yields 3–5 identical notifications. **Use `shipping_history` as the
-  ledger: emit only when this is the FIRST `delivery_fail` row for the order.**
-  The row is written in that code path anyway — one existence query on
-  `shippingHistoryRepository` (already injected, `orders.service.ts:129`), no
-  Redis, no new column, no migration. Later attempts still write history for the
-  console; they just stop pestering the buyer.
-- **New event, do NOT reuse `order.status_changed`** — its payload's
-  `status`/`previousStatus` mean `OrderStatus`, and `statusChangedMessage()`
-  would need a branch for a "status" that does not exist.
-- `type = "order_delivery_attempt_failed"` (`type` is free-form `varchar(50)`;
-  an unmapped type falls back to default rendering on FE — NOTIF-LIFECYCLE-01
-  precedent). Wording must read as not-final: "Giao hàng chưa thành công, đơn vị
-  vận chuyển sẽ giao lại…", never a bare "thất bại".
-- **Still the user's call:** whether the notification carries a CTA. A buyer
-  cannot self-serve an address fix after the waybill exists (`update_receiver` is
-  an admin/`shipping_manager` action), so it is either purely informational or
-  "liên hệ người bán", which shifts load onto the shop.
-
 ## SOCIAL-LIKE-NTF-01 — liking a post notifies nobody (product decision, not a bug)
 
 `comment` and `reply` both notify the post owner (verified on prod 2026-08-13 —
