@@ -340,9 +340,41 @@ describe("ProductService seller enrichment failure modes", () => {
       "prod_aaaaaaaaaaaaaaaa",
     ])) as unknown as Array<Record<string, unknown>>;
 
+    // ENRICH-BATCH-01: `username`, not the nullable `users.name` display
+    // column — this is the value the single-product read exposes, and the two
+    // paths must not name the same seller differently.
     expect(products[0].user).toMatchObject({
       id: "usr_aaaaaaaaaaaaaaaa",
-      name: "Shop A",
+      name: "shopa",
+    });
+  });
+
+  // ENRICH-BATCH-01 — the case that was actually broken on prod: a seller who
+  // never set a display name. `users.name` is NULL, so the batch answered
+  // `user.name: null` for a seller that plainly exists, while
+  // `GET /api/products/:id` answered "shop1". One nullable column away from
+  // the FE rendering "Người bán không còn tồn tại" over a live shop.
+  it("names a seller whose display name is unset, matching the per-id read", async () => {
+    userClient.send.mockReturnValue(
+      of([
+        {
+          id: 31,
+          publicId: "usr_xU2Q7pGhhFpduGWz",
+          name: null,
+          username: "shop1",
+          avatar: null,
+        },
+      ]),
+    );
+
+    const products = (await service.getProductsWithInventory([
+      "prod_aaaaaaaaaaaaaaaa",
+    ])) as unknown as Array<Record<string, unknown>>;
+
+    expect(products[0].user).toEqual({
+      id: "usr_xU2Q7pGhhFpduGWz",
+      name: "shop1",
+      avatar: null,
     });
   });
 });

@@ -1957,7 +1957,17 @@ export class ProductService {
         if (user && typeof user.id === "number") {
           userMap.set(user.id, {
             id: user.publicId ?? String(user.id),
-            name: user.name,
+            // ENRICH-BATCH-01: read `username`, NOT `users.name`. Both columns
+            // ride along on GET_USERS_BY_IDS, but `name` is nullable and unset
+            // on every account that never filled in a display name — so this
+            // list/batch path answered `user.name: null` for a seller the
+            // single-product path (`enrichProductWithUserInfo`, which reads
+            // `username`) named correctly. Same product, same seller, two
+            // different answers. `username` is NOT NULL + unique, and it is
+            // what every other user embed in the gateway exposes (social,
+            // notification), so it is the one source that cannot come back
+            // blank. Keep the two paths reading the same column.
+            name: user.username,
             avatar: user.avatar,
             province: user.province ?? null,
           });
