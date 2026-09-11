@@ -2,6 +2,7 @@ export const EVENT = {
   ORDER_CREATED_EVENT: "order_created",
   ORDER_CANCELED_EVENT: "order_canceled",
   ORDER_STATUS_CHANGED_EVENT: "order.status_changed",
+  ORDER_DELIVERY_ATTEMPT_FAILED_EVENT: "order.delivery_attempt_failed",
   ORDER_RETURN_REQUESTED_EVENT: "order.return_requested",
   ORDER_RETURN_APPROVED_EVENT: "order.return_approved",
   ORDER_RETURN_REJECTED_EVENT: "order.return_rejected",

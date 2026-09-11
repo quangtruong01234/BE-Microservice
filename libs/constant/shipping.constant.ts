@@ -103,6 +103,14 @@ export const GHN_STATUSES_WITHOUT_LOCAL_STATUS = [
   "lost",
 ] as const;
 
+/**
+ * The one status in `GHN_STATUSES_WITHOUT_LOCAL_STATUS` the BUYER can act on
+ * (wrong address / nobody home / phone unreachable), and therefore the only one
+ * that notifies them (GHN-FAIL-NTF-01). The in-transit legs are GHN-internal
+ * noise; `exception`/`damage`/`lost` need a human decision first.
+ */
+export const GHN_DELIVERY_FAIL_STATUS = "delivery_fail";
+
 const ghnStatusesWithoutLocalStatus = new Set<string>(
   GHN_STATUSES_WITHOUT_LOCAL_STATUS,
 );
