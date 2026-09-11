@@ -180,6 +180,19 @@ export class Order {
   })
   paidAt!: Date | null;
 
+  // GHN-ETA-01: the delivery ETA GHN returns when the waybill is cut, kept as
+  // the absolute timestamp GHN gave us. NULL = no waybill yet, or GHN did not
+  // quote one. Refreshed on a manual admin sync (the detail is fetched there
+  // anyway); the webhook does NOT refresh it — its payload carries no ETA and
+  // fetching one per status event would add a GHN call to every callback.
+  @Column({
+    name: "expected_delivery_time",
+    type: "datetime",
+    nullable: true,
+    default: null,
+  })
+  expectedDeliveryTime!: Date | null;
+
   @CreateDateColumn({ name: "created_at", type: "datetime" })
   createdAt!: Date;
 

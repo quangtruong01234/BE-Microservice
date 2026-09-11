@@ -32,6 +32,16 @@ import { ORDER_MESSAGE } from "libs/constant/response-message.constant";
 const publishedEventNames = (publish: jest.Mock): string[] =>
   publish.mock.calls.map((call: unknown[]) => String(call[1]));
 
+// The decoded envelope of one published event — publish() takes the JSON as a
+// Buffer, so the assertion has to parse it back.
+const publishedEventPayload = <T>(
+  publish: jest.Mock,
+  index = 0,
+): { pattern: string; data: T } => {
+  const calls = publish.mock.calls as unknown[][];
+  return JSON.parse(String(calls[index][2])) as { pattern: string; data: T };
+};
+
 // The `message` persisted on the first shipping_history row a call wrote.
 const firstHistoryMessage = (historySave: jest.Mock): string => {
   const calls = historySave.mock.calls as Array<[{ message: string | null }]>;
@@ -80,6 +90,8 @@ describe("OrdersService.handleGhnWebhook", () => {
   const createOrder = (status: OrderStatus): Order =>
     ({
       id: 1,
+      publicId: "ord_webhook1",
+      userId: 7,
       status,
       ghnOrderCode: "GHN-1",
       paymentMethod: PaymentMethod.COD,
@@ -90,12 +102,17 @@ describe("OrdersService.handleGhnWebhook", () => {
   const createService = (
     order: Order,
     affected: number,
-    options: { historySaveRejects?: boolean } = {},
+    options: {
+      historySaveRejects?: boolean;
+      hasEarlierDeliveryFail?: boolean;
+      historyExistRejects?: boolean;
+    } = {},
   ): {
     service: OrdersService;
     publish: jest.Mock;
     update: jest.Mock;
     historySave: jest.Mock;
+    historyExist: jest.Mock;
   } => {
     const publish = jest.fn();
     const update = jest.fn().mockResolvedValue({ affected });
@@ -112,9 +129,13 @@ describe("OrdersService.handleGhnWebhook", () => {
             createdAt: new Date(),
           }),
         );
+    const historyExist = options.historyExistRejects
+      ? jest.fn().mockRejectedValue(new Error("history table unavailable"))
+      : jest.fn().mockResolvedValue(options.hasEarlierDeliveryFail === true);
     const shippingHistoryRepository = {
       create: jest.fn((value: unknown) => value),
       save: historySave,
+      exist: historyExist,
     };
 
     const service = new OrdersService(
@@ -134,7 +155,7 @@ describe("OrdersService.handleGhnWebhook", () => {
       {} as CachedService,
     );
 
-    return { service, publish, update, historySave };
+    return { service, publish, update, historySave, historyExist };
   };
 
   it("does not change a canceled order", async () => {
@@ -224,7 +245,7 @@ describe("OrdersService.handleGhnWebhook", () => {
   // only then moves to the return family — so the local status must not move,
   // but the history row must not call it "Unhandled" either.
   it("keeps a delivery_fail order in delivering and records it as acknowledged", async () => {
-    const { service, publish, update, historySave } = createService(
+    const { service, update, historySave } = createService(
       createOrder(OrderStatus.DELIVERING),
       1,
     );
@@ -232,13 +253,73 @@ describe("OrdersService.handleGhnWebhook", () => {
     await service.handleGhnWebhook("GHN-1", "delivery_fail");
 
     expect(update).not.toHaveBeenCalled();
-    expect(publish).not.toHaveBeenCalled();
     expect(firstHistoryMessage(historySave)).toBe(
       ORDER_MESSAGE.GHN_STATUS_NO_LOCAL_STATUS(
         "delivery_fail",
         OrderStatus.DELIVERING,
       ),
     );
+  });
+
+  // GHN-FAIL-NTF-01: the buyer is told about the FIRST failed attempt only. The
+  // status itself still does not move (GHN-FAIL-01 above) — the notification is
+  // the whole effect.
+  it("notifies the buyer on the first delivery_fail", async () => {
+    const { service, publish, historyExist } = createService(
+      createOrder(OrderStatus.DELIVERING),
+      1,
+    );
+
+    await service.handleGhnWebhook("GHN-1", "delivery_fail");
+
+    expect(historyExist).toHaveBeenCalledWith({
+      where: { orderId: 1, ghnStatus: "delivery_fail" },
+    });
+    expect(publishedEventNames(publish)).toEqual([
+      EVENT.ORDER_DELIVERY_ATTEMPT_FAILED_EVENT,
+    ]);
+    const payload = publishedEventPayload<{
+      orderId: number;
+      publicId: string | null;
+      userId: number;
+    }>(publish);
+    expect(payload.pattern).toBe(EVENT.ORDER_DELIVERY_ATTEMPT_FAILED_EVENT);
+    expect(payload.data).toEqual({
+      orderId: 1,
+      publicId: "ord_webhook1",
+      userId: 7,
+    });
+  });
+
+  // GHN retries on its own, and every retry that misses sends another
+  // `delivery_fail`. The earlier history row is the ledger that keeps the buyer
+  // from being told the same thing three times.
+  it("stays silent on a repeat delivery_fail but still records it", async () => {
+    const { service, publish, historySave } = createService(
+      createOrder(OrderStatus.DELIVERING),
+      1,
+      { hasEarlierDeliveryFail: true },
+    );
+
+    await service.handleGhnWebhook("GHN-1", "delivery_fail");
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(historySave).toHaveBeenCalledTimes(1);
+  });
+
+  it("swallows a failing delivery-fail ledger read instead of notifying", async () => {
+    const { service, publish, historySave } = createService(
+      createOrder(OrderStatus.DELIVERING),
+      1,
+      { historyExistRejects: true },
+    );
+
+    await expect(
+      service.handleGhnWebhook("GHN-1", "delivery_fail"),
+    ).resolves.toBeUndefined();
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(historySave).toHaveBeenCalledTimes(1);
   });
 
   it("still reports a GHN status it has never seen as unhandled", async () => {
@@ -1128,7 +1209,9 @@ describe("OrdersService payment completion idempotency", () => {
           return Promise.resolve({ affected: 1 });
         },
       );
-    const createShippingOrder = jest.fn().mockResolvedValue("GHN-98");
+    const createShippingOrder = jest
+      .fn()
+      .mockResolvedValue({ orderCode: "GHN-98", expectedDeliveryTime: null });
     const service = new OrdersService(
       null,
       {} as HttpService,
@@ -1197,17 +1280,45 @@ describe("OrdersService.readyToShip GHN waybill gating", () => {
     return { service, save, update };
   };
 
-  it("advances to processing and persists the GHN code on success", async () => {
-    const createShippingOrder = jest.fn().mockResolvedValue("GHN-50");
+  it("advances to processing and persists the GHN code + ETA on success", async () => {
+    const createShippingOrder = jest.fn().mockResolvedValue({
+      orderCode: "GHN-50",
+      expectedDeliveryTime: "2026-09-15T09:00:00Z",
+    });
     const { service, save, update } = buildService(createShippingOrder);
 
     const result = await service.readyToShip(50, 0);
 
     expect(createShippingOrder).toHaveBeenCalledTimes(1);
-    expect(update).toHaveBeenCalledWith(50, { ghnOrderCode: "GHN-50" });
+    // GHN-ETA-01: the ETA rides in on the SAME response as the waybill code and
+    // must land in the same write — it has no second source.
+    expect(update).toHaveBeenCalledWith(50, {
+      ghnOrderCode: "GHN-50",
+      expectedDeliveryTime: new Date("2026-09-15T09:00:00Z"),
+    });
     expect(result.status).toBe(OrderStatus.PROCESSING);
     expect(result.ghnOrderCode).toBe("GHN-50");
+    expect(result.expectedDeliveryTime).toEqual(
+      new Date("2026-09-15T09:00:00Z"),
+    );
     expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  // GHN's "no ETA" is a zero date, which is below MySQL's DATETIME floor —
+  // writing it raw would fail the waybill write for a decorative field.
+  it("stores a null ETA when GHN quotes its zero date", async () => {
+    const createShippingOrder = jest.fn().mockResolvedValue({
+      orderCode: "GHN-51",
+      expectedDeliveryTime: "0001-01-01T00:00:00Z",
+    });
+    const { service, update } = buildService(createShippingOrder);
+
+    await service.readyToShip(50, 0);
+
+    expect(update).toHaveBeenCalledWith(50, {
+      ghnOrderCode: "GHN-51",
+      expectedDeliveryTime: null,
+    });
   });
 
   it("keeps the order at confirmed and throws when GHN creation fails", async () => {
@@ -1225,6 +1336,94 @@ describe("OrdersService.readyToShip GHN waybill gating", () => {
     );
     // The order must NOT be advanced to PROCESSING without a waybill.
     expect(save).not.toHaveBeenCalled();
+  });
+});
+
+describe("OrdersService.syncAdminGhnOrder ETA refresh (GHN-ETA-01)", () => {
+  const buildService = (
+    detail: Record<string, unknown>,
+    storedEta: Date | null = null,
+  ): { service: OrdersService; update: jest.Mock; order: Order } => {
+    const order = {
+      id: 60,
+      publicId: "ord_sync60",
+      status: OrderStatus.PROCESSING,
+      ghnOrderCode: "L8WN9W",
+      expectedDeliveryTime: storedEta,
+      items: [{ productId: 1, quantity: 1 }],
+    } as unknown as Order;
+    const findOne = jest.fn().mockResolvedValue(order);
+    const update = jest.fn().mockResolvedValue({ affected: 1 });
+    const shippingHistoryRepository = {
+      create: jest.fn().mockImplementation((data: object) => data),
+      save: jest.fn().mockImplementation((data: object) => ({
+        ...data,
+        id: 1,
+        createdAt: new Date("2026-09-11T00:00:00Z"),
+      })),
+      // GHN-FAIL-NTF-01 reads this ledger on every `delivery_fail`; without it
+      // the guard would throw into its own catch and this suite would pass for
+      // the wrong reason.
+      exist: jest.fn().mockResolvedValue(false),
+    };
+    const service = new OrdersService(
+      null,
+      {} as HttpService,
+      {} as ClientProxy,
+      {} as ClientProxy,
+      {} as ClientProxy,
+      { findOne, update } as unknown as Repository<Order>,
+      {} as Repository<OrderItem>,
+      createOutboxRepository().repository,
+      shippingHistoryRepository as unknown as Repository<ShippingHistory>,
+      {} as Repository<OrderReturnRequest>,
+      {} as Repository<Voucher>,
+      {} as Repository<VoucherRedemption>,
+      {
+        // `delivery_fail` maps to no local status (GHN-FAIL-01), so the status
+        // leg is a deliberate no-op and only the ETA write is under test.
+        getOrderDetail: jest
+          .fn()
+          .mockResolvedValue({ status: "delivery_fail", ...detail }),
+      } as unknown as GhnService,
+      {} as CachedService,
+    );
+    return { service, update, order };
+  };
+
+  // The two GHN endpoints name the same value differently: /shipping-order/create
+  // answers with `expected_delivery_time`, /shipping-order/detail leaves that
+  // field null and puts the identical timestamp in `leadtime`. Reading only the
+  // first one made every manual sync a silent no-op.
+  it("falls back to `leadtime` when the detail leaves expectedDeliveryTime null", async () => {
+    const { service, update, order } = buildService({
+      expectedDeliveryTime: null,
+      leadtime: "2026-09-13T16:59:59Z",
+    });
+
+    await service.syncAdminGhnOrder(60, 1);
+
+    expect(update).toHaveBeenCalledWith(60, {
+      expectedDeliveryTime: new Date("2026-09-13T16:59:59Z"),
+    });
+    expect(order.expectedDeliveryTime).toEqual(
+      new Date("2026-09-13T16:59:59Z"),
+    );
+  });
+
+  // GHN dropping the field is not the same as the delivery date being withdrawn
+  // — blanking the stored ETA would white out the buyer's date for no reason.
+  it("leaves the stored ETA alone when GHN returns neither field", async () => {
+    const stored = new Date("2026-09-13T16:59:59Z");
+    const { service, update, order } = buildService(
+      { expectedDeliveryTime: null, leadtime: null },
+      stored,
+    );
+
+    await service.syncAdminGhnOrder(60, 1);
+
+    expect(update).not.toHaveBeenCalled();
+    expect(order.expectedDeliveryTime).toEqual(stored);
   });
 });
 
@@ -1616,7 +1815,9 @@ describe("OrdersService ORD-GUARD-01 — unpaid online orders cannot be fulfille
   } => {
     const save = jest.fn().mockImplementation((toSave: Order) => toSave);
     const update = jest.fn().mockResolvedValue({ affected: 1 });
-    const createShippingOrder = jest.fn().mockResolvedValue("GHN-77");
+    const createShippingOrder = jest
+      .fn()
+      .mockResolvedValue({ orderCode: "GHN-77", expectedDeliveryTime: null });
     // The seller owns the order in every case here — the guard, not ownership,
     // is what must reject.
     const productClient = { send: () => of([1]) } as unknown as ClientProxy;

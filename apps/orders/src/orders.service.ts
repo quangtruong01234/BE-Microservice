@@ -42,7 +42,10 @@ import { INVENTORY_MESSAGE_PATTERNS } from "libs/constant/message-pattern-invent
 import { USER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
-import { isGhnStatusWithoutLocalStatus } from "libs/constant/shipping.constant";
+import {
+  GHN_DELIVERY_FAIL_STATUS,
+  isGhnStatusWithoutLocalStatus,
+} from "libs/constant/shipping.constant";
 import { generateInvoicePdf, InvoiceParty } from "./invoice/invoice.generator";
 import { GhnService } from "./ghn/ghn.service";
 import {
@@ -141,6 +144,26 @@ function isStricterCap(current: number | null, next: number | null): boolean {
     return false;
   }
   return current === null || next < current;
+}
+
+/**
+ * GHN-ETA-01: turn the ISO 8601 UTC timestamp GHN quotes into a Date for the
+ * `expected_delivery_time` column.
+ *
+ * Returns null for anything the column cannot hold: an absent value, an
+ * unparseable one, and GHN's zero date (`0001-01-01T00:00:00Z`, its way of
+ * saying "no ETA"), which is below MySQL's DATETIME floor and would otherwise
+ * fail the write. An ETA is decoration — it must never break a waybill.
+ */
+function toExpectedDeliveryDate(value: string | null): Date | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime()) || parsed.getUTCFullYear() < 2000) {
+    return null;
+  }
+  return parsed;
 }
 
 @Injectable()
@@ -394,11 +417,7 @@ export class OrdersService {
 
     if (order.paymentMethod === PaymentMethod.COD) {
       try {
-        const ghnCode = await this.ghnService.createShippingOrder(order);
-        await this.orderRepository.update(order.id, {
-          ghnOrderCode: ghnCode,
-        });
-        order.ghnOrderCode = ghnCode;
+        await this.createAndPersistWaybill(order);
       } catch (err) {
         this.logger.error(
           `GHN createShippingOrder failed for order ${order.id}: ${err instanceof Error ? err.message : String(err)}`,
@@ -408,6 +427,58 @@ export class OrdersService {
     }
 
     return order;
+  }
+
+  /**
+   * GHN-ETA-01: cut the waybill and persist BOTH values the create response
+   * carries — the tracking code and the delivery ETA.
+   *
+   * All four waybill call sites need the same pair written the same way, and
+   * the create response is the only place the ETA arrives for free (the GHN
+   * webhook payload carries none), so the write lives here rather than being
+   * repeated — and forgotten — per caller. Mutates `order` in place so the
+   * caller's in-memory copy matches the row.
+   */
+  private async createAndPersistWaybill(order: Order): Promise<string> {
+    const created = await this.ghnService.createShippingOrder(order);
+    const expectedDeliveryTime = toExpectedDeliveryDate(
+      created.expectedDeliveryTime,
+    );
+    await this.orderRepository.update(order.id, {
+      ghnOrderCode: created.orderCode,
+      expectedDeliveryTime,
+    });
+    order.ghnOrderCode = created.orderCode;
+    order.expectedDeliveryTime = expectedDeliveryTime;
+    return created.orderCode;
+  }
+
+  /**
+   * GHN-ETA-01: refresh the stored ETA from a GHN detail we already fetched.
+   *
+   * Best-effort on purpose: an ETA that failed to update must never fail the
+   * status sync it rode in on. A missing/unusable value LEAVES the stored one
+   * alone — GHN dropping the field is not the same as the delivery date being
+   * withdrawn, and blanking it would white out the buyer's ETA for no reason.
+   */
+  private async refreshExpectedDeliveryTime(
+    order: Order,
+    expectedDeliveryTime: string | null,
+  ): Promise<void> {
+    const next = toExpectedDeliveryDate(expectedDeliveryTime);
+    if (!next || next.getTime() === order.expectedDeliveryTime?.getTime()) {
+      return;
+    }
+    try {
+      await this.orderRepository.update(order.id, {
+        expectedDeliveryTime: next,
+      });
+      order.expectedDeliveryTime = next;
+    } catch (err) {
+      this.logger.warn(
+        `[ORDERS] Failed to refresh expected delivery time for order ${order.id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -1397,11 +1468,7 @@ export class OrdersService {
 
       if (paymentMethod === PaymentMethod.COD) {
         try {
-          const ghnCode = await this.ghnService.createShippingOrder(order);
-          await this.orderRepository.update(order.id, {
-            ghnOrderCode: ghnCode,
-          });
-          order.ghnOrderCode = ghnCode;
+          await this.createAndPersistWaybill(order);
         } catch (err) {
           this.logger.error(
             `[ORDERS] GHN createShippingOrder failed for order ${order.id}: ${err instanceof Error ? err.message : String(err)}`,
@@ -2298,6 +2365,21 @@ export class OrdersService {
       );
     }
 
+    // GHN-ETA-01: the detail we just fetched carries the current ETA, so the
+    // refresh is free here. This is the ONLY refresh point — the webhook
+    // payload has no ETA and re-fetching one per status event would put a GHN
+    // call on every callback.
+    //
+    // The two GHN endpoints name the same value differently, verified against
+    // the live sandbox: /shipping-order/create answers with
+    // `expected_delivery_time`, /shipping-order/detail leaves that field null
+    // and puts the identical timestamp in `leadtime`. Reading only the first
+    // one made every sync a silent no-op.
+    await this.refreshExpectedDeliveryTime(
+      order,
+      detail.expectedDeliveryTime ?? detail.leadtime,
+    );
+
     const result = await this.applyGhnStatus(order, detail.status);
     const history = await this.recordShippingHistory({
       orderId: order.id,
@@ -3003,9 +3085,7 @@ export class OrdersService {
 
     // ZaloPay/VNPay: create GHN shipping order (codAmount = null → 0 in GHN payload)
     try {
-      const ghnCode = await this.ghnService.createShippingOrder(order);
-      await this.orderRepository.update(order.id, { ghnOrderCode: ghnCode });
-      order.ghnOrderCode = ghnCode;
+      const ghnCode = await this.createAndPersistWaybill(order);
       this.logger.log(`[ORDERS] GHN order created for ${orderId}: ${ghnCode}`);
     } catch (err) {
       this.logger.error(
@@ -3273,6 +3353,7 @@ export class OrdersService {
       const logLine = `[GHN] ${message} for order ${order.publicId ?? order.id}`;
       if (isKnown) {
         this.logger.log(logLine);
+        await this.notifyFirstDeliveryFailure(order, ghnStatus);
       } else {
         this.logger.warn(logLine);
       }
@@ -3719,9 +3800,7 @@ export class OrdersService {
     // Never advance to PROCESSING without a waybill — that strands the order
     // (it would look shipped while GHN has no record and can never be synced).
     if (!order.ghnOrderCode) {
-      const ghnCode = await this.ghnService.createShippingOrder(order);
-      await this.orderRepository.update(order.id, { ghnOrderCode: ghnCode });
-      order.ghnOrderCode = ghnCode;
+      await this.createAndPersistWaybill(order);
     }
 
     order.status = OrderStatus.PROCESSING;
@@ -4142,6 +4221,84 @@ export class OrdersService {
               sellerId: order.sellerId == null ? null : Number(order.sellerId),
               status: order.status,
               previousStatus,
+            },
+          }),
+        ),
+      );
+    } catch (error) {
+      this.logger.warn(
+        `[ORDERS] Failed to publish ${eventName} for order ${order.id}: ${String(error)}`,
+      );
+    }
+  }
+
+  /**
+   * GHN-FAIL-NTF-01 — tell the buyer about a failed delivery ATTEMPT, once.
+   *
+   * `delivery_fail` maps to no local status (GHN-FAIL-01), so there is no
+   * transition to hang idempotency on the way every other order notification
+   * does — and GHN retries the attempt ~3x, webhooks redeliver, and all three
+   * entry points (webhook / manual sync / demo status) funnel through
+   * `applyGhnStatus`. The ledger is `shipping_history`: this runs BEFORE the
+   * caller writes its row, so "no delivery_fail row yet" means "first attempt".
+   * Later attempts still get a history row for the console timeline; they just
+   * stop pestering the buyer.
+   *
+   * Best-effort in both directions: the ledger read is wrapped because a webhook
+   * that already did its job must not fail over a notification, and a failed
+   * read stays silent rather than risking a duplicate.
+   */
+  private async notifyFirstDeliveryFailure(
+    order: Order,
+    ghnStatus: string,
+  ): Promise<void> {
+    if (ghnStatus.toLowerCase() !== GHN_DELIVERY_FAIL_STATUS) {
+      return;
+    }
+    try {
+      const alreadyNotified = await this.shippingHistoryRepository.exist({
+        where: { orderId: order.id, ghnStatus: GHN_DELIVERY_FAIL_STATUS },
+      });
+      if (alreadyNotified) {
+        this.logger.log(
+          `[GHN] Repeat ${GHN_DELIVERY_FAIL_STATUS} for order ${order.publicId ?? order.id} — buyer already notified`,
+        );
+        return;
+      }
+    } catch (error) {
+      this.logger.warn(
+        `[ORDERS] Delivery-failure ledger read failed for order ${order.id}: ${String(error)}`,
+      );
+      return;
+    }
+    this.publishOrderDeliveryAttemptFailedEvent(order);
+  }
+
+  /**
+   * Announce a missed delivery attempt so the notification service can tell the
+   * buyer in-app. Deliberately its own event rather than `order.status_changed`:
+   * that payload's `status`/`previousStatus` mean `OrderStatus`, and a missed
+   * attempt is not a status. Best-effort like every other publish here.
+   */
+  private publishOrderDeliveryAttemptFailedEvent(order: Order): void {
+    const eventName = EVENT.ORDER_DELIVERY_ATTEMPT_FAILED_EVENT;
+    if (!this.fanoutChannel || !this.isFanoutChannelLive()) {
+      this.logger.warn(
+        `[ORDERS] RMQ channel unavailable — ${eventName} event not published for order ${order.id}`,
+      );
+      return;
+    }
+    try {
+      this.fanoutChannel.publish(
+        EXCHANGE.ORDERS_EXCHANGE,
+        eventName,
+        Buffer.from(
+          JSON.stringify({
+            pattern: eventName,
+            data: {
+              orderId: Number(order.id),
+              publicId: order.publicId ?? null,
+              userId: Number(order.userId),
             },
           }),
         ),

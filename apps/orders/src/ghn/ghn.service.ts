@@ -15,6 +15,7 @@ import { GHN_MESSAGE } from "libs/constant/response-message.constant";
 import { Order } from "../entity/order.entity";
 import {
   CacheEntry,
+  GhnCreatedOrder,
   GhnDetailResponse,
   GhnDistrict,
   GhnMasterDataResponse,
@@ -366,7 +367,7 @@ export class GhnService {
     };
   }
 
-  async createShippingOrder(order: Order): Promise<string> {
+  async createShippingOrder(order: Order): Promise<GhnCreatedOrder> {
     const apiUrl = requireEnv("GHN_API_URL");
     const body = await this.buildShippingOrderBody(
       order.shippingAddress,
@@ -395,9 +396,12 @@ export class GhnService {
       throw this.toGhnDomainError(error, GHN_MESSAGE.CREATE_ERROR);
     }
 
-    const orderCode = response.data?.data?.order_code;
-    if (orderCode) {
-      return orderCode;
+    const created = response.data?.data;
+    if (created?.order_code) {
+      return {
+        orderCode: created.order_code,
+        expectedDeliveryTime: created.expected_delivery_time ?? null,
+      };
     }
 
     throw new InternalServerErrorException(

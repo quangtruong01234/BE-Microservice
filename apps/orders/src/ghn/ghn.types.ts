@@ -92,6 +92,14 @@ export interface ShippingFeePreview {
   expectedDeliveryTime: string | null;
 }
 
+// GHN-ETA-01: what `/v2/shipping-order/create` gives back. The ETA sits in the
+// same response as the waybill code — dropping it used to cost an extra
+// `/shipping-order/detail` call to recover.
+export interface GhnCreatedOrder {
+  orderCode: string;
+  expectedDeliveryTime: string | null;
+}
+
 export interface GhnOrderDetail {
   orderCode: string;
   status: string | null;
