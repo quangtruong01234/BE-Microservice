@@ -19,6 +19,12 @@ export interface OrderResponse {
   // order means the buyer never completed the checkout — the FE branches on it
   // to keep showing "THANH TOÁN NGAY" and to hide the seller's confirm action.
   paidAt?: string | null;
+  // GHN-ETA-01: the delivery ETA GHN quoted when the waybill was cut, as an
+  // absolute ISO 8601 timestamp. NULL before there is a waybill, or when GHN
+  // quoted none. The FE renders "giao trong X ngày" by diffing against now —
+  // the backend deliberately does not compute a duration, which would go stale
+  // the moment it was serialized.
+  expectedDeliveryTime?: string | null;
   subtotal?: number;
   items: unknown[];
   createdAt: string;
