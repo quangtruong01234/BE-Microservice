@@ -386,6 +386,55 @@ export class NotificationController {
     }
   }
 
+  /**
+   * GHN-FAIL-NTF-01 — a delivery ATTEMPT missed the buyer. In-app only, no
+   * email: `EMAILED_STATUSES` is milestones, and mailing a retryable event
+   * generates "is my order broken?" tickets. Seller is not told — a missed
+   * attempt is not something they can act on.
+   *
+   * Dedupe lives in the orders service (first `delivery_fail` row in
+   * `shipping_history` wins), so this handler notifies whatever reaches it.
+   */
+  @EventPattern(EVENT.ORDER_DELIVERY_ATTEMPT_FAILED_EVENT)
+  async handleOrderDeliveryAttemptFailed(
+    @Payload()
+    data: {
+      orderId: number;
+      publicId?: string | null;
+      userId: number;
+    },
+    @Ctx() context: RmqContext,
+  ): Promise<void> {
+    const { orderId, userId } = data;
+    this.logger.log(
+      `[NOTIFICATION] order.delivery_attempt_failed received for order ${orderId}`,
+    );
+    try {
+      const publicId = data.publicId ?? null;
+      const label = this.orderLabel(orderId, publicId);
+      // Must read as not-final: GHN retries on its own, and the buyer's next
+      // step is to wait for the redelivery, not to assume the order is dead.
+      const message = `Đơn hàng ${label} giao chưa thành công, đơn vị vận chuyển sẽ giao lại trong thời gian tới`;
+      await this.notificationService.saveNotification(
+        Number(userId),
+        "order_delivery_attempt_failed",
+        orderId,
+        message,
+        {},
+        publicId,
+      );
+      this.rmqService.ack(context);
+    } catch (err) {
+      this.logger.error(
+        `[NOTIFICATION] handleOrderDeliveryAttemptFailed failed for order ${orderId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      const channel = context.getChannelRef() as {
+        nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
+      };
+      channel.nack(context.getMessage(), false, true); // requeue: DB error
+    }
+  }
+
   @EventPattern(EVENT.ORDER_RETURN_REQUESTED_EVENT)
   async handleOrderReturnRequested(
     @Payload() data: { orderId: number },
