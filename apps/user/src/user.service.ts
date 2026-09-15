@@ -513,6 +513,37 @@ export class UserService {
   }
 
   /**
+   * SEARCH-01: type-ahead lookup for the header search box. Matches `username`
+   * and the nullable display `name`; both columns are `utf8mb4_0900_ai_ci`, so
+   * LIKE is already case- AND accent-insensitive ("quang" finds "Quảng") with
+   * no folding in application code. Same query-builder rationale as
+   * getFeaturedSellers: it skips the eager `role` relation.
+   */
+  async searchUsers(
+    q: string,
+    limit: number,
+  ): Promise<Pick<User, "id" | "publicId" | "username" | "name" | "avatar">[]> {
+    const keyword = q.trim();
+    if (!keyword) return [];
+    return this.userRepository
+      .createQueryBuilder("user")
+      .where("user.isActive = :isActive", { isActive: true })
+      .andWhere("(user.username LIKE :keyword OR user.name LIKE :keyword)", {
+        keyword: `%${keyword}%`,
+      })
+      .orderBy("user.username", "ASC")
+      .limit(limit)
+      .select([
+        "user.id",
+        "user.publicId",
+        "user.username",
+        "user.name",
+        "user.avatar",
+      ])
+      .getMany();
+  }
+
+  /**
    * PUBID-02: maps an external opaque id (`usr_...`) to the internal numeric
    * PK. Numeric ids pass through untouched so internal TCP callers (orders
    * invoice, notification email) keep working with the number they store.
@@ -579,6 +610,42 @@ export class UserService {
     }
     delete (saved as Partial<User>).password;
     return saved;
+  }
+
+  /**
+   * ROLE-ADMIN-01: the only write path for `users.role_id`. The role is looked
+   * up by name in the `roles` table — the enum alone is not enough, because a
+   * name that exists in code but was never seeded (or was blocked) must be a
+   * 400, not a row pointing at a missing role.
+   *
+   * The JWT is stateless and carries `role` + `grants` from login time, so the
+   * new role only takes effect on the target's NEXT login. Nothing is revoked
+   * here (same contract as CHG-PW-01).
+   */
+  async updateUserRole(userId: number, roleName: string): Promise<SafeUser> {
+    this.logger.log(`updateUserRole called with userId: ${userId}`);
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException(USER_MESSAGE.NOT_FOUND);
+    }
+    // `String(name)` keeps both sides plain strings — comparing the enum member
+    // directly against an untrusted string is a no-unsafe-enum-comparison error.
+    const knownRoleName = Object.values(RoleName).find(
+      (name) => String(name) === roleName,
+    );
+    if (!knownRoleName) {
+      throw new BadRequestException(USER_MESSAGE.ROLE_NOT_FOUND(roleName));
+    }
+    const role = await this.roleRepository.findOne({
+      where: { rol_name: knownRoleName, rol_status: RoleStatus.ACTIVE },
+    });
+    if (!role) {
+      throw new BadRequestException(USER_MESSAGE.ROLE_NOT_FOUND(roleName));
+    }
+    user.role = role;
+    const saved = await this.userRepository.save(user);
+    this.logger.log(`User ${userId} role set to ${knownRoleName}`);
+    return this.toSafeUser(saved);
   }
 
   async listAddresses(userId: number): Promise<UserAddress[]> {

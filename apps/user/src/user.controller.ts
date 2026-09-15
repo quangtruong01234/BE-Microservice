@@ -1,4 +1,9 @@
-import { Controller, ForbiddenException, Logger } from "@nestjs/common";
+import {
+  BadRequestException,
+  Controller,
+  ForbiddenException,
+  Logger,
+} from "@nestjs/common";
 import { UserService } from "./user.service";
 import { MessagePattern, Payload } from "@nestjs/microservices";
 import { RegisterUserDto } from "./dto/register-user.dto";
@@ -89,6 +94,13 @@ export class UserController {
     return this.userService.getFeaturedSellers(data.limit);
   }
 
+  @MessagePattern({ cmd: USER_MESSAGE_PATTERN.SEARCH_USERS })
+  async searchUsers(
+    @Payload() data: { q: string; limit: number },
+  ): Promise<unknown> {
+    return this.userService.searchUsers(data.q, data.limit);
+  }
+
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.LOGIN_USER })
   async login(@Payload() payload: LoginUserDto): Promise<unknown> {
     this.logger.log(`[USER-TCP] Login user: ${payload.username}`);
@@ -157,6 +169,25 @@ export class UserController {
       }
     }
     return this.userService.updateUser(data.userId, data.dto);
+  }
+
+  // ROLE-ADMIN-01: admin-only at the gateway. `requesterId` is the admin's
+  // numeric JWT id — an admin may not change its OWN role, otherwise a single
+  // admin can demote itself and leave the platform with no way back in.
+  @MessagePattern({ cmd: USER_MESSAGE_PATTERN.UPDATE_USER_ROLE })
+  async updateUserRole(
+    @Payload()
+    data: {
+      requesterId: number;
+      targetId: number | string;
+      role: string;
+    },
+  ): Promise<SafeUser> {
+    const targetUserId = await this.userService.resolveUserId(data.targetId);
+    if (targetUserId === data.requesterId) {
+      throw new BadRequestException(USER_MESSAGE.CANNOT_CHANGE_OWN_ROLE);
+    }
+    return this.userService.updateUserRole(targetUserId, data.role);
   }
 
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.ADDRESS_LIST })
