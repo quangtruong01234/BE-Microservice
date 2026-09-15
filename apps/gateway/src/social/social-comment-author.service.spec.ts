@@ -18,9 +18,17 @@ describe("SocialGatewayService comment authors", () => {
   const productClient = { send: jest.fn() };
   let service: SocialGatewayService;
 
+  // AUTHOR-NAME-01: alice has a display name, bob has none — both directions of
+  // the nullable `name` are covered by the fixture itself.
   const users = [
-    { id: 7, publicId: "usr_alice", username: "alice", avatar: null },
-    { id: 9, publicId: "usr_bob", username: "bob", avatar: null },
+    {
+      id: 7,
+      publicId: "usr_alice",
+      username: "alice",
+      name: "Alice Nguyễn",
+      avatar: null,
+    },
+    { id: 9, publicId: "usr_bob", username: "bob", name: null, avatar: null },
   ];
 
   /** Route the social client by message pattern; unknown patterns must fail. */
@@ -73,7 +81,9 @@ describe("SocialGatewayService comment authors", () => {
     });
 
     const result = (await service.getComments("post_5", 1, 10)) as {
-      data: Array<{ author: { id: string; username: string } }>;
+      data: Array<{
+        author: { id: string; username: string; name: string | null };
+      }>;
       total: number;
     };
 
@@ -81,9 +91,41 @@ describe("SocialGatewayService comment authors", () => {
     expect(result.data[0].author).toEqual({
       id: "usr_alice",
       username: "alice",
+      name: "Alice Nguyễn",
       avatar: null,
     });
     expect(result.data[1].author.username).toBe("bob");
+    // A user who never set a display name is `null`, never a missing key —
+    // the FE renders `name ?? username` and must find the key to fall back.
+    expect(result.data[1].author.name).toBeNull();
+  });
+
+  // AUTHOR-NAME-01: the FE falls back with `??`, which does NOT fire on "".
+  // `@MinLength(1)` on the PATCH DTO accepts "  ", so a whitespace-only display
+  // name is settable — it must not reach the embed as a renderable value.
+  it("normalizes a blank display name to null", async () => {
+    routeSocial({
+      data: [comment(1, 7), comment(2, 9)],
+      total: 2,
+      page: 1,
+      limit: 10,
+      totalPages: 1,
+      hasNext: false,
+    });
+    userClient.send.mockReturnValue(
+      of([
+        { id: 7, publicId: "usr_alice", username: "alice", name: "   " },
+        { id: 9, publicId: "usr_bob", username: "bob", name: "  Bob  " },
+      ]),
+    );
+
+    const result = (await service.getComments("post_5", 1, 10)) as {
+      data: Array<{ author: { name: string | null } }>;
+    };
+
+    expect(result.data[0].author.name).toBeNull();
+    // A name that is merely padded keeps its value, trimmed.
+    expect(result.data[1].author.name).toBe("Bob");
   });
 
   it("attaches the author through the whole nested reply tree", async () => {

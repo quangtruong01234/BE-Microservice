@@ -93,7 +93,9 @@ export class SocialController {
   @Get()
   @Public()
   @UseGuards(OptionalJwtAuthGuard)
-  @ApiOperation({ summary: "Get paginated posts" })
+  @ApiOperation({
+    summary: "Get paginated posts, optionally filtered by `search`",
+  })
   @ApiResponse({ status: 200, description: "Paginated post list." })
   async getPosts(
     @Req() req: Request,
@@ -104,6 +106,7 @@ export class SocialController {
       query.page ?? 1,
       query.limit ?? 20,
       viewerUserId,
+      query.search,
     );
   }
 

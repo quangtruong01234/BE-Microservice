@@ -71,6 +71,12 @@ export class SocialGatewayService {
           {
             id: u.publicId ?? String(u.id),
             username: u.username,
+            // AUTHOR-NAME-01: the real display name, additive next to
+            // `username`. A blank one is normalized to `null` because the FE
+            // renders `name ?? username` — `??` does not fall back on `""`, so
+            // a whitespace-only display name (which `@MinLength(1)` on the
+            // PATCH DTO does not catch) would otherwise blank the label.
+            name: u.name?.trim() ? u.name.trim() : null,
             avatar: u.avatar,
           },
         ]),
@@ -424,6 +430,7 @@ export class SocialGatewayService {
     page: number,
     limit: number,
     viewerUserId?: number | null,
+    search?: string | null,
   ): Promise<unknown> {
     try {
       const result = (await firstValueFrom(
@@ -432,6 +439,8 @@ export class SocialGatewayService {
             page,
             limit,
             viewerUserId: viewerUserId ?? null,
+            // A blank `?search=` must read as "no filter", not as "match ''".
+            search: search?.trim() ? search.trim() : null,
           })
           .pipe(
             timeout(TCP_TIMEOUT_MS.READ),
