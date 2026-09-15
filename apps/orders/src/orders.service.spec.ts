@@ -307,6 +307,44 @@ describe("OrdersService.handleGhnWebhook", () => {
     expect(historySave).toHaveBeenCalledTimes(1);
   });
 
+  // GHN-FAIL-NTF-02: a canceled order can still carry a live waybill (buyer
+  // cancel gives up after two failed GHN cancels), so a real delivery attempt
+  // can still fail on it. Telling that buyer "the carrier will redeliver soon"
+  // contradicts the cancellation — and every MAPPED status already refuses to
+  // touch a terminal order, so the notification must not be the exception.
+  it.each([OrderStatus.CANCELED, OrderStatus.COMPLETED, OrderStatus.REFUNDED])(
+    "does not notify on delivery_fail for a %s order but still records it",
+    async (status) => {
+      const { service, publish, historyExist, historySave } = createService(
+        createOrder(status),
+        1,
+      );
+
+      await service.handleGhnWebhook("GHN-1", "delivery_fail");
+
+      expect(publish).not.toHaveBeenCalled();
+      expect(historyExist).not.toHaveBeenCalled();
+      expect(historySave).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  // The other side of the guard above: RETURN_REQUESTED is reachable straight
+  // from DELIVERING, so the goods may still be on the truck and a redelivery is
+  // still the truth. It stays notifiable on purpose — do not "tidy" it into
+  // NO_REDELIVERY_STATUSES.
+  it("still notifies on delivery_fail for a return-requested order", async () => {
+    const { service, publish } = createService(
+      createOrder(OrderStatus.RETURN_REQUESTED),
+      1,
+    );
+
+    await service.handleGhnWebhook("GHN-1", "delivery_fail");
+
+    expect(publishedEventNames(publish)).toEqual([
+      EVENT.ORDER_DELIVERY_ATTEMPT_FAILED_EVENT,
+    ]);
+  });
+
   it("swallows a failing delivery-fail ledger read instead of notifying", async () => {
     const { service, publish, historySave } = createService(
       createOrder(OrderStatus.DELIVERING),

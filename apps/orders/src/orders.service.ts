@@ -147,6 +147,19 @@ function isStricterCap(current: number | null, next: number | null): boolean {
 }
 
 /**
+ * GHN-FAIL-NTF-02: order states in which a missed delivery attempt must NOT be
+ * announced to the buyer, because nothing will be redelivered. Each one is
+ * reachable while a waybill is still live (a failed GHN cancel leaves one
+ * running), so the attempt — and its webhook — is real even though the order
+ * is finished.
+ */
+const NO_REDELIVERY_STATUSES = new Set<OrderStatus>([
+  OrderStatus.CANCELED,
+  OrderStatus.COMPLETED,
+  OrderStatus.REFUNDED,
+]);
+
+/**
  * GHN-ETA-01: turn the ISO 8601 UTC timestamp GHN quotes into a Date for the
  * `expected_delivery_time` column.
  *
@@ -4253,6 +4266,28 @@ export class OrdersService {
     ghnStatus: string,
   ): Promise<void> {
     if (ghnStatus.toLowerCase() !== GHN_DELIVERY_FAIL_STATUS) {
+      return;
+    }
+    // GHN-FAIL-NTF-02: an unmapped status returns from `applyGhnStatus` BEFORE
+    // the terminal guard (and before the rank check) that every mapped status
+    // passes through, so this is the only place a finished order can be
+    // filtered out. A canceled order can still carry a LIVE waybill — the
+    // buyer-cancel path gives up after two failed GHN cancels — so the shipper
+    // really does attempt a delivery that really does fail. Telling that buyer
+    // "the carrier will redeliver soon" contradicts the cancellation (or the
+    // refund) they already got.
+    //
+    // RETURN_REQUESTED is deliberately NOT here: it is reachable from
+    // DELIVERING, where a redelivery is still the truth.
+    //
+    // Silence is the only effect — the caller still writes the history row, so
+    // the console timeline keeps every attempt.
+    // Defaulted the same way `applyGhnStatus` defaults it, so a row with no
+    // status reads as PENDING (notifiable) in both places rather than diverging.
+    if (NO_REDELIVERY_STATUSES.has(order.status ?? OrderStatus.PENDING)) {
+      this.logger.log(
+        `[GHN] ${GHN_DELIVERY_FAIL_STATUS} for ${order.status} order ${order.publicId ?? order.id} — buyer not notified`,
+      );
       return;
     }
     try {
