@@ -127,9 +127,11 @@ describe("ProductService ownership", () => {
     expect(paginatedProducts.total).toBe(1);
     expect(paginatedProducts.totalPages).toBe(1);
     expect(paginatedProducts.hasNext).toBe(false);
+    // The label is `username`, never the nullable `users.name` — the batch path
+    // must agree with the single-product path above (ENRICH-BATCH-01).
     expect(paginatedProducts.data[0].user).toEqual({
       id: "usr_1111111111111111",
-      name: "Seller 20",
+      name: "seller20",
       avatar: "avatar.jpg",
     });
     expect(paginatedProducts.data[0].user).not.toHaveProperty("email");
