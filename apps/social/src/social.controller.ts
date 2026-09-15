@@ -64,6 +64,7 @@ export class SocialController {
       page: number;
       limit: number;
       viewerUserId?: number | null;
+      search?: string | null;
     },
   ): Promise<unknown> {
     return this.socialService.getPosts(payload);

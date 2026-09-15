@@ -10,8 +10,10 @@ import {
 import { InjectDataSource, InjectRepository } from "@nestjs/typeorm";
 import {
   DataSource,
+  FindOptionsWhere,
   In,
   IsNull,
+  Like,
   QueryFailedError,
   Repository,
   TreeRepository,
@@ -424,15 +426,23 @@ export class SocialService {
     page: number;
     limit: number;
     viewerUserId?: number | null;
+    search?: string | null;
   }): Promise<
     PaginatedResponse<
       Post & { likeCount: number; isLiked: boolean; commentCount: number }
     >
   > {
-    const { page, limit, viewerUserId } = payload;
+    const { page, limit, viewerUserId, search } = payload;
     try {
+      // SEARCH-01: `content LIKE %q%` is both case- and accent-insensitive
+      // because the column collation is `utf8mb4_0900_ai_ci` — "ban phim"
+      // matches "bàn phím" with no folding in application code.
+      const where: FindOptionsWhere<Post> = { isHidden: false };
+      if (search) {
+        where.content = Like(`%${search}%`);
+      }
       const [posts, total] = await this.postRepository.findAndCount({
-        where: { isHidden: false },
+        where,
         order: { createdAt: "DESC" },
         skip: (page - 1) * limit,
         take: limit,
