@@ -19,7 +19,7 @@ import { MicroserviceErrorHandler } from "../common/exception/microservice-error
 import { retryOnTransportError } from "../common/exception/transport-error";
 import { assertCloudinaryUrlsOwnedBy } from "../common/media/cloudinary-ownership";
 import { JwtService } from "@nestjs/jwt";
-import { UserData } from "./user.types";
+import { UserData, UserRole } from "./user.types";
 import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 
 @Injectable()
@@ -328,6 +328,32 @@ export class UserService {
     }
   }
 
+  async searchUsers(q: string, limit: number): Promise<unknown[]> {
+    try {
+      const users = (await firstValueFrom(
+        this.userClient
+          .send({ cmd: USER_MESSAGE_PATTERN.SEARCH_USERS }, { q, limit })
+          .pipe(
+            timeout(TCP_TIMEOUT_MS.READ),
+            retryOnTransportError(),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      )) as unknown;
+      // SHAPE-01 rule 1: the contract declares a collection — never `null`.
+      return Array.isArray(users)
+        ? users.map((user) => this.exposeUser(user))
+        : [];
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "search users",
+        "User Service",
+      );
+    }
+  }
+
   async getMe(userId: number): Promise<unknown> {
     try {
       return this.exposeUser(
@@ -379,6 +405,41 @@ export class UserService {
       MicroserviceErrorHandler.handleError(
         error,
         `update user ${targetId}`,
+        "User Service",
+      );
+    }
+  }
+
+  /**
+   * ROLE-ADMIN-01: admin-only role change (e.g. promoting a buyer to `shop`).
+   * The target is the route's opaque `usr_...` id; `requesterId` is the admin's
+   * numeric JWT id, sent so the user service can refuse a self-change.
+   */
+  async updateUserRole(
+    requesterId: number,
+    targetId: string,
+    role: UserRole["rol_name"],
+  ): Promise<unknown> {
+    try {
+      return this.exposeUser(
+        await firstValueFrom(
+          this.userClient
+            .send(
+              { cmd: USER_MESSAGE_PATTERN.UPDATE_USER_ROLE },
+              { requesterId, targetId, role },
+            )
+            .pipe(
+              timeout(TCP_TIMEOUT_MS.WRITE),
+              catchError((err: unknown) => {
+                throw err;
+              }),
+            ),
+        ),
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        `update role for user ${targetId}`,
         "User Service",
       );
     }

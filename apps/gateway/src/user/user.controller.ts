@@ -22,7 +22,9 @@ import {
   ChangePasswordDto,
   ListUsersQueryDto,
   FeaturedSellersQueryDto,
+  SearchUsersQueryDto,
   UpdateUserGatewayDto,
+  UpdateUserRoleDto,
 } from "./dto/user.dto";
 import {
   CreateUserAddressDto,
@@ -186,6 +188,28 @@ export class UserController {
     return this.userService.getFeaturedSellers(query.limit ?? 5);
   }
 
+  // Must stay above `@Get(":id")` — otherwise "search" is parsed as a user id.
+  @Get("search")
+  @UseGuards(JwtAuthGuard)
+  @RateLimit({ limit: 60, ttl: 60 })
+  @ApiOperation({
+    summary:
+      "Search users by username or display name (any authenticated user)",
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      "Array of matching active accounts: `{ id, username, name, avatar }[]`. " +
+      "`name` is nullable — render `username` as the label.",
+  })
+  @ApiResponse({ status: 400, description: "Missing or empty `q`." })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  async searchUsers(
+    @Query(ValidationPipe) query: SearchUsersQueryDto,
+  ): Promise<unknown[]> {
+    return this.userService.searchUsers(query.q, query.limit ?? 5);
+  }
+
   @Get("me")
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: "Get current authenticated user" })
@@ -291,5 +315,28 @@ export class UserController {
     @Request() req: { user: { id: number } },
   ): Promise<unknown> {
     return this.userService.updateUser(req.user.id, id, dto);
+  }
+
+  // ROLE-ADMIN-01: the only way to promote a buyer to `shop` without touching
+  // the database by hand. The new role reaches the target's JWT only on their
+  // NEXT login — the token is stateless and nothing revokes it here.
+  @Patch(":id/role")
+  @Roles("admin")
+  @ApiOperation({ summary: "Admin: change a user's role (e.g. user → shop)" })
+  @ApiBody({ type: UpdateUserRoleDto })
+  @ApiResponse({ status: 200, description: "Updated user with the new role." })
+  @ApiResponse({
+    status: 400,
+    description:
+      "Invalid user id format, unknown/inactive role, or self role change.",
+  })
+  @ApiResponse({ status: 403, description: "Forbidden — admin only." })
+  @ApiResponse({ status: 404, description: "User not found." })
+  async updateUserRole(
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.USER)) id: string,
+    @Body() dto: UpdateUserRoleDto,
+    @Request() req: { user: { id: number } },
+  ): Promise<unknown> {
+    return this.userService.updateUserRole(req.user.id, id, dto.role);
   }
 }
