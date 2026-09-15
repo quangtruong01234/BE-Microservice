@@ -6,6 +6,286 @@
 
 ## Completed Milestones
 
+- **NAME-TRIM-01 — a whitespace-only name/username is rejected instead of
+  stored (2026-09-15). No migration, no new endpoint, release class B.**
+  FE reported that `PATCH /api/user/:id` accepted `{ name: "   " }` with a
+  `200` and handed it straight back on the next `GET /user/me`:
+  `@MinLength(1)` measures the raw string, and `"   "` is length 3. The account
+  then had a stored display name that rendered as nothing in every label in the
+  app.
+  - **Delivered.** `@Transform(({value}) => value.trim())` on
+    `UpdateUserGatewayDto.name` in `apps/gateway/src/user/dto/user.dto.ts`. The
+    transform runs in `plainToInstance`, i.e. **before** validation, so the
+    length check sees the trimmed value: `"   "` collapses to `""` and is a
+    `400`, while a padded-but-real `" Quang "` is persisted as `"Quang"`.
+    Matches the inline idiom already used by `SearchUsersQueryDto` 20 lines up
+    in the same file (3 such copies already existed; no shared helper in
+    `libs/`, so no new abstraction was introduced for a 4th).
+  - **The change-impact review found a second, worse hole that nobody had
+    reported — and it is the real value of this task.** The gateway's
+    `RegisterUserDto.username` carried only `@IsString()`, so
+    `POST /api/user/register` with `username: "   "` returned **`201` and
+    created the account** (proven at runtime, not inferred:
+    `usr_p4wMRyPlPJkXY17b`). `username` is the label the entire app falls back
+    to when the display name is null — the thing ENRICH-BATCH-01 and
+    AUTHOR-NAME-01 both describe as "the label that cannot come back blank".
+    That guarantee held only for `NULL`, never for whitespace. Unlike the
+    reported bug, **the FE could not mitigate this one**, because the fallback
+    itself was the blank value. Same fix, plus `@IsNotEmpty()`; trimming also
+    stops `" john "` from being a row that is UNIQUE against `john` yet renders
+    identically to it.
+  - **Why the microservice DTOs were deliberately not touched.**
+    `apps/user/src/dto/{update-user,register-user}.dto.ts` carry the same
+    decorators, but that service's `ValidationPipe` is commented out
+    (`apps/user/src/main.ts:25`), so those decorators never execute. The
+    gateway DTO is the only gate that actually runs; "fixing" the microservice
+    copy would have been dead code that reads like protection.
+  - **Scope held deliberately.** `password` is NOT trimmed — spaces can be part
+    of a real secret and trimming one silently changes the credential. `email`
+    needed nothing (`@IsEmail()` already rejects a padded address). `null`
+    remains the documented way to clear the display name (nullable column,
+    SHAPE-01 rule 3) — only blank *strings* became a 400. Login still does not
+    trim, so the pre-fix probe account stays reachable.
+  - **Verified at runtime on the live stack, both directions.**
+    `{"name":"   "}` → `400` (was `200`) · `{"name":"\t\n  "}` → `400` ·
+    padded `"  Quang Trường  "` → `200` stored `"Quang Trường"` with the
+    multibyte bytes intact (`c6b0 e1bb9d`) · `{"name":null}` → `200`, still
+    clears · register `"   "` → `400` (was `201`). One trap worth recording:
+    the first padded test *looked* like an encoding bug (`"Quang Tru?ng"`,
+    hex `3f`) — it was Git Bash mangling the `-d` argument, disproven by
+    re-sending the same payload as UTF-8 bytes from a file. Not a backend
+    defect.
+  - **Pinned by 14 new cases** in `apps/gateway/src/user/dto/user.dto.spec.ts`
+    (following the existing `update-product.dto.spec.ts` pattern), covering
+    blank/padded/clean/null/non-string for both DTOs. Full suite **42 suites /
+    444 tests** green; `tsc --noEmit`, eslint and `check:conventions`
+    (348 files / 3 invariants) clean.
+  - **Release class B, with the reasoning stated rather than assumed.** The
+    rulebook calls "200 → 4xx" class C, but the tie-breaker is whether a user
+    sees something wrong between the two deploys. For `name`: no — FE already
+    shipped `z.string().trim().min(1)` on the only screen that writes it
+    (verified in `frontend/src/features/user/profileForm.ts`), so the shipped
+    FE cannot produce the rejected input. For `username`: the FE register
+    schema is `z.string().min(1)` **without** `.trim()`, so it *can* send
+    `"   "` — but the response changes from "silently broken account" to a
+    validation error on input that was never valid. No legitimate flow breaks.
+    FE was asked to mirror `.trim()` so the error shows inline instead of
+    costing a round-trip.
+  - **Residual behaviour:** `known-behaviors.md` → NAME-TRIM-01. The
+    AUTHOR-NAME-01 bullet asserting that the PATCH "accepts and persists"
+    `"   "` was corrected there — it is now false. The read-side normalization
+    in `fetchAuthorMap` stays, because it is what covers rows written before
+    this fix.
+  - **Known gap, left open honestly:** the probe account could not be deleted —
+    there is no delete-user endpoint and no MySQL credentials on this machine
+    (`api/.env` does not exist; the running services hold their own env). It
+    was neutralised by giving it a renderable `name` and is documented in
+    `../.agent-local/test-accounts.md`. It is dev-DB only; the probe was never
+    run against prod.
+
+- **ROLE-ADMIN-01 — an admin can change a user's role over HTTP (2026-09-15).
+  New endpoint, no migration, release class B.** Until now `users.role_id` had
+  exactly one write path: `register`, which hardcodes `user`. Every shop and
+  admin account on dev and prod was made with a hand-written `UPDATE` against
+  Aiven MySQL — a seller onboarding step that could not be done from any UI.
+  - **Delivered.** `PATCH /api/user/:id/role`, `@Roles("admin")`, body
+    `{ role: "user" | "shop" | "admin" | "logistics_operator" |
+    "shipping_manager" }`, returns the updated user in the usual
+    `exposeUser` shape (`role: { id, name }`, no password). New TCP pattern
+    `user.update_role` → `UserService.updateUserRole`.
+  - **Two layers of validation on purpose.** The gateway DTO `@IsIn` keys off
+    `ASSIGNABLE_USER_ROLES` (`apps/gateway/src/user/user.types.ts`), typed
+    against the existing `UserRole["rol_name"]` union so an invented name fails
+    to compile; the user service then still requires the `roles` row to exist
+    with `rol_status = 'active'`. The enum is the spelling check, the table is
+    the source of truth.
+  - **An admin cannot change its own role** (400). A one-admin platform that
+    demotes itself is locked out with no API to get back. Changing *another*
+    admin is allowed.
+  - **The catch, documented in `known-behaviors.md` → ROLE-ADMIN-01:** the JWT
+    is stateless and carries `role` + `grants` from login, so the change only
+    lands on the target's NEXT login. Proven, not assumed — a demoted account's
+    live cookie still answered 200 on `GET /api/products/shop/stats`. The FE
+    must force a re-login after a role change.
+  - **Self-tested against the running stack** (9 legs): promote user→shop 200;
+    the promoted account then logged in and got a real `shop` JWT that passed
+    the `shop`-gated `GET /api/products/shop/stats`; `shipping_manager` 200
+    (proves all five seeded roles resolve, not just `shop`); demote back 200;
+    unknown role 400 listing the five; `role: null` 400; self-change 400;
+    non-admin caller 403; anonymous 401; unknown `usr_...` 404. Dev data was
+    left as found — the test account is back on `user`.
+
+- **AUTHOR-NAME-01 — the social author embed now carries the display name
+  (2026-09-15). One field, one construction site, no migration, release class
+  B.** Picked by `/sweep AUTHOR-NAME-01` from `backend-handoff.md` §Open: the
+  post/comment/reply `author` embed was `{ id, username, avatar }`, so the feed
+  printed `username` even for an account with a display name set — while
+  `GET /api/user/:id` returned that same user's `name` happily. The FE had
+  already typed `name` and already rendered `author.name ?? author.username`;
+  it had **no** mitigation, because the only client-side fix would have been an
+  N+1 `/user/:id` per author on the homepage.
+  - **Delivered.** `name: string | null` added to the `author` embed. The whole
+    change is one line in `fetchAuthorMap`
+    (`apps/gateway/src/social/social.service.ts:68`) plus the `UserInfo` /
+    `UserInfoTcp` types — that helper is the single construction site for the
+    embed, so all 10 call sites (post list, user posts, single post, paginated
+    comments, reply tree, created comment, created reply, followers, following,
+    feed, admin reports incl. the `reporter` hydration) gained the field at once.
+  - **No user-service change was needed** — `getUsersByIds` already selected
+    `name`; the gateway was the only thing dropping it. The FE's question about
+    `apps/user/src/user.controller.ts:50` is answered: nothing to do there.
+  - **Blank display names are normalized to `null`.** `UpdateUserGatewayDto.name`
+    has `@MinLength(1)` and no trim, so `PATCH /api/user/:id` with `"   "` is
+    accepted and persisted — verified against the running stack, not reasoned
+    about. The FE falls back with `??`, which does not fire on `""`, so an
+    unnormalized blank would have rendered an empty author label. This is the
+    only non-obvious line in the diff and it is pinned by a test.
+  - **The key collides with `product.user.name`, which carries the USERNAME**
+    (ENRICH-BATCH-01). Both meanings are now written down in the `UserInfo`
+    doc comment and in `known-behaviors.md` → AUTHOR-NAME-01, so nobody
+    "aligns" the two embeds later. The notification `actor` embed
+    (OVERFETCH-01) deliberately keeps no `name`.
+  - **Verified at runtime** on every leg, not just the one the FE reported:
+    `GET /api/social/posts` (15/15 posts, `"API Test User"` vs `null` both
+    present), a created comment, a created reply incl. its embedded `parent`,
+    the nested reply tree, the single post, user posts, followers, following,
+    the following-feed, and admin reports (`post.author` + each `reports[].reporter`).
+    The blank-name path was exercised end-to-end by PATCHing `"   "` onto a test
+    account, confirming the embed answered `null`, then restoring the column.
+    `tsc --noEmit`, eslint, `check:conventions` (348 files, 3 invariants) and the
+    full unit suite (41 suites / **430** tests, +1 for the blank-name case) green.
+  - **Change-impact review:** `UserInfo` has exactly one construction site, so no
+    second code path can emit an embed missing the key; nothing caches the author
+    embed (the social Redis usage is like-counts and liked-flags only), so no
+    stale shape can be served; every other `username:` literal in the gateway
+    belongs to a different, untouched embed type.
+  - FE contract recorded in `../.agent-local/frontend-handoff.md` (storefront).
+
+- **SEARCH-01 — the header search box can finally find posts and sellers
+  server-side (2026-09-15). One new optional query param, one new endpoint, no
+  migration, release class B.** Picked by `/sweep SEARCH-01` from
+  `backend-handoff.md` §Open: the FE placeholder promised *"sản phẩm, bài viết,
+  seller"* but only products were really searchable. The FE was pulling the 50
+  newest posts + the top 20 featured sellers and filtering them client-side, so
+  anything older than 50 feed rows or outside the top-20 pool was unfindable.
+  - **Delivered.** `GET /api/social/posts?search=<q>` — an optional
+    `MaxLength(100)`, trimmed filter on `content`, keeping the existing
+    `PaginatedResponse<Post>` shape and the `author` embed (verified: the embed
+    survives the filter and still labels with `username`).
+    `GET /api/user/search?q=<q>&limit=5` — new, `JwtAuthGuard` + `@RateLimit(60/60s)`,
+    matches `username` OR the display `name` on active accounts, returns
+    `{ id, username, name, avatar }[]` with `usr_...` public ids.
+  - **Accent-insensitivity cost zero application code.** Probing the live Aiven
+    schema showed `posts.content`, `users.username` and `users.name` are all
+    `utf8mb4_0900_ai_ci`, so `LIKE '%ban phim%'` already matches `bàn phím` —
+    the same property the product search has always leaned on. A normalized
+    shadow column or a `CONVERT(... USING ascii)` expression would have been a
+    migration and an index-killer for a match the DB already does. The
+    dependency (and what breaks it) is now written down as SEARCH-01 in
+    `known-behaviors.md`.
+  - **Class B, deliberately.** A blank `?search=` normalizes to `null` at the
+    gateway, so the pre-existing FE call to the post feed is byte-identical in
+    behaviour; the user route is brand new. Nothing to hold at the release gate.
+  - **Route ordering is the landmine.** `@Get("search")` sits above `@Get(":id")`
+    in the user controller with a comment saying why — below it, `search` parses
+    as a public id and 400s.
+  - **Verified at runtime**, both endpoints: accent round-trip in both
+    directions (`ban phim` ⇄ `bàn phím`, `quang` → `Quảng` after a UTF-8-safe
+    display-name PATCH that was rolled back afterwards), zero-match → `[]` /
+    `total: 0` rather than an error, `%` wildcard → all rows not a 500, blank
+    `search` → full feed, blank `q` → 400, `limit=21` → 400, unauthenticated →
+    401. `tsc --noEmit`, eslint, `check:conventions` (348 files, 3 invariants)
+    and the full unit suite (41 suites / 429 tests) all green.
+  - FE contract recorded in `../.agent-local/frontend-handoff.md` (storefront),
+    including the four client-side workarounds it can now delete.
+
+- **GHN-FAIL-NTF-02 — a cancelled order no longer tells its buyer the carrier
+  will redeliver (2026-09-14). One guard in `orders`, no contract change, no
+  migration, release class A.** Found by `/sweep` with both work sources empty:
+  `snapshot.md` §Active Tasks had nothing mid-implementation and
+  `backend-handoff.md` §Open had no actionable item, so the sweep audited the
+  least-reviewed surface instead — the 7 commits that are committed but still
+  unpushed. The bug was in GHN-FAIL-NTF-01, shipped three days earlier and not
+  yet on prod.
+  - **The defect.** `notifyFirstDeliveryFailure` was called from the
+    `!mappedStatus` branch of `applyGhnStatus`, which `return`s **above** both
+    the CANCELED/COMPLETED terminal guard and the `statusRank` staleness check.
+    Every *mapped* status is protected by one of those two; the new notification
+    was protected by neither, so it was the single code path in the method that
+    would act on a finished order.
+  - **Reachable, and by a route this repo already documents.** The buyer-cancel
+    path gives up after two failed GHN cancels, leaving a canceled order with a
+    live waybill (a standing known behaviour). The shipper then attempts a real
+    delivery, it fails, GHN sends a real `delivery_fail` — and the buyer got
+    *"đơn vị vận chuyển sẽ giao lại trong thời gian tới"* about an order they had
+    already cancelled. Dedupe could not save it: the ledger only suppresses a
+    *repeat* attempt.
+  - **Fix**: `NO_REDELIVERY_STATUSES` = CANCELED / COMPLETED / REFUNDED, checked
+    before the ledger read. REFUNDED was added on review — it is terminal in the
+    same way and reachable by the same stale-waybill route, and unlike the mapped
+    path it had no `statusRank` protection to fall back on. RETURN_REQUESTED is
+    deliberately left notifiable: `requestReturn` accepts DELIVERING, so the goods
+    can still be on the truck and a redelivery is still the truth. A test pins
+    that exclusion so it is not "tidied" into the set later.
+  - **Silence is the only effect** — the caller still writes the
+    `shipping_history` row, so the GHN console timeline keeps every attempt.
+  - **Verified in both directions, at runtime, against real rows** — not just by
+    unit test. Canceled order `ord_H5qkNUfVa7RKa8xQ` (waybill `L8DFEN`, **zero**
+    prior `delivery_fail` rows, so the old code *would* have notified):
+    `demo-status delivery_fail` → `201`, notification count for its buyer stayed
+    **2**, history row written. Live order `ord_516ac8d6816611f1` (processing):
+    same call → notification count **2 → 3**, proving the happy path is intact.
+    Re-run on a second fresh canceled order (`ord_516a8081816611f1`, buyer 21)
+    after the REFUNDED widening: still zero notifications for that buyer, history
+    row present.
+  - **Regression tests proven to fail without the fix** (guard stubbed to
+    `if (false)` → both cases red, restored → green). 4 new tests: CANCELED /
+    COMPLETED / REFUNDED stay silent but still record, RETURN_REQUESTED still
+    notifies. Suite **41 files / 429 tests** (was 427), `tsc --noEmit` clean,
+    eslint clean, `check:conventions` OK.
+  - **Ships inside the same unpushed batch as GHN-FAIL-NTF-01**, so the narrowed
+    rule is the only one that ever reaches prod — no FE-visible change, no
+    release-gate hold.
+
+- **E2E-SCAFFOLD-01 — deleted 14 dead test files, and caught a red CI that the
+  unpushed ENRICH-BATCH-01 commit would have shipped (2026-09-11). No runtime
+  code touched, no migration, release class A.** Picked up from `snapshot.md`
+  §"Worth a decision": the 7 `apps/*/test/app.e2e-spec.ts` files were identical
+  `nest generate app` boilerplate asserting `GET / → "Hello World!"`.
+  - **Confirmed dead three ways before deleting**, rather than trusting the note:
+    `grep -rn "Hello World" apps/ libs/` matches **only the 7 scaffolds** — no
+    service anywhere implements that route, so every one of them would fail the
+    moment it ran; the root jest `testRegex` is `.*\.spec\.ts$`, which requires a
+    literal dot and therefore never matches `-spec.ts`; and there is **no
+    `test:e2e` script** in `package.json` and no CI step that would use one
+    (`ci.yml:151` runs plain `npm test`). The 7 `jest-e2e.json` files beside them
+    were byte-identical (same md5) and referenced by nothing, so they went too —
+    14 files, −245 lines. Only 7 of the 10 services even had the directory, which
+    is itself the tell that these were scaffolding nobody ever revisited.
+  - **Deleted rather than made real.** A genuine TCP e2e needs live
+    Redis/RabbitMQ/Aiven in CI, which collides with the free-tier-only
+    constraint; the honest state is 41 unit suites and no e2e, not a suite that
+    claims coverage it never executes. The remaining gap is recorded in
+    `snapshot.md` so deleting these does not erase the question.
+  - **The find that mattered was incidental.** Running the full suite over the
+    working tree turned up `product-ownership.service.spec.ts:130` still
+    asserting `name: "Seller 20"` — the *old* `users.name` value. ENRICH-BATCH-01
+    (commit `778a3b8`, unpushed at the time) corrected `product.service.spec.ts` but
+    missed this sibling spec, whose mock deliberately sets `username: "seller20"`
+    *and* `name: "Seller 20"` so the two are distinguishable. The single-product
+    assertion at `:91` had already been updated; only the batch one was stale.
+    **`npm test` on `main` would have gone red on push.** Fixed to `"seller20"`,
+    which makes the test assert the batch/detail parity that ENRICH-BATCH-01 is
+    actually about.
+  - **Left deliberately:** `supertest` and `@types/supertest` are now unreferenced
+    devDependencies. Removing them is lockfile churn for no CI benefit — the
+    dependency step is `npm audit`, not an unused-dependency check — and they
+    would be needed again by any future HTTP-level e2e.
+  - **Verified:** `tsc --noEmit` 0 · `lint:check` 0 · `check:conventions` OK
+    (348 files, 3 invariants) · `npx jest` **41 suites / 425 tests green** (was
+    40 passed / 1 failed before the spec fix) · `npm run build` all 10 services.
+    No endpoint changed, so there was nothing to self-test over HTTP.
+
 - **ENRICH-BATCH-01 — the list/batch product read named a seller `null` that the
   per-id read named correctly (2026-09-11). One source line. No migration,
   release class B.** Reported by the FE from prod: for the *same* product and

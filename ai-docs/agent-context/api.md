@@ -98,6 +98,7 @@ payments, `reward_points`, `shipping_history`, `voucher_redemptions`.
 | GET | `/api/user/me` | Cookie | Get current authenticated user |
 | GET | `/api/user/:id` | Cookie | Get public user profile by ID (no email) |
 | PATCH | `/api/user/:id` | Cookie | Update user profile (own account only) |
+| PATCH | `/api/user/:id/role` | Role: admin | Change a user's role — `{ role: "user" \| "shop" \| "admin" \| "logistics_operator" \| "shipping_manager" }`. 400 on an unknown/inactive role or a self-change; takes effect on the target's next login (ROLE-ADMIN-01) |
 
 ### Register DTO
 ```typescript

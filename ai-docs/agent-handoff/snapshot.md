@@ -38,9 +38,12 @@ Nothing is mid-implementation. What is genuinely open:
 
 ### Held by the release gate
 
-Nothing. `../.agent-local/release-gate.md` **Holding** and **Ready to release**
-are both empty as of 2026-09-10 — check that file, not this line, before you
-conclude a push is blocked.
+`../.agent-local/release-gate.md` **Holding** carries one entry as of
+2026-09-15: SEARCH-01 (+ ROLE-ADMIN-01, AUTHOR-NAME-01, NAME-TRIM-01). The hold
+is on the **`frontend`** repo, not on `api` — this tree is class B (new routes,
+a new optional query param, a new optional response field), so `api` may push
+alone and the FE follows immediately after. Check that file, not this line,
+before you conclude a push is blocked.
 
 ### Prod-owed
 
@@ -55,12 +58,11 @@ conclude a push is blocked.
 
 ### Worth a decision, not yet work
 
-- **The 7 `apps/*/test/app.e2e-spec.ts` are dead scaffolds.** Identical untouched
-  Nest boilerplate asserting `GET / → "Hello World!"` against services that are
-  TCP-only and have no HTTP server. They never run (jest's `testRegex` wants a
-  literal `.spec.ts`; these are `-spec.ts`) and would fail if wired up. Either
-  delete them or write a real TCP e2e — leaving them is a test suite that lies
-  about its coverage.
+- **A real TCP e2e suite still does not exist.** The 7 dead `app.e2e-spec.ts`
+  scaffolds were DELETED 2026-09-11 (E2E-SCAFFOLD-01), so the suite no longer
+  lies about its coverage — but the gap they pretended to fill is still open.
+  Anything real needs live Redis/RabbitMQ/Aiven in CI, which collides with
+  free-tier-only; unit coverage (42 suites / 444 tests) is what exists today.
 - **CD-03 — build-on-runner deploy variant.** Only if the EC2 gets
   smaller/slower (CI-built `dist/` rsync + `npm ci --omit=dev` + restart). Not
   needed while CD-01 works.
@@ -74,6 +76,9 @@ Full designs (scope, shape, landmines, release class) live in
 `ai-docs/agent-context/planned-work.md` — load it with the Read tool when you
 pick one up. Do not re-derive them:
 
+- **EXPORT-CSV-01** — seller order export to CSV, split into T1 (shared csv util)
+  → T2 (orders TCP leg) → T3 (gateway route, goes live); T4 admin / T5 async are
+  optional. No migration, class B.
 - **SOCIAL-LIKE-NTF-01** — liking a post notifies nobody (product decision, needs batching).
 - **VOUCHER-SHOP-01 phase 2** — Shopee-style stacking + multi-shop apportionment.
 - **AI-03 / AI-04** — Sell From Photo, Visual Search (Gemini; AI-04 adds 1 migration).
@@ -107,6 +112,8 @@ twice, single-seller checkout has no `paymentUrl` (`GET /:id/payment-url` →
 **GHN** — GHN-FAIL-01 (`delivery_fail` deliberately moves no local status),
 GHN-FAIL-NTF-01 (the buyer is notified on the FIRST `delivery_fail` only, deduped
 via `shipping_history`; in-app only, no email, no seller copy),
+GHN-FAIL-NTF-02 (a CANCELED/COMPLETED/REFUNDED order never notifies — a stale
+waybill can still produce a real failed attempt; RETURN_REQUESTED still does),
 GHN-DIST-01 (unknown district / cross-district ward → 400, but validation is
 fail-open), GHN-MSG-01 (12 of 19 Quận 8 wards unshippable on the dev shop —
 **do not "fix" it by quoting from `/shipping-order/fee`**), free-text address is
@@ -127,9 +134,22 @@ reads, `null` not `{}` for a missing relation, no `@IsOptionalNotNull()` sweep),
 BATCH-FAIL-01 (product leg errors, inventory leg degrades),
 ENRICH-FAIL-01 (a social write can 502 on a user-service outage),
 ENRICH-BATCH-01 (every seller embed labels with `username`; nullable
-`users.name` is not exposed anywhere and `GET /api/user/featured-sellers` is the
-one route that still passes it through),
+`users.name` rides along on two row-dump routes — `GET /api/user/featured-sellers`
+and `GET /api/user/search`), AUTHOR-NAME-01 (the social author embed also carries
+`name`, but the key means the **display name** there and the **username** in
+`product.user.name`; blank display names are normalized to `null`; the
+notification `actor` embed deliberately still has no `name`),
+NAME-TRIM-01 (a whitespace-only `name` on `PATCH /api/user/:id` **and** a
+whitespace-only `username` on `POST /api/user/register` are now 400s, trimmed
+before validation at the gateway DTO — the user service's own DTOs never run,
+its `ValidationPipe` is commented out; `null` still clears the display name and
+`password` is deliberately not trimmed),
 ENVELOPE-01, array query params `?x[]=` → 400.
+
+**Search** — SEARCH-01 (accent-insensitivity comes from the MySQL
+`utf8mb4_0900_ai_ci` collation, not from application code; `%`/`_` in a query
+are NOT escaped, matching the older product search; `/api/user/search` returns
+active accounts only and 400s on a blank `q`).
 
 **Vouchers** — VOUCHER-CONC-01 (Redis quota gate fails open, can be
 pessimistic for 300s), VOUCHER-CANCEL-01 (cancel gives the redemption back;
@@ -138,8 +158,10 @@ be walked back), VOUCHER-NULL-01, VOUCHER-SHOP-01 residuals.
 
 **Auth / mail** — CHG-PW-01 (change-password revokes nothing — an attacker's
 stolen session survives it), CHG-PW-02 (optional `errorCode`, survives the prod
-401 sanitizer), RESET-EXHAUST-01, RESET-TTL-01 (60s, live on prod since
-2026-09-10),
+401 sanitizer), ROLE-ADMIN-01 (`PATCH /api/user/:id/role` is admin-only, refuses
+a self-change, and the new role reaches the target only on their NEXT login —
+the live token keeps the old grants), RESET-EXHAUST-01, RESET-TTL-01 (60s, live
+on prod since 2026-09-10),
 MAIL-UI-01 (no copy button — email clients strip `<script>`; SMTP is :465 only),
 MAIL-UI-02 (order emails build their CTA from `FRONTEND_URL` entry [0]),
 MAIL-BOUNCE-01 (mail to `@trybuy.com` / RFC-reserved domains is dropped before

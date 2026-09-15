@@ -259,6 +259,38 @@ the notification is the entire effect.
   zero rows before either writes one. Closing it needs a unique constraint, i.e.
   the migration this design deliberately avoids. Accepted: the cost is one
   duplicate in-app line, and GHN's retries are hours apart, not milliseconds.
+
+## A finished order never hears about a missed attempt (GHN-FAIL-NTF-02, 2026-09-14)
+
+Found by `/sweep` auditing GHN-FAIL-NTF-01 before it was pushed; shipped in the
+same unpushed batch, so the narrowed rule is the only one that ever reaches prod.
+
+- **The hole.** An unmapped status returns from `applyGhnStatus` in the
+  `!mappedStatus` branch, which sits **above** both the CANCELED/COMPLETED
+  terminal guard and the `statusRank` staleness check that every *mapped* status
+  passes through. The new notify call was placed in that branch, so it inherited
+  none of that protection.
+- **It was reachable, not theoretical.** A canceled order can still carry a LIVE
+  waybill — the buyer-cancel path gives up after two failed GHN cancels
+  (documented directly above) — so the shipper really attempts a delivery that
+  really fails, and GHN really sends `delivery_fail`. The buyer then got
+  *"đơn vị vận chuyển sẽ giao lại trong thời gian tới"* for an order they had
+  already cancelled. Reproduced on a real dev row (`ord_H5qkNUfVa7RKa8xQ`,
+  waybill `L8DFEN`, canceled, zero prior `delivery_fail` rows ⇒ dedupe could not
+  have masked it).
+- **The rule.** `NO_REDELIVERY_STATUSES` = CANCELED, COMPLETED, REFUNDED —
+  states in which nothing will be redelivered, each reachable while a stale
+  waybill is still live. Checked BEFORE the ledger read, so a finished order does
+  not even query `shipping_history`.
+- **RETURN_REQUESTED is deliberately excluded and notifies.** It is reachable
+  straight from DELIVERING (`requestReturn` accepts DELIVERING or COMPLETED), so
+  the goods may still be on the truck and a redelivery is still the truth. A test
+  pins this so it is not "tidied" into the set later.
+- **Silence is the ONLY effect.** The caller still writes the `shipping_history`
+  row, so the GHN console timeline keeps every attempt — the audit trail is
+  unchanged, only the buyer-facing line is suppressed.
+- **A row with no status reads as PENDING** (notifiable), defaulted the same way
+  `applyGhnStatus` defaults it rather than diverging from it.
 - **Both reads are best-effort.** A failing ledger query logs a warn and stays
   SILENT (a webhook that already did its job must not fail over a notification,
   and a failed read must not risk a duplicate); a dead RMQ channel logs a warn
@@ -1222,12 +1254,105 @@ is typed `string` and must never be able to arrive `null` — the FE renders an
 empty seller label as *"Người bán không còn tồn tại"*, i.e. a live shop reads as
 deleted.
 
-Residual, deliberate: **`GET /api/user/featured-sellers` still passes `name`
-through** (nullable) alongside `username`. `exposeUser` spreads the whole row,
-nothing there is declared non-null, and the usable label ships in the same
-object — so it is a faithful row dump, not the same defect. Read `username`.
-`users.name` is otherwise unexposed; do not start surfacing it without making it
-NOT NULL first.
+Residual, deliberate: **`GET /api/user/featured-sellers` and
+`GET /api/user/search` still pass `name` through** (nullable) alongside
+`username`. `exposeUser` spreads the whole row, nothing there is declared
+non-null, and the usable label ships in the same object — so those are faithful
+row dumps, not the same defect. Read `username`.
+
+Since AUTHOR-NAME-01 (2026-09-15) the **social author embed also carries `name`**
+— see the next section for why that is not a walk-back of the rule above.
+
+## The social author embed carries `name` too — and the key means something else there (AUTHOR-NAME-01, 2026-09-15)
+
+The post / comment / reply `author` embed was `{ id, username, avatar }`, so the
+feed could only print `username` even for an account that had set a display
+name. The FE had already typed `name` and already rendered
+`author.name ?? author.username`, and could not fix it client-side without an
+N+1 `/user/:id` per author on the homepage. `name` is now emitted alongside
+`username` by `fetchAuthorMap` (`apps/gateway/src/social/social.service.ts:68`),
+the single construction site for the embed — so every one of its 10 call sites
+(post list, user posts, single post, paginated comments, reply tree, created
+comment, created reply, followers, following, feed, admin reports incl. the
+`reporter` hydration) gained it at once.
+
+**This does not walk back ENRICH-BATCH-01, because the two embeds use the key
+for different things:**
+
+| Embed | `name` carries | Nullable? |
+|---|---|---|
+| `product.user.name` | the **username** (`name: user.username`) | no — that is the whole point of ENRICH-BATCH-01 |
+| `post.author.name` | the real **display name** | **yes** — `string \| null` |
+
+So `username` is still the label that cannot come back blank, and `name` in the
+social embed is strictly additive next to it. Do not read `author.name` alone,
+and do not "align" the two embeds by copying either one onto the other.
+
+Deliberate details:
+
+- **A blank display name is normalized to `null`.** The FE falls back with `??`,
+  which does **not** fire on `""` — an unnormalized blank would render an empty
+  author label. `fetchAuthorMap` therefore emits `name: u.name?.trim() ? … : null`
+  and a merely padded name ships trimmed. Pinned by
+  `social-comment-author.service.spec.ts` → *"normalizes a blank display name to
+  null"*.
+  **Correction (NAME-TRIM-01, 2026-09-15):** this bullet used to add that
+  `PATCH /api/user/:id` *accepts and persists* `"   "`. That is no longer true —
+  the write is now a 400 (next section). Keep the read-side normalization
+  anyway: it is what protects rows written before the fix, and it is the reason
+  `??` is safe at the call site.
+- **The key is always present**, `null` when unset — never omitted. A missing key
+  and a `null` both read as falsy in the FE fallback, but only the declared shape
+  survives a typed client.
+- **No user-service change was needed** — `getUsersByIds` already selected
+  `name`; the gateway was dropping it.
+- **Out of scope, still `{ id, username, avatar }`: the notification `actor`
+  embed** (`NotificationActor`, OVERFETCH-01). The FE did not ask for it and
+  notifications read fine with `username`. Its absence there is a boundary, not
+  an oversight — extend it only on a real FE request.
+
+## A blank name/username is rejected at the write boundary (NAME-TRIM-01, 2026-09-15)
+
+`@MinLength(1)` and `@IsNotEmpty()` both measure the **raw** string, so `"   "`
+(length 3) sailed through every "non-empty" guard the user DTOs had. Two writes
+were affected, and the second was the worse of the pair:
+
+| Write | Before | After |
+|---|---|---|
+| `PATCH /api/user/:id` `{ name: "   " }` | `200`, stored verbatim | **`400`** `"name must be longer than or equal to 1 characters"` |
+| `POST /api/user/register` `{ username: "   " }` | **`201`, account created** | **`400`** `"username should not be empty"` |
+
+Both are fixed with `@Transform(trim)` in `apps/gateway/src/user/dto/user.dto.ts`,
+which runs during `plainToInstance` — i.e. **before** validation — so the
+length check sees the trimmed value. A padded-but-real value is persisted
+trimmed (`" Quang "` → `"Quang"`).
+
+Things that are easy to get wrong here:
+
+- **The gateway DTO is the only gate that runs.** `apps/user/src/dto/update-user.dto.ts`
+  and `register-user.dto.ts` carry the same decorators, but the user service's
+  `ValidationPipe` is **commented out** (`apps/user/src/main.ts:25`). Fixing the
+  microservice DTO alone would have been dead code. Do not "tidy up" by moving
+  the guard there.
+- **The register hole was the serious one, and it was never reported.** It was
+  found by the change-impact review, not by the FE ticket. `username` is the
+  label the whole app falls back to when the display name is null — it is what
+  ENRICH-BATCH-01 and AUTHOR-NAME-01 both call "the label that cannot come back
+  blank". That guarantee was only ever true of `NULL`, never of whitespace: a
+  blank-username account rendered as nothing, everywhere, and the FE could not
+  mitigate it because the fallback *was* the blank value. Specimen account in
+  `../.agent-local/test-accounts.md`.
+- **Trimming is `String.prototype.trim()`**, so tabs and newlines count as
+  blank, and multibyte characters are untouched (verified: `"  Quang Trường  "`
+  → `"Quang Trường"`, bytes `c6b0 e1bb9d` intact).
+- **`null` is still the documented way to clear the display name** — `name` maps
+  to a nullable column, so `@IsOptional()` stays and `{ name: null }` answers
+  `200` (SHAPE-01 rule 3). Only *blank strings* became a 400.
+- **`password` is deliberately NOT trimmed** — leading/trailing spaces can be
+  part of a real secret, and silently trimming one changes the credential.
+  `email` needed nothing: `@IsEmail()` already rejects a padded address.
+- **Login was left alone.** It does not trim `username`, so the pre-fix probe
+  account is still reachable by sending its literal `"   "`.
 
 ## Cancelling an order gives the voucher back (VOUCHER-CANCEL-01, 2026-08-26)
 
@@ -1378,3 +1503,83 @@ whole time, and there is no retry on the gateway's TCP leg.
   must be registered — an unknown address returns early and is fast regardless,
   which proves nothing. Mind the 60s `user:pwreset:cooldown:<id>`: a second call
   inside the window also short-circuits and reads as a false pass.
+
+## Search is accent-insensitive because of the collation, not the code (SEARCH-01, 2026-09-15)
+
+`GET /api/social/posts?search=` and `GET /api/user/search?q=` both match with a
+plain parameterized `LIKE '%q%'`. There is **no folding, normalizing, shadow
+column or `COLLATE` clause anywhere in the application** — typing `ban phim`
+finds `bàn phím` purely because `posts.content`, `users.username` and
+`users.name` are `utf8mb4_0900_ai_ci` (`ai` = accent-insensitive, `ci` =
+case-insensitive), verified against the live Aiven MySQL 8 schema on
+2026-09-15. The older product search (`apps/product/src/product.service.ts`)
+has always relied on the same property.
+
+Consequences worth knowing before you touch any of this:
+
+- **A table created with a different collation silently loses the feature.** The
+  query keeps returning 200 with fewer rows; nothing errors. If a future
+  migration adds a searchable text column, it must inherit the DB default
+  collation, or the accent match must be restored explicitly.
+- **PostgreSQL has no equivalent** — `ILIKE` is case-insensitive only. Node B
+  (inventory/payments/rewards) cannot copy this pattern; it would need `unaccent`.
+- **`%` and `_` in a query are NOT escaped.** `?search=%` matches every post
+  (measured: 15/15 on dev). This is deliberate, for consistency with the
+  existing product search — all three suggestion groups behave identically for
+  the same input. It is a wildcard, never an error: no 500, no injection (the
+  keyword is a bound parameter).
+- **No index helps a leading-wildcard `LIKE`.** Both queries are sequential
+  scans with `LIMIT`. Fine at the current row counts; if `posts` grows past
+  ~100k rows, this becomes a FULLTEXT/`MATCH AGAINST` job, not a bigger index.
+
+Contract edges, both verified at runtime:
+
+- `?search=` / `?search=%20%20` on the post feed returns the **full unfiltered
+  feed** — the gateway normalizes a blank to `null`, so the pre-SEARCH-01 FE
+  call behaves byte-identically (that is what made this release class B).
+- `?q=` blank on the user route is a **400**, not an empty list — `q` is
+  required there and a suggestion box has nothing to show for an empty string.
+  The FE must skip the call while the trimmed input is empty.
+- `/api/user/search` returns **active accounts only** (`isActive = true`), any
+  role (not just shops), ordered by `username` ASC, `limit` 1–20 default 5, and
+  `[]` when nothing matches (SHAPE-01 rule 1). Ids are `usr_...` public ids via
+  `exposeUser`; the nullable `name` rides along — see ENRICH-BATCH-01.
+
+## A role change only reaches the JWT on the target's NEXT login (ROLE-ADMIN-01, 2026-09-15)
+
+`PATCH /api/user/:id/role` (admin only) is the first and only write path for
+`users.role_id` — before it, promoting a buyer to `shop` meant a hand-written
+`UPDATE` against Aiven MySQL. It writes the row and nothing else, which has one
+consequence that matters more than the endpoint itself:
+
+**The target keeps the OLD role until their token is replaced.** The JWT is
+stateless and carries `role` + `grants` baked in at login (`generateJwtToken`,
+`apps/gateway/src/user/user.service.ts`), and nothing here revokes it — the same
+contract as CHG-PW-01. Verified at runtime, not reasoned about: after demoting a
+`shop` account back to `user`, its still-live cookie answered **200** on
+`GET /api/products/shop/stats`. A promotion has the mirror-image delay — the new
+`shop` sees 403 on seller routes until they log out and back in. **Tell the FE
+to force a re-login (or at least surface "log out and back in") after a role
+change**; polling `/api/user/me` will not help, since the role in the response
+comes from the DB while the guard reads the token.
+
+Deliberate, and not oversights:
+
+- **An admin cannot change its OWN role** → 400 `CANNOT_CHANGE_OWN_ROLE`. A
+  single-admin platform that demotes itself has no way back in short of SQL.
+  Changing ANOTHER admin (promoting or demoting) is allowed.
+- **The `roles` table is the source of truth, not the enum.** The gateway DTO
+  `@IsIn` rejects a name outside the five known roles (400 listing them), then
+  the user service still requires the row to exist with `rol_status = 'active'`
+  — a name that is in `RoleName` but was never seeded is a 400, never a row
+  pointing at a missing role. All five (`user`, `shop`, `admin`,
+  `logistics_operator`, `shipping_manager`) resolve on dev and on the prod seed.
+- **No side effects.** No shop/seller row is created — `shop` is purely the role
+  (a freshly promoted account answers `GET /api/products/shop/stats` with
+  zeroes), nothing is emitted to RabbitMQ, and the target is not notified or
+  emailed. If a "you are now a seller" notification is ever wanted, it is new
+  work, not a bug here.
+- **Assigning the role a user already has is a 200, not a 409** — the write is
+  idempotent.
+- `PATCH /api/user/:id` (profile) still ignores `role` entirely;
+  `forbidNonWhitelisted` rejects the key there with a 400.
