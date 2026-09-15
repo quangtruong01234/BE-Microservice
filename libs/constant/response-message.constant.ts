@@ -50,6 +50,10 @@ export const USER_MESSAGE = {
   CURRENT_PASSWORD_INCORRECT: "Current password is incorrect",
   NEW_PASSWORD_SAME_AS_CURRENT:
     "New password must be different from the current password",
+  CANNOT_CHANGE_OWN_ROLE:
+    "You cannot change your own role — ask another admin to do it",
+  ROLE_NOT_FOUND: (roleName: string): string =>
+    `Role "${roleName}" does not exist or is not active`,
 } as const;
 
 export const INVENTORY_MESSAGE = {
