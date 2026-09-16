@@ -48,8 +48,8 @@ Load on demand — read with the Read tool when the task touches the relevant ar
 | `ai-docs/agent-context/performance.md` | query / list / pagination / index / cache / N+1 / slow path |
 | `ai-docs/agent-context/backend.md` | NestJS / TCP / RabbitMQ / @MessagePattern / @EventPattern detail |
 | `ai-docs/agent-context/ops-runtime.md` | deploy / pm2 / nginx / prod env / EC2 / cloudinary / GHN ops / applied migration / seed |
-| `ai-docs/agent-context/known-behaviors.md` | residual behavior / known issue / 409 version / skuList / paymentUrl / compensation |
-| `ai-docs/agent-context/planned-work.md` | planned / roadmap / next feature / AI feature / Gemini / visual search / ETA / voucher stacking / phase 2 |
+| `ai-docs/agent-context/known-behaviors.md` | any **shipped** behaviour you are about to re-diagnose, change, or write a test against — see the keyword row in Auto-context below for the full trigger list |
+| `ai-docs/agent-context/planned-work.md` | planned / roadmap / next feature / AI feature / Gemini / visual search / voucher stacking / phase 2 |
 
 Do NOT use `@` for the on-demand group above — load them explicitly with the Read tool.
 
@@ -66,12 +66,89 @@ Match keywords in the prompt → read the corresponding file with the Read tool.
 | TCP, RabbitMQ, message pattern, event, @MessagePattern, @EventPattern | `ai-docs/agent-context/backend.md` |
 | performance, slow, N+1, index, cache, pagination, query | `ai-docs/agent-context/performance.md` |
 | deploy, pm2, nginx, prod, EC2, cloudinary, GHN ops, applied migration, seed | `ai-docs/agent-context/ops-runtime.md` |
-| known issue, residual behavior, version 409, skuList, paymentUrl, compensation | `ai-docs/agent-context/known-behaviors.md` |
-| planned, roadmap, next feature, AI feature, Gemini, visual search, ETA, voucher stacking, phase 2 | `ai-docs/agent-context/planned-work.md` |
+| known issue, residual behavior, 409, skuList, SKU, paymentUrl, return URL, compensation, GHN, waybill, delivery_fail, ETA, ward, district, voucher, reset, change-password, errorCode, role, search, accent, cron, outbox, notification, inventory, restock, stock, seller, embed, author, username, trim, envelope, upload, media, chat, mail, SMTP, /ready, SHAPE-01, batch, overfetch, moderation, storefront, isActive, PATCH, optimistic lock, paidAt, shipping status, query param, 502 | `ai-docs/agent-context/known-behaviors.md` — **two-stage, see below** |
+| planned, roadmap, next feature, AI feature, Gemini, visual search, voucher stacking, phase 2 | `ai-docs/agent-context/planned-work.md` |
 
 - No keyword match → use only the 3 always-loaded files; do not load extras.
 - Multiple keywords match → load all matching files.
 - User tags a file manually → that tag always takes priority over auto-context.
+
+**`known-behaviors.md` is TWO-STAGE — never read it whole on a keyword hit.**
+It is ~15k words; loading it on every task that says "inventory" or "seller" is
+pure waste, and its keyword row is deliberately broad to favour recall.
+
+0. **Stage 0 is automatic.** A `UserPromptSubmit` hook
+   (`.claude/hooks/kb-hint.mjs`) matches the prompt against the per-entry
+   anchors and injects a `<kb-hint>` block with the matching ids + one-line
+   summaries. If you see one, treat it as stage 1 already done — jump to stage
+   2 for the ids that are actually relevant, and ignore the rest. An id marked
+   `[STALE]` has had its owning files change since it was baselined: read the
+   CODE first and treat the entry as a claim to check, not a fact.
+1. **Stage 1 is free.** `snapshot.md` is already auto-loaded and its
+   "Known Issues — index only" section lists all 56 entries as
+   `- <ID> — <one-line summary>`, grouped by domain. Match the task against it
+   **by meaning, not by keyword** — carrying the summaries in an always-loaded
+   file is what makes that possible. The stage-0 hook only greps `keys=`, so it
+   is blind to paraphrase and to wording nobody thought to write a key for; you
+   are not.
+2. **Stage 2 is targeted.** Only if an id matches, open `known-behaviors.md` and
+   read *that entry* (grep its id — each entry is one `## ` heading). Do not
+   read the file end to end unless the task really is a survey of residuals.
+
+**Why this exists:** the trigger list used to be six words
+(`known issue, residual behavior, 409 version, skuList, paymentUrl, compensation`)
+while the 56 entries cover GHN, vouchers, mail, reset, search, roles, crons and
+more — so the file almost never loaded and an agent would happily re-derive a
+behaviour that was already decided. Worse, `ETA` routed to `planned-work.md`
+(which has no ETA content) instead of GHN-ETA-01. Both fixed 2026-09-16.
+
+**Adding an entry to `known-behaviors.md` — four things, all enforced.**
+`npm run check:conventions` runs `node .claude/hooks/kb-hint.mjs --check` and
+fails if any of them is missing:
+1. An id in the `## ` heading.
+2. An anchor line directly under the heading:
+   `<!-- kb: id=X; group=G; aka=Y,Z; files=a.ts,b.ts; sha=…; verified=prod:2026-09-16; keys=a,b,c; summary=one sentence -->`
+   Required: `id`, `group`, `verified`, `keys`, `summary` (last, may contain `;`).
+   Optional: `aka` (sub-ids, so grepping one finds the parent) and `files`.
+   - `keys` is what the stage-0 hook greps — write the words someone would
+     actually type, including column names, route fragments and function names.
+     A bare one-word key matches on a word boundary, so prefer `ship` over
+     `shipping` only if you mean the verb. **Give every entry Vietnamese keys
+     too** — prompts here are mixed VN/EN. Matching folds diacritics, so write
+     `tồn kho` naturally and it also fires on `ton kho`. A multi-word key only
+     matches as a contiguous phrase: a phrase-only key set is exactly why
+     GHN-FAIL-NTF-01 was unreachable until 2026-09-16.
+   - `verified` is PROVENANCE, not confidence: `prod:<date>` / `local:<date>`
+     only if the entry itself says where it was checked, otherwise
+     `unrecorded[:<date>]`. Do not upgrade a tag you did not earn — the point of
+     the field is to show which entries have never actually been exercised
+     (today: 5 prod, 4 local, 47 unrecorded).
+   - `files` names the file(s) that OWN the behaviour; omit it when there is no
+     honest owner (3 of 56 entries have none). Never hand-write `sha` — run
+     `node .claude/hooks/kb-hint.mjs --rebaseline <id>`.
+3. A `group=` naming one of the ten domains: `orders`, `ghn`, `products`,
+   `shape`, `social`, `search`, `vouchers`, `auth`, `ops`, `messaging`. It
+   decides which heading the entry renders under in the snapshot index, and an
+   unknown value fails `--check`. To add a group, declare it in `GROUPS` in
+   `kb-hint.mjs` — that array is the display order.
+4. A regenerated snapshot index. The `snapshot.md` "Known Issues — index only"
+   section is **GENERATED** from the `summary=` anchors — never hand-edit it.
+   Run `node .claude/hooks/kb-hint.mjs --index --write` after adding an entry or
+   re-wording a summary; `--check` compares the render against the file
+   byte-for-byte, so the index cannot silently fall behind the anchors.
+   Consequence for whoever writes the `summary=`: it is what every future
+   session reads at stage 1, so make it a standalone sentence stating the
+   behaviour — not "see the entry", not a restatement of the id.
+
+**Staleness is a WARNING, not a gate.** `check:conventions` also runs
+`kb-hint.mjs --stale`, which re-hashes each entry's `files` (working-tree
+content, so an uncommitted edit counts) and flags entries whose owning code has
+moved since they were baselined. It always exits 0 on purpose: an owning file
+holds a hundred unrelated lines, so most changes do not invalidate the entry,
+and a hard failure would only train people to skip the check. When an id you
+touched is flagged, re-read the entry against the code — still true ⇒
+`--rebaseline <id>`; no longer true ⇒ fix the entry first. Rebaselining without
+re-reading defeats the entire mechanism.
 
 ## Additional References
 

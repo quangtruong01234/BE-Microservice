@@ -6,6 +6,223 @@
 
 ## Completed Milestones
 
+- **CTX-SEM-01 — the kb index is now matched by MEANING, not by keyword
+  (2026-09-16). Docs/tooling only, release class A.**
+  The problem was measured, not assumed. Ten realistic prompts in this project's
+  actual register — mixed Vietnamese/English, often undiacritized — were run
+  through the stage-0 hook: **1 of 10** surfaced the entry the task was really
+  about. `giỏ hàng trả về null thay vì mảng rỗng` matched nothing, though
+  SHAPE-01 exists precisely to answer it. That is not a tuning problem. A hook
+  is `grep`; it cannot understand a paraphrase, and no key list ever written by
+  hand will cover every way a person can phrase a thing in two languages.
+  - **The fix moves semantics to the matcher that already has them.** The model
+    reads `snapshot.md` every session anyway, so the "Known Issues — index only"
+    section stopped being a bare list of 56 ids and became 56
+    `- <ID> — <one-line summary>` lines under ten domain headings. A summary in
+    context is something the model can match against a Vietnamese prompt about
+    an empty cart without anyone having predicted that prompt. Cost, measured
+    before deciding: the section went 782 → 1252 words, the file 1718 → 2188
+    (+470/session, ~600 tokens). That is a real charge against snapshot.md's own
+    "keep it LEAN" rule, paid deliberately — a stage-1 miss costs a re-derivation
+    of a decided behaviour, which is worth far more than 600 tokens.
+  - **The index is GENERATED, so it cannot drift.** `kb-hint.mjs --index --write`
+    renders it from the `summary=` anchors; `--check` compares the render to the
+    file byte-for-byte and fails on any difference. Verified by hand-editing one
+    rendered line and confirming `--check` exits 1, then confirming
+    `--index --write` restores the file byte-identically. Grouping comes from a
+    new required `group=` anchor field (one of ten slugs, unknown value fails
+    `--check`) rather than a map hidden in the script — same reason the anchors
+    are colocated with the entries: the metadata is visible to whoever edits the
+    entry.
+  - **Two cheap lexical repairs on the hook itself.** (1) Matching folds
+    Vietnamese diacritics on both sides (NFD strip + `đ`→`d`), so a key written
+    `tồn kho` fires on `ton kho`. (2) Vietnamese keys were added to 32 anchors.
+    The specific hole this closed: GHN-FAIL-NTF-01's key set was *entirely*
+    multi-word phrases, and a multi-word key only matches as a contiguous
+    phrase — so a prompt containing both "delivery_fail" and "notification"
+    separately matched none of them. Re-measured on the same ten prompts:
+    **10/10**, with **0** hits across seven deliberately off-topic prompts
+    (unit test, refactor, migration, build error, architecture question, commit,
+    index tuning), so recall did not come out of precision.
+  - **Residual.** The hook is still lexical and always will be; stage 1 is the
+    semantic layer. New entries therefore owe a *standalone* `summary=` — it is
+    what every future session reads — and Vietnamese keys, both now documented
+    in the mirrored "four things, all enforced" block in `AGENTS.md` and
+    `.claude/CLAUDE.md`.
+
+- **CTX-PROV-01 — every kb entry now declares its provenance and its owning
+  files, and staleness is detected mechanically (2026-09-16). Docs/tooling only,
+  release class A.**
+  CTX-ANCHOR-01 made the right entry *reachable*. It did nothing about the two
+  ways a reachable entry still misleads: an agent cannot tell a behaviour that
+  was confirmed on prod from one that was reasoned about and never run, and an
+  entry keeps asserting a contract long after the code under it moved. A stale
+  entry is worse than a missing one — a missing entry gets re-derived from the
+  code, a stale one gets trusted.
+  - **Delivered — provenance (`verified=`).** All 56 anchors carry
+    `verified=prod:<date>` / `local:<date>` / `unrecorded[:<date>]`, validated by
+    `--check`. The honest count is **5 prod, 4 local, 47 unrecorded**: only nine
+    entries actually state where they were checked (PAYURL-01, GHN-ADDR-01,
+    GHN-MSG-01, RESET-TTL-01, MAIL-BOUNCE-01 on prod; P0-03, QUERY-ARRAY-01,
+    SHAPE-01, ORD-CRON-01 locally). The other 47 fall back to the date in their
+    own heading. Labelling them `local` would have been a fabrication and would
+    have destroyed the only thing the field is for. Two judgement calls:
+    MAIL-BOUNCE-01 counts as prod (the entry measures a real prod latency),
+    ORD-CRON-01 as local (it says "live on prod since the 2026-08-15 deploy" but
+    also "orders on DEV; prod count unknown" — the observation was on dev).
+  - **Delivered — staleness (`files=` + `sha=`).** 53 of 56 entries name the
+    file(s) that own the behaviour; `sha=` is a 12-hex digest over the sorted
+    `path:blob` pairs, so the anchor stays one readable line and the script names
+    the file that moved when it trips. Hashes come from `git hash-object` on the
+    **working tree**, so an uncommitted edit trips the check before the push, not
+    after. Three entries are deliberately untracked because they have no honest
+    owner: PAYRET-LEGACY-01 (historical rows, not code), SHAPE-01 (a
+    cross-cutting rule enforced in `conventions.md`), VOUCHER-SHOP-01 (residuals
+    spread across the whole voucher surface).
+  - **Delivered — tooling.** `kb-hint.mjs` gains `--stale` (report) and
+    `--rebaseline [id...]` (re-stamp after re-reading). `check:conventions` runs
+    `--check` (hard fail) then `--stale` (**warn only, always exit 0**). Warn-only
+    is the design, not a shortcut: an owning file holds a hundred unrelated
+    lines, so most changes do not invalidate the entry, and a gate that cries
+    wolf gets bypassed. Both branches were verified end-to-end — a modified
+    `health.service.ts` and a renamed one each flagged READY-01 (the rename
+    reported distinctly as `MISSING`), and the file was restored clean.
+  - **Delivered — staleness reaches the agent, not just CI.** `check:conventions`
+    only warns when someone runs it; the agent that most needs the warning is the
+    one about to trust the entry. So stage 0 carries it too: the hook hashes
+    **only the anchors that matched the prompt** (≤6 entries, ~12 paths, 3s
+    timeout, any failure degrades to "nothing is stale" rather than costing the
+    user their prompt) and marks a drifted hit `- <ID> [STALE] — <summary>`,
+    followed by three lines telling the agent to read the code first and treat
+    the entry as a claim to check. Measured cost: 95ms no match, 117ms one hit,
+    121ms six hits — ~25ms, against a 10s hook timeout. Verified end-to-end by
+    modifying `health.service.ts` and confirming `READY-01 [STALE]` in the
+    injected block, then restoring the file.
+  - **Residual.** A file like `apps/orders/src/orders.service.ts` owns six
+    entries, so touching it warns on all six — expected, and the reason for
+    warn-only. `--rebaseline` is an honour-system assertion that you re-read the
+    entry; running it to silence the warning defeats the mechanism. `verified=`
+    records where a behaviour was *observed*, never how confident anyone is.
+
+- **CTX-ANCHOR-01 — per-entry anchors + a prompt-matching hook made stage 1
+  automatic (2026-09-16). Docs/tooling only, release class A.**
+  CTX-ROUTE-01 made `known-behaviors.md` reachable, but reaching it still
+  depended on the agent reading a 51-term keyword row and matching it by hand
+  against a prose index. That is exactly the step an agent skips when it is in
+  a hurry. Two concrete defects were left behind: six of the 56 entries had **no
+  id at all** in their heading (`paymentUrl` asymmetry, legacy return URLs,
+  optimistic locking, array query params, free-text GHN address, product PATCH
+  `null`), so the "grep the id" instruction had nothing to grep — and
+  `PATCH /api/products/:id` heads two different entries, so grepping the prose
+  returns both.
+  - **Delivered.**
+    - The six id-less entries were named: PAYURL-01, PAYRET-LEGACY-01,
+      PATCH-LOCK-01, QUERY-ARRAY-01, GHN-ADDR-01 (the id already existed in the
+      body text — only the heading lacked it), PATCH-NULL-01. All six added to
+      the `snapshot.md` index. No code references any id, so renaming was free.
+    - All 56 entries carry a machine-readable anchor directly under the heading:
+      `<!-- kb: id=X; aka=Y,Z; keys=a,b,c; summary=one sentence -->`. Colocated
+      on purpose — a sidecar index drifts, and whoever edits the entry sees the
+      anchor. `aka` carries sub-ids (SOCIAL-502-ROLLOUT → SOCIAL-502,
+      BATCH-STATUS-01 → BATCH-FAIL-01, RET-NUM-01 → ORDER-SHAPE-01,
+      GHN-WARD-01 → GHN-MSG-01) so grepping a sub-id finds the parent.
+    - `.claude/hooks/kb-hint.mjs` runs as a `UserPromptSubmit` hook: it scores
+      the prompt against every anchor (id hit = 10, multi-word key = 3, bare
+      word = 1 on a word boundary) and injects the top 6 as ids + one-line
+      summaries only — never entry bodies, so stage 2 stays the agent's call.
+      A prompt that matches nothing injects nothing.
+    - The same file has a `--check` mode wired into `npm run check:conventions`:
+      it fails if a heading has no anchor, an anchor has no id/keys/summary, an
+      id is duplicated, an anchor does not match its own heading, or an id is
+      missing from the `snapshot.md` index. It found all six missing index
+      entries on first run — the mechanism now enforces itself instead of
+      relying on an agent remembering three steps.
+  - **Residual.** Matching is lexical, so a prompt phrased entirely in
+    Vietnamese with no English technical term still matches nothing; keys carry
+    the English terms that actually appear in prompts. Codex does not run
+    Claude Code hooks, so `AGENTS.md` tells it to do stage 1 by hand.
+
+- **CTX-ROUTE-01 — `known-behaviors.md` was effectively unreachable; routing
+  fixed and made two-stage (2026-09-16). Docs/tooling only, release class A.**
+  The auto-context table routed to `known-behaviors.md` on six keywords
+  (`known issue, residual behavior, 409 version, skuList, paymentUrl,
+  compensation`) while its 56 entries cover GHN, vouchers, mail, reset, search,
+  roles, crons, chat, uploads and more. None of those words were triggers, so
+  ~15k words of decided behaviour almost never loaded and an agent would
+  re-derive — or contradict — a shipped decision. Worse, `ETA` routed to
+  `planned-work.md`, which contains no ETA content at all (only a stale
+  self-reference in its own keyword line), instead of GHN-ETA-01.
+  - **Delivered.** Trigger row widened to 51 domain terms, biased toward recall;
+    `ETA` moved off `planned-work.md`. Because a broad row would otherwise pull
+    15k words into a task that merely says "inventory", the row is now paired
+    with an explicit **two-stage** rule: stage 1 matches the task against the
+    "Known Issues — index only" section of `snapshot.md` (already auto-loaded,
+    free); stage 2 opens `known-behaviors.md` and greps only the matching id.
+    Mirrored into **both** entry points — `.claude/CLAUDE.md` and `AGENTS.md`.
+  - **The index had to be repaired for stage 1 to work.** A script check found
+    only 36 of 50 entry ids present in the snapshot index — the documented
+    mechanism would have silently missed 28% of entries. Added the 14 absent
+    ids (BUG-A/B/D, GHN-CREATE-01, SOCIAL-AUTHOR-01, SOCIAL-502,
+    RETURN-STOCK-01, NOTIF-LIFECYCLE-01, INV-CONTRACT-01, ORDER-SHAPE-01,
+    OVERFETCH-01, MEDIA-ORPHAN-01, UPLOAD-SIZE-01, CHAT-ROOM-01), including a
+    new **Social / chat / media** line the index never had. `snapshot.md` grew
+    1327 → 1547 words; that is the price of an index that does not lie.
+  - **Verified mechanically**, not by eye: a throwaway node script asserts every
+    `## ` heading matches ≥1 trigger keyword and every id appears in the
+    snapshot. Final state 56/56 keyword coverage, 50/50 ids indexed.
+  - **Debt.** Six entries carry no id at all (`paymentUrl` asymmetry, legacy
+    payment return URLs, concurrent product PATCH, array query params, GHN
+    free-text address, the six `null`-cleared columns). They are reachable by
+    prose in stage 1 but cannot be grepped by id in stage 2. Assign ids when one
+    is next touched.
+  - **Context.** Came out of evaluating whether to adopt `Graphify-Labs/graphify`
+    (code→knowledge-graph skill). Declined — NestJS decorator dispatch is the
+    weakest case for an AST call graph, its PreToolUse hooks fight this repo's
+    own auto-context routing, and the recommended "commit `graphify-out/`"
+    workflow collides with the never-commit-prod-DNS rule. What was worth
+    stealing was the *idea* of provenance-tagged, incrementally-validated
+    context — of which this is step 1.
+
+- **ROLE-ADMIN-01 (follow-up) — `GET /api/user/me` now tells the client which
+  role its TOKEN carries (2026-09-16). No migration, no new endpoint, release
+  class B.**
+  Shipping `PATCH /api/user/:id/role` left one window the FE could not close by
+  itself, and the FE opened a `backend-handoff.md` entry with the measurement:
+  `ProtectedRoute`/`useRole` gate on `GET /api/user/me`, whose `role` comes from
+  the **DB** and is therefore fresh the instant an admin changes it — while every
+  guard keeps enforcing the role baked into the still-live **JWT**. A user
+  promoted to `shop` who has not logged in again was let into `/sell`, shown the
+  full seller UI, allowed to fill the form, and only then hit a 403 on submit.
+  The FE could not detect it: the cookie is httpOnly, so nothing the client can
+  read reflects the token's role.
+  - **Delivered.** `GET /api/user/me` gained two additive fields:
+    `tokenRole: string` (the role in the presented JWT — what guards enforce)
+    and `isRoleStale: boolean` (`role.name !== tokenRole`). The controller
+    forwards `req.user.role`, which `JwtAuthGuard` already decodes off the
+    token, so the comparison costs **no extra query and no extra TCP call** —
+    the existing `GET_ME` round trip is untouched. ~25 lines in
+    `apps/gateway/src/user/{user.controller.ts,user.service.ts}`.
+  - **Why a signal and not session revocation.** The FE offered both; the signal
+    is class B (old clients ignore the keys and behave exactly as today) while
+    real revocation is class C and needs a token blacklist/version that does not
+    exist — the same gap CHG-PW-01 documents. Building one for this was not
+    worth it; if it is ever wanted, it fixes both items at once and is new work.
+  - **Verified at runtime on all four directions** (throwaway `roleprobe0915`,
+    restored to `user` afterwards): fresh token ⇒ `isRoleStale:false`; promotion
+    on the SAME cookie ⇒ `role.name:"shop"` + `tokenRole:"user"` +
+    `isRoleStale:true`, and `POST /api/products` on that cookie still **403** —
+    proving `tokenRole` predicts the guard where `role.name` does not; re-login
+    ⇒ `tokenRole:"shop"` + `isRoleStale:false`; demotion on the live `shop`
+    cookie ⇒ `isRoleStale:true`, the over-privileged direction that matters for
+    security. Plus 5 unit tests in `user-role-staleness.service.spec.ts`
+    covering the branches curl cannot reach (absent/unreadable DB role reports
+    `false`, never `true` — an unexpected shape must not log a user out).
+    Suite: 43 files / 449 tests green (was 42/444).
+  - **Residual, recorded in `known-behaviors.md` → ROLE-ADMIN-01:** nothing is
+    revoked. A client that ignores the fields is as stale as before, and the
+    login response deliberately does NOT carry the pair (the token is minted in
+    that same call, so drift is impossible there).
+
 - **NAME-TRIM-01 — a whitespace-only name/username is rejected instead of
   stored (2026-09-15). No migration, no new endpoint, release class B.**
   FE reported that `PATCH /api/user/:id` accepted `{ name: "   " }` with a

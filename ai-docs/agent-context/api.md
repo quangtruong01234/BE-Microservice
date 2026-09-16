@@ -95,10 +95,10 @@ payments, `reward_points`, `shipping_history`, `voucher_redemptions`.
 | POST | `/api/user/login` | Public | Login — sets HttpOnly JWT cookie |
 | POST | `/api/user/logout` | Public | Clears auth cookie |
 | GET | `/api/user` | Role: admin | Paginated users (`?page=&limit=`) |
-| GET | `/api/user/me` | Cookie | Get current authenticated user |
+| GET | `/api/user/me` | Cookie | Get current authenticated user. `role` is the DB role; `tokenRole` is the role in the presented JWT (what guards enforce) and `isRoleStale` is true when they differ — gate UI on `tokenRole` (ROLE-ADMIN-01) |
 | GET | `/api/user/:id` | Cookie | Get public user profile by ID (no email) |
 | PATCH | `/api/user/:id` | Cookie | Update user profile (own account only) |
-| PATCH | `/api/user/:id/role` | Role: admin | Change a user's role — `{ role: "user" \| "shop" \| "admin" \| "logistics_operator" \| "shipping_manager" }`. 400 on an unknown/inactive role or a self-change; takes effect on the target's next login (ROLE-ADMIN-01) |
+| PATCH | `/api/user/:id/role` | Role: admin | Change a user's role — `{ role: "user" \| "shop" \| "admin" \| "logistics_operator" \| "shipping_manager" }`. 400 on an unknown/inactive role or a self-change; takes effect on the target's next login, which `GET /api/user/me` now advertises via `isRoleStale` (ROLE-ADMIN-01) |
 
 ### Register DTO
 ```typescript

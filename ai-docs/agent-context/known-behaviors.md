@@ -7,6 +7,7 @@
 > the wrong contract in tests. Moved out of `snapshot.md` on 2026-08-04.
 
 ## SKU edit over HTTP (BUG-A, fixed 2026-08-03)
+<!-- kb: id=BUG-A; group=products; files=apps/product/src/product.service.ts; sha=e8a541e6988a; verified=unrecorded:2026-08-03; keys=skuList,sku edit,variations,tierIdx,getReferencedSkuIds,deactivate sku,sku delete; summary=skuList is the FULL desired set, not a delta; omitted SKUs are removed and the reference check fails safe. -->
 
 `PATCH /api/products/:id` accepts `variations` + `skuList` (P0-05 diff engine).
 
@@ -29,7 +30,8 @@
   deactivating it would break releasing that SKU's in-flight reservations. Only
   hard-deleted (by definition unreferenced) SKUs deactivate inventory.
 
-## `paymentUrl` asymmetry on checkout (confirmed on prod 2026-08-03, not a defect)
+## `paymentUrl` asymmetry on checkout (PAYURL-01, confirmed on prod 2026-08-03, not a defect)
+<!-- kb: id=PAYURL-01; group=orders; files=apps/gateway/src/order/order.service.ts; sha=786c66f55d0a; verified=prod:2026-08-03; keys=paymentUrl,orderUrl,payment-url,single-seller,multi-seller,checkout response,link thanh toán,url thanh toán; summary=Single-seller checkout returns NO paymentUrl; GET /:id/payment-url answers with the key orderUrl. -->
 
 - Multi-seller basket: `POST /api/order` returns `{orders:[…], paymentUrl}`.
 - Single-seller basket (`apps/gateway/src/order/order.service.ts:390-419`):
@@ -40,6 +42,7 @@
 Never write a test asserting `paymentUrl` on the single-seller shape.
 
 ## Sellers cannot set shipping status by hand (ORD-RBAC-01, 2026-08-13)
+<!-- kb: id=ORD-RBAC-01; group=orders; files=apps/gateway/src/order/order.controller.ts,apps/user/src/rbac/grants.ts; sha=82e9314a8219; verified=unrecorded:2026-08-13; keys=ship,deliver,complete,shipping status,seller 403,admin-only,shipping_manager,trạng thái giao,cập nhật trạng thái đơn,đổi trạng thái đơn; summary=ship/deliver/complete are admin-only; a seller gets 403 before the order is even loaded. -->
 
 `PATCH /api/order/:id/{ship,deliver,complete}` is **admin-only**. Role `shop`
 (and every other non-admin role) gets a **403** _"Shipping status after
@@ -64,6 +67,7 @@ does not exist or that they do not own. Deliberate, not an oversight:
   and `logistics_operator` get 403 here too and use the `admin/ghn/*` routes.
 
 ## `paidAt` gates the seller transitions (ORD-GUARD-01, 2026-08-11)
+<!-- kb: id=ORD-GUARD-01; group=orders; files=apps/orders/src/orders.service.ts; sha=cc66fc8703f1; verified=unrecorded:2026-08-11; keys=paidAt,paid_at,assertOnlinePaymentSettled,ready-to-ship,confirm,payment settled,COD,chưa thanh toán,đã thanh toán chưa; summary=A NULL paidAt on a non-COD order blocks every seller transition with a 400 — admin included, no override. -->
 
 `orders.paid_at` is the ONLY payment fact the orders service owns — payments
 lives on Node B and speaks to orders only through the `payment_completed`
@@ -89,7 +93,8 @@ completed yet"_. Consequences that are deliberate, not bugs:
 - `paidAt` is on every order read. NULL on a non-COD order means unpaid; NULL on
   a COD order means "not delivered yet", not "unpaid forever".
 
-## Legacy payment return URLs keep the numeric order id (2026-08-07)
+## Legacy payment return URLs keep the numeric order id (PAYRET-LEGACY-01, 2026-08-07)
+<!-- kb: id=PAYRET-LEGACY-01; group=orders; verified=unrecorded:2026-08-07; keys=return URL,vnp_ReturnUrl,payment-result,numeric order id,VNPay signature,resume pending order; summary=Payment rows before 2026-08-07 keep a numeric order id in the stored return URL and cannot be rewritten. -->
 
 Since 2026-08-07 the gateway redirect is
 `{FRONTEND_URL}/payment-result?order=ord_<16>&method=<gateway>` — the public id,
@@ -103,6 +108,7 @@ absent. When the order has no public id, or for multi-order ZaloPay checkouts,
 the param is omitted entirely; never emit it numeric.
 
 ## P0-03 compensation leg (verified on local 2026-08-03, 3/3)
+<!-- kb: id=P0-03; group=products; files=apps/gateway/src/product/product.service.ts; sha=df753e26993e; verified=local:2026-08-03; keys=compensation,compensateProductCreate,inventory sku collision,driverError,buildInventorySku,409; summary=Product-create compensation rolls the product row back; sku-collision discrimination reads error.driverError.detail. -->
 
 The product-create failure branch can be forced from outside the API:
 `products.sku` is UNIQUE but NULLABLE while `inventory.sku` is UNIQUE NOT NULL,
@@ -119,7 +125,8 @@ index after TypeORM's generated `UQ_<hash>`, so the column never appears in the
 message (a first fix matched on `message` and silently did nothing). The
 duplicate-product message still comes from the explicit pre-check.
 
-## Concurrent `PATCH /api/products/:id` — optimistic locking (fixed 2026-08-02)
+## Concurrent `PATCH /api/products/:id` — optimistic locking (PATCH-LOCK-01, fixed 2026-08-02)
+<!-- kb: id=PATCH-LOCK-01; group=products; files=apps/product/src/product.service.ts; sha=e8a541e6988a; verified=unrecorded:2026-08-02; keys=optimistic lock,version,VersionColumn,VERSION_CONFLICT,concurrent PATCH,ER_LOCK_DEADLOCK,product patch; summary=products.version is OPT-IN, and background writers bump it too — a 409 does not mean a human edited the product. -->
 
 `updateProduct` runs in a transaction behind `SELECT … FOR UPDATE`;
 `products.version` is a `@VersionColumn`; `ER_DUP_ENTRY` on `sku` → 409;
@@ -146,6 +153,7 @@ duplicate-product message still comes from the explicit pre-check.
   (a GET commits the pre-update body after the PATCH invalidation).
 
 ## Cancel-with-waybill — detached GHN cancel (BUG-D, fixed 2026-08-03)
+<!-- kb: id=BUG-D; group=orders; files=apps/orders/src/orders.service.ts; sha=cc66fc8703f1; verified=unrecorded:2026-08-03; keys=cancel waybill,GHN cancel,detached,cancelShippingOrderBestEffort,live waybill,buyer cancel; summary=Buyer cancel detaches the GHN cancel — two failed attempts leave a live waybill on a CANCELED order. -->
 
 `GhnModule` uses `HttpModule.register({timeout:5000})` (was axios default `0` =
 infinite), and the buyer-cancel GHN leg is detached
@@ -166,7 +174,8 @@ infinite), and the buyer-cancel GHN leg is detached
 - Master-data GETs pass `timeout: 10000` per request, which overrides the 5s
   instance default (axios merges request config over instance config).
 
-## Array query params on the gateway
+## Array query params on the gateway (QUERY-ARRAY-01)
+<!-- kb: id=QUERY-ARRAY-01; group=shape; files=apps/gateway/src/main.ts; sha=60b8b8eab354; verified=local:2026-08-03; keys=array query param,categoryIds,bracket syntax,forbidNonWhitelisted,repeated key,query DTO; summary=?x[]= is a 400 by design; use repeated keys or a scalar, and wrap any new array query field with @Transform. -->
 
 Express runs the **simple** query parser, so bracket syntax `?categoryIds[]=18`
 arrives as literal key `"categoryIds[]"` → the global pipe
@@ -179,7 +188,8 @@ query DTO field needs the same guard-and-wrap `@Transform`. Note the storefront
 FE historically sent singular `categoryId`/`brandId` (never matched the DTO) —
 handoff entry written 2026-07-03.
 
-## GHN free-text address resolution is best-effort
+## GHN free-text address resolution is best-effort (GHN-ADDR-01)
+<!-- kb: id=GHN-ADDR-01; group=ghn; files=apps/orders/src/ghn/ghn.service.ts; sha=d9c9852a1dd2; verified=prod:2026-07-30; keys=free-text address,resolveAddressToGhnIds,toDistrictId,toWardCode,address resolution,địa chỉ tự do,địa chỉ text; summary=Free-text address resolution is best-effort and can match a wrong-but-valid location; sending both ids skips it. -->
 
 Only affects callers that do NOT send `toDistrictId`/`toWardCode` (GHN-ADDR-01,
 2026-07-23, prod-verified 2026-07-30 4/4): a garbage/placeholder free-text
@@ -192,6 +202,7 @@ ward codes can carry leading zeros. For COD the waybill is created at
 ORDER-CREATE time, so ready-to-ship re-uses the existing `ghnOrderCode`.
 
 ## `delivery_fail` does not move the local status — on purpose (GHN-FAIL-01, 2026-08-16)
+<!-- kb: id=GHN-FAIL-01; group=ghn; files=libs/constant/shipping.constant.ts; sha=ddb0b0004bdf; verified=unrecorded:2026-08-16; keys=delivery_fail,mapGhnStatus,unmapped status,exception,damage,lost,GHN_STATUSES_WITHOUT_LOCAL_STATUS,giao thất bại,giao hàng thất bại; summary=delivery_fail (and exception/damage/lost) deliberately move no local order status. -->
 
 `mapGhnStatus` covers `picking|picked`, `delivering`, `delivered` and the whole
 cancel/return family. Everything else returns `null` and the order keeps the
@@ -220,6 +231,7 @@ status "<x>"` and now logs at **warn**, so a new GHN vocabulary word is loud.
   — see GHN-FAIL-NTF-01 immediately below.
 
 ## A failed delivery attempt notifies the buyer ONCE (GHN-FAIL-NTF-01, 2026-09-11)
+<!-- kb: id=GHN-FAIL-NTF-01; group=ghn; files=apps/notification/src/notification.controller.ts,apps/orders/src/orders.service.ts; sha=4893600e7d66; verified=unrecorded:2026-09-11; keys=failed delivery attempt,delivery_fail notification,shipping_history dedupe,redelivery,order.delivery_attempt_failed,delivery_fail,giao thất bại,giao hàng thất bại,thông báo giao hàng; summary=The buyer is notified on the FIRST delivery_fail only, deduped via shipping_history; in-app only, no email, no seller copy. -->
 
 `delivery_fail` is the only one of the ten `GHN_STATUSES_WITHOUT_LOCAL_STATUS`
 that reaches the buyer. The local status is untouched (GHN-FAIL-01 above stands);
@@ -261,6 +273,7 @@ the notification is the entire effect.
   duplicate in-app line, and GHN's retries are hours apart, not milliseconds.
 
 ## A finished order never hears about a missed attempt (GHN-FAIL-NTF-02, 2026-09-14)
+<!-- kb: id=GHN-FAIL-NTF-02; group=ghn; files=apps/orders/src/orders.service.ts; sha=cc66fc8703f1; verified=unrecorded:2026-09-14; keys=NO_REDELIVERY_STATUSES,finished order notification,canceled order,RETURN_REQUESTED,stale waybill,giao thất bại,đơn đã huỷ; summary=A CANCELED/COMPLETED/REFUNDED order is never told about a missed attempt; RETURN_REQUESTED still is. -->
 
 Found by `/sweep` auditing GHN-FAIL-NTF-01 before it was pushed; shipped in the
 same unpushed batch, so the narrowed rule is the only one that ever reaches prod.
@@ -297,6 +310,7 @@ same unpushed batch, so the narrowed rule is the only one that ever reaches prod
   and drops the notification — it is not on the outbox (OUTBOX-SCOPE-01).
 
 ## An unknown district/ward is a 400 (GHN-DIST-01, 2026-08-13; extended to order create by GHN-CREATE-01)
+<!-- kb: id=GHN-DIST-01; group=ghn; files=apps/orders/src/ghn/ghn.service.ts; sha=d9c9852a1dd2; verified=unrecorded:2026-08-13; keys=district,ward,DISTRICT_NOT_FOUND,WARD_NOT_IN_DISTRICT,master data,buildShippingOrderBody,quận huyện,phường xã,địa chỉ không hợp lệ; summary=An unknown district or cross-district ward is a 400, but the validation is fail-open on a GHN outage. -->
 
 `buildShippingOrderBody` validates a caller-supplied `toDistrictId` +
 `toWardCode` against GHN master data before quoting or cutting a waybill,
@@ -327,6 +341,7 @@ extra GHN calls) turns a silent 0 into `400 GHN_MESSAGE.DISTRICT_NOT_FOUND` /
   stored pair (4 distinct, 16 orders) passes.
 
 ## The stored delivery ETA is refreshed by the manual sync, never by the webhook (GHN-ETA-01, 2026-09-11)
+<!-- kb: id=GHN-ETA-01; group=ghn; files=apps/orders/src/ghn/ghn.service.ts,apps/orders/src/entity/order.entity.ts,apps/orders/src/orders.service.ts; sha=7cef450839fe; verified=unrecorded:2026-09-11; keys=expected_delivery_time,leadtime,ETA,delivery date,ghn sync,waybill create,thời gian giao dự kiến,ngày giao dự kiến; summary=The stored ETA is refreshed by the manual sync only, never by the webhook; create and detail name the field differently. -->
 
 `orders.expected_delivery_time` holds the absolute timestamp GHN quotes. It is
 written at waybill create (the only place it arrives for free) and refreshed on
@@ -359,6 +374,7 @@ recovering the value would cost one GHN call per order and a past order's ETA
 has no reader.
 
 ## Order create rejects an undeliverable address, but still places on a GHN outage (GHN-CREATE-01, 2026-08-13)
+<!-- kb: id=GHN-CREATE-01; group=ghn; files=apps/orders/src/orders.service.ts; sha=cc66fc8703f1; verified=unrecorded:2026-08-13; keys=getShippingFeeOrZero,order create,fee 0,undeliverable address,shipping fee,GHN outage; summary=Order create 400s on a GHN refusal but still places the order at fee 0 on a GHN outage. -->
 
 `POST /api/order` prices shipping through `getShippingFeeOrZero()`
 (`orders.service.ts`), which used to swallow **every** GHN preview error and fall
@@ -396,6 +412,7 @@ The catch now splits the two failure classes:
   re-creates the missing waybill (`orders.service.ts` — `if (!order.ghnOrderCode)`).
 
 ## The envelope `error` label is derived from the status (ENVELOPE-01, 2026-08-13)
+<!-- kb: id=ENVELOPE-01; group=shape; files=apps/gateway/src/common/filters/http-exception.filter.ts; sha=acf6a31a7521; verified=unrecorded:2026-08-13; keys=error envelope,error label,HttpExceptionFilter,reason phrase,normalizeErrorLabel; summary=The envelope `error` field is always the HTTP reason phrase, never an exception class name. -->
 
 `HttpExceptionFilter` no longer reports an exception class name in the `error`
 field. Deliberate consequences — do not "restore" any of them:
@@ -417,6 +434,7 @@ field. Deliberate consequences — do not "restore" any of them:
   the GHN console branches on status. It is a debugging aid, not a contract.
 
 ## Deactivated products on the storefront (BUG-B, fixed 2026-08-03)
+<!-- kb: id=BUG-B; group=products; files=apps/product/src/product.service.ts; sha=e8a541e6988a; verified=unrecorded:2026-08-03; keys=isActive,deactivated product,storefront catalog,findAllProducts,public catalog,userIds,sản phẩm ẩn,ngừng bán; summary=The public catalog defaults isActive:true; a single userId is the only exception, and it is an anonymous leak by design. -->
 
 `findAllProducts` defaults `isActive: true` when the caller passes NEITHER
 `isActive` NOR `userId`, so the five `@Public` catalog routes (list, search,
@@ -442,6 +460,7 @@ risk-blocked rows.
   `userId` exception, the explicit override, and the cache key.
 
 ## Comment `author` is decorated in the gateway and may be `null` (SOCIAL-AUTHOR-01, 2026-08-13)
+<!-- kb: id=SOCIAL-AUTHOR-01; group=social; files=apps/gateway/src/social/social.service.ts; sha=51ad33fc3d46; verified=unrecorded:2026-08-13; keys=comment author,attachCommentAuthors,author null,reply tree,children,parent comment; summary=The comment `author` embed is decorated in the gateway and is legitimately null on a user-service failure. -->
 
 The social service does NOT return an author on comments — it never has. The
 `author` embed on `POST /posts/:id/comments`, `GET /posts/:id/comments`,
@@ -465,6 +484,7 @@ like the post path does. Consequences worth knowing before "fixing" any of them:
   opaque `usr_` id. Decorating after would emit a raw numeric id.
 
 ## Gateway transport failures — one sanitized 502 (SOCIAL-502, fixed 2026-08-09)
+<!-- kb: id=SOCIAL-502; group=social; aka=SOCIAL-502-ROLLOUT,TCP-RESIL-01; files=libs/common/src/resilience/resilient-client-tcp.ts; sha=acf2742d5726; verified=unrecorded:2026-08-09; keys=502,transport error,Connection closed,ECONNREFUSED,retryOnTransportError,ResilientClientTCP,NetSocketClosedException; summary=Gateway transport failures collapse to one sanitized 502; the 100ms retry is reads-only and always after timeout(). -->
 
 `MicroserviceErrorHandler.handleError` classifies a "the call never reached the
 microservice" failure BEFORE the keyword matcher, so all 14 gateway services now
@@ -537,6 +557,7 @@ of null (reading 'on')` — strictly worse. Tried and reverted 2026-08-15.
     `main.ts` `createMicroservice` is the SERVER side and must stay as is.
 
 ## Approved return restocks via a dedicated path (RETURN-STOCK-01, fixed 2026-08-11)
+<!-- kb: id=RETURN-STOCK-01; group=products; files=apps/inventory/src/inventory.controller.ts,apps/orders/src/orders.service.ts; sha=c2a3a1dc19ac; verified=unrecorded:2026-08-11; keys=return restock,restock_returned,approved return,RETURNED reservation,releaseReservedItems,hoàn hàng,trả hàng; summary=An approved return restocks through inventory.restock_returned, not a release; the fix is not retroactive. -->
 
 Approving a return used to call `releaseReservedItems()`. A release only rewinds
 a still-`RESERVED` ledger row, and an order that reached COMPLETED already had
@@ -563,6 +584,7 @@ because a cancelable order still holds a RESERVED row. Approve now calls
   repaired by hand on 2026-08-11; see `CHANGELOG.md`.
 
 ## Manual stock adjustment — ONE write, either side (STOCK-SYNC-01, 2026-08-11)
+<!-- kb: id=STOCK-SYNC-01; group=products; files=apps/gateway/src/product/product.service.ts; sha=df753e26993e; verified=unrecorded:2026-08-11; keys=stock sync,stockQuantity,availableStock,manual stock adjustment,applyStockSync,inventory.stock_changed,tồn kho,cập nhật tồn kho,lệch tồn kho; summary=Stock syncs two-way — adjust from either side with ONE absolute write; SKU-matrix products are warn-and-skip. -->
 
 Superseding the older "do both writes" recipe: since STOCK-SYNC-01 the two stock
 stores keep each other in step, so adjust from **either** side with a single
@@ -600,6 +622,7 @@ Verify either direction with `GET /api/inventory/product/<publicId>` and
 `GET /api/products/<publicId>` — `availableStock` must equal `stockQuantity`.
 
 ## `PATCH /api/products/:id` is not one transaction (PATCH-ATOMIC-01, 2026-08-12)
+<!-- kb: id=PATCH-ATOMIC-01; group=products; files=apps/product/src/product.service.ts; sha=e8a541e6988a; verified=unrecorded:2026-08-12; keys=product PATCH atomic,upsertSkus,restoreProductStockMirror,partial apply,two databases,product patch; summary=A product PATCH is up to three writes across two DBs and is NOT atomic — a failed PATCH does not mean nothing changed. -->
 
 Answer to the FE question "is the PATCH atomic when the inventory step fails":
 **no, and it cannot be.** One PATCH is up to three sequential writes:
@@ -632,6 +655,7 @@ Consequence for clients: a failed PATCH does **not** mean "nothing changed".
 Refetch the product on error rather than trusting the local form state.
 
 ## Order lifecycle notifications (NOTIF-LIFECYCLE-01, 2026-08-11)
+<!-- kb: id=NOTIF-LIFECYCLE-01; group=orders; files=apps/notification/src/notification.controller.ts; sha=0306d626d5f9; verified=unrecorded:2026-08-11; keys=order.status_changed,lifecycle notification,EMAILED_STATUSES,order_canceled,duplicate notification,thông báo đơn hàng,mail đơn hàng; summary=Which lifecycle transitions notify whom; emails are gated to shipping milestones and order_canceled has its own event. -->
 
 Every order status move publishes one generic RabbitMQ event
 `order.status_changed`; the notification service decides what is worth telling
@@ -663,6 +687,7 @@ a user. See `CHANGELOG.md` 2026-08-11 for the design.
   verified ready=0/unacked=0) — same as the existing `order.return_*` events.
 
 ## `inventory_v2.sku` is a label, not a link (INV-CONTRACT-01, 2026-08-11)
+<!-- kb: id=INV-CONTRACT-01; group=products; files=apps/inventory/src/inventory.entity.ts; sha=43fc4b8316e3; verified=unrecorded:2026-08-11; keys=inventory_v2.sku,inventory sku rename,INVENTORY_FIND_BY_SKU,products.sku drift,warehouse label; summary=inventory_v2.sku is a warehouse label with no resolver — it drifts from products.sku on purpose. -->
 
 `PUT /api/inventory/:id` accepts `sku` and really renames the row.
 
@@ -684,6 +709,7 @@ a user. See `CHANGELOG.md` 2026-08-11 for the design.
   `POST /api/inventory` after creating a product; doing so is a guaranteed 409.
 
 ## Order item `image` — one key on HTTP, two inside (ORDER-SHAPE-01, 2026-08-11; collapsed by OVERFETCH-01, 2026-08-20)
+<!-- kb: id=ORDER-SHAPE-01; group=orders; aka=RET-NUM-01; files=apps/gateway/src/order/order.service.ts; sha=786c66f55d0a; verified=unrecorded:2026-08-11; keys=order item image,productImage,decorateItem,exposeOrder,refundAmount,subtotal,DECIMAL transformer,ảnh sản phẩm trong đơn; summary=HTTP emits `image` only; productImage survives internally and on the one admin GHN console detail route. -->
 
 Order items used to carry BOTH `image` and `productImage` on the decorated read
 paths. Since OVERFETCH-01 every buyer/seller path through `exposeOrder` emits
@@ -718,6 +744,7 @@ PATCH responses — those return the plain order shape; recompute from `items` i
 you need it there.
 
 ## Post media cleanup is reference-counted (MEDIA-ORPHAN-01, 2026-08-11)
+<!-- kb: id=MEDIA-ORPHAN-01; group=social; files=apps/social/src/social.service.ts; sha=9b1a0753a983; verified=unrecorded:2026-08-11; keys=post media,Cloudinary cleanup,destroyUnreferencedMedia,imageUrls,orphan media,xoá ảnh bài viết; summary=Post media cleanup is reference-counted and best-effort — a URL shared by another post is never destroyed. -->
 
 `editPost`, `deletePost` and moderation delete drop Cloudinary assets through
 `destroyUnreferencedMedia()`, not directly. Consequences to expect:
@@ -736,6 +763,7 @@ trybuy/posts/` folder or an `undefined_` prefix come from an old FE upload
   bug. Fix such rows as data, do not re-diagnose the cleanup path.
 
 ## Upload size caps are a contract, NOT a security boundary (UPLOAD-SIZE-01, 2026-08-15)
+<!-- kb: id=UPLOAD-SIZE-01; group=social; files=apps/gateway/src/upload/upload.service.ts,apps/gateway/src/upload/upload.types.ts; sha=64adbd85787d; verified=unrecorded:2026-08-15; keys=upload signature,maxBytes,maxVideoBytes,max_file_size,upload preset,upload size,upload ảnh,dung lượng ảnh,giới hạn upload,tải ảnh; summary=Upload size caps are an advisory contract, NOT a security boundary — Cloudinary cannot sign a size on this account. -->
 
 `POST /api/upload/signature` returns `maxBytes` (and `maxVideoBytes` on the
 posts folder, the only one whose `allowed_formats` admits mp4) and refuses with
@@ -777,6 +805,7 @@ upload_presets/<name>` came back with `settings: {"folder":"trybuy/products"}`
   video uploads.
 
 ## The voucher quota gate is an admission gate, not the cap (VOUCHER-CONC-01, 2026-08-18)
+<!-- kb: id=VOUCHER-CONC-01; group=vouchers; files=apps/orders/src/orders.service.ts; sha=cc66fc8703f1; verified=unrecorded:2026-08-18; keys=voucher quota,Redis quota,JUST_FULLY_REDEEMED,claimVoucherQuota,flash code,voucher,mã giảm giá; summary=The Redis voucher quota is an admission gate that fails OPEN and can read pessimistically for up to 300s. -->
 
 `voucher:quota:<voucherId>` in Redis is claimed at the top of `placeOrder`,
 before the GHN fee preview and before any stock is reserved, so a burst on a
@@ -817,6 +846,7 @@ plus a reservation that then needs compensating. What it is NOT is the cap.
   second, in every caller; keep it that way and it cannot deadlock.
 
 ## Gateway read payloads are trimmed at the boundary (OVERFETCH-01, 2026-08-20)
+<!-- kb: id=OVERFETCH-01; group=shape; files=apps/gateway/src/product/product.service.ts; sha=df753e26993e; verified=unrecorded:2026-08-20; keys=overfetch,trimmed payload,reservationKey,exposeReferences,actor embed,role.slug,trimTaxonomyReferences,payload thừa,trả về thừa; summary=Gateway read payloads are trimmed at the boundary; the actor/reporter/reviewer embeds must keep ONE shape. -->
 
 The FE asked for smaller read payloads. Every cut is made in a gateway
 boundary walker, never in a microservice — the TCP/RMQ shapes and the entities
@@ -879,6 +909,7 @@ Residual: the product public read cache holds already-exposed payloads
 product read can still serve a pre-trim fat row. Self-healing; not a bug.
 
 ## Reports outlive their post; the moderation queue hides them (REPORT-TOTAL-01, 2026-08-21)
+<!-- kb: id=REPORT-TOTAL-01; group=social; files=apps/social/src/social.service.ts,apps/social/src/entities/post-report.entity.ts; sha=a132542faf4c; verified=unrecorded:2026-08-21; keys=post report,moderation queue,orphan report,listReportedPosts,total mismatch; summary=Reports outlive their deleted post as an audit trail, so the queue total can read lower than the raw table count. -->
 
 `deletePost` (`apps/social/src/social.service.ts:559`) hard-removes the post with
 `postRepository.remove` and never deletes the matching `post_reports` rows. There
@@ -903,6 +934,7 @@ Consequence to expect: `total` on this endpoint can be LOWER than the raw
 the endpoint against the table directly must join `posts` too.
 
 ## `null` is a 400 on a voucher edit, but still a 201 on a voucher create (VOUCHER-NULL-01, 2026-08-26)
+<!-- kb: id=VOUCHER-NULL-01; group=vouchers; files=apps/gateway/src/common/validators/is-optional-not-null.validator.ts; sha=1ae4a9aed48d; verified=unrecorded:2026-08-26; keys=voucher null,minOrderAmount,isActive,IsOptionalNotNull,voucher edit,voucher create,voucher; summary=null is a 400 on a voucher edit but still a 201 on create — the asymmetry is deliberate. -->
 
 `PATCH /api/order/vouchers/:id` and `PATCH /api/order/admin/vouchers/:id` now
 reject an explicit `null` on `minOrderAmount` and on `isActive` with a 400. Those
@@ -949,6 +981,7 @@ needing an FE hold — for zero reported benefit. Create is forgiving, update is
 strict, and that is the intended state.
 
 ## Chat `new_message` targets a room UNION (CHAT-ROOM-01, 2026-08-15)
+<!-- kb: id=CHAT-ROOM-01; group=social; files=apps/gateway/src/chat/chat.ws-gateway.ts; sha=297094342cda; verified=unrecorded:2026-08-15; keys=new_message,chat room,chatMessageRooms,participantIds,socket.io namespace,websocket,tin nhắn,phòng chat; summary=new_message targets a union of user: and conv: rooms, so a recipient no longer needs to join. -->
 
 `ChatWsGateway.handleSendMessage` emits to `chatMessageRooms(...)` =
 `["user:<a>", "user:<b>", "conv:<publicId>"]`, not to the conversation room
@@ -973,6 +1006,7 @@ alone.
   cross-talk between chat messages and notifications.
 
 ## The reset-code email has no copy button, and the code is in the subject (MAIL-UI-01, 2026-08-29)
+<!-- kb: id=MAIL-UI-01; group=auth; files=libs/common/src/mailer/email-templates.ts; sha=6b01923b79a9; verified=unrecorded:2026-08-29; keys=reset code email,copy button,email template,mail subject,multipart/alternative,SMTP,mail đặt lại mật khẩu,mã xác nhận; summary=The reset-code mail has no copy button by design (clients strip script) and repeats the code in the subject. -->
 
 `renderPasswordResetEmail()` (`libs/common/src/mailer/email-templates.ts`) is
 written against three constraints of the medium. Do not "modernise" it — every
@@ -1011,6 +1045,7 @@ that the body's line endings are now normalised to CRLF, which they always
 should have been; Gmail tolerated the bare LFs, a stricter MTA may not.
 
 ## `errorCode` is optional, closed-set, and survives the 401 sanitizer (CHG-PW-02, 2026-09-08)
+<!-- kb: id=CHG-PW-02; group=auth; files=libs/constant/error-code.constant.ts; sha=3abd12c0615a; verified=unrecorded:2026-09-08; keys=errorCode,401 sanitizer,UNAUTHENTICATED,INVALID_CURRENT_PASSWORD,error-code.constant; summary=errorCode is optional, closed-set, and deliberately survives the prod 401 sanitizer; only the user service forwards it. -->
 
 An error envelope may carry an `errorCode` from
 `libs/constant/error-code.constant.ts`. Four properties define it — none of
@@ -1041,6 +1076,7 @@ them is an accident:
   is a permanent contract.
 
 ## Order emails: one template, and the CTA depends on who is reading (MAIL-UI-02, 2026-09-08)
+<!-- kb: id=MAIL-UI-02; group=auth; files=libs/common/src/mailer/email-templates.ts,apps/notification/src/notification.controller.ts; sha=99d9e8ac7186; verified=unrecorded:2026-09-08; keys=order email,CTA,FRONTEND_URL,renderOrderNotificationEmail,buyer link,seller link; summary=One template for all nine order mails; the CTA origin is FRONTEND_URL entry [0] and the audience decides the path. -->
 
 `renderOrderNotificationEmail()` renders ALL nine order lifecycle mails
 (placed/paid/shipped/delivering/delivered, canceled, and the three return
@@ -1063,6 +1099,7 @@ out of the sentence into its own row. Do not fork it per event.
   the in-app notification and the WS push are already saved by then.
 
 ## Only ONE of the five reset-password rejections is told apart (RESET-EXHAUST-01, 2026-09-08)
+<!-- kb: id=RESET-EXHAUST-01; group=auth; files=apps/user/src/user.service.ts,libs/constant/error-code.constant.ts; sha=53c002c6b607; verified=unrecorded:2026-09-08; keys=reset password,RESET_CODE_EXHAUSTED,attempt limit,exhausted marker,account-existence oracle,quên mật khẩu,nhập sai mã; summary=Five reset rejections share one 400; only the attempt-limit one carries an errorCode, via a separate marker key. -->
 
 `POST /api/user/reset-password` answers `400 "Invalid or expired verification
 code"` for five different causes: wrong digits, expired after the code TTL,
@@ -1100,6 +1137,7 @@ other four stay code-less, and `message` is identical in all five.
   (a plain code-less 400), never to a 500.
 
 ## The reset code lives 60 seconds, not 600 (RESET-TTL-01, 2026-09-09)
+<!-- kb: id=RESET-TTL-01; group=auth; files=apps/user/src/user.service.ts; sha=1e0b7caef168; verified=prod:2026-09-10; keys=reset code TTL,code expiry,60 seconds,password reset lifetime,mã reset,mã hết hạn,hết hạn; summary=The reset code lives 60s, not 600 — live on prod since 2026-09-10. -->
 
 `RESET-TTL-01` shrank the password-reset code TTL from 600s to **60s**. Two
 consequences that read like regressions but are not:
@@ -1116,6 +1154,7 @@ lets the email state the lifetime, so the copy cannot drift from the constant
 again (`../.agent-local/release-gate.md` → `RESET-TTL-01`).
 
 ## `change-password` revokes nothing (CHG-PW-01, 2026-09-08)
+<!-- kb: id=CHG-PW-01; group=auth; files=apps/user/src/user.service.ts; sha=1e0b7caef168; verified=unrecorded:2026-09-08; keys=change-password,revoke,token blacklist,stolen session,logout everywhere,đổi mật khẩu; summary=change-password revokes nothing — an attacker’s stolen session survives it until its own expiry. -->
 
 `POST /api/user/change-password` deliberately does NOT revoke or rotate
 anything. The JWT is stateless with no blacklist, so issuing a new cookie would
@@ -1134,7 +1173,8 @@ Also deliberate:
 - The change drops the pending `user:pwreset:code:*` / `attempts:*` Redis keys,
   so an already-emailed reset code cannot be replayed afterwards.
 
-## `PATCH /api/products/:id` — `null` clears exactly six columns
+## `PATCH /api/products/:id` — `null` clears exactly six columns (PATCH-NULL-01)
+<!-- kb: id=PATCH-NULL-01; group=products; files=apps/gateway/src/product/dto/update-product.dto.ts,apps/product/src/product.service.ts; sha=7f4db2f47d19; verified=unrecorded; keys=product PATCH null,clear column,sellerNotes,imageUrls,brandId,weight,product patch,xoá field sản phẩm; summary=null on a product PATCH clears exactly six nullable columns; anywhere else it is a 400 by design. -->
 
 `null` clears only the six NULLABLE columns: `description`, `sku`, `brandId`,
 `sellerNotes`, `weight`, `imageUrls`. A `null` on any other field is a **400 by
@@ -1144,6 +1184,7 @@ decorator rule (`@IsOptional()` for nullable, `@IsOptionalNotNull()` for NOT
 NULL).
 
 ## The orders crons were never scheduled before 2026-08-13 (ORD-CRON-01)
+<!-- kb: id=ORD-CRON-01; group=orders; files=apps/orders/src/main.ts; sha=65a5b996c472; verified=local:2026-08-15; keys=orders cron,sweepStaleReservations,app.init,stale reservation,cancel wave,scheduled job; summary=No orders @Cron ever fired before 2026-08-13; the stale-reservation sweep then started with a backlog. -->
 
 `apps/orders/src/main.ts` called neither `listen()` nor `init()`, so no NestJS
 lifecycle hook ran and **no `@Cron` in the orders service had ever fired**. The
@@ -1164,6 +1205,7 @@ listening yet — orders and product each refused to boot while the other was
 down. Both warmups are best-effort now (warn + lazy connect on first send).
 
 ## Only `order_created` is durable; the rest are best-effort (OUTBOX-SCOPE-01)
+<!-- kb: id=OUTBOX-SCOPE-01; group=messaging; files=libs/common/src/rmq/rmq-publisher.util.ts; sha=d7e754743442; verified=unrecorded; keys=outbox,durable event,order_created,best-effort publish,isRmqPublisherLive,payment_completed; summary=Only order_created is durable; every other RMQ publish is best-effort by design. -->
 
 Every RMQ publish site in all 6 publishing services guards with the shared
 `isRmqPublisherLive()` (`libs/common/src/rmq/rmq-publisher.util.ts`), so a
@@ -1180,6 +1222,7 @@ routing them through the outbox would risk duplicate notifications
 silent-loss bug**; re-open only if one of those events becomes state-critical.
 
 ## SHAPE-01 residuals (2026-08-26; hậu kiểm 2026-08-27)
+<!-- kb: id=SHAPE-01; group=shape; verified=local:2026-08-27; keys=data shape,empty cart,IsOptionalNotNull sweep,DB order,missing relation,with-inventory/multiple,giỏ hàng rỗng,cart rỗng,mảng rỗng,trả về null,empty array; summary=Residuals of the data-shape rules — empty-cart key set, DB-order batch reads, null (not {}) for a missing relation, no decorator sweep. -->
 
 The four data-shape rules themselves live in `conventions.md` → SHAPE-01. What
 follows is what was deliberately NOT done, and the edges that surprised people:
@@ -1203,6 +1246,7 @@ follows is what was deliberately NOT done, and the edges that surprised people:
   reason (create computes the flag), while the PATCH is a 400.
 
 ## Batch product read — the product leg errors, the inventory leg degrades (BATCH-FAIL-01)
+<!-- kb: id=BATCH-FAIL-01; group=shape; aka=BATCH-STATUS-01; files=apps/gateway/src/common/exception/microservice-error.handler.ts,apps/gateway/src/product/product.service.ts; sha=bbad7453f1ab; verified=unrecorded; keys=batch product read,with-inventory/multiple,inventory null,guessStatusFromMessage,partial batch,lấy nhiều sản phẩm; summary=On a batch product read the product leg errors (502/408) while the inventory leg degrades to inventory: null. -->
 
 On `POST /api/products/with-inventory/multiple`, a **product-service** failure is
 an error status, not `200 []`. That matters because `[]` has to keep meaning
@@ -1224,6 +1268,7 @@ says "not found" can no longer surface as a 404. Every other call site still
 uses the keyword matcher — deliberate, do not sweep it.
 
 ## The seller/author embed no longer swallows a transport failure (ENRICH-FAIL-01)
+<!-- kb: id=ENRICH-FAIL-01; group=shape; files=apps/gateway/src/product/product.service.ts; sha=df753e26993e; verified=unrecorded; keys=seller embed,author embed,enrichment failure,social write 502,exposeSubmittedBy; summary=A user-service outage can turn a committed social write into a 502; exposeSubmittedBy drops its field instead. -->
 
 A seller/author that does not RESOLVE is still `user: null` / `author: null` —
 the user-service handlers return null or filter the row, they never throw. Only
@@ -1241,6 +1286,7 @@ user-service failure so the moderation queue stays usable — that field is
 decoration, not the answer.
 
 ## The seller label is `username`, never `users.name` (ENRICH-BATCH-01, 2026-09-11)
+<!-- kb: id=ENRICH-BATCH-01; group=shape; files=apps/gateway/src/product/product.service.ts; sha=df753e26993e; verified=unrecorded:2026-09-11; keys=seller label,username,users.name,featured-sellers,user search,enrichProductsWithUserInfo,tên người bán,tên shop; summary=Label every user embed with username; the nullable name rides along only on two row-dump routes. -->
 
 `users` has two name columns: `username` (NOT NULL, unique) and `name`
 (nullable, a display name most accounts never set — 13 of 17 rows on dev are
@@ -1264,6 +1310,7 @@ Since AUTHOR-NAME-01 (2026-09-15) the **social author embed also carries `name`*
 — see the next section for why that is not a walk-back of the rule above.
 
 ## The social author embed carries `name` too — and the key means something else there (AUTHOR-NAME-01, 2026-09-15)
+<!-- kb: id=AUTHOR-NAME-01; group=shape; files=apps/gateway/src/social/social.service.ts; sha=51ad33fc3d46; verified=unrecorded:2026-09-15; keys=author name,display name,fetchAuthorMap,social author embed,blank name,notification actor,tên tác giả,tên hiển thị; summary=The social author embed carries name as the DISPLAY name (nullable), while product.user.name is the username. -->
 
 The post / comment / reply `author` embed was `{ id, username, avatar }`, so the
 feed could only print `username` even for an account that had set a display
@@ -1312,6 +1359,7 @@ Deliberate details:
   an oversight — extend it only on a real FE request.
 
 ## A blank name/username is rejected at the write boundary (NAME-TRIM-01, 2026-09-15)
+<!-- kb: id=NAME-TRIM-01; group=shape; files=apps/gateway/src/user/dto/user.dto.ts,apps/user/src/main.ts; sha=7e0f50d90e91; verified=unrecorded:2026-09-15; keys=blank name,whitespace username,trim,MinLength,register,ValidationPipe commented out,khoảng trắng,tên rỗng; summary=A whitespace-only name or username is now a 400, trimmed at the gateway DTO — the user service’s own pipe never runs. -->
 
 `@MinLength(1)` and `@IsNotEmpty()` both measure the **raw** string, so `"   "`
 (length 3) sailed through every "non-empty" guard the user DTOs had. Two writes
@@ -1355,6 +1403,7 @@ Things that are easy to get wrong here:
   account is still reachable by sending its literal `"   "`.
 
 ## Cancelling an order gives the voucher back (VOUCHER-CANCEL-01, 2026-08-26)
+<!-- kb: id=VOUCHER-CANCEL-01; group=vouchers; files=apps/orders/src/orders.service.ts; sha=cc66fc8703f1; verified=unrecorded:2026-08-26; keys=voucher cancel,releaseVoucherRedemption,used_count,cancel farming,redemption back,voucher; summary=Cancelling gives the redemption back, so cancel-farming a limited code is possible by design. -->
 
 `releaseVoucherRedemption()` deletes the `voucher_redemptions` row, decrements
 `used_count` and drops the Redis quota mirror on every cancel path.
@@ -1369,6 +1418,7 @@ Residuals, deliberate:
   was permanently burning a slot for an order that was never fulfilled.
 
 ## A loosening voucher edit cannot be walked back (VOUCHER-EDIT-01, 2026-08-26)
+<!-- kb: id=VOUCHER-EDIT-01; group=vouchers; files=apps/orders/src/orders.service.ts; sha=cc66fc8703f1; verified=unrecorded:2026-08-26; keys=voucher edit,isStricterCap,loosening,usageLimit,redeemed voucher,tightening,voucher; summary=On a redeemed voucher only loosening is allowed, so a mistaken widening cannot be walked back. -->
 
 On a REDEEMED voucher only LOOSENING is allowed (`isStricterCap()` in
 `orders.service.ts`); an untouched voucher edits freely. So the reverse of a
@@ -1387,6 +1437,7 @@ drops the VOUCHER-CONC-01 Redis quota key so the next claim re-seeds instead of
 enforcing the old cap for up to 300s.
 
 ## Shop-voucher residuals (VOUCHER-SHOP-01, deliberate)
+<!-- kb: id=VOUCHER-SHOP-01; group=vouchers; verified=unrecorded; keys=shop voucher,sellerId,platform voucher,vouchers/available,voucher 403,voucher,mã giảm giá của shop; summary=Shop-voucher residuals — sellerId is only checked to exist, available caps at 50, and sellerId:null is a platform voucher. -->
 
 - The admin `sellerId` on `POST /api/order/admin/vouchers` is only checked to be
   an EXISTING user (404 otherwise), **not** a `shop`-role one — assigning it to
@@ -1399,6 +1450,7 @@ enforcing the old cap for up to 300s.
   `404 User not found`.
 
 ## 12 of 19 Quận 8 wards cannot be ordered to (GHN-MSG-01, prod, 2026-08-26)
+<!-- kb: id=GHN-MSG-01; group=ghn; aka=GHN-WARD-01; files=apps/orders/src/ghn/ghn.service.ts; sha=d9c9852a1dd2; verified=prod:2026-08-26; keys=unshippable ward,DESTINATION_NOT_SERVICEABLE,shipping-order/fee,retired ward,district 1450; summary=12 of 19 Quan 8 wards cannot be ordered to; do NOT "fix" it by quoting from /shipping-order/fee. -->
 
 Probing all 19 wards that `GET /api/shipping/wards?districtId=1450` returns
 against `POST /api/order/shipping-fee` on prod: only **7 quote a fee**.
@@ -1431,6 +1483,7 @@ probes worth considering. Known-good pair for any manual prod test: district
 `1450` + ward `20816`.
 
 ## `/ready` probes RabbitMQ but does not fail on it (READY-01, 2026-09-10)
+<!-- kb: id=READY-01; group=ops; files=apps/gateway/src/health/health.service.ts; sha=aecce576ab1d; verified=unrecorded:2026-09-10; keys=/ready,readiness probe,health check,not_configured,probeRabbitMq,liveness; summary=/ready really probes RabbitMQ but stays 200 on a broker outage; the result is cached 10s. -->
 
 Before LINT-GATE-01 the readiness probe reported `rabbitmq: not_checked` and
 could therefore never fail. It now runs a real AMQP connect. Three deliberate
@@ -1461,6 +1514,7 @@ i.e. the health check would become the outage).
 machine with no broker configured reports `not_configured` instead of flapping.
 
 ## Mail to a fixture address is dropped before SMTP (MAIL-BOUNCE-01, 2026-09-11)
+<!-- kb: id=MAIL-BOUNCE-01; group=auth; files=libs/common/src/mailer/mailer.constants.ts; sha=0516c1f20d64; verified=prod:2026-09-11; keys=mail bounce,undeliverable domain,MAIL_UNDELIVERABLE_DOMAINS,fixture address,SMTP drop; summary=Mail to the fixture domain / RFC-reserved names is dropped before SMTP after a 45h bounce flood. -->
 
 `MailerService.sendMail()` refuses recipients whose domain cannot accept mail
 and logs the body instead — the same fallback the no-SMTP path already used. It
@@ -1505,6 +1559,7 @@ whole time, and there is no retry on the gateway's TCP leg.
   inside the window also short-circuits and reads as a false pass.
 
 ## Search is accent-insensitive because of the collation, not the code (SEARCH-01, 2026-09-15)
+<!-- kb: id=SEARCH-01; group=search; files=apps/product/src/product.service.ts; sha=e8a541e6988a; verified=unrecorded:2026-09-15; keys=search,accent,collation,utf8mb4_0900_ai_ci,LIKE,user search,post search,tìm kiếm,không dấu,bỏ dấu; summary=Accent-insensitivity comes from the MySQL collation, not code; % and _ are not escaped and a blank q is a 400. -->
 
 `GET /api/social/posts?search=` and `GET /api/user/search?q=` both match with a
 plain parameterized `LIKE '%q%'`. There is **no folding, normalizing, shadow
@@ -1546,6 +1601,7 @@ Contract edges, both verified at runtime:
   `exposeUser`; the nullable `name` rides along — see ENRICH-BATCH-01.
 
 ## A role change only reaches the JWT on the target's NEXT login (ROLE-ADMIN-01, 2026-09-15)
+<!-- kb: id=ROLE-ADMIN-01; group=auth; files=apps/gateway/src/user/user.service.ts; sha=a1f105df78a8; verified=unrecorded:2026-09-15; keys=role change,tokenRole,isRoleStale,JWT role,promote shop,CANNOT_CHANGE_OWN_ROLE,đổi role,đổi quyền,phân quyền,lên shop; summary=A role change reaches the JWT only on the target’s NEXT login; GET /api/user/me exposes the drift as a signal only. -->
 
 `PATCH /api/user/:id/role` (admin only) is the first and only write path for
 `users.role_id` — before it, promoting a buyer to `shop` meant a hand-written
@@ -1558,10 +1614,36 @@ stateless and carries `role` + `grants` baked in at login (`generateJwtToken`,
 contract as CHG-PW-01. Verified at runtime, not reasoned about: after demoting a
 `shop` account back to `user`, its still-live cookie answered **200** on
 `GET /api/products/shop/stats`. A promotion has the mirror-image delay — the new
-`shop` sees 403 on seller routes until they log out and back in. **Tell the FE
-to force a re-login (or at least surface "log out and back in") after a role
-change**; polling `/api/user/me` will not help, since the role in the response
-comes from the DB while the guard reads the token.
+`shop` sees 403 on seller routes until they log out and back in.
+
+**The drift is now observable — `GET /api/user/me` reports the role twice
+(2026-09-16).** The session's own role is invisible to the client (httpOnly
+cookie), so the boundary reports it instead of leaving the FE to guess:
+
+| Key | Source | Use |
+|---|---|---|
+| `role: { id, name }` | the `users` row | display ("your role is X") |
+| `tokenRole: string` | the presented JWT | **gate UI on this** — it is what every guard enforces |
+| `isRoleStale: boolean` | `role.name !== tokenRole` | show "log out and back in" |
+
+Measured on the throwaway `roleprobe0915` account, all four directions: fresh
+token ⇒ `tokenRole:"user"`/`isRoleStale:false`; after promotion on the SAME
+cookie ⇒ `role.name:"shop"` but `tokenRole:"user"`/`isRoleStale:true`, and
+`POST /api/products` on that cookie still **403** — i.e. `tokenRole` predicted
+the guard and `role.name` did not; after re-login ⇒ `tokenRole:"shop"`/
+`isRoleStale:false`; after demotion on the still-live `shop` cookie ⇒
+`tokenRole:"shop"`/`isRoleStale:true`, which is the over-privileged direction.
+
+Deliberate in that signal:
+
+- **It is a signal, not an enforcement.** Nothing is revoked — a client that
+  ignores `isRoleStale` behaves exactly as before, which is why this was class
+  **B**. Real revocation needs a token blacklist/version the project does not
+  have (same gap as CHG-PW-01); if that is ever wanted it is new work.
+- **An unreadable DB role reports `isRoleStale: false`**, not `true` — an
+  unexpected payload shape must not log a user out.
+- **Only `GET /api/user/me` carries the pair.** The login response deliberately
+  does not: the token is minted in that same call, so drift is impossible there.
 
 Deliberate, and not oversights:
 

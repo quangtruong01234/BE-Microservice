@@ -36,14 +36,16 @@ DONE — see `CHANGELOG.md`. The public-id (PUBID) contract lives in
 
 Nothing is mid-implementation. What is genuinely open:
 
-### Held by the release gate
+### Awaiting a push, not awaiting work
 
-`../.agent-local/release-gate.md` **Holding** carries one entry as of
-2026-09-15: SEARCH-01 (+ ROLE-ADMIN-01, AUTHOR-NAME-01, NAME-TRIM-01). The hold
-is on the **`frontend`** repo, not on `api` — this tree is class B (new routes,
-a new optional query param, a new optional response field), so `api` may push
-alone and the FE follows immediately after. Check that file, not this line,
-before you conclude a push is blocked.
+`../.agent-local/release-gate.md` **Holding** carries one entry: SEARCH-01
+(+ ROLE-ADMIN-01, AUTHOR-NAME-01, NAME-TRIM-01). As of 2026-09-16 both repos are
+code-ready and committed — `api` has 19 unpushed commits on `main`, `frontend`
+has 8. The hold is on the **`frontend`** repo, not on `api`: this tree is class
+B (new routes, a new optional query param, new always-present `/user/me` keys),
+so `api` may push alone and the FE follows immediately after. What is left is
+the push itself, which needs the user's go-ahead. Check that file, not this
+line, before you conclude a push is blocked.
 
 ### Prod-owed
 
@@ -69,6 +71,21 @@ before you conclude a push is blocked.
 - **GHN Web console (`../web-flow-GHN`)** — backend is ready; the remaining work
   is all FE. Only backend contract still blocking it: analytics charts. Steps
   and deps in `planned-work.md`.
+- **CTX-PROV-02 — 47 of 56 `known-behaviors.md` anchors carry
+  `verified=unrecorded`.** Upgrading a tag means actually EXERCISING the
+  behaviour (services up, an account from `test-accounts.md`, curl, assert the
+  documented outcome), then `verified=prod:<date>` or `local:<date>` for where
+  you ran it. Editing the tag without running anything destroys the only thing
+  the field is for. Do it drip-feed — when a task makes you open an entry and
+  you verify it anyway, upgrade that one — never as a 47-step sweep.
+- **CONV-CHECK-02 — three more `scripts/check-conventions.mjs` assertions.**
+  Candidates: (a) writer symmetry — an `emit()` whose event has no
+  `@EventPattern` consumer, (b) orphan handler — a `@MessagePattern` no gateway
+  ever sends, (c) Create/Update DTO drift — an Update DTO redeclaring fields
+  instead of `PartialType`. Gated on an AUDIT FIRST: count existing violations
+  per rule before choosing hard-fail vs warn — `check:conventions` runs in CI
+  (`.github/workflows/ci.yml`), so a rule that lights up working code turns the
+  gate red on day one and trains people to skip it.
 
 ### Planned but not started
 
@@ -97,83 +114,89 @@ pick one up. Do not re-derive them:
 
 ## Known Issues — index only
 
-> Every entry below is a residual/deliberate behaviour of a **shipped** fix, NOT
-> an open bug. Full detail is in `ai-docs/agent-context/known-behaviors.md` —
-> read it there before re-diagnosing one or writing a test that asserts the
-> opposite contract.
+> GENERATED from the `summary=` anchors in `ai-docs/agent-context/known-behaviors.md`
+> — do not hand-edit; run `node .claude/hooks/kb-hint.mjs --index --write`.
+> Every line is a residual/deliberate behaviour of a **shipped** fix, NOT an open
+> bug. Match your task against these by MEANING, not by keyword: the stage-0 hook
+> only greps `keys=`, so it misses paraphrase and mixed VN/EN prompts. When one
+> looks related, grep its id out of that file and read the entry before you
+> re-diagnose it, change it, or write a test asserting the opposite contract.
 
-**Orders / fulfilment** — ORD-RBAC-01 (ship/deliver/complete are admin-only),
-ORD-GUARD-01 (`paidAt` NULL blocks seller transitions on non-COD),
-ORD-CRON-01 (orders crons never ran before 2026-08-13; the stale-reservation
-sweep has a backlog), buyer cancel leaves a live waybill if GHN cancel fails
-twice, single-seller checkout has no `paymentUrl` (`GET /:id/payment-url` →
-`orderUrl`), payment return URLs before 2026-08-07 keep a numeric id.
+**Orders / fulfilment**
+- PAYURL-01 — Single-seller checkout returns NO paymentUrl; GET /:id/payment-url answers with the key orderUrl.
+- ORD-RBAC-01 — ship/deliver/complete are admin-only; a seller gets 403 before the order is even loaded.
+- ORD-GUARD-01 — A NULL paidAt on a non-COD order blocks every seller transition with a 400 — admin included, no override.
+- PAYRET-LEGACY-01 — Payment rows before 2026-08-07 keep a numeric order id in the stored return URL and cannot be rewritten.
+- BUG-D — Buyer cancel detaches the GHN cancel — two failed attempts leave a live waybill on a CANCELED order.
+- NOTIF-LIFECYCLE-01 — Which lifecycle transitions notify whom; emails are gated to shipping milestones and order_canceled has its own event.
+- ORDER-SHAPE-01 — HTTP emits `image` only; productImage survives internally and on the one admin GHN console detail route.
+- ORD-CRON-01 — No orders @Cron ever fired before 2026-08-13; the stale-reservation sweep then started with a backlog.
 
-**GHN** — GHN-FAIL-01 (`delivery_fail` deliberately moves no local status),
-GHN-FAIL-NTF-01 (the buyer is notified on the FIRST `delivery_fail` only, deduped
-via `shipping_history`; in-app only, no email, no seller copy),
-GHN-FAIL-NTF-02 (a CANCELED/COMPLETED/REFUNDED order never notifies — a stale
-waybill can still produce a real failed attempt; RETURN_REQUESTED still does),
-GHN-DIST-01 (unknown district / cross-district ward → 400, but validation is
-fail-open), GHN-MSG-01 (12 of 19 Quận 8 wards unshippable on the dev shop —
-**do not "fix" it by quoting from `/shipping-order/fee`**), free-text address is
-best-effort, `toWardCode` stays a string, GHN-ETA-01 (the stored ETA is
-refreshed by the manual sync only — never by the webhook — and `create` vs
-`detail` name the same value `expected_delivery_time` vs `leadtime`).
+**GHN**
+- GHN-ADDR-01 — Free-text address resolution is best-effort and can match a wrong-but-valid location; sending both ids skips it.
+- GHN-FAIL-01 — delivery_fail (and exception/damage/lost) deliberately move no local order status.
+- GHN-FAIL-NTF-01 — The buyer is notified on the FIRST delivery_fail only, deduped via shipping_history; in-app only, no email, no seller copy.
+- GHN-FAIL-NTF-02 — A CANCELED/COMPLETED/REFUNDED order is never told about a missed attempt; RETURN_REQUESTED still is.
+- GHN-DIST-01 — An unknown district or cross-district ward is a 400, but the validation is fail-open on a GHN outage.
+- GHN-ETA-01 — The stored ETA is refreshed by the manual sync only, never by the webhook; create and detail name the field differently.
+- GHN-CREATE-01 — Order create 400s on a GHN refusal but still places the order at fee 0 on a GHN outage.
+- GHN-MSG-01 — 12 of 19 Quan 8 wards cannot be ordered to; do NOT "fix" it by quoting from /shipping-order/fee.
 
-**Products / inventory** — SKU `skuList` is the full desired set not a delta,
-STOCK-SYNC-01 (two-way absolute stock sync), PATCH-ATOMIC-01 (product PATCH is
-three steps across two DBs, not one transaction), product PATCH optimistic
-`version` is opt-in, `PATCH /api/products/:id` `null` clears exactly six
-columns, P0-03 compensation reads `error.driverError.detail`, storefront catalog
-defaults `isActive:true`, approved returns restock via
-`inventory.restock_returned`.
+**Products / inventory**
+- BUG-A — skuList is the FULL desired set, not a delta; omitted SKUs are removed and the reference check fails safe.
+- P0-03 — Product-create compensation rolls the product row back; sku-collision discrimination reads error.driverError.detail.
+- PATCH-LOCK-01 — products.version is OPT-IN, and background writers bump it too — a 409 does not mean a human edited the product.
+- BUG-B — The public catalog defaults isActive:true; a single userId is the only exception, and it is an anonymous leak by design.
+- RETURN-STOCK-01 — An approved return restocks through inventory.restock_returned, not a release; the fix is not retroactive.
+- STOCK-SYNC-01 — Stock syncs two-way — adjust from either side with ONE absolute write; SKU-matrix products are warn-and-skip.
+- PATCH-ATOMIC-01 — A product PATCH is up to three writes across two DBs and is NOT atomic — a failed PATCH does not mean nothing changed.
+- INV-CONTRACT-01 — inventory_v2.sku is a warehouse label with no resolver — it drifts from products.sku on purpose.
+- PATCH-NULL-01 — null on a product PATCH clears exactly six nullable columns; anywhere else it is a 400 by design.
 
-**Data shape / errors** — SHAPE-01 residuals (empty-cart key set, DB-order batch
-reads, `null` not `{}` for a missing relation, no `@IsOptionalNotNull()` sweep),
-BATCH-FAIL-01 (product leg errors, inventory leg degrades),
-ENRICH-FAIL-01 (a social write can 502 on a user-service outage),
-ENRICH-BATCH-01 (every seller embed labels with `username`; nullable
-`users.name` rides along on two row-dump routes — `GET /api/user/featured-sellers`
-and `GET /api/user/search`), AUTHOR-NAME-01 (the social author embed also carries
-`name`, but the key means the **display name** there and the **username** in
-`product.user.name`; blank display names are normalized to `null`; the
-notification `actor` embed deliberately still has no `name`),
-NAME-TRIM-01 (a whitespace-only `name` on `PATCH /api/user/:id` **and** a
-whitespace-only `username` on `POST /api/user/register` are now 400s, trimmed
-before validation at the gateway DTO — the user service's own DTOs never run,
-its `ValidationPipe` is commented out; `null` still clears the display name and
-`password` is deliberately not trimmed),
-ENVELOPE-01, array query params `?x[]=` → 400.
+**Data shape / errors**
+- QUERY-ARRAY-01 — ?x[]= is a 400 by design; use repeated keys or a scalar, and wrap any new array query field with @Transform.
+- ENVELOPE-01 — The envelope `error` field is always the HTTP reason phrase, never an exception class name.
+- OVERFETCH-01 — Gateway read payloads are trimmed at the boundary; the actor/reporter/reviewer embeds must keep ONE shape.
+- SHAPE-01 — Residuals of the data-shape rules — empty-cart key set, DB-order batch reads, null (not {}) for a missing relation, no decorator sweep.
+- BATCH-FAIL-01 — On a batch product read the product leg errors (502/408) while the inventory leg degrades to inventory: null.
+- ENRICH-FAIL-01 — A user-service outage can turn a committed social write into a 502; exposeSubmittedBy drops its field instead.
+- ENRICH-BATCH-01 — Label every user embed with username; the nullable name rides along only on two row-dump routes.
+- AUTHOR-NAME-01 — The social author embed carries name as the DISPLAY name (nullable), while product.user.name is the username.
+- NAME-TRIM-01 — A whitespace-only name or username is now a 400, trimmed at the gateway DTO — the user service’s own pipe never runs.
 
-**Search** — SEARCH-01 (accent-insensitivity comes from the MySQL
-`utf8mb4_0900_ai_ci` collation, not from application code; `%`/`_` in a query
-are NOT escaped, matching the older product search; `/api/user/search` returns
-active accounts only and 400s on a blank `q`).
+**Social / chat / media / moderation**
+- SOCIAL-AUTHOR-01 — The comment `author` embed is decorated in the gateway and is legitimately null on a user-service failure.
+- SOCIAL-502 — Gateway transport failures collapse to one sanitized 502; the 100ms retry is reads-only and always after timeout().
+- MEDIA-ORPHAN-01 — Post media cleanup is reference-counted and best-effort — a URL shared by another post is never destroyed.
+- UPLOAD-SIZE-01 — Upload size caps are an advisory contract, NOT a security boundary — Cloudinary cannot sign a size on this account.
+- REPORT-TOTAL-01 — Reports outlive their deleted post as an audit trail, so the queue total can read lower than the raw table count.
+- CHAT-ROOM-01 — new_message targets a union of user: and conv: rooms, so a recipient no longer needs to join.
 
-**Vouchers** — VOUCHER-CONC-01 (Redis quota gate fails open, can be
-pessimistic for 300s), VOUCHER-CANCEL-01 (cancel gives the redemption back;
-cancel-farming is possible by design), VOUCHER-EDIT-01 (a loosening edit cannot
-be walked back), VOUCHER-NULL-01, VOUCHER-SHOP-01 residuals.
+**Search**
+- SEARCH-01 — Accent-insensitivity comes from the MySQL collation, not code; % and _ are not escaped and a blank q is a 400.
 
-**Auth / mail** — CHG-PW-01 (change-password revokes nothing — an attacker's
-stolen session survives it), CHG-PW-02 (optional `errorCode`, survives the prod
-401 sanitizer), ROLE-ADMIN-01 (`PATCH /api/user/:id/role` is admin-only, refuses
-a self-change, and the new role reaches the target only on their NEXT login —
-the live token keeps the old grants), RESET-EXHAUST-01, RESET-TTL-01 (60s, live
-on prod since 2026-09-10),
-MAIL-UI-01 (no copy button — email clients strip `<script>`; SMTP is :465 only),
-MAIL-UI-02 (order emails build their CTA from `FRONTEND_URL` entry [0]),
-MAIL-BOUNCE-01 (mail to `@trybuy.com` / RFC-reserved domains is dropped before
-SMTP — it bounced back to the sender for 45h).
+**Vouchers**
+- VOUCHER-CONC-01 — The Redis voucher quota is an admission gate that fails OPEN and can read pessimistically for up to 300s.
+- VOUCHER-NULL-01 — null is a 400 on a voucher edit but still a 201 on create — the asymmetry is deliberate.
+- VOUCHER-CANCEL-01 — Cancelling gives the redemption back, so cancel-farming a limited code is possible by design.
+- VOUCHER-EDIT-01 — On a redeemed voucher only loosening is allowed, so a mistaken widening cannot be walked back.
+- VOUCHER-SHOP-01 — Shop-voucher residuals — sellerId is only checked to exist, available caps at 50, and sellerId:null is a platform voucher.
 
-**Ops / probes** — READY-01 (`/ready` now really probes RabbitMQ, but
-`required:false` so a broker outage stays a 200; `database:not_configured` is
-correct; the probe is cached 10s).
+**Auth / mail**
+- MAIL-UI-01 — The reset-code mail has no copy button by design (clients strip script) and repeats the code in the subject.
+- CHG-PW-02 — errorCode is optional, closed-set, and deliberately survives the prod 401 sanitizer; only the user service forwards it.
+- MAIL-UI-02 — One template for all nine order mails; the CTA origin is FRONTEND_URL entry [0] and the audience decides the path.
+- RESET-EXHAUST-01 — Five reset rejections share one 400; only the attempt-limit one carries an errorCode, via a separate marker key.
+- RESET-TTL-01 — The reset code lives 60s, not 600 — live on prod since 2026-09-10.
+- CHG-PW-01 — change-password revokes nothing — an attacker’s stolen session survives it until its own expiry.
+- MAIL-BOUNCE-01 — Mail to the fixture domain / RFC-reserved names is dropped before SMTP after a 45h bounce flood.
+- ROLE-ADMIN-01 — A role change reaches the JWT only on the target’s NEXT login; GET /api/user/me exposes the drift as a signal only.
 
-**Messaging** — OUTBOX-SCOPE-01 (only `order_created` is durable; the rest are
-best-effort by design), REPORT-TOTAL-01 (orphan `post_reports` are the audit
-trail).
+**Ops / probes**
+- READY-01 — /ready really probes RabbitMQ but stays 200 on a broker outage; the result is cached 10s.
+
+**Messaging**
+- OUTBOX-SCOPE-01 — Only order_created is durable; every other RMQ publish is best-effort by design.
 
 ## Ops / Runtime Reference
 

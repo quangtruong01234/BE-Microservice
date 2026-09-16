@@ -1,7 +1,7 @@
 # Planned Work — designs decided but NOT started
 
 > Load on demand — keywords: planned, roadmap, next feature, AI feature, Gemini,
-> visual search, ETA, stacking, phase 2. Moved out of `snapshot.md` on
+> visual search, stacking, phase 2. Moved out of `snapshot.md` on
 > 2026-09-10 so the auto-loaded snapshot carries only the live picture.
 >
 > Everything here is **designed and decided, not implemented**. `snapshot.md`
