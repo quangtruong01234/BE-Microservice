@@ -39,20 +39,40 @@ Nothing is mid-implementation. What is genuinely open:
 ### Awaiting a push, not awaiting work
 
 `../.agent-local/release-gate.md` **Holding** carries one entry: SEARCH-01
-(+ ROLE-ADMIN-01, AUTHOR-NAME-01, NAME-TRIM-01). As of 2026-09-16 both repos are
-code-ready and fully committed, each with its whole batch unpushed on `main`
-(`api` ~19 commits, `frontend` 8). The hold is on **`frontend`**, not `api`: this tree
-is class B (new routes, a new optional query param, new `/user/me` keys),
-so `api` may push alone and the FE follows immediately after. What is left is
-the push itself, which needs the user's go-ahead. Check that file, not this
-line, before you conclude a push is blocked.
+(+ ROLE-ADMIN-01, AUTHOR-NAME-01, NAME-TRIM-01).
+
+**`api` was PUSHED 2026-09-16 (`d8b7f4e..87fc2f8`) and the deploy FAILED AND
+ROLLED BACK — prod still runs `d8b7f4e`.** Do not read the git head as proof of
+a release: the FE's original unblock test ("`git ls-remote origin main` ≠
+`d8b7f4e`") now passes while prod does not have the code. The only honest test
+is a runtime probe — `GET /api/social/posts?search=x` must not answer *"property
+search should not exist"*, and `GET /api/user/search?q=x` must not answer
+*"Invalid id"*. Both still fail on prod (measured 14:11Z). `frontend` therefore
+stays HOLD. Cause and state: DEPLOY-PG-01 below.
 
 ### Prod-owed
 
-- **Migration `nodeA-20260911-001-add-expected-delivery-time-to-orders` is NOT
-  applied to prod** (GHN-ETA-01, additive `orders.expected_delivery_time`). The
-  deploy workflow runs the migrate step before `pm2 startOrRestart`, so pushing
-  applies it in the right order — just do not hand-deploy the code without it.
+- **DEPLOY-PG-01 🔴 — the prod Aiven PostgreSQL instance is GONE, so every deploy
+  rolls back and Node B is dead on prod (found 2026-09-16).** The CD migrate step
+  runs on the EC2 and dies with `getaddrinfo ENOTFOUND
+  pg-prod-…….h.aivencloud.com`; the host does not resolve from the box or from
+  here, while the DEV PG host still resolves. `deploy.yml` runs
+  `db:migrate:nodeA`+`nodeB` under `set -e` BEFORE the restart, so the nodeB leg
+  aborts the run and the `if: failure()` step resets prod to the previous sha —
+  which is why a green push produced no release. Independent of the pushed code:
+  the pm2 table in the rollback log shows inventory ↺21, payments ↺22, rewards
+  ↺21 in *waiting restart* against ↺1 for every Node A service, and
+  `GET /api/products/with-inventory/all` 500s on prod while Node A reads
+  (`/api/social/posts`, `/api/products/categories`) are 200. **Nothing ships
+  until this is decided:** restore/recreate the PG service and fix `PG_HOST` in
+  `local/nodeB/.env` on the EC2, or make the nodeB migrate leg non-fatal so Node
+  A can release while Node B stays down. The second is a deploy-policy change,
+  not a fix — it ships code onto a box whose Node B half is still broken.
+- ~~Migration `nodeA-20260911-001-add-expected-delivery-time-to-orders` is not
+  applied to prod~~ → **APPLIED TO PROD 2026-09-16** by the failed run's migrate
+  step (`[apply] nodeA-20260911-001-add-expected-delivery-time-to-orders`, which
+  ran and succeeded before the nodeB leg failed). The rollback reverted the CODE,
+  not the schema; the column is additive so `d8b7f4e` ignores it.
 - **`METRICS_TOKEN` is UNSET in `local/nodeA/.env`**, so `GET /metrics` 404s on
   prod (verified 2026-08-15). Set it only when a scraper actually exists. Only
   the gateway is instrumented; the registry is per-process, so
