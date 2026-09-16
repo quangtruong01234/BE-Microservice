@@ -36,43 +36,40 @@ DONE — see `CHANGELOG.md`. The public-id (PUBID) contract lives in
 
 Nothing is mid-implementation. What is genuinely open:
 
-### Awaiting a push, not awaiting work
+### Waiting on the frontend push only
 
-`../.agent-local/release-gate.md` **Holding** carries one entry: SEARCH-01
-(+ ROLE-ADMIN-01, AUTHOR-NAME-01, NAME-TRIM-01).
+`api` is **LIVE ON PROD at `87fc2f8`** (deployed 2026-09-16 14:39Z by a
+`workflow_dispatch` redeploy after DEPLOY-PG-01 was fixed). SEARCH-01,
+ROLE-ADMIN-01, AUTHOR-NAME-01 and NAME-TRIM-01 are all verified **on prod** —
+see CHANGELOG. `../.agent-local/release-gate.md` has the entry in **Ready to
+release** with `api: ✅ live`; the remaining step is the `frontend` push, which
+is the FE agent's to make.
 
-**`api` was PUSHED 2026-09-16 (`d8b7f4e..87fc2f8`) and the deploy FAILED AND
-ROLLED BACK — prod still runs `d8b7f4e`.** Do not read the git head as proof of
-a release: the FE's original unblock test ("`git ls-remote origin main` ≠
-`d8b7f4e`") now passes while prod does not have the code. The only honest test
-is a runtime probe — `GET /api/social/posts?search=x` must not answer *"property
-search should not exist"*, and `GET /api/user/search?q=x` must not answer
-*"Invalid id"*. Both still fail on prod (measured 14:11Z). `frontend` therefore
-stays HOLD. Cause and state: DEPLOY-PG-01 below.
+**Lesson worth keeping: a green push is not a release.** The 14:07Z deploy of
+this same sha failed and rolled back, so `git ls-remote origin main` reported
+the new head while prod served the old code. Verify a release with a runtime
+probe against prod, never with the git head.
 
 ### Prod-owed
 
-- **DEPLOY-PG-01 🔴 — the prod Aiven PostgreSQL instance is GONE, so every deploy
-  rolls back and Node B is dead on prod (found 2026-09-16).** The CD migrate step
-  runs on the EC2 and dies with `getaddrinfo ENOTFOUND
-  pg-prod-…….h.aivencloud.com`; the host does not resolve from the box or from
-  here, while the DEV PG host still resolves. `deploy.yml` runs
-  `db:migrate:nodeA`+`nodeB` under `set -e` BEFORE the restart, so the nodeB leg
-  aborts the run and the `if: failure()` step resets prod to the previous sha —
-  which is why a green push produced no release. Independent of the pushed code:
-  the pm2 table in the rollback log shows inventory ↺21, payments ↺22, rewards
-  ↺21 in *waiting restart* against ↺1 for every Node A service, and
-  `GET /api/products/with-inventory/all` 500s on prod while Node A reads
-  (`/api/social/posts`, `/api/products/categories`) are 200. **Nothing ships
-  until this is decided:** restore/recreate the PG service and fix `PG_HOST` in
-  `local/nodeB/.env` on the EC2, or make the nodeB migrate leg non-fatal so Node
-  A can release while Node B stays down. The second is a deploy-policy change,
-  not a fix — it ships code onto a box whose Node B half is still broken.
+- ~~DEPLOY-PG-01 — the prod Aiven PostgreSQL instance is gone~~ → **RESOLVED
+  2026-09-16**, user restarted the service. Kept here for the failure mode, which
+  will recur every time that instance is down: the CD migrate step runs on the
+  EC2 BEFORE `pm2 startOrRestart`, under `set -e`, so a nodeB leg that dies
+  (`getaddrinfo ENOTFOUND <pg host>`) aborts the whole run and the `if: failure()`
+  step resets prod to the previous sha — **a green CI plus a green push then
+  produce no release at all**, which is exactly what happened at 14:07Z. Node B
+  itself needed no deploy to recover: pm2 had inventory/payments/rewards in
+  *waiting restart* (↺21/22/21) and they came back on their own once DNS
+  resolved, `GET /api/products/with-inventory/all` going 500 → 200 with real
+  `availableStock` rows (not the `inventory: null` BATCH-FAIL-01 degrade). The
+  redeploy then had to be dispatched by hand — nothing re-fires `workflow_run`
+  without a new push, so `gh workflow run Deploy --ref main` is the recovery step.
 - ~~Migration `nodeA-20260911-001-add-expected-delivery-time-to-orders` is not
-  applied to prod~~ → **APPLIED TO PROD 2026-09-16** by the failed run's migrate
-  step (`[apply] nodeA-20260911-001-add-expected-delivery-time-to-orders`, which
-  ran and succeeded before the nodeB leg failed). The rollback reverted the CODE,
-  not the schema; the column is additive so `d8b7f4e` ignores it.
+  applied to prod~~ → **APPLIED TO PROD 2026-09-16** (GHN-ETA-01). The failed
+  14:07Z run applied it before the nodeB leg died; the rollback reverted the CODE,
+  not the schema. The 14:39Z redeploy confirms it — `[apply] target=nodeA
+  pending-check=8` with no pending entries, `target=nodeB pending-check=0`.
 - **`METRICS_TOKEN` is UNSET in `local/nodeA/.env`**, so `GET /metrics` 404s on
   prod (verified 2026-08-15). Set it only when a scraper actually exists. Only
   the gateway is instrumented; the registry is per-process, so
@@ -91,8 +88,10 @@ stays HOLD. Cause and state: DEPLOY-PG-01 below.
 - **GHN Web console (`../web-flow-GHN`)** — backend is ready; the remaining work
   is all FE. Only backend contract still blocking it: analytics charts. Steps
   and deps in `planned-work.md`.
-- **CTX-PROV-02 — 47 of 56 `known-behaviors.md` anchors carry
-  `verified=unrecorded`.** Upgrading a tag means actually EXERCISING the
+- **CTX-PROV-02 — 43 of 56 `known-behaviors.md` anchors carry
+  `verified=unrecorded`** (9 prod, 4 local; SEARCH-01, ROLE-ADMIN-01,
+  AUTHOR-NAME-01 and NAME-TRIM-01 were upgraded to `prod:2026-09-16` by actually
+  exercising them on prod after the release). Upgrading a tag means actually EXERCISING the
   behaviour (services up, an account from `test-accounts.md`, curl, assert the
   documented outcome), then `verified=prod:<date>` or `local:<date>` for where
   you ran it. Editing the tag without running anything destroys the only thing

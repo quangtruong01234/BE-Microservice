@@ -135,7 +135,7 @@ fails if any of them is missing:
      only if the entry itself says where it was checked, otherwise
      `unrecorded[:<date>]`. Do not upgrade a tag you did not earn — the point of
      the field is to show which entries have never actually been exercised
-     (today: 5 prod, 4 local, 47 unrecorded).
+     (today: 9 prod, 4 local, 43 unrecorded).
    - `files` names the file(s) that OWN the behaviour; omit it when there is no
      honest owner (3 of 56 entries have none). Never hand-write `sha` — run
      `node .claude/hooks/kb-hint.mjs --rebaseline <id>`.

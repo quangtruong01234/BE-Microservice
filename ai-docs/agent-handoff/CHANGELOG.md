@@ -6,6 +6,65 @@
 
 ## Completed Milestones
 
+- **DEPLOY-0915 / DEPLOY-PG-01 — SEARCH-01 + ROLE-ADMIN-01 + AUTHOR-NAME-01 +
+  NAME-TRIM-01 are LIVE ON PROD at `87fc2f8` (2026-09-16 14:39Z). Release class
+  B; the `frontend` half of the gate is now unblocked.**
+  - **The first push produced no release, and nothing in git said so.** CI went
+    green on `87fc2f8` at 14:05Z, the push landed, and `git ls-remote origin
+    main` duly reported the new head — while prod kept serving `d8b7f4e`. The
+    Deploy job had failed: `deploy.yml` runs `db:migrate:nodeA` +
+    `db:migrate:nodeB` on the EC2 *before* `pm2 startOrRestart`, under
+    `set -euo pipefail`, so when the nodeB leg died with `getaddrinfo ENOTFOUND`
+    on the prod Aiven PostgreSQL host the whole run aborted and the
+    `if: failure()` step reset the box to the previous sha. **The FE's unblock
+    test for this gate — "head ≠ `d8b7f4e` and the head carries both routes" —
+    passed on a prod that had neither route.** It was replaced in
+    `release-gate.md` and `backend-handoff.md` with three runtime probes against
+    prod. Treat a git head as evidence of a push and nothing more.
+  - **Node B had been down independently of the push**, and needed no deploy to
+    come back: pm2 held inventory ↺21 / payments ↺22 / rewards ↺21 in *waiting
+    restart* against ↺1 for every Node A service, and they recovered on their own
+    the moment the host resolved again. Measured across the fix:
+    `GET /api/products/with-inventory/all` 500 → 200 with real `availableStock`
+    rows, i.e. the inventory leg genuinely reconnected rather than degrading to
+    `inventory: null` (BATCH-FAIL-01). Node A reads were 200 throughout, which is
+    what isolated the outage to Node B in the first place.
+  - **Recovery needed a manual dispatch.** `workflow_run` only fires behind a new
+    CI run, so a rolled-back deploy leaves prod stale with nothing to re-trigger
+    it; `gh workflow run Deploy --ref main` (the `workflow_dispatch` the workflow
+    already documents for "a box that was stopped when its deploy fired, a
+    rollback, an env change") is the recovery step. The 14:39Z run: nodeA
+    `pending-check=8` with nothing left to apply, nodeB `pending-check=0` — the
+    leg that killed the first run — build, all 10 processes `online`,
+    `gateway is live (attempt 3)`.
+  - **Verified on prod, not on localhost** (accounts `user1`, `admin1`,
+    `e2eprod0806` from `test-accounts.md`):
+    - SEARCH-01 — `?search=` on `GET /api/social/posts` went 400 *"property
+      search should not exist"* → **200**, and it really filters: `tai nghe` → 1,
+      `TAI NGHE` → 1 (case-insensitive), `khongtontai` → 0, and **`trau` matches
+      the stored `trâu`**, confirming the accent-insensitivity comes from the
+      MySQL collation. `GET /api/user/search?q=user` went 400 *"Invalid id"* →
+      **200** returning `{id: usr_…, username, name, avatar}`; blank `q` is
+      **400** as designed, and `GET /api/user/:id` still resolves, so the route
+      order that used to let `@Get(":id")` swallow `search` holds.
+    - ROLE-ADMIN-01 — full drift cycle, end to end. Baseline `role=user /
+      tokenRole=user / isRoleStale=false`; admin `PATCH /api/user/:id/role
+      {"role":"shop"}` → **200**; the *same untouched cookie* then reported
+      `role=shop / tokenRole=user / **isRoleStale=true**`, and `POST
+      /api/products` on it was still **403** — proving `tokenRole`, not `role`,
+      is what predicts the guard. A re-login cleared it to `shop/shop/false`.
+      The route is admin-only: a non-admin PATCH is **403**, not 404, so the
+      route exists and the guard is what refuses. **The test account was reverted
+      to `user`** and the revert confirmed by a fresh login.
+    - AUTHOR-NAME-01 — the post `author` embed carries the `name` key
+      (`null` here, which is the contract).
+    - NAME-TRIM-01 — `PATCH /api/user/:id {"name":"   "}` → **400**;
+      `POST /api/user/register {"username":"   "}` → **400**, so the register
+      hole closed with it.
+  - **CTX-PROV-02 drip-feed:** those four entries were exercised, so their
+    anchors moved from `verified=unrecorded:2026-09-15` to `prod:2026-09-16`.
+    The tally in both agent entry points is now 9 prod / 4 local / 43 unrecorded.
+
 - **CTX-SEM-01 — the kb index is now matched by MEANING, not by keyword
   (2026-09-16). Docs/tooling only, release class A.**
   The problem was measured, not assumed. Ten realistic prompts in this project's

@@ -1310,7 +1310,7 @@ Since AUTHOR-NAME-01 (2026-09-15) the **social author embed also carries `name`*
 — see the next section for why that is not a walk-back of the rule above.
 
 ## The social author embed carries `name` too — and the key means something else there (AUTHOR-NAME-01, 2026-09-15)
-<!-- kb: id=AUTHOR-NAME-01; group=shape; files=apps/gateway/src/social/social.service.ts; sha=51ad33fc3d46; verified=unrecorded:2026-09-15; keys=author name,display name,fetchAuthorMap,social author embed,blank name,notification actor,tên tác giả,tên hiển thị; summary=The social author embed carries name as the DISPLAY name (nullable), while product.user.name is the username. -->
+<!-- kb: id=AUTHOR-NAME-01; group=shape; files=apps/gateway/src/social/social.service.ts; sha=51ad33fc3d46; verified=prod:2026-09-16; keys=author name,display name,fetchAuthorMap,social author embed,blank name,notification actor,tên tác giả,tên hiển thị; summary=The social author embed carries name as the DISPLAY name (nullable), while product.user.name is the username. -->
 
 The post / comment / reply `author` embed was `{ id, username, avatar }`, so the
 feed could only print `username` even for an account that had set a display
@@ -1359,7 +1359,7 @@ Deliberate details:
   an oversight — extend it only on a real FE request.
 
 ## A blank name/username is rejected at the write boundary (NAME-TRIM-01, 2026-09-15)
-<!-- kb: id=NAME-TRIM-01; group=shape; files=apps/gateway/src/user/dto/user.dto.ts,apps/user/src/main.ts; sha=7e0f50d90e91; verified=unrecorded:2026-09-15; keys=blank name,whitespace username,trim,MinLength,register,ValidationPipe commented out,khoảng trắng,tên rỗng; summary=A whitespace-only name or username is now a 400, trimmed at the gateway DTO — the user service’s own pipe never runs. -->
+<!-- kb: id=NAME-TRIM-01; group=shape; files=apps/gateway/src/user/dto/user.dto.ts,apps/user/src/main.ts; sha=7e0f50d90e91; verified=prod:2026-09-16; keys=blank name,whitespace username,trim,MinLength,register,ValidationPipe commented out,khoảng trắng,tên rỗng; summary=A whitespace-only name or username is now a 400, trimmed at the gateway DTO — the user service’s own pipe never runs. -->
 
 `@MinLength(1)` and `@IsNotEmpty()` both measure the **raw** string, so `"   "`
 (length 3) sailed through every "non-empty" guard the user DTOs had. Two writes
@@ -1559,7 +1559,7 @@ whole time, and there is no retry on the gateway's TCP leg.
   inside the window also short-circuits and reads as a false pass.
 
 ## Search is accent-insensitive because of the collation, not the code (SEARCH-01, 2026-09-15)
-<!-- kb: id=SEARCH-01; group=search; files=apps/product/src/product.service.ts; sha=e8a541e6988a; verified=unrecorded:2026-09-15; keys=search,accent,collation,utf8mb4_0900_ai_ci,LIKE,user search,post search,tìm kiếm,không dấu,bỏ dấu; summary=Accent-insensitivity comes from the MySQL collation, not code; % and _ are not escaped and a blank q is a 400. -->
+<!-- kb: id=SEARCH-01; group=search; files=apps/product/src/product.service.ts; sha=e8a541e6988a; verified=prod:2026-09-16; keys=search,accent,collation,utf8mb4_0900_ai_ci,LIKE,user search,post search,tìm kiếm,không dấu,bỏ dấu; summary=Accent-insensitivity comes from the MySQL collation, not code; % and _ are not escaped and a blank q is a 400. -->
 
 `GET /api/social/posts?search=` and `GET /api/user/search?q=` both match with a
 plain parameterized `LIKE '%q%'`. There is **no folding, normalizing, shadow
@@ -1601,7 +1601,7 @@ Contract edges, both verified at runtime:
   `exposeUser`; the nullable `name` rides along — see ENRICH-BATCH-01.
 
 ## A role change only reaches the JWT on the target's NEXT login (ROLE-ADMIN-01, 2026-09-15)
-<!-- kb: id=ROLE-ADMIN-01; group=auth; files=apps/gateway/src/user/user.service.ts; sha=a1f105df78a8; verified=unrecorded:2026-09-15; keys=role change,tokenRole,isRoleStale,JWT role,promote shop,CANNOT_CHANGE_OWN_ROLE,đổi role,đổi quyền,phân quyền,lên shop; summary=A role change reaches the JWT only on the target’s NEXT login; GET /api/user/me exposes the drift as a signal only. -->
+<!-- kb: id=ROLE-ADMIN-01; group=auth; files=apps/gateway/src/user/user.service.ts; sha=a1f105df78a8; verified=prod:2026-09-16; keys=role change,tokenRole,isRoleStale,JWT role,promote shop,CANNOT_CHANGE_OWN_ROLE,đổi role,đổi quyền,phân quyền,lên shop; summary=A role change reaches the JWT only on the target’s NEXT login; GET /api/user/me exposes the drift as a signal only. -->
 
 `PATCH /api/user/:id/role` (admin only) is the first and only write path for
 `users.role_id` — before it, promoting a buyer to `shop` meant a hand-written
