@@ -40,9 +40,9 @@ Nothing is mid-implementation. What is genuinely open:
 
 `../.agent-local/release-gate.md` **Holding** carries one entry: SEARCH-01
 (+ ROLE-ADMIN-01, AUTHOR-NAME-01, NAME-TRIM-01). As of 2026-09-16 both repos are
-code-ready and committed — `api` has 19 unpushed commits on `main`, `frontend`
-has 8. The hold is on the **`frontend`** repo, not on `api`: this tree is class
-B (new routes, a new optional query param, new always-present `/user/me` keys),
+code-ready and fully committed, each with its whole batch unpushed on `main`
+(`api` ~19 commits, `frontend` 8). The hold is on **`frontend`**, not `api`: this tree
+is class B (new routes, a new optional query param, new `/user/me` keys),
 so `api` may push alone and the FE follows immediately after. What is left is
 the push itself, which needs the user's go-ahead. Check that file, not this
 line, before you conclude a push is blocked.
