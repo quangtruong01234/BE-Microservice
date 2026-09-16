@@ -354,9 +354,19 @@ export class UserService {
     }
   }
 
-  async getMe(userId: number): Promise<unknown> {
+  /**
+   * ROLE-ADMIN-01: `role` here is read from the DB, so it goes stale the moment
+   * an admin changes it — while every guard keeps enforcing the role baked into
+   * the still-live JWT. A client that gates its UI on the DB role therefore lets
+   * a freshly promoted `shop` into the seller pages and only fails at submit
+   * time with a 403. The session's own role is not observable to the client
+   * (httpOnly cookie), so the boundary reports it: `tokenRole` is what the
+   * guards enforce, `isRoleStale` says the two have drifted apart and the user
+   * must log out and back in.
+   */
+  async getMe(userId: number, tokenRole: string): Promise<unknown> {
     try {
-      return this.exposeUser(
+      const exposed = this.exposeUser(
         await firstValueFrom(
           this.userClient
             .send({ cmd: USER_MESSAGE_PATTERN.GET_ME }, { userId })
@@ -368,7 +378,16 @@ export class UserService {
               }),
             ),
         ),
-      );
+      ) as Record<string, unknown>;
+      const role = exposed.role as { name?: unknown } | null | undefined;
+      const databaseRole = typeof role?.name === "string" ? role.name : null;
+      return {
+        ...exposed,
+        tokenRole,
+        // An unreadable DB role is not evidence of drift — say "not stale"
+        // rather than logging the user out over a shape we did not expect.
+        isRoleStale: databaseRole !== null && databaseRole !== tokenRole,
+      };
     } catch (error) {
       MicroserviceErrorHandler.handleError(error, "get me", "User Service");
     }

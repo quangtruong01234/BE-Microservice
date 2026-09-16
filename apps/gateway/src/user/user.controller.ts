@@ -213,10 +213,19 @@ export class UserController {
   @Get("me")
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: "Get current authenticated user" })
-  @ApiResponse({ status: 200, description: "Current user profile." })
+  @ApiResponse({
+    status: 200,
+    description:
+      "Current user profile. `role` is the role in the DB; `tokenRole` is the " +
+      "role baked into the presented JWT — what every guard actually enforces " +
+      "— and `isRoleStale` is true when an admin changed the role after this " +
+      "session was issued (ROLE-ADMIN-01). Gate seller/admin UI on `tokenRole`.",
+  })
   @ApiResponse({ status: 401, description: "Unauthorized." })
-  async getMe(@Request() req: { user: { id: number } }): Promise<unknown> {
-    return this.userService.getMe(req.user.id);
+  async getMe(
+    @Request() req: { user: { id: number; role?: string } },
+  ): Promise<unknown> {
+    return this.userService.getMe(req.user.id, req.user.role ?? "user");
   }
 
   @Get("me/addresses")
