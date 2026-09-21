@@ -1,10 +1,10 @@
 {
   "name": "trybuy-api",
   "version": "0.0.1",
-  "description": "",
+  "description": "TryBuy marketplace backend — NestJS monorepo of 10 microservices (TCP RPC + RabbitMQ) behind one HTTP gateway.",
   "author": "",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
   "scripts": {
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "npm run clean && nest build gateway && nest build orders && nest build user && nest build product && nest build social && nest build notification && nest build chat && nest build inventory && nest build payments && nest build rewards",
