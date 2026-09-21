@@ -6,6 +6,366 @@
 
 ## Completed Milestones
 
+- **REPO-PRES-01 — the repository was made readable by a stranger: public docs,
+  a measurement script, MIT licence, and the dead code that would have been the
+  first thing a reviewer tripped over (2026-09-21). Release class A — no runtime
+  behaviour, no contract, no schema touched.**
+  - **Why.** The repo is going on a CV. Everything in it was written for two
+    agents and a maintainer who already knew the system; a reviewer opening it
+    cold got a 24-line README and 383 lines of agent instructions at the root.
+  - **Created:** `README.md` (rewritten — architecture diagram, the six
+    engineering decisions and *why* each one, getting started, testing,
+    deployment, how AI is used, structure), `docs/ARCHITECTURE.md` (context
+    diagram, service boundaries, transport-choice table, checkout sequence,
+    payment/webhook flow, both ERDs, consistency strategy, caching, deployment
+    topology), `docs/DEMO.md` (bilingual — three flows plus five things worth
+    clicking), `docs/VIDEO-SCRIPT.md`, `docs/METRICS.md`, `docs/AGENT-WORKFLOW.md`,
+    `docs/img/README.md`, `scripts/metrics.sh`, `LICENSE` (MIT).
+  - **`AGENTS.md`: 383 → 141 lines.** The context-loading protocol, the
+    two-stage `known-behaviors.md` mechanics, the self-test and change-impact
+    protocols, handoff routing and the release gate all moved verbatim into
+    `docs/AGENT-WORKFLOW.md`; the root file keeps the contract and points there.
+    Nothing was dropped. `.claude/CLAUDE.md` is untouched — it is the Claude-side
+    twin and rewriting it would have broken the hook wiring for no gain.
+  - **Every number in the docs is now derived, not hand-counted.**
+    `scripts/metrics.sh` (POSIX sh + grep/find only — no `jq`, which the Windows
+    box lacks; jest JSON is parsed with node) recomputes the lot in one run:
+    10 services, 4 libs, 155 HTTP routes, 153 `@MessagePattern`, 22
+    `@EventPattern`, 34 entities, 8 migrations, 47 spec files, 58 kb anchors,
+    500/500 tests passing, 37,878 LOC across 325 files. A stale README is now a
+    `git diff` away from being obvious.
+  - **The throughput section carries a warning banner on purpose.** The 798
+    req/s figure is real and reproducible but was measured on a 12-core dev box
+    running the load generator, all 13 processes and Docker at once. It is
+    labelled "not production capacity" and an EC2 re-measurement is owed, rather
+    than letting a CV quote a dev-box number as a deployment number.
+  - **Dead code removed:** the three orphan inventory TCP handlers
+    (`INVENTORY_FIND_ALL`, `FIND_BY_SKU`, `REMOVE` — reachable but with no
+    caller, printed as a warning by `check:conventions` every run) and
+    `apps/social/src/entity/` (two entity files nothing imported, declaring
+    `@Entity("conversations")` / `@Entity("messages")` — the same tables
+    `apps/chat` already owns). INV-CONTRACT-01 was updated and RETURN-STOCK-01
+    rebaselined; `INVENTORY_RESTOCK_RETURNED` was verified still wired, which is
+    what keeps that entry true.
+  - **Secret scan.** A real personal inbox was found in three tracked doc
+    locations and redacted to `<maintainer-inbox>`. `git grep` for the
+    production hostname and its registrable domain returns nothing. 20 genuinely
+    missing keys were added to `.env.example`; the 22 my first regex flagged as
+    unused turned out to be read through access patterns it could not see, so
+    nothing was removed — a reminder that "grep found no usage" is a hypothesis.
+  - **Left to the author, deliberately:** the three `docs/img/` screenshots (the
+    README table is commented out until they exist), the demo-account passwords
+    in `docs/DEMO.md` (dedicated demo accounts must be created — the internal
+    `test-accounts.md` credentials must never enter the repo), and the video
+    link.
+
+- **TZ-STORE-01 — storage zone pinned to UTC on the one connection that was not,
+  after measuring that 21 of 23 candidate columns never went through the driver
+  (2026-09-20). Release class A — nothing FE-visible, no data migrated.**
+  - **Why this came up.** EXPORT-TZ-01 fixed the *presentation* half (render and
+    snap in VN time regardless of process zone). The user then asked for the
+    storage half: "lấy giờ theo chuẩn chung rồi khi có lệnh export csv mới đổi
+    giờ theo location" — store one standard, convert at export. The presentation
+    half was already shipped; what was genuinely unpinned was the connection.
+  - **One-line diff:** `timezone: "Z"` in `libs/database/src/database.module.ts`.
+    That module backs **product and user**; orders, chat, notification and social
+    declare their own `TypeOrmModule.forRoot` and already set it. Prod runs UTC,
+    so no stored wall-clock changes there — it only stops the value depending on
+    the ambient `TZ`. The read side is the half that actually bit: a dev box
+    parsed the (correct, UTC) stored `2026-06-23 18:54:13` back as the instant
+    `11:54:13Z`, 7 hours early, while prod parsed it correctly. Dev and prod now
+    agree, which is also why nothing FE-visible changes on prod.
+  - **The scope was 10x smaller than the first estimate, and measuring is what
+    caught it.** A `-7h` sweep over 23 datetime columns in 11 product/user tables
+    was drafted and dry-run. It would have **corrupted 21 of them**: those are
+    `DEFAULT CURRENT_TIMESTAMP(6)` / `ON UPDATE CURRENT_TIMESTAMP(6)`, filled by
+    the MySQL server (`NOW() == UTC_TIMESTAMP()`, `@@time_zone = SYSTEM`), so
+    they are already UTC and the driver never touches them. Proof was a
+    cross-database pairing: `products.created_at` vs `inventory_v2.created_at`
+    for the same product-create flow agree to **0.00h**, not 7h. The sweep was
+    rewritten down to the two columns that really are written from a JS `Date` —
+    `products.risk_scored_at` (28 dev rows) and `risk_next_retry_at` (0 rows) —
+    and left unapplied, since it is dev-only risk-scoring metadata.
+  - **Node B deliberately unchanged.** All six postgres `timestamp` columns are
+    `DEFAULT now()` with the Aiven session TZ at `GMT` (already UTC), and nothing
+    in inventory/payments/rewards writes a JS `Date` into one — the only date
+    comparison in the stale-reservation sweep is `orders.created_at LessThan(...)`
+    in Node A, which is pinned. TypeORM has no postgres `timezone` option;
+    `setTypeParser(1114, …)` would pin parsing but not serialization and break
+    dev; `timestamptz` cannot be one env-agnostic migration because prod rows
+    hold UTC and dev rows hold the writer's zone. Recorded in known-behaviors
+    rather than "fixed".
+  - **Validation:** `tsc --noEmit` 0, eslint 0, `check:conventions` OK (3
+    pre-existing orphan-handler warnings), **47 suites / 500 tests pass**.
+    `known-behaviors.md` EXPORT-TZ-01 extended with the storage section and
+    rebaselined; its `files=` now includes `database.module.ts`.
+
+- **EXPORT-TZ-01 — order timestamps and every day window are now Vietnam time,
+  fixed in code rather than in `TZ` (2026-09-20). Release class B — the current
+  FE keeps working; prod data simply becomes correct. Reported by the FE agent
+  in `backend-handoff.md`.**
+  - **The report, and the part of it that was wrong.** FE found that
+    `GET /api/order/seller/export` wrote `orderDate`/`paidAt` with no offset via
+    local-time getters, and that `resolveAnalyticsRange` snapped `from`/`to` with
+    `setHours()`. Their diagnosis of the mechanism was right. Their statement of
+    the direction was not: it is orders placed **before 07:00 VN** that shift
+    back a day and fall out of the window, not orders after 17:00 VN.
+  - **Why it was invisible.** `orders.created_at` / `paid_at` are MySQL
+    `DATETIME` (no zone) and `database.module.ts` sets no mysql2 `timezone`
+    option, so the driver serializes and parses in the **process** zone. Those
+    two conversions cancel — a `Date` from TypeORM is the correct *instant* on
+    any box — so nothing leaks the server zone except local-time formatting.
+    Dev is UTC+7 and prod EC2 is UTC, and the FE had only ever downloaded the
+    file through a local dev gateway.
+  - **Rejected the suggested fix.** FE proposed setting `TZ=Asia/Ho_Chi_Minh`
+    on the orders service. That is data-corrupting: every existing prod row was
+    written by a UTC process, so re-reading the same stored wall-clock as VN
+    moves all history 7 hours. The fix therefore lives where values are
+    *presented*, never where they are stored — and is correct in any process zone, which is strictly stronger
+    than matching prod's.
+  - **New `libs/common/src/utils/timezone.util.ts`** — `formatVnTimestamp`,
+    `toVnCalendarDay`, `startOfVnDay` / `endOfVnDay`, `startOfVnDayBefore`,
+    `vnWallClockShiftMinutes`. Fixed-offset arithmetic, legitimate because
+    Vietnam has had no DST since 1975 and far cheaper than `Intl` at the
+    5.000-row export cap.
+  - **Three call sites carried the defect; a grep for local-time getters across
+    `apps/` and `libs/` now returns nothing but a comment.**
+    1. `formatExportTimestamp` printed the server clock.
+    2. `resolveAnalyticsRange` ran VN 07:00 on the first day → VN 06:59 the day
+       AFTER the last, **dropping** orders placed between midnight and 07:00 on
+       the first day and inventing rows from the day after. Shared by seller and
+       admin analytics and by the export, so all three were wrong together.
+    3. **ZaloPay `generateTransId` — the most severe, and not in the report.**
+       `app_trans_id` must begin with today's date in GMT+7 or ZaloPay refuses
+       the transaction outright, so on a UTC box every payment attempted between
+       VN midnight and 07:00 sent yesterday's prefix. Found by the change-impact
+       grep, not by the self-test.
+  - **Revenue buckets shift inside SQL** (`o.createdAt + INTERVAL <n> MINUTE`,
+    `<n>` a locally computed integer — 420 on prod, 0 on dev). Fixing the bounds
+    without the bucket would have produced a chart point dated the day BEFORE the
+    requested window. `CONVERT_TZ` is unusable: it returns NULL unless the
+    server's timezone tables are loaded, which Aiven does not guarantee.
+  - **CSV headers are now `orderDate (GMT+7)` / `paidAt (GMT+7)`.** The zone
+    goes in the header, not the cell — a trailing `+07:00` stops Excel
+    recognising the value as a date. Safe to rename because the route has never
+    been on prod, and `escapeCell` leaves spaces/parens/`+` mid-string alone.
+  - **Tests, which is what the report actually asked for** ("không có assertion
+    nào về múi giờ"). 15 new tests across three suites — `timezone.util.spec.ts`,
+    four TZ cases added to `seller-orders.export.spec.ts` (including the exact
+    VN window bounds passed to the query), and a new `zalopay.helper.spec.ts`.
+    The export fixtures' bare `new Date("2026-08-01T10:00:00")` were replaced
+    with explicit offsets: parsed in the runner's zone, they were the reason a
+    fully-tested export proved nothing about prod. **Suites run green under
+    UTC+7, UTC, UTC-4 and UTC+9**; verified against the old code that they do
+    discriminate (old formatter yields `03:00:00` under UTC where the test
+    demands `10:00:00`).
+  - Full suite 46/496 green, tsc + eslint + `check:conventions` clean.
+  - **Self-test (local, services up, `test1`/shop + `testadmin`/admin):** export
+    200 with `(GMT+7)` headers; `ord_h1rQ8uPBaIP9RMer` stored at
+    `2026-08-03T16:36:45.345Z` renders `2026-08-03 23:36:45`, matching the order
+    detail exactly; single-day window returns exactly that VN day; seller and
+    admin analytics 200 with bounds `2026-07-31T17:00:00.000Z` →
+    `2026-08-31T16:59:59.999Z`; `interval=month` and the no-bounds default both
+    correct. **The prod-zone half is unobservable at runtime here** — on a UTC+7
+    box old and new code produce identical bounds — which is exactly why the
+    zone matrix lives in the test suite.
+  - Residuals and the standing "do not fix this with `TZ`" warning:
+    `known-behaviors.md` → EXPORT-TZ-01.
+
+- **EXPORT-CSV-01 audit — the export is complete; two real gaps closed
+  (2026-09-19). Release class A — a Swagger example and tests; no runtime
+  behaviour, no contract, no migration.**
+  - **Verdict on "is the CSV feature enough": T1–T3 are genuinely done.** The
+    route ordering is correct (`@Get("seller/export")` sits ABOVE
+    `@Get("seller/:id")`, so `:id` cannot swallow `export` and 400 it through
+    `ParsePublicIdPipe`), `idx_order_items_seller_id` exists, the empty-window
+    shipping-history lookup is guarded against `IN ()`, the FE has integrated and
+    verified it full-stack, and the entry is already in **Done** in
+    `frontend-handoff.md`. T4 (platform-wide admin export) and T5 (async job for
+    windows past the caps) stay deliberately unbuilt — still no requester.
+  - **Gap 1 — the Swagger example 400s on its own endpoint.** `from 2026-06-01` /
+    `to 2026-08-30` is a **91-day** window against an inclusive 90-day cap, so a
+    "Try it out" in `/doc` returned 400 on the very pair that documents the
+    route. Moved `to` to `2026-08-29` (exactly 90 inclusive days).
+  - **Gap 2 — nothing failed a build if the export's own invariants broke.**
+    `csv.util.spec.ts` pins the RENDERING (BOM, RFC-4180 quoting, injection
+    guards, `="…"` literals) and pins it well; the layer above it was untested.
+    An edit that "filled down" the blank order-level cells — the single most
+    likely well-meaning change to this file, since blank cells look like a bug —
+    passed tsc, eslint, every test and `check:conventions`, and shipped a file
+    where `SUM(orderTotal)` silently multiplies by the item count.
+  - **New: `apps/orders/src/export/seller-orders.export.spec.ts`, 11 tests.**
+    The first-row-only rule for all four order-level money columns (with
+    `lineTotal` summable on EVERY row, which is the other half of the rule); the
+    reconciliation equation `SUM(lineTotal) + shippingFee - discountAmount =
+    orderTotal`; a real `0` discount distinguished from a blank; the
+    `shippingAddress` split with the `="0901234567"` phone guard and the street
+    excluded; the pre-PUBID numeric-id fallback; `item.sellerId` as the filter
+    (not the order's seller); both caps (>90 days 400s BEFORE any query work,
+    exactly-90 passes, oversize rejects with `/7421/` and never reaches
+    `getMany`); the header-only empty window; and `ghnStatus` off the latest
+    `shipping_history` row with its bigint-string coercion.
+  - **The tests were proved load-bearing, not assumed.** Mutating
+    `isFirstRowOfOrder` to a constant `true` in `orders.service.ts` turned the
+    suite red (1 failed / 10 passed); the file was then restored from backup and
+    the diffstat confirmed back at its original 138 insertions.
+  - The fixtures type `total` and `price` as `string | number` on purpose: they
+    are DECIMAL columns the entity types `number` while TypeORM hands back
+    strings (conventions.md, common TCP bug #3) — which is exactly why the export
+    wraps both in `Number()`. Fixtures that modelled the entity type instead of
+    the runtime truth would have tested a case that never happens.
+  - Clean run: tsc 0, eslint 0, `check-conventions: OK (350 files, 6 invariants,
+    3 pre-existing inventory orphan-handler warnings)`, kb-hint `--check` 57
+    anchors OK, **45 suites / 479 tests pass** (up from 44 / 468).
+
+- **CONV-CHECK-02 — three new `check-conventions.mjs` invariants, plus the 17
+  literal-bound pattern decorators they exposed (2026-09-17). Release class A —
+  tooling plus a value-identical refactor; nothing FE-visible, no migration.**
+  - **The audit changed the deliverable.** The snapshot mandated "AUDIT FIRST",
+    and it earned its keep twice. The first cut matched `.send(CONST` /
+    `.emit(CONST` on one line and reported **19 violations, all 19 false** — real
+    call sites wrap (`.send<T>(\n  CONST,`) and real producers go through helpers
+    (`publishOrderReturnEvent(EVENT.X, id)`). Rewritten as REFERENCE-based
+    detection (a constant counts as used if it appears anywhere outside a pattern
+    decorator, the constant-definition files, and specs), the true counts for the
+    two proposed rules were **0 and 0** — free to hard-fail, but protecting
+    nothing yet. What the audit *did* surface was unlisted and worse: **17
+    `@MessagePattern` decorators bound to raw string literals** (all 15 inventory
+    handlers + `get_orders_by_user` + `get_payment_url`). A literal is invisible
+    to invariant 2, which can only compare the two sides when both name the same
+    constant — so those 17 routes had silently opted out of the one guard that
+    catches a shape mismatch.
+  - **The swap is safe by assertion, not by eyeball.** All 17 constants were
+    machine-checked equal to the literals they replaced ("ALL 17 VALUES IDENTICAL
+    — wire format unchanged"), which is what makes this class A rather than a
+    contract change.
+  - **New invariant 4 `pattern-constant` (error)** — a pattern decorator must
+    bind a constant, never a literal. Scans ALL files, not just `*.controller.ts`:
+    a handler is only *conventionally* in a controller, and a rule that trusts the
+    filename has a blind spot the day someone puts one elsewhere.
+  - **New invariant 5 `event-writer-symmetry` (error, both directions)** — a
+    published EVENT with no `@EventPattern` is dropped silently (no error, no
+    nack, no dead-letter — exactly conventions.md bug #8); a consumer with no
+    publisher can never fire.
+  - **New invariant 6 `message-pattern-handler`** — sent-with-no-handler is an
+    **error** (runtime "no matching handler" → gateway 502); the reverse, an
+    orphan handler, is a **warning**, because it is dead code, not an outage.
+  - **A warnings channel that never fails the run**, same reasoning as kb-hint
+    `--stale`: a rule whose hits are usually benign must not turn CI red, or
+    people learn to skip the gate.
+  - **Pattern maps are DISCOVERED, not guessed from the name.** Matching
+    `[A-Z_]*_PATTERNS?\.[A-Z_]+` on sight would also claim anything that merely
+    reads like one — `PUBLIC_ID_PATTERN` (a regex in `apps/gateway/src/upload`)
+    escapes only because `.test` is lowercase. The object name now has to be
+    declared as `export const *_MESSAGE_PATTERN(S) = {` in `libs/constant` to
+    count, and finding **zero** such maps is itself a reported violation so the
+    check can never silently degrade into a green run that proves nothing.
+  - **Proved it can fail, twice.** Reverting one decorator to a literal fires
+    `pattern-constant` + `message-pattern-handler` (exit 1); renaming an
+    `@EventPattern` to a never-published event fires both directions of
+    `event-writer-symmetry` (exit 1). Both files restored.
+  - **Rule (c), Create/Update DTO drift, was DECLINED** — see snapshot for why
+    (`UpdateVoucherDto` must not become a `PartialType`; the redeclaration is
+    what encodes VOUCHER-NULL-01's deliberate asymmetry).
+  - Clean run: `check-conventions: OK (350 files, 6 invariants checked, 3
+    warning(s))`. tsc 0, eslint 0, 44 suites / 468 tests pass. Runtime self-test
+    exercised 7 of the swapped patterns live across all three services —
+    `get_orders_by_user` (200, real rows), `get_payment_url` (200, `orderUrl`
+    key per PAYURL-01; its catch rethrows, so the 200 is a real handler answer
+    and not a masked failure), `inventory.get_by_product_ids` (populated
+    `availableStock`, not the BATCH-FAIL-01 `inventory: null` degrade),
+    `find_by_product_id`, `get_low_stock`, `check_stock`, and one write —
+    `inventory.update` via a product PATCH (101 → 121 → restored to 101).
+    RETURN-STOCK-01 was re-read against the code and rebaselined.
+
+- **EXPORT-CSV-01 T1–T3 — seller order export to CSV is live
+  (`GET /api/order/seller/export`, 2026-09-16). Release class B — additive, new
+  endpoint, the shipped FE is unaffected. No migration.**
+  - **T1 — `libs/common/src/utils/csv.util.ts` (+19 unit tests).** `toCsv(rows,
+    columns)` with a `CsvColumn<TRow>` list. Handles the four things a
+    hand-rolled `join(",")` always gets wrong: a leading UTF-8 BOM (without it
+    Excel VN renders `Ão thun`), CRLF endings, RFC-4180 quoting, and a `'`
+    prefix on formula-injection leaders (`=`, `+`, `@`, TAB, CR) because
+    `productName` is seller-supplied. Two deliberate carve-outs: a plain
+    negative number is **not** guarded, so `-500` still SUMs in Excel; and a
+    `literal: true` column emits `="…"` (used for `buyerPhone` and
+    `trackingCode`) by **stripping** `"`/`,`/newline rather than escaping them —
+    quoting a literal cell silently disables the literal, which is the whole
+    point of the column.
+  - **T2 — orders leg.** `ORDER_MESSAGE_PATTERN.EXPORT_SELLER_ORDERS_CSV`,
+    a `@MessagePattern` handler returning a `Buffer`, and
+    `exportSellerOrdersCsv()` + `buildSellerExportQuery()` in
+    `orders.service.ts`. The query filters on **`item.sellerId`** with an
+    `innerJoinAndSelect` on the order — it deliberately does NOT reuse
+    `getOrdersBySeller()`, which pulls *every* item of any order containing one
+    of the seller's products and would make `lineTotal` sum to someone else's
+    revenue. Column layout lives in `apps/orders/src/export/seller-orders.export.ts`
+    so the service holds the query and the caps while the file holds the shape
+    sellers build pivot tables on.
+  - **Two caps, both 400 before any work is done:** 90 days
+    (`EXPORT_RANGE_TOO_WIDE`) and 5.000 item rows (`EXPORT_TOO_MANY_ROWS`, a
+    `getCount()` gate naming the real count). The file is buffered whole (~1.2 MB
+    at the cap), never streamed: once `res.write()` fires the response is
+    committed, so a failure mid-file can no longer become a 4xx and the client
+    receives a truncated file that looks valid.
+  - **T3 — gateway.** `ExportSellerOrdersQueryDto` (`from`/`to` required
+    `@IsDateString()`, optional `status` in `ORDER_STATUS_VALUES`), a
+    `TCP_TIMEOUT_MS.WRITE` call with `retryOnTransportError()` +
+    `MicroserviceErrorHandler`, and `@Res()` + `res.end(buffer)` with
+    `text/csv; charset=utf-8`. The route sits **above `@Get("seller/:id")`** —
+    declared after it, `:id` swallows `export` and `ParsePublicIdPipe` answers
+    400.
+  - **Verified end to end** against local nodeA+nodeB with `techstore_demo` from
+    `test-accounts.md`: happy path 200 → a file whose BOM bytes are `ef bb bf`,
+    54 data rows for the account's 51 orders / 54 items, no ragged row, VN
+    diacritics intact, `buyerPhone`/`trackingCode` emitted as `="…"`. Also
+    covered: the status filter, three DTO-validation 400s, 401 unauthenticated,
+    an authenticated non-seller (header-only file, not an error — matching the
+    sibling seller routes, which are `JwtAuthGuard`-only and self-scoped by
+    `req.user.id`), and three sibling-route regression checks.
+  - **The row cap was proven to count ITEMS, not orders** by temporarily setting
+    `EXPORT_MAX_ROWS = 10`: the 400 named **54**, the item count, not 51. The
+    90-day boundary is not off-by-one either — exactly 90 → 200, 91 → 400 naming
+    91.
+  - **Change-Impact Review caught one real defect:** `@IsDateString()` also
+    accepts a full ISO timestamp, so `from=2026-08-01T00:00:00.000Z` produced
+    `filename="trybuy-orders-2026-08-01T00:00:00.000Z-….csv"` — colons make that
+    unsaveable on Windows. Fixed by slicing both bounds to the calendar day.
+  - Gates: `tsc --noEmit` clean, eslint clean on all 12 touched files,
+    `check-conventions: OK (350 files, 3 invariants)`, `kb-hint --check: 57
+    anchors OK`, full suite **44 suites / 468 tests passed**. Residuals recorded
+    as `known-behaviors.md` → EXPORT-CSV-01; T4 (admin export) and T5 (async job)
+    remain deliberately unbuilt in `planned-work.md`.
+  - **2026-09-17 follow-up — `discountAmount` + `voucherCode` (17 → 19 columns,
+    still class B, still unpushed).** Audit of a real FE-produced export
+    (`2026-08-19 → 2026-09-17`, 9 orders) found the file structurally perfect but
+    **arithmetically unreconcilable**: one order read `lineTotal 39` next to
+    `orderTotal 0`, another `39` next to `34`. Cross-checked against live
+    `GET /api/order/seller` — the export copies `order.total` faithfully; the
+    gap was a voucher the file did not expose (`CONC3530696` −39,
+    `STALE580745` −5). A seller reading that concludes the app computes money
+    wrong, which is the exact complaint the first-row-only rule exists to
+    prevent. Both columns are order-level and follow the same first-row-only
+    rule, and sit **between `shippingFee` and `orderTotal`** so the money columns
+    read left to right as `SUM(lineTotal) + shippingFee - discountAmount =
+    orderTotal`. Placement over append was chosen deliberately — the file has
+    never been released, so there is no pivot table to preserve.
+    `discountAmount` writes a real `0` when there is no voucher (`?? 0`): a blank
+    on a first row would be indistinguishable from the deliberate blank of a
+    continuation row. `voucherCode` passes the null through — empty on a first
+    row means "no code". No query change: `buildSellerExportQuery` already
+    `innerJoinAndSelect`s the order without a `.select()` trim, so both columns
+    were already hydrated.
+  - **Re-verified:** `tsc --noEmit` clean, eslint clean, 44 suites / 468 tests.
+    Two live exports — the user's own window (200, `text/csv`, 19-column header,
+    all 9 orders `delta=0`, placement issues none) and `2026-06-26 → 2026-07-03`
+    (11 rows / 8 orders, **3 multi-item**) to exercise the first-row rule the
+    user's 1-item-per-order file never reached: every continuation row blank in
+    all four order-level columns, 0 unbalanced orders. Also disproved two false
+    alarms in that file — one `productId` under two names (`order_items`
+    snapshots `productName` at order time; the product was renamed mid-E2E) and a
+    universally blank `paidAt` (COD stamps it at delivery, ORD-GUARD-01).
+
 - **DEPLOY-0915 / DEPLOY-PG-01 — SEARCH-01 + ROLE-ADMIN-01 + AUTHOR-NAME-01 +
   NAME-TRIM-01 are LIVE ON PROD at `87fc2f8` (2026-09-16 14:39Z). Release class
   B; the `frontend` half of the gate is now unblocked.**
@@ -1000,7 +1360,7 @@
     link.
   - **Verified at runtime, both legs.** (1) Rendered and really sent through the
     compiled `MailerService`: `SMTP configured: true`, `Email sent to
-    quang5552013@gmail.com: "TryBuy — Đơn hàng #ord_9Kq2mZ7xTb4aVn1P đang được
+    <maintainer-inbox>: "TryBuy — Đơn hàng #ord_9Kq2mZ7xTb4aVn1P đang được
     giao đến bạn"`, CTA `http://localhost:5173/order/ord_9Kq2mZ7xTb4aVn1P`.
     (2) Through the LIVE notification service: published one `order_created`
     envelope to that service's own queue only (default exchange, routing key =
@@ -1045,7 +1405,7 @@
     no deep-link CTA, because the storefront flow is a two-step in-page form on
     `/login` holding the email in React state — a link would drop the user at
     step 1 and a resend would invalidate the emailed code.
-  - **Verified end to end on a real inbox** (`quang5552013@gmail.com`, appended
+  - **Verified end to end on a real inbox** (`<maintainer-inbox>`, appended
     to `test-accounts.md` — the only test account whose mail actually lands):
     register → 201 (`usr_NmeFvrSBZoLqNPAd`); forgot-password → 201 in 3.97s
     (tens of ms when SMTP is unconfigured — the timing IS the evidence the TLS

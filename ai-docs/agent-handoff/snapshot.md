@@ -88,8 +88,8 @@ probe against prod, never with the git head.
 - **GHN Web console (`../web-flow-GHN`)** — backend is ready; the remaining work
   is all FE. Only backend contract still blocking it: analytics charts. Steps
   and deps in `planned-work.md`.
-- **CTX-PROV-02 — 43 of 56 `known-behaviors.md` anchors carry
-  `verified=unrecorded`** (9 prod, 4 local; SEARCH-01, ROLE-ADMIN-01,
+- **CTX-PROV-02 — 43 of 58 `known-behaviors.md` anchors carry
+  `verified=unrecorded`** (9 prod, 6 local; SEARCH-01, ROLE-ADMIN-01,
   AUTHOR-NAME-01 and NAME-TRIM-01 were upgraded to `prod:2026-09-16` by actually
   exercising them on prod after the release). Upgrading a tag means actually EXERCISING the
   behaviour (services up, an account from `test-accounts.md`, curl, assert the
@@ -97,14 +97,18 @@ probe against prod, never with the git head.
   you ran it. Editing the tag without running anything destroys the only thing
   the field is for. Do it drip-feed — when a task makes you open an entry and
   you verify it anyway, upgrade that one — never as a 47-step sweep.
-- **CONV-CHECK-02 — three more `scripts/check-conventions.mjs` assertions.**
-  Candidates: (a) writer symmetry — an `emit()` whose event has no
-  `@EventPattern` consumer, (b) orphan handler — a `@MessagePattern` no gateway
-  ever sends, (c) Create/Update DTO drift — an Update DTO redeclaring fields
-  instead of `PartialType`. Gated on an AUDIT FIRST: count existing violations
-  per rule before choosing hard-fail vs warn — `check:conventions` runs in CI
-  (`.github/workflows/ci.yml`), so a rule that lights up working code turns the
-  gate red on day one and trains people to skip it.
+- ~~CONV-CHECK-02 — three more `check-conventions.mjs` assertions~~ → **DONE
+  2026-09-17**, see CHANGELOG. Rule **(c) Create/Update DTO drift was DECLINED**
+  and should not be re-proposed: of 11 candidate Update DTOs only 4 have a real
+  Create sibling, and the strongest of those (`UpdateVoucherDto`) must NOT become
+  a `PartialType` — the redeclaration is what encodes the deliberate
+  create-vs-edit `null` asymmetry documented in VOUCHER-NULL-01. A gate demanding
+  what known-behaviors.md forbids is the wrong gate.
+  Left behind as untested surface, not a bug: **3 `orphan-handler` warnings** —
+  `INVENTORY_FIND_ALL`, `INVENTORY_FIND_BY_SKU`, `INVENTORY_REMOVE` in
+  `apps/inventory/src/inventory.controller.ts` are reachable over TCP but no
+  gateway calls them. Delete them or give them a caller; until then the checker
+  prints them every run without failing.
 
 ### Planned but not started
 
@@ -112,9 +116,13 @@ Full designs (scope, shape, landmines, release class) live in
 `ai-docs/agent-context/planned-work.md` — load it with the Read tool when you
 pick one up. Do not re-derive them:
 
-- **EXPORT-CSV-01** — seller order export to CSV, split into T1 (shared csv util)
-  → T2 (orders TCP leg) → T3 (gateway route, goes live); T4 admin / T5 async are
-  optional. No migration, class B.
+- **EXPORT-CSV-01 T4 / T5** — T1–T3 SHIPPED 2026-09-16 (`GET /api/order/seller/export`
+  is live locally, class B, not yet pushed), **audited complete 2026-09-19**, and
+  **timezone-corrected 2026-09-20** (EXPORT-TZ-01, see CHANGELOG — 15 tests now
+  pin the money rules, both caps, and VN wall-clock under four process zones).
+  Still unbuilt and still optional: T4 an admin/platform-wide export, T5 an async
+  job for windows over the caps. Neither has a requester — build on demand, not
+  speculatively.
 - **SOCIAL-LIKE-NTF-01** — liking a post notifies nobody (product decision, needs batching).
 - **VOUCHER-SHOP-01 phase 2** — Shopee-style stacking + multi-shop apportionment.
 - **AI-03 / AI-04** — Sell From Photo, Visual Search (Gemini; AI-04 adds 1 migration).
@@ -150,6 +158,8 @@ pick one up. Do not re-derive them:
 - NOTIF-LIFECYCLE-01 — Which lifecycle transitions notify whom; emails are gated to shipping milestones and order_canceled has its own event.
 - ORDER-SHAPE-01 — HTTP emits `image` only; productImage survives internally and on the one admin GHN console detail route.
 - ORD-CRON-01 — No orders @Cron ever fired before 2026-08-13; the stale-reservation sweep then started with a backlog.
+- EXPORT-CSV-01 — The seller CSV export is one row per ORDER ITEM, and the four order-level money columns are written on each order's first row only so a column SUM does not double-count.
+- EXPORT-TZ-01 — Order timestamps and every from/to day window are Vietnam wall-clock computed in code, because the server TZ is UTC on prod and UTC+7 on dev — do NOT "fix" a zone bug by setting TZ or the connection timezone.
 
 **GHN**
 - GHN-ADDR-01 — Free-text address resolution is best-effort and can match a wrong-but-valid location; sending both ids skips it.

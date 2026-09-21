@@ -141,104 +141,19 @@ that helper — the hard part left is per-SKU seeding and the compensation matri
 not the Lua. Second tier of local cache in front of Redis is also open but only
 safe for brand/category (multi-instance staleness).
 
-## EXPORT-CSV-01 — seller order export to CSV (no migration, class B)
+## EXPORT-CSV-01 — T4 / T5 only (T1–T3 SHIPPED 2026-09-16)
 
-Sellers can read their orders but cannot compute on them: reconciling GHN
-payouts, summing revenue per SKU, or handing figures to an accountant all mean
-paging through a list by hand. CSV is the escape hatch — and it also closes
-future backlog, because "add column X to the report" becomes "export and pivot".
+T1 (`libs/common/src/utils/csv.util.ts`), T2 (orders TCP leg) and T3 (the live
+`GET /api/order/seller/export` route) are **done** — see `CHANGELOG.md` for what
+shipped and `known-behaviors.md` → EXPORT-CSV-01 for the residuals (one row per
+ITEM, order-level money on the first row only, the 90-day / 5.000-row caps, and
+why the file is buffered rather than streamed). Do not re-derive any of that.
 
-**The finding that shapes the whole design:** `order_items`
-(`apps/orders/src/entity/order_item.entity.ts:36-86`) already snapshots
-`sellerId`, `productName`, `productPublicId`, `skuLabel`, `price`, `quantity`,
-and `orders.public_id` is on the order row. So the CSV needs **no product-service
-enrichment, no `buildProductMap`, no N+1** — one query inside the orders service
-has every column. Do not route this through the gateway enrichment path.
-
-**Transport precedent to copy, not reinvent:** the PDF invoice already ships a
-file over TCP — orders returns a `Buffer`, TCP serializes it as
-`{type:'Buffer', data:number[]}`, gateway does `Buffer.from(result.data)` then
-`res.end()`. See `apps/gateway/src/order/order.controller.ts:541-570` and
-`order.service.ts:1058-1090`.
-
-**Shape: synchronous with a hard cap, NOT an async job.** Async (job table +
-worker + storage + poll endpoint + cleanup cron) is the right answer at scale and
-the wrong one here — it is ~5x the work for a catalog this size. Cap the window
-instead: **90 days / 5.000 rows**, `COUNT` first and 400 with the real row count
-before building anything. Buffer the whole file in memory (~1.2 MB at the cap) —
-do **not** stream chunks: once `res.write()` fires the response is committed, so
-a failure on page 3 can no longer become a 4xx and the client silently receives a
-truncated file that looks valid. That is the worst failure mode of CSV export.
-
-### T1 — `libs/common/src/utils/csv.util.ts` (standalone, class A)
-
-Nothing exists in `libs/` today. Build `toCsv(rows, columns)` once and every
-later export (inventory, admin orders, revenue) is just "query + column list".
-Four things it must handle, none optional:
-1. **BOM `﻿`** first — without it Excel VN renders `Ão thun`. Most common
-   Vietnamese CSV bug there is.
-2. **Escape** — wrap in `"` and double inner `"` for values containing `,`, `"`,
-   or newline. A `skuLabel` like `Đen, size L` breaks columns otherwise.
-3. **CSV injection** — a cell starting `=`, `+`, `-`, `@` executes as an Excel
-   formula. `productName` is seller-supplied text, so this is a real hole, not a
-   theoretical one. Prefix with `'`.
-4. **Excel mangling numerics** — long tracking codes / phone numbers become
-   `1.23E+11`. Emit `="GHN123456"` where the literal must survive.
-Unit-test all four. Ships alone, invisible to FE.
-
-### T2 — orders service leg (class A, still no HTTP route)
-
-- `EXPORT_SELLER_ORDERS_CSV: "order.export_seller_csv"` in
-  `libs/constant/message-pattern.constant.ts` (never inline).
-- `@MessagePattern` handler in `orders.controller.ts` returning the `Buffer`.
-- `orders.service.ts`: `COUNT` gate → over cap throws `BadRequestException`
-  naming the actual row count and telling the caller to narrow the range; then
-  ONE query filtered on **`items.seller_id`**, `order.created_at BETWEEN`, and
-  optional status.
-- **Do not reuse `getOrdersBySeller()` (`orders.service.ts:3710`).** It
-  `leftJoinAndSelect`s *every* item of any order containing one of the seller's
-  products. Harmless today because checkout splits per seller
-  (`CREATE_MULTI_SELLER_ORDER` returns an array of orders), but filtering at the
-  item level is what makes the `lineTotal` column sum to that seller's revenue
-  and keeps it correct if orders are ever un-split.
-
-### T3 — gateway leg, makes it live (class B, push freely)
-
-- `ExportSellerOrdersQueryDto` — `from`/`to` required, ≤ 90 days, optional
-  `status`; `@ApiProperty()` on every field.
-- Route + `@Res()`, `Content-Type: text/csv; charset=utf-8`,
-  `Content-Disposition: attachment; filename="trybuy-orders-<from>-<to>.csv"`.
-- TCP call with `timeout(TCP_TIMEOUT_MS.WRITE)` (heavier than a list read) +
-  `retryOnTransportError()` + `MicroserviceErrorHandler`.
-- ⚠️ **Route order: `@Get("seller/export")` must be declared BEFORE
-  `@Get("seller/:id")`** (currently `order.controller.ts:638`) or `:id` swallows
-  `export` and `ParsePublicIdPipe` 400s. `seller/analytics` already sits above
-  it — put `export` next to that one.
-- DoD: self-test with a shop account from `../.agent-local/test-accounts.md`,
-  actually open the downloaded file and confirm Vietnamese + escaping, then
-  append the contract entry to `../.agent-local/frontend-handoff.md`. FE work is
-  a button + two date pickers; `window.location.href = url` is enough because the
-  auth cookie is HttpOnly and rides along.
-
-### Columns — one row per ITEM
-
-`orderId, orderDate, status, paymentMethod, paidAt, productId, productName,
-skuLabel, quantity, unitPrice, lineTotal, shippingFee, orderTotal, trackingCode,
-ghnStatus`
-
-**`shippingFee` and `orderTotal` belong to the ORDER, not the row.** Repeat them
-on every item row and a seller's SUM double-counts, and they will report it as
-"the app computes money wrong". Write them on the **first row of each order
-only**, blank afterwards — this is what marketplaces do. Item granularity is
-chosen because it pivots up to order level trivially in Excel, while order
-granularity loses the SKU breakdown permanently.
-
-### Open decisions (defaults assumed if nobody answers)
-
-- **Buyer PII**: default = include name + phone, **exclude full address**. Enough
-  to reconcile, without turning the file into a portable customer list. The
-  seller may see it in-app, but a CSV leaves the system.
-- Cap 90 days / 5.000 rows — raise only with evidence.
+What is reusable for the two optional tiers below: `toCsv(rows, columns)` in
+`@app/common` handles BOM, RFC-4180 escaping, formula-injection guarding and
+`="…"` literal cells, so a new export is "query + column list". The file-over-TCP
+transport (orders returns a `Buffer`, gateway does `Buffer.from(result.data)`
+then `res.end()`) is proven by both the PDF invoice and this export.
 
 ### T4 — admin export (optional, later)
 

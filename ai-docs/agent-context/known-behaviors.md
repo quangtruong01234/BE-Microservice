@@ -557,7 +557,7 @@ of null (reading 'on')` — strictly worse. Tried and reverted 2026-08-15.
     `main.ts` `createMicroservice` is the SERVER side and must stay as is.
 
 ## Approved return restocks via a dedicated path (RETURN-STOCK-01, fixed 2026-08-11)
-<!-- kb: id=RETURN-STOCK-01; group=products; files=apps/inventory/src/inventory.controller.ts,apps/orders/src/orders.service.ts; sha=c2a3a1dc19ac; verified=unrecorded:2026-08-11; keys=return restock,restock_returned,approved return,RETURNED reservation,releaseReservedItems,hoàn hàng,trả hàng; summary=An approved return restocks through inventory.restock_returned, not a release; the fix is not retroactive. -->
+<!-- kb: id=RETURN-STOCK-01; group=products; files=apps/inventory/src/inventory.controller.ts,apps/orders/src/orders.service.ts; sha=12031300bca8; verified=unrecorded:2026-08-11; keys=return restock,restock_returned,approved return,RETURNED reservation,releaseReservedItems,hoàn hàng,trả hàng; summary=An approved return restocks through inventory.restock_returned, not a release; the fix is not retroactive. -->
 
 Approving a return used to call `releaseReservedItems()`. A release only rewinds
 a still-`RESERVED` ledger row, and an order that reached COMPLETED already had
@@ -691,8 +691,10 @@ a user. See `CHANGELOG.md` 2026-08-11 for the design.
 
 `PUT /api/inventory/:id` accepts `sku` and really renames the row.
 
-- **Nothing resolves inventory by sku.** `INVENTORY_FIND_BY_SKU` has a handler
-  but no caller anywhere in the monorepo; checkout, reservations and the stock
+- **Nothing resolves inventory by sku.** `INVENTORY_FIND_BY_SKU` used to have a
+  handler with no caller anywhere in the monorepo; it was DELETED 2026-09-21
+  along with `INVENTORY_FIND_ALL` and `INVENTORY_REMOVE` (repo hygiene sweep),
+  so there is no sku resolver at all now. Checkout, reservations and the stock
   fanout all key on `productId` / `productSkuId` / `reservationKey`. So a
   rename cannot break stock movement.
 - **It does NOT rename `products.sku`, and vice versa.** `inventory_v2.sku` is
@@ -1552,7 +1554,7 @@ whole time, and there is no retry on the gateway's TCP leg.
   response body is deliberately identical either way, so only timing separates
   the branches. `POST /api/user/forgot-password` for a **registered** account
   measured on 2026-09-11: `e2eprod0806@trybuy.com` (blocked domain) → 201 in
-  **0.36s**, `quang5552013@gmail.com` (deliverable) → 201 in **4.07s**. The ~4s
+  **0.36s**, `<maintainer-inbox>` (deliverable) → 201 in **4.07s**. The ~4s
   is the SMTP dialogue; its absence is the proof the guard fired. Both accounts
   must be registered — an unknown address returns early and is fast regardless,
   which proves nothing. Mind the 60s `user:pwreset:cooldown:<id>`: a second call
@@ -1665,3 +1667,193 @@ Deliberate, and not oversights:
   idempotent.
 - `PATCH /api/user/:id` (profile) still ignores `role` entirely;
   `forbidNonWhitelisted` rejects the key there with a 400.
+
+## The seller CSV export is item-granular and order-level money rides row 1 only (EXPORT-CSV-01, 2026-09-16)
+<!-- kb: id=EXPORT-CSV-01; group=orders; files=apps/orders/src/orders.service.ts,apps/orders/src/export/seller-orders.export.ts,libs/common/src/utils/csv.util.ts,apps/gateway/src/order/order.controller.ts; sha=7e1b899a529b; verified=local:2026-09-16; keys=export,csv,xuat file,xuat excel,excel,tai ve,download orders,seller export,order export,bao cao don hang,EXPORT_MAX_ROWS,EXPORT_MAX_WINDOW_DAYS,toCsv,BOM,formula injection,shippingFee blank,orderTotal blank,discountAmount,voucherCode,giam gia,ma giam gia,voucher column; summary=The seller CSV export is one row per ORDER ITEM, and the four order-level money columns are written on each order's first row only so a column SUM does not double-count. -->
+
+`GET /api/order/seller/export?from&to[&status]` renders the caller's own order
+items as a CSV file. Five things about it look like bugs and are not.
+
+**1. One row per ITEM, not per order.** An order with three SKUs is three rows
+sharing one `orderId`. Item granularity pivots up to order level in Excel in one
+step; order granularity loses the SKU breakdown permanently, so it is the
+lossless direction.
+
+**2. The four order-level columns are BLANK on every row after an order's
+first.** `shippingFee`, `discountAmount`, `voucherCode` and `orderTotal` belong
+to the order, not the line. Repeating them would make a seller's
+`SUM(orderTotal)` count a 3-item order three times, and they would report that —
+correctly — as the app computing money wrong. `lineTotal` is the column that is
+safe to sum on every row. Do not "fix" the blanks.
+
+The file reconciles exactly, and that is the invariant to protect:
+`SUM(lineTotal) + shippingFee - discountAmount = orderTotal`, per order. The
+voucher pair was added 2026-09-17 after a real export showed `lineTotal 39` next
+to `orderTotal 0` with nothing in between to explain the gap — the money was
+right (a 39 voucher), but the file could not prove it, which reads to a seller
+exactly like the double-count the first-row rule exists to prevent. The columns
+sit BETWEEN `shippingFee` and `orderTotal` so the money reads left to right as
+that equation.
+
+`discountAmount` renders a real `0` when there is no voucher, never a blank —
+on a first row a blank would be indistinguishable from the deliberate blank of a
+continuation row. `voucherCode` is the one exception: it is legitimately empty
+on a first row (no code), and must NEVER be non-empty on a continuation row.
+
+**3. `productId` and `orderId` fall back to the numeric id.** Rows written
+before PUBID have no `productPublicId`, so the cell reads `19`, not
+`prod_…`. That is the project-wide `publicId ?? String(id)` fallback, not a
+broken export.
+
+**4. `buyerPhone` and `trackingCode` are emitted as `="0901234567"`, unquoted.**
+Excel eats a leading zero and turns a long GHN code into `1.23E+11`. The `="…"`
+form is the only thing Excel honours, and **only in an unquoted field** — which
+is why `literal: true` columns in `toCsv` STRIP `"`/`,`/newline instead of
+escaping them. Quoting a literal cell silently disables it.
+
+**5. A value starting with `=`, `+`, `@`, TAB or CR is prefixed with `'`.**
+CSV formula injection: a seller-controlled product name like
+`=cmd|' /C calc'!A0` executes on open in Excel. A plain negative number is
+deliberately NOT guarded — `-500` must stay summable.
+
+**Caps, and why they are 400s and not a truncated file.** The window is capped
+at 90 days and the result at 5.000 item rows; both refuse with a 400 that names
+the ACTUAL figure (`Export matches 54 item rows; the maximum is 10.`), because
+"narrow the range" with no number leaves the seller guessing. Both bounds are
+REQUIRED — unlike the analytics range, which defaults to the last 30 days.
+
+The document is buffered whole (~1.2 MB at the cap) rather than streamed: once
+`res.write()` fires the response is committed, a later failure can no longer
+become a 4xx, and the client receives a truncated file that opens fine. That is
+the worst failure mode a CSV export has. It is synchronous for the same reason
+T5 (async job) stays unbuilt — a job table + worker + storage + poll endpoint is
+~5x the work for the same file at this catalog size.
+
+**The query is item-level on `items.seller_id`, NOT `getOrdersBySeller()`.**
+That helper resolves the seller's product ids and then joins *every* item of any
+order containing one of them. Harmless today because checkout splits orders per
+seller — and exactly what would make `lineTotal` stop summing to this seller's
+revenue if orders are ever un-split. `order_items` already snapshots
+`productName`, `productPublicId`, `skuLabel`, `price` and `quantity`, so the
+whole file comes out of one join with no product-service round trip.
+
+Buyer name and phone come from splitting `orders.shipping_address` on `|`
+(`name|phone|addr|ward|district|province`) — the column is NOT NULL, so the
+split is safe. The street address is deliberately excluded.
+
+The two timestamp columns are named `orderDate (GMT+7)` / `paidAt (GMT+7)` and
+the `from`/`to` window is VN midnight-to-midnight regardless of the server's
+zone — see EXPORT-TZ-01 for why the zone is in the header rather than the cell,
+and why fixing this in the process `TZ` would have corrupted prod data.
+
+**`productId` is `item.productPublicId ?? String(item.productId)`, and the
+numeric fallback is PERMANENT — do not "fix" it with a backfill.** Rows written
+before `nodeA-20260717-007-snapshot-product-public-id-on-order-items` have
+`product_public_id IS NULL`, and the only place a value could come from is
+`products.public_id` for that `product_id`. Measured on dev 2026-09-20: 68 of
+183 `order_items` are NULL, **0 of them are recoverable** — all ten distinct
+`product_id`s (7, 10, 13, 15, 19, 21, 22, 23, 24, 57) have since been deleted
+from `products`, so the backfill UPDATE would join to nothing and change zero
+rows. Every NULL predates 2026-07-17 05:51; nothing written since has been
+NULL, so the write path is sound and the set cannot grow. The numeric id is
+then the *only* surviving identifier for that line, which is also why a
+deleted product does not erase the order line. Re-check on another database
+with:
+`SELECT SUM(p.id IS NOT NULL) recoverable, SUM(p.id IS NULL) orphaned FROM order_items oi LEFT JOIN products p ON p.id = oi.product_id WHERE oi.product_public_id IS NULL;`
+Reported by FE as EXPORT-PUBID-01; closed will-not-do, not deferred.
+
+## Timestamps and day windows are Vietnam time, fixed in code not in `TZ` (EXPORT-TZ-01, 2026-09-20)
+<!-- kb: id=EXPORT-TZ-01; group=orders; files=libs/common/src/utils/timezone.util.ts,libs/database/src/database.module.ts,apps/orders/src/export/seller-orders.export.ts,apps/orders/src/orders.service.ts,apps/payments/src/zalopay/zalopay.helper.ts; sha=a11b1fc0c03b; verified=local:2026-09-20; keys=timezone,time zone,mui gio,lech gio,sai gio,sai ngay,lech 7 tieng,7 hours,GMT+7,UTC+7,UTC,TZ,offset,Asia/Ho_Chi_Minh,orderDate,paidAt,formatVnTimestamp,startOfVnDay,endOfVnDay,toVnCalendarDay,vnWallClockShiftMinutes,resolveAnalyticsRange,setHours,getHours,DATE_FORMAT,CONVERT_TZ,revenue chart,bieu do doanh thu,analytics range,khoang ngay,app_trans_id,zalopay prefix,gio server,ngay xuat file,missing rows,thieu don,mysql2,timestamptz,CURRENT_TIMESTAMP,DatabaseModule,PostgresDatabaseModule,risk_scored_at,risk_next_retry_at,luu gio,chuan chung,gio chuan,pin storage,connection timezone,setTypeParser,createDateColumn; summary=Order timestamps and every from/to day window are Vietnam wall-clock computed in code, because the server TZ is UTC on prod and UTC+7 on dev — do NOT "fix" a zone bug by setting TZ or the connection timezone. -->
+
+Every date the backend *renders* or *snaps to a day boundary* is Vietnam time
+(UTC+7, fixed — no DST since 1975), derived explicitly in
+`libs/common/src/utils/timezone.util.ts`. Nothing relies on the process zone,
+which is UTC+7 on a dev box and **UTC on prod**.
+
+**The trap, and why it hid for so long.** `orders.created_at` and `paid_at` are
+MySQL `DATETIME`, which carries no zone, and `libs/database/src/database.module.ts`
+sets no mysql2 `timezone` option — so the driver serializes and parses in the
+**Node process zone**. Those two conversions cancel: a `Date` from TypeORM is
+the correct *instant* on any box. What does not cancel is any local-time getter
+on the way out. `getHours()` and `setHours()` silently render in the server's
+zone, so the same order read 23:36 from a dev gateway and 16:36 from prod, and
+`new Date("2026-09-01")` + `setHours(0,0,0,0)` produced VN 07:00 on prod. The
+FE reported the export as correct precisely because it had gone through a local
+dev gateway — the bug was invisible to every test and to the whole team's
+machines.
+
+Three call sites carried it, all fixed 2026-09-20:
+1. **The seller CSV export** (`formatExportTimestamp`) printed the server clock.
+2. **`resolveAnalyticsRange`** snapped `from`/`to` with `setHours()`. On prod the
+   window ran VN 07:00 on the first day to VN 06:59 the day AFTER the last — it
+   **dropped** orders placed between midnight and 07:00 on the first day and
+   invented rows from the day after. A missing row in an export is the worst
+   failure mode here: nothing in the file hints it is incomplete.
+3. **ZaloPay `generateTransId`** — the most severe. `app_trans_id` MUST begin
+   with today's date *in GMT+7* or ZaloPay refuses the transaction, so on a UTC
+   box every payment attempted between VN midnight and 07:00 sent yesterday's
+   prefix.
+
+**Do NOT "fix" this by setting `TZ=Asia/Ho_Chi_Minh` on prod.** It is the
+obvious move and it corrupts data: every existing prod row was WRITTEN by a UTC
+process, so re-interpreting the same stored wall-clock as VN moves all history 7
+hours. The fix belongs where values are presented, never where they are stored.
+
+**Storage is separately pinned to UTC, and that is NOT the same fix (2026-09-20).**
+`libs/database/src/database.module.ts` now sets mysql2 `timezone: "Z"`, matching
+the four services that already declared it (orders, chat, notification, social);
+it backs product and user, which did not. This changes nothing about the
+presentation fix above and nothing on prod, where the process is already UTC.
+On the WRITE side it closes only the **explicit JS `Date` path**, which is far
+narrower than it looks. On the READ side it matters more: every datetime column
+in product/user used to be parsed back in the process zone, so a dev box turned
+the (correct, UTC) stored `2026-06-23 18:54:13` into the instant `11:54:13Z` —
+7 hours early — and a prod box did not. Dev and prod now agree. Measured, not
+assumed:
+- Of the 23 datetime columns in the product + user schema, **21 are
+  `DEFAULT CURRENT_TIMESTAMP(6)` / `ON UPDATE CURRENT_TIMESTAMP(6)`** — filled by
+  the MySQL server, whose clock is UTC (`NOW() == UTC_TIMESTAMP()`,
+  `@@time_zone = SYSTEM`). They never pass through the driver, so the connection
+  `timezone` option has never affected them. Verified by pairing
+  `products.created_at` with `inventory_v2.created_at` (a postgres table proven
+  UTC): rows written by the same product-create flow agree to **0.00h**, not 7h.
+- The only two columns written from a JS `Date` are
+  `products.risk_scored_at` (28 dev rows, stored as VN wall-clock) and
+  `products.risk_next_retry_at` (0 rows). On dev those 28 legacy rows now read 7h
+  late; it is risk-scoring metadata, so no correction was shipped.
+- **Corollary — never bulk-shift a dev database "to match the pin".** A −7h sweep
+  over all 23 columns was drafted and would have corrupted 21 of them.
+- `risk_next_retry_at <= :now` compares a stored value against a JS `Date`
+  through the same driver on both sides, so the comparison is self-consistent
+  either way.
+
+**Node B (postgres) needs no equivalent and must not get one.** All six
+`timestamp` columns there (`inventory_v2`, `inventory_reservations`, `payments`,
+`reward_points`) are `DEFAULT now()` with the Aiven session TZ at `GMT`, so they
+are already UTC, and no code in inventory/payments/rewards ever writes a JS
+`Date` into one. TypeORM has no postgres `timezone` option anyway;
+`pg.types.setTypeParser(1114, …)` would pin parsing but not serialization, which
+*introduces* the asymmetry it looks like it removes (right on prod, wrong on
+dev). The honest fix would be `timestamptz`, and it cannot be one env-agnostic
+migration because prod rows hold UTC wall-clock while dev rows hold whatever the
+writer's zone was. Not worth it while nothing writes a `Date` there.
+
+**Residual details that look wrong and are not:**
+- The CSV headers read `orderDate (GMT+7)` / `paidAt (GMT+7)`. The zone is named
+  in the HEADER, not appended to each cell: a trailing `+07:00` in the value
+  stops Excel recognising it as a date, which is the entire point of the
+  `YYYY-MM-DD HH:mm:ss` format.
+- The revenue chart shifts inside SQL — `o.createdAt + INTERVAL <n> MINUTE`,
+  where `<n>` is a locally computed integer (420 on prod, 0 on dev), so the
+  interpolation is safe. `CONVERT_TZ` is unusable: it returns NULL unless the
+  server's timezone tables are loaded, which is not guaranteed on Aiven.
+- `GET /*/analytics` with no `to` returns `to` as **now**, an instant, not
+  end-of-day — snapping it forward would include orders not yet placed. `from`
+  is still a VN midnight.
+- The echoed `from`/`to` in the analytics response therefore change on prod
+  after this fix (`…T00:00:00.000Z` → `…T17:00:00.000Z` the previous day). No FE
+  reads them; they are diagnostic.
+- Tests for anything time-shaped must use instants with an explicit offset and
+  are run under several zones. A bare `new Date("2026-08-01T10:00:00")` in a spec
+  is parsed in the RUNNER's zone — that is what let the export ship with tests
+  that proved nothing about prod.
