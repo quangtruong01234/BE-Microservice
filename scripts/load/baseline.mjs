@@ -32,6 +32,29 @@
  * error% below after each official run, newest first.
  *
  * ── Recorded baselines ────────────────────────────────────────────────────
+ * 2026-09-21 (5th run) — FIRST RUN ON PRODUCTION. EC2 2 vCPU / 7.7 GB, pm2
+ * fork mode, deployed build 2beea58, autocannon ON THE BOX against
+ * 127.0.0.1:3000 (driving it remotely measures nginx limit_req 30r/s, not the
+ * API). c=500, 30s per scenario, 4 autocannon workers.
+ *   S1 anon list   1227.94 req/s  p50 292  p95 1831  p99 3138  0.34% timeouts
+ *   S2 anon detail 2866.50 req/s  p50 143  p95  281  p99 1573  0 errors
+ *   S3 auth cart    420.40 req/s  p50 1156 p95 1570  p99 1627  0 errors
+ *   S4 auth orders  200.00 req/s  p50 2252 p95 3908  p99 3984  0 errors
+ *   S5 checkout     single contract probe → 201 ord_aLIny8HGLGsQGKRr
+ * Across all four: 141,430 responses, 0 non-2xx, 0 5xx, 0 429. Only failures
+ * anywhere were 125 client-side timeouts on S1.
+ * Read it as CONSERVATIVE: the generator shared 2 cores with all ten services,
+ * Redis and RabbitMQ. The cached anon reads beat the authenticated ones by an
+ * order of magnitude because a cache hit is one local Redis GET, while an auth
+ * read still crosses TCP into a service and out to Aiven in another region.
+ * ⚠️ Two process lessons from this run, both cost real exposure:
+ *   1. The EXIT trap meant to restore RATE_LIMIT_DEFAULT_LIMIT did not fire —
+ *      prod ran with rate limiting effectively OFF until a follow-up check
+ *      caught it. Always grep the value back afterwards.
+ *   2. The restore then read from a backup taken AFTER the edit, so it carried
+ *      the raised value and changed nothing. Back up BEFORE you sed.
+ * Raw: results/2026-09-21T21-24-59-027Z-500.json
+ *
  * 2026-07-19 (4th run) — SCALE-01b probe: gateway pm2 CLUSTER ×4
  * (GATEWAY_INSTANCES=4, exec_mode cluster) on top of run 3 (SCALE-01a/02/04).
  * Functional result: cluster is CORRECT — 4 workers online, 0 restarts,

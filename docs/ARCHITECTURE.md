@@ -328,7 +328,9 @@ Redis is used in three distinct ways, and conflating them would be a mistake:
 The micro-cache is only safe because both cached routes are user-invariant: no
 `req.user` influences the response, so the final exposed payload — public ids
 already applied — can be handed to the next caller verbatim. It is what took the
-public product list from 61 to 798 req/s (see [METRICS.md](./METRICS.md)).
+public product list from 61 to 798 req/s on the measurement box, and it is why
+the production EC2 serves that same route at 1,228 req/s and product detail at
+2,867 req/s (see [METRICS.md](./METRICS.md)).
 Writes best-effort invalidate the affected keys, and the 10-second TTL bounds
 staleness regardless of whether that invalidation succeeded.
 

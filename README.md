@@ -128,10 +128,13 @@ patterns, service names).
   reads are user-invariant, so the gateway caches the fully-serialized response
   (public ids already applied) in Redis for 10 seconds. That collapses a product
   TCP call, a user-enrichment TCP call and serialization into one local `GET`,
-  and moved the public catalog from 61 to 798 req/s — see
-  [`docs/METRICS.md`](./docs/METRICS.md). Database pool tuning alone could not
-  get past 61: the free-tier connection ceiling is a structural wall that only
-  caching crosses.
+  and moved the public catalog from 61 to 798 req/s on the measurement box —
+  a 13× step. Database pool tuning alone could not get past 61: the free-tier
+  connection ceiling is a structural wall that only caching crosses. On the
+  production EC2 the same catalog read sustains **1,228 req/s** and product
+  detail **2,867 req/s** at 500 concurrent connections, with zero 5xx across
+  141,430 responses — numbers, conditions and the raw autocannon output in
+  [`docs/METRICS.md`](./docs/METRICS.md).
 
 ## Getting started
 

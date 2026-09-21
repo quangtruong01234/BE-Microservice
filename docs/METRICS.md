@@ -68,35 +68,42 @@ stack instead, and the result of each is recorded in
 
 ## Throughput
 
-> ⚠️ **Measured on a development machine, not on the production EC2.** The
-> figures below are real and reproducible, but the hardware is a 12-core dev box
-> running the load generator, all 13 Node processes, Redis and Docker at once.
-> A production re-measurement is owed; until it exists, do not quote these as
-> "production capacity".
+Measured **on the production EC2** (2 vCPU, 7.7 GB) on 2026-09-21, against the
+deployed build at `2beea58`. Runner: `node scripts/load/baseline.mjs`
+(autocannon). It refuses to be quoted casually — the script header records every
+official run, newest first, and the raw autocannon JSON for each is committed
+under `scripts/load/results/`.
 
-Runner: `node scripts/load/baseline.mjs` (autocannon). It refuses to be quoted
-casually — the script header records every official run, newest first, and the
-raw autocannon JSON for each is committed under `scripts/load/results/`.
+> These numbers are **conservative**. autocannon ran on the same 2-vCPU box as
+> all ten services, Redis and RabbitMQ, so the load generator and the system
+> under test competed for the same two cores. A generator on separate hardware
+> would report higher.
 
-Conditions for the run below: prod build (`npm run build` + pm2 via
-`ecosystem.config.js`, **not** `nest --watch`), `RATE_LIMIT_DEFAULT_LIMIT`
-raised so the test measures the API and not the rate limiter, Aiven free-tier
-databases in a remote region (~250 ms round trip), 20 s per probe.
+Conditions: deployed prod build under pm2 (**not** `nest --watch`), requests
+aimed at `127.0.0.1:3000` to bypass the nginx per-IP caps (`limit_req 30r/s`,
+`limit_conn 32`) which otherwise measure nginx rather than the API,
+`RATE_LIMIT_DEFAULT_LIMIT` temporarily raised and restored afterwards, Aiven
+free-tier databases in a remote region, **500 concurrent connections and 30 s
+per scenario**.
 
-### Anonymous product list — `GET /api/products?page=1&limit=20`
+| Scenario | Route | req/s | p50 | p95 | p99 | Errors |
+|---|---|---:|---:|---:|---:|---|
+| Anonymous product list | `GET /api/products?page=1&limit=20` | **1,228** | 292 ms | 1,831 ms | 3,138 ms | 0.34% timeouts |
+| Anonymous product detail | `GET /api/products/:id` | **2,867** | 143 ms | 281 ms | 1,573 ms | 0 |
+| Authenticated cart read | `GET /api/cart` | **420** | 1,156 ms | 1,570 ms | 1,627 ms | 0 |
+| Authenticated order list | `GET /api/order/user/:id` | **200** | 2,252 ms | 3,908 ms | 3,984 ms | 0 |
+| Checkout (contract probe) | `POST /api/order` | — | — | — | — | `201` |
 
-| Connections | req/s | p50 | p99 | Errors |
-|---:|---:|---:|---:|---|
-| 50 | 798 | 51 ms | 84 ms | 0 |
-| 100 | 790 | 103 ms | 1,859 ms | 0 |
-| 200 | 679 | 213 ms | 4,695 ms | 0 |
-| 500 | 757 | 517 ms | 6,291 ms | ~3.6% timeouts, 0 non-2xx |
+**Across all four scenarios: zero non-2xx, zero 5xx, zero 429.** 141,430
+responses, every one of them a 200. The only failures anywhere were 125
+client-side timeouts on the list scenario.
 
-### Anonymous product detail — `GET /api/products/:id`
-
-| Connections | req/s | p50 | p99 | Errors |
-|---:|---:|---:|---:|---|
-| 50 | 1,692 | 25 ms | 45 ms | 0 |
+The shape of that table is the architecture showing through. The two cached
+anonymous reads run an order of magnitude faster than the two authenticated
+ones, because a cache hit is a single local Redis `GET` while an authenticated
+read still crosses TCP into a service and out to Aiven in another region. The
+order list is the slowest because it is the heaviest join and the least
+cacheable — it is per-user by definition.
 
 ### What moved the numbers
 
@@ -107,6 +114,12 @@ Three changes, measured one at a time, each with its own committed result file:
 | Baseline (`MYSQL_POOL_SIZE=10` everywhere) | 40 req/s |
 | **Per-service DB pool budget** — MySQL 68 conns and PostgreSQL 12 conns, both under the free-tier caps (76 / 20) | 61 req/s |
 | **Gateway full-response Redis micro-cache**, 10 s TTL, on the two user-invariant public reads | **798 req/s** |
+
+(Those three were measured on a 12-core dev box, which is why the ceiling there
+reads 798 while production reports 1,228 — the dev box was running the load
+generator, all thirteen Node processes, Redis and Docker at once. The useful
+figure is the ratio between the rows, not the absolute value of any one of
+them.)
 
 The pool budget mattered because a flat `MYSQL_POOL_SIZE=50` across six MySQL
 services blew past the 76-connection cap and turned ~35% of responses into
@@ -122,32 +135,54 @@ Two limits are worth stating plainly rather than optimising away:
 - **Free-tier Aiven allows ~76 MySQL connections at ~250 ms round trip, so
   ~300 req/s total across all services is a structural wall.** Bigger pools
   cannot cross it. Only caching can, which is why SCALE-04 exists.
-- **Cached reads are now bound by the single gateway Node process**, not the
+- **Cached reads are bound by the single gateway Node process**, not the
   database. Running the gateway as a pm2 cluster (`GATEWAY_INSTANCES=4`) is
   implemented and correct — 4 workers, 0 restarts, 0 non-2xx, 8/8 WebSocket
   connects across workers via the Redis adapter — but it measured *slower* on
-  the dev box, where the load generator competes for the same 12 cores. It
-  ships env-gated and defaults to 1. Re-measure on the target host before
-  raising it.
+  the dev box, where the load generator competed for the same 12 cores. It
+  ships env-gated and defaults to 1. Production has 2 vCPU and currently runs
+  ten services on them, so a cluster there is unlikely to pay either; the
+  measurement is owed before anyone raises it.
 
 ## Reproducing the throughput run
+
+Run it **on the target host**, aimed at the loopback. Driving it from a laptop
+measures nginx's per-IP `limit_req 30r/s` and `limit_conn 32`, not the API.
 
 ```bash
 # 1. Prod-like target (not `nest --watch` — the watcher alone costs ~40% of it)
 npm run build
 pm2 start ecosystem.config.js
 
-# 2. Raise the rate limit on the gateway, or you will measure the rate limiter
-#    RATE_LIMIT_DEFAULT_LIMIT=1000000 in local/nodeA/.env
+# 2. Raise the rate limit on the gateway, or you will measure the rate limiter.
+#    Back it up first, and put it back afterwards — this weakens a live defence.
+cp local/nodeA/.env local/nodeA/.env.bak
+sed -i 's/^RATE_LIMIT_DEFAULT_LIMIT=.*/RATE_LIMIT_DEFAULT_LIMIT=2000000/' local/nodeA/.env
+pm2 restart gateway --update-env
 
 # 3. Credentials come from the untracked account file, never from source
 export LOAD_USER=... LOAD_PASS=...     # see ../.agent-local/test-accounts.md
 
 # 4. Run
-npm i -g autocannon
-node scripts/load/baseline.mjs --profile 500
+npm i --no-save autocannon
+PATH="$PWD/node_modules/.bin:$PATH" node scripts/load/baseline.mjs \
+  --profile 500 --base http://127.0.0.1:3000
+
+# 5. RESTORE — verify the value, do not trust the restore silently
+cp local/nodeA/.env.bak local/nodeA/.env
+pm2 restart gateway --update-env
+grep '^RATE_LIMIT_DEFAULT_LIMIT' local/nodeA/.env    # must read 300
 ```
 
-`--write` additionally exercises the checkout path and creates real orders; the
-stale-reservation sweeper cancels them within 24 h. Without it, checkout fires
-exactly one request to validate the contract.
+Step 5 is not optional and its verification is not decoration. On the
+2026-09-21 run an `EXIT` trap that was supposed to restore the limit did not
+fire, and production sat with rate limiting effectively disabled until a
+follow-up check caught it. Worse, the second attempt "restored" from a backup
+that had itself been taken after the edit, so the backup carried the raised
+value and the restore silently changed nothing. **Read the value back; do not
+infer it from the fact that a restore command ran.**
+
+`--write` additionally exercises the checkout path under load and creates real
+orders. Without it, checkout still fires **exactly one** request to validate the
+contract — which on a production target means one real order in the production
+database. Expect it, and clean it up.

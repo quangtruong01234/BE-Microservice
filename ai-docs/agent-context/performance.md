@@ -13,13 +13,34 @@ per-service pool budget is already sized to fit under it (MySQL 20+16+16+6+4+6 =
 takes the whole system over the wall.
 
 `scripts/load/baseline.mjs` (autocannon; profiles `smoke|500|1k|5k`) is the
-measurement tool; recorded baselines live in its header. Post-SCALE-04: anon
-list 798 req/s, detail 1692 req/s, c=500 survives ~3.6% err, auth ~102 req/s.
-A dev-machine `GATEWAY_INSTANCES>1` cluster probe was noisy with no stable gain.
+measurement tool; recorded baselines live in its header. Post-SCALE-04 on the
+dev box: anon list 798 req/s, detail 1692 req/s, c=500 survives ~3.6% err, auth
+~102 req/s. A dev-machine `GATEWAY_INSTANCES>1` cluster probe was noisy with no
+stable gain.
+
+**Measured on the production EC2 2026-09-21** (build `2beea58`, c=500, 30s per
+scenario, autocannon on the box against `127.0.0.1:3000`): anon list 1228 req/s
+(p95 1831 ms), anon detail 2867 req/s (p95 281 ms), auth cart 420 req/s, auth
+order list 200 req/s. 141,430 responses, **0 non-2xx, 0 5xx, 0 429**; the only
+failures were 125 client-side timeouts on the list. Full conditions and the
+restore-the-rate-limit warning: `docs/METRICS.md`.
+
+Reconciling that with the ≈300 req/s wall above: the wall is about requests that
+**reach Aiven**. The two anon reads clear it by an order of magnitude precisely
+because a cache hit never opens a DB connection. Do not quote 2867 as system
+capacity — quote it as cache capacity, and quote the auth rows as the DB-bound
+figure.
+
+Two measurement rules this run established, both of which invalidate a result if
+broken: run the generator **on the target host against loopback** (driving it
+from a laptop measures nginx `limit_req 30r/s`, not the API), and raise
+`RATE_LIMIT_DEFAULT_LIMIT` first — then **read it back afterwards** to confirm
+the restore, because on this run the restore silently did not happen.
 
 SCALE-06 (re-measure behind nginx on a bigger VPS) is **CLOSED, will-not-do** —
 it needs infrastructure the project will not buy. Re-open only if the budget
-changes.
+changes. The 2026-09-21 run is not SCALE-06: it measured the existing EC2 and
+deliberately bypassed nginx.
 
 ## Complexity budget
 
