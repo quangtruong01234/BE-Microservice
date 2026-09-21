@@ -37,6 +37,7 @@ import { SellerOrdersQueryDto } from "./dto/seller-orders-query.dto";
 import { ShippingFeeDto } from "./dto/shipping-fee.dto";
 import { AdminGhnOrdersQueryDto } from "./dto/admin-ghn-orders-query.dto";
 import { AnalyticsQueryDto } from "./dto/analytics-query.dto";
+import { ExportSellerOrdersQueryDto } from "./dto/export-seller-orders-query.dto";
 import {
   AdminGhnOrderListItem,
   AdminGhnOrderListResult,
@@ -1084,6 +1085,52 @@ export class OrderService {
       MicroserviceErrorHandler.handleError(
         error,
         "get order invoice",
+        "Orders Service",
+      );
+    }
+  }
+
+  /**
+   * EXPORT-CSV-01 — seller order export. Same file-over-TCP transport as the
+   * PDF invoice above: orders returns a `Buffer`, TCP serializes it as
+   * `{type:"Buffer", data:number[]}`, and we rebuild it here.
+   *
+   * Deliberately NOT routed through `exposeOrderWithProducts` — `order_items`
+   * already snapshots everything the file needs, so the gateway enrichment path
+   * would add a product-service round trip for columns that are already on the
+   * row.
+   */
+  async exportSellerOrdersCsv(
+    sellerId: number,
+    query: ExportSellerOrdersQueryDto,
+  ): Promise<Buffer> {
+    try {
+      const result = await firstValueFrom(
+        this.ordersClient
+          .send<{
+            type: string;
+            data: number[];
+          }>(ORDER_MESSAGE_PATTERN.EXPORT_SELLER_ORDERS_CSV, {
+            sellerId,
+            from: query.from,
+            to: query.to,
+            status: query.status,
+          })
+          .pipe(
+            // WRITE, not READ: this scans a 90-day window and renders the whole
+            // document before answering — heavier than a paged list read.
+            timeout(TCP_TIMEOUT_MS.WRITE),
+            retryOnTransportError(),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      );
+      return Buffer.from(result.data);
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "export seller orders csv",
         "Orders Service",
       );
     }

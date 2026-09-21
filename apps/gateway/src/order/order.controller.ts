@@ -29,6 +29,7 @@ import { GetOrdersByUserQueryDto } from "./dto/get-orders-query.dto";
 import { SellerOrdersQueryDto } from "./dto/seller-orders-query.dto";
 import { AdminGhnOrdersQueryDto } from "./dto/admin-ghn-orders-query.dto";
 import { AnalyticsQueryDto } from "./dto/analytics-query.dto";
+import { ExportSellerOrdersQueryDto } from "./dto/export-seller-orders-query.dto";
 import {
   SetGhnDemoStatusDto,
   UpdateGhnCodDto,
@@ -602,6 +603,48 @@ export class OrderController {
   ): Promise<unknown> {
     const sellerId = req.user?.id ?? 0;
     return this.orderService.getSellerAnalytics(sellerId, query);
+  }
+
+  // EXPORT-CSV-01. MUST stay above `@Get("seller/:id")` — declared after it,
+  // `:id` swallows `export` and ParsePublicIdPipe answers 400.
+  @Get("seller/export")
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({
+    summary: "Export the logged-in seller's orders as a CSV file",
+    description:
+      "One row per order ITEM over the requested window. `from`/`to` are " +
+      "required; the window is capped at 90 days and 5.000 item rows, and a " +
+      "request over either cap is a 400 naming the actual figure. " +
+      "`shippingFee`, `discountAmount`, `voucherCode` and `orderTotal` are " +
+      "order-level and are written on the first row of each order only, so " +
+      "summing a column does not double-count.",
+  })
+  @ApiResponse({ status: 200, description: "CSV file (text/csv, UTF-8 BOM)." })
+  @ApiResponse({
+    status: 400,
+    description: "Invalid date range, or over the 90-day / 5.000-row cap.",
+  })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  async exportSellerOrders(
+    @Query(ValidationPipe) query: ExportSellerOrdersQueryDto,
+    @Req() req: Request,
+    @Res() res: Response,
+  ): Promise<void> {
+    const sellerId = req.user?.id ?? 0;
+    const csvBuffer = await this.orderService.exportSellerOrdersCsv(
+      sellerId,
+      query,
+    );
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    // Calendar day only: `@IsDateString()` also accepts a full ISO timestamp,
+    // and its colons make a filename Windows refuses to save.
+    const fromDay = query.from.slice(0, 10);
+    const toDay = query.to.slice(0, 10);
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="trybuy-orders-${fromDay}-${toDay}.csv"`,
+    );
+    res.end(csvBuffer);
   }
 
   @Get("admin/analytics")
