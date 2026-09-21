@@ -1,13 +1,10 @@
 export const INVENTORY_MESSAGE_PATTERNS = {
   // Basic CRUD operations
   INVENTORY_CREATE: "inventory.create",
-  INVENTORY_FIND_ALL: "inventory.find_all",
   INVENTORY_FIND_ONE: "inventory.find_one",
   INVENTORY_FIND_BY_PRODUCT_ID: "inventory.find_by_product_id",
-  INVENTORY_FIND_BY_SKU: "inventory.find_by_sku",
   INVENTORY_GET_BY_PRODUCT_IDS: "inventory.get_by_product_ids",
   INVENTORY_UPDATE: "inventory.update",
-  INVENTORY_REMOVE: "inventory.remove",
   INVENTORY_REMOVE_BY_PRODUCT: "inventory.remove_by_product",
 
   // Stock operations
