@@ -20,6 +20,7 @@ import {
 import { EVENT } from "@app/common/constants/event";
 import { HttpToRpcExceptionFilter, RmqService } from "@app/common";
 import { Inventory } from "./inventory.entity";
+import { INVENTORY_MESSAGE_PATTERNS } from "libs/constant/message-pattern-inventory.constant";
 
 @UseFilters(HttpToRpcExceptionFilter)
 @Controller("inventory")
@@ -31,25 +32,19 @@ export class InventoryController {
     private readonly rmqService: RmqService,
   ) {}
 
-  @MessagePattern("inventory.create")
+  @MessagePattern(INVENTORY_MESSAGE_PATTERNS.INVENTORY_CREATE)
   async createInventory(data: CreateInventoryDto): Promise<Inventory> {
     this.logger.log(`[INVENTORY-TCP] Create inventory`, data);
     return this.inventoryService.create(data);
   }
 
-  @MessagePattern("inventory.find_all")
-  async findAllInventory(): Promise<Inventory[]> {
-    this.logger.log(`[INVENTORY-TCP] Find all inventory`);
-    return this.inventoryService.findAll();
-  }
-
-  @MessagePattern("inventory.find_one")
+  @MessagePattern(INVENTORY_MESSAGE_PATTERNS.INVENTORY_FIND_ONE)
   async findOneInventory(id: number): Promise<Inventory> {
     this.logger.log(`[INVENTORY-TCP] Find inventory id ${id}`);
     return this.inventoryService.findOne(id);
   }
 
-  @MessagePattern("inventory.find_by_product_id")
+  @MessagePattern(INVENTORY_MESSAGE_PATTERNS.INVENTORY_FIND_BY_PRODUCT_ID)
   async findByProductId(productId: number): Promise<Inventory> {
     this.logger.log(
       `[INVENTORY-TCP] Find inventory by product id ${productId}`,
@@ -57,19 +52,13 @@ export class InventoryController {
     return this.inventoryService.findByProductId(productId);
   }
 
-  @MessagePattern("inventory.find_by_sku")
-  async findBySku(sku: string): Promise<Inventory> {
-    this.logger.log(`[INVENTORY-TCP] Find inventory by sku ${sku}`);
-    return this.inventoryService.findBySku(sku);
-  }
-
-  @MessagePattern("inventory.get_by_product_ids")
+  @MessagePattern(INVENTORY_MESSAGE_PATTERNS.INVENTORY_GET_BY_PRODUCT_IDS)
   async getInventoryByProductIds(productIds: number[]): Promise<Inventory[]> {
     this.logger.log(`[INVENTORY-TCP] Get inventory by product ids`, productIds);
     return this.inventoryService.getInventoryByProductIds(productIds);
   }
 
-  @MessagePattern("inventory.check_stock")
+  @MessagePattern(INVENTORY_MESSAGE_PATTERNS.INVENTORY_CHECK_STOCK)
   async checkStock(data: {
     productId: number;
     quantity: number;
@@ -85,7 +74,7 @@ export class InventoryController {
     );
   }
 
-  @MessagePattern("inventory.reserve_stock")
+  @MessagePattern(INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK)
   async reserveStock(data: {
     productId: number;
     quantity: number;
@@ -103,7 +92,7 @@ export class InventoryController {
     );
   }
 
-  @MessagePattern("inventory.release_stock")
+  @MessagePattern(INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK)
   async releaseStock(data: {
     productId: number;
     quantity: number;
@@ -121,7 +110,7 @@ export class InventoryController {
     );
   }
 
-  @MessagePattern("inventory.consume_reserved_stock")
+  @MessagePattern(INVENTORY_MESSAGE_PATTERNS.INVENTORY_CONSUME_RESERVED_STOCK)
   async consumeReservedStock(data: {
     productId: number;
     quantity: number;
@@ -139,7 +128,7 @@ export class InventoryController {
     );
   }
 
-  @MessagePattern("inventory.restock_returned")
+  @MessagePattern(INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESTOCK_RETURNED)
   async restockReturnedStock(data: {
     productId: number;
     quantity: number;
@@ -157,7 +146,7 @@ export class InventoryController {
     );
   }
 
-  @MessagePattern("inventory.get_low_stock")
+  @MessagePattern(INVENTORY_MESSAGE_PATTERNS.INVENTORY_GET_LOW_STOCK)
   async getLowStockItems(data?: {
     productIds?: number[];
   }): Promise<Inventory[]> {
@@ -165,7 +154,7 @@ export class InventoryController {
     return this.inventoryService.getLowStockItems(data?.productIds);
   }
 
-  @MessagePattern("inventory.update")
+  @MessagePattern(INVENTORY_MESSAGE_PATTERNS.INVENTORY_UPDATE)
   async updateInventory(data: {
     id: number;
     update: UpdateInventoryDto;
@@ -174,14 +163,7 @@ export class InventoryController {
     return this.inventoryService.update(data.id, data.update);
   }
 
-  @MessagePattern("inventory.remove")
-  async removeInventory(id: number): Promise<{ success: boolean }> {
-    this.logger.log(`[INVENTORY-TCP] Remove inventory id ${id}`);
-    const success = await this.inventoryService.remove(id);
-    return { success };
-  }
-
-  @MessagePattern("inventory.remove_by_product")
+  @MessagePattern(INVENTORY_MESSAGE_PATTERNS.INVENTORY_REMOVE_BY_PRODUCT)
   async removeInventoryByProduct(
     productId: number,
   ): Promise<{ deleted: number }> {

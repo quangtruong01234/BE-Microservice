@@ -117,13 +117,6 @@ export class InventoryService {
     }
   }
 
-  async findAll(): Promise<Inventory[]> {
-    return await this.inventoryRepository.find({
-      where: { isActive: true },
-      order: { createdAt: "DESC" },
-    });
-  }
-
   async findOne(id: number): Promise<Inventory> {
     const result = await this.inventoryRepository.findOne({
       where: { id, isActive: true },
@@ -172,15 +165,6 @@ export class InventoryService {
     return qb.getOne();
   }
 
-  async findBySku(sku: string): Promise<Inventory> {
-    const result = await this.inventoryRepository.findOne({
-      where: { sku, isActive: true },
-    });
-    if (!result)
-      throw new NotFoundException(INVENTORY_MESSAGE.NOT_FOUND_BY_SKU(sku));
-    return result;
-  }
-
   async update(id: number, data: UpdateInventoryDto): Promise<Inventory> {
     const inventory = await this.findOne(id);
     if (!inventory) {
@@ -227,13 +211,6 @@ export class InventoryService {
       );
     }
     return updatedInventory;
-  }
-
-  async remove(id: number): Promise<boolean> {
-    const result = await this.inventoryRepository.update(id, {
-      isActive: false,
-    });
-    return result.affected != null && result.affected > 0;
   }
 
   /**
