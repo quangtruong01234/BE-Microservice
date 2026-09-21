@@ -102,7 +102,7 @@ export class PaymentsController {
     }
   }
 
-  @MessagePattern("get_payment_url")
+  @MessagePattern(PAYMENT_MESSAGE_PATTERN.GET_PAYMENT_URL)
   getPaymentUrl(
     @Payload()
     data: {
