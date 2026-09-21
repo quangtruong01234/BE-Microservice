@@ -69,8 +69,6 @@ export const INVENTORY_MESSAGE = {
     `Inventory with id ${id} not found after update`,
   NOT_FOUND_BY_PRODUCT: (productId: number | string): string =>
     `Inventory for product ${productId} not found`,
-  NOT_FOUND_BY_SKU: (sku: string): string =>
-    `Inventory with sku ${sku} not found`,
   CANNOT_MODIFY_ANOTHER_USER: "You cannot modify another user's inventory",
   SKU_NOT_OF_PRODUCT: "SKU does not belong to this product",
 } as const;
@@ -172,6 +170,10 @@ export const ORDER_MESSAGE = {
   INVALID_TO_DATE: (to: string): string => `Invalid "to" date: ${to}`,
   INVALID_FROM_DATE: (from: string): string => `Invalid "from" date: ${from}`,
   FROM_AFTER_TO: `"from" must be on or before "to"`,
+  EXPORT_RANGE_TOO_WIDE: (days: number, maxDays: number): string =>
+    `Export window is ${days} days; the maximum is ${maxDays}. Narrow the date range.`,
+  EXPORT_TOO_MANY_ROWS: (rows: number, maxRows: number): string =>
+    `Export matches ${rows} item rows; the maximum is ${maxRows}. Narrow the date range or filter by status.`,
   NO_GHN_ORDER_CODE: (orderId: number | string): string =>
     `Order ${orderId} has no GHN order code`,
   GHN_ACTION_NOT_ALLOWED: (

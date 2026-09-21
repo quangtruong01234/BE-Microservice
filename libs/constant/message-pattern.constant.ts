@@ -54,6 +54,7 @@ export const ORDER_MESSAGE_PATTERN = {
   GHN_WEBHOOK: "handle_ghn_webhook",
   VERIFY_PRODUCT_PURCHASED: "order.verify_product_purchased",
   GET_ORDERS_BY_SELLER: "order.get_by_seller",
+  EXPORT_SELLER_ORDERS_CSV: "order.export_seller_csv",
   CONFIRM_ORDER: "order.confirm",
   READY_TO_SHIP: "order.ready_to_ship",
   CALCULATE_SHIPPING_FEE: "order.calculate_shipping_fee",
