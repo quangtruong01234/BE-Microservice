@@ -19,6 +19,7 @@ import {
   Like,
   QueryFailedError,
   Repository,
+  SelectQueryBuilder,
 } from "typeorm";
 import { Order, OrderStatus } from "./entity/order.entity";
 import { OrderOutbox } from "./entity/order-outbox.entity";
@@ -28,6 +29,11 @@ import {
   generatePublicId,
   isPublicId,
   isRmqPublisherLive,
+  toCsv,
+  startOfVnDay,
+  endOfVnDay,
+  startOfVnDayBefore,
+  vnWallClockShiftMinutes,
 } from "@app/common";
 import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 import { CachedService } from "@app/cached";
@@ -47,6 +53,14 @@ import {
   isGhnStatusWithoutLocalStatus,
 } from "libs/constant/shipping.constant";
 import { generateInvoicePdf, InvoiceParty } from "./invoice/invoice.generator";
+import {
+  EXPORT_MAX_ROWS,
+  EXPORT_MAX_WINDOW_DAYS,
+  ONE_DAY_MS,
+  SELLER_EXPORT_COLUMNS,
+  SellerExportRow,
+  formatExportTimestamp,
+} from "./export/seller-orders.export";
 import { GhnService } from "./ghn/ghn.service";
 import {
   GhnOrderDetail,
@@ -96,6 +110,7 @@ import {
   VoucherEvaluation,
   VoucherEvaluationContext,
   VoucherPreview,
+  SellerOrdersExportQuery,
 } from "./orders.types";
 
 /**
@@ -2015,10 +2030,23 @@ export class OrdersService {
     const completedOrders = statusDistribution[OrderStatus.COMPLETED] ?? 0;
 
     // 2. Revenue over time — goods revenue from COMPLETED orders per period.
+    //
+    // EXPORT-TZ-01: the bucket is a VN calendar day, so the shift has to be
+    // applied inside SQL — this grouping is the one place the raw column is
+    // compared and JS never sees it. `vnWallClockShiftMinutes` is a locally
+    // computed integer (420 on a UTC prod box, 0 on a UTC+7 dev box), which is
+    // why interpolating it is safe. Without it the bounds would be VN while
+    // the labels stayed UTC, and a chart could carry a point dated the day
+    // BEFORE the window it was asked for.
+    const vnShiftMinutes = vnWallClockShiftMinutes(fromDate);
+    const createdAtVn =
+      vnShiftMinutes === 0
+        ? "o.createdAt"
+        : `o.createdAt + INTERVAL ${Number(vnShiftMinutes)} MINUTE`;
     const revenueQb = this.orderItemRepository
       .createQueryBuilder("oi")
       .innerJoin("oi.order", "o")
-      .select(`DATE_FORMAT(o.createdAt, '${dateFormat}')`, "period")
+      .select(`DATE_FORMAT(${createdAtVn}, '${dateFormat}')`, "period")
       .addSelect("SUM(oi.price * oi.quantity)", "revenue")
       .addSelect("COUNT(DISTINCT o.id)", "orderCount")
       .where("o.status = :status", { status: OrderStatus.COMPLETED })
@@ -2102,6 +2130,15 @@ export class OrdersService {
    * Resolve the analytics window. Both bounds are optional; defaults to the
    * last 30 days. Dates are treated as calendar-day granular — `from` snaps to
    * start-of-day and `to` to end-of-day (inclusive).
+   *
+   * EXPORT-TZ-01: the day is a **Vietnamese** calendar day, pinned regardless
+   * of the server's zone. This used to snap with `setHours()`, i.e. in the
+   * process's local time — which on prod (UTC) silently shifted the window 7
+   * hours, so a seller asking for 1–19 September got 07:00 on the 1st through
+   * 06:59 on the 20th. That does not just mislabel rows, it DROPS the ones
+   * placed between midnight and 07:00 on the first day and invents rows from
+   * the day after the last. A missing row in an export is the failure mode
+   * worth the most care here: nothing in the file hints that it is incomplete.
    */
   private resolveAnalyticsRange(
     from?: string,
@@ -2109,26 +2146,26 @@ export class OrdersService {
   ): { fromDate: Date; toDate: Date } {
     let toDate: Date;
     if (to) {
-      toDate = new Date(to);
-      if (Number.isNaN(toDate.getTime())) {
+      const resolvedTo = endOfVnDay(to);
+      if (!resolvedTo) {
         throw new BadRequestException(ORDER_MESSAGE.INVALID_TO_DATE(to));
       }
-      toDate.setHours(23, 59, 59, 999);
+      toDate = resolvedTo;
     } else {
+      // No `to` means "up to now" — an instant, not a day, so it is NOT
+      // snapped forward; snapping would include orders not yet placed.
       toDate = new Date();
     }
 
     let fromDate: Date;
     if (from) {
-      fromDate = new Date(from);
-      if (Number.isNaN(fromDate.getTime())) {
+      const resolvedFrom = startOfVnDay(from);
+      if (!resolvedFrom) {
         throw new BadRequestException(ORDER_MESSAGE.INVALID_FROM_DATE(from));
       }
-      fromDate.setHours(0, 0, 0, 0);
+      fromDate = resolvedFrom;
     } else {
-      fromDate = new Date(toDate);
-      fromDate.setDate(fromDate.getDate() - 30);
-      fromDate.setHours(0, 0, 0, 0);
+      fromDate = startOfVnDayBefore(toDate, 30);
     }
 
     if (fromDate.getTime() > toDate.getTime()) {
@@ -3739,6 +3776,133 @@ export class OrdersService {
       .getManyAndCount();
 
     return PaginatedResponse.of(data, total, page, limit);
+  }
+
+  /**
+   * EXPORT-CSV-01 — render the seller's own order ITEMS over a bounded window
+   * as a CSV file.
+   *
+   * `order_items` already snapshots `sellerId`, `productName`,
+   * `productPublicId`, `skuLabel`, `price` and `quantity`, so the whole file
+   * comes out of ONE join here — no product-service enrichment, no N+1, and the
+   * gateway does not touch its own enrichment path for this route.
+   *
+   * Deliberately synchronous with a hard cap rather than an async job: at this
+   * catalog size a job table + worker + storage + poll endpoint is ~5x the work
+   * for the same file. The whole document is buffered in memory (~1.2 MB at the
+   * cap) instead of streamed, because once `res.write()` fires the response is
+   * committed — a failure halfway can no longer become a 4xx, and the client
+   * silently receives a truncated file that opens fine. That is the worst
+   * failure mode a CSV export has.
+   */
+  async exportSellerOrdersCsv(query: SellerOrdersExportQuery): Promise<Buffer> {
+    const { fromDate, toDate } = this.resolveAnalyticsRange(
+      query.from,
+      query.to,
+    );
+    const windowDays = Math.ceil(
+      (toDate.getTime() - fromDate.getTime()) / ONE_DAY_MS,
+    );
+    if (windowDays > EXPORT_MAX_WINDOW_DAYS) {
+      throw new BadRequestException(
+        ORDER_MESSAGE.EXPORT_RANGE_TOO_WIDE(windowDays, EXPORT_MAX_WINDOW_DAYS),
+      );
+    }
+
+    // COUNT first and refuse with the REAL row count: "narrow the range" with
+    // no number leaves the seller guessing how much to narrow it by.
+    const rowCount = await this.buildSellerExportQuery(
+      query,
+      fromDate,
+      toDate,
+    ).getCount();
+    if (rowCount > EXPORT_MAX_ROWS) {
+      throw new BadRequestException(
+        ORDER_MESSAGE.EXPORT_TOO_MANY_ROWS(rowCount, EXPORT_MAX_ROWS),
+      );
+    }
+
+    const items = await this.buildSellerExportQuery(
+      query,
+      fromDate,
+      toDate,
+    ).getMany();
+
+    const latestHistory = await this.findLatestShippingHistory([
+      ...new Set(items.map((item) => Number(item.order.id))),
+    ]);
+
+    const seenOrderIds = new Set<number>();
+    const rows: SellerExportRow[] = items.map((item) => {
+      const order = item.order;
+      const orderId = Number(order.id);
+      // `shippingFee` and `orderTotal` belong to the ORDER, not to the item.
+      // Repeating them on every line makes a seller's SUM double-count, and
+      // they will (correctly) report that as "the app computes money wrong".
+      const isFirstRowOfOrder = !seenOrderIds.has(orderId);
+      seenOrderIds.add(orderId);
+      const [buyerName, buyerPhone] = order.shippingAddress
+        .split("|")
+        .map((part) => (part ?? "").trim());
+
+      return {
+        orderId: order.publicId ?? String(order.id),
+        orderDate: formatExportTimestamp(order.createdAt),
+        status: order.status ?? "",
+        paymentMethod: order.paymentMethod,
+        paidAt: formatExportTimestamp(order.paidAt),
+        buyerName: buyerName || "",
+        buyerPhone: buyerPhone || "",
+        productId: item.productPublicId ?? String(item.productId),
+        productName: item.productName,
+        skuLabel: item.skuLabel,
+        quantity: item.quantity,
+        unitPrice: Number(item.price),
+        lineTotal: Number(item.price) * item.quantity,
+        shippingFee: isFirstRowOfOrder ? (order.shippingFee ?? 0) : null,
+        // `?? 0` rather than passing the null through: an empty cell on a first
+        // row would be indistinguishable from the deliberate blank on a
+        // continuation row, so "no voucher" has to render as a real 0.
+        discountAmount: isFirstRowOfOrder ? (order.discountAmount ?? 0) : null,
+        voucherCode: isFirstRowOfOrder ? order.voucherCode : null,
+        orderTotal: isFirstRowOfOrder ? Number(order.total) : null,
+        trackingCode: order.ghnOrderCode,
+        ghnStatus: latestHistory.get(orderId)?.ghnStatus ?? null,
+      };
+    });
+
+    return Buffer.from(toCsv(rows, SELLER_EXPORT_COLUMNS), "utf8");
+  }
+
+  /**
+   * Filtered at the ITEM level on `items.seller_id`, NOT via
+   * `getOrdersBySeller()`. That one resolves the seller's product ids and then
+   * `leftJoinAndSelect`s *every* item of any order containing one of them —
+   * harmless today because checkout splits orders per seller, but it is exactly
+   * what would make `lineTotal` stop summing to this seller's revenue if orders
+   * are ever un-split.
+   */
+  private buildSellerExportQuery(
+    query: SellerOrdersExportQuery,
+    fromDate: Date,
+    toDate: Date,
+  ): SelectQueryBuilder<OrderItem> {
+    const qb = this.orderItemRepository
+      .createQueryBuilder("item")
+      .innerJoinAndSelect("item.order", "order")
+      .where("item.sellerId = :sellerId", { sellerId: query.sellerId })
+      .andWhere("order.createdAt BETWEEN :fromDate AND :toDate", {
+        fromDate,
+        toDate,
+      })
+      .orderBy("order.createdAt", "ASC")
+      .addOrderBy("order.id", "ASC")
+      .addOrderBy("item.id", "ASC");
+
+    if (query.status) {
+      qb.andWhere("order.status = :status", { status: query.status });
+    }
+    return qb;
   }
 
   /**

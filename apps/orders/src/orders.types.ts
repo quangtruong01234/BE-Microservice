@@ -82,6 +82,19 @@ export interface AnalyticsQuery {
   topN?: number;
 }
 
+/**
+ * EXPORT-CSV-01 — one seller's order items over a bounded window, rendered as a
+ * CSV file. Both bounds are REQUIRED (unlike analytics, which defaults to the
+ * last 30 days): an export with an implicit range is how someone accidentally
+ * downloads the whole history and then reports the endpoint as slow.
+ */
+export interface SellerOrdersExportQuery {
+  sellerId: number;
+  from: string;
+  to: string;
+  status?: string;
+}
+
 export interface RevenuePoint {
   period: string;
   revenue: number;

@@ -18,6 +18,7 @@ import type {
   ReturnRequestView,
   AvailableVoucher,
   VoucherPreview,
+  SellerOrdersExportQuery,
 } from "./orders.types";
 import { EVENT } from "@app/common/constants/event";
 import {
@@ -122,7 +123,7 @@ export class OrdersController {
     );
   }
 
-  @MessagePattern("get_orders_by_user")
+  @MessagePattern(ORDER_MESSAGE_PATTERN.GET_ORDERS_BY_USER)
   async getOrdersByUser(
     @Payload()
     payload: {
@@ -335,6 +336,13 @@ export class OrdersController {
       data.requestingUserId,
       data.requestingUserRole ?? "user",
     );
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.EXPORT_SELLER_ORDERS_CSV)
+  async exportSellerOrdersCsv(
+    @Payload() payload: SellerOrdersExportQuery,
+  ): Promise<Buffer> {
+    return await this.ordersService.exportSellerOrdersCsv(payload);
   }
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.GHN_WEBHOOK)
