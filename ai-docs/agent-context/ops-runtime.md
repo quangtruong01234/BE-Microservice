@@ -84,7 +84,15 @@
   /var/cache/nginx/trybuy` (steps in conf header) and set
   `RATE_LIMIT_SKIP_PUBLIC_GET=true` in the gateway prod env (ONLY behind nginx;
   skips the Redis rate-limit counter for @Public GETs without explicit
-  `@RateLimit`).
+  `@RateLimit`). **Actually set on prod 2026-09-22, not before** — it sat unset
+  from 2026-07-20 while the CHANGELOG claimed otherwise, so every @Public GET
+  paid a Redis round-trip for two months. The guard reads the flag once at
+  construction (`rate-limit.guard.ts:36`), so editing `local/nodeA/.env` does
+  nothing until `pm2 restart gateway`; the app loads its own env via
+  `dotenv.config()`, so a plain restart re-reads the file and `--update-env` is
+  not involved. Verify by probe, not by reading the file: 140 requests to a
+  `@Public` GET outside the nginx micro-cache regex must all return 200, where
+  the counted behaviour 429s from #121.
 - **Metrics scrape (RESIL-03, 2026-08-14)**: `GET /metrics` on the gateway
   serves Prometheus text (default process metrics + `http_requests_total` /
   `http_request_duration_seconds` / `http_requests_in_flight`, labelled with the

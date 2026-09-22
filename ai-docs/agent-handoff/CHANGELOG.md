@@ -3480,7 +3480,17 @@
     120/60s in `.env.example` and in `local/nodeA/.env.production.example`. On
     **prod** the route is not counted at all: `RATE_LIMIT_SKIP_PUBLIC_GET=true`
     skips the Redis counter for `@Public` GETs without an explicit decorator, so
-    only nginx `limit_req 30r/s burst 60` per IP applies. The 9-then-429 the FE
+    only nginx `limit_req 30r/s burst 60` per IP applies.
+    **Correction (2026-09-22): that sentence described the intended deploy step,
+    not the box.** The key was never actually set in `local/nodeA/.env` on the
+    EC2, so from 2026-07-20 until 2026-09-22 every `@Public` GET on prod DID pay
+    a Redis round-trip and DID count against the 120/60s default. It is set and
+    the gateway restarted now, verified by probe: 140 requests to
+    `GET /api/products/with-inventory/all` (`@Public`, no `@RateLimit`, and
+    outside the nginx micro-cache regex so each one reaches the guard) in 19.4s
+    at 7.2 req/s — all 140 returned 200, where the old behaviour would have
+    429'd from #121. Lesson worth more than the fix: an ops step written in a
+    changelog is not an ops step performed. The 9-then-429 the FE
     measured is a **dev-box-only** artifact: `local/nodeA/.env` still carries
     `RATE_LIMIT_DEFAULT_LIMIT=10`, left over from a limiter test. The window is
     fixed (not sliding), which is why it stayed hot for the rest of the minute.
