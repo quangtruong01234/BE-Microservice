@@ -18,14 +18,9 @@ Design rationale: [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 
 ## Screenshots
 
-_Pending capture — drop the three files into `docs/img/` and uncomment the
-table below._
-
-<!--
 | Architecture | Swagger UI | RabbitMQ queues |
 |---|---|---|
 | ![Architecture diagram](./docs/img/architecture.png) | ![Swagger UI](./docs/img/swagger.png) | ![RabbitMQ management](./docs/img/rabbitmq.png) |
--->
 
 See [`docs/img/README.md`](./docs/img/README.md) for what each image should
 show and the size budget.

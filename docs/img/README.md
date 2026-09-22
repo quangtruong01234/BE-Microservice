@@ -13,4 +13,9 @@ Crop out anything that identifies the production host, a real email address, or
 a token. The production hostname must never appear in this repository, images
 included.
 
-Once all three exist, uncomment the table in the root `README.md`.
+All three exist and the root `README.md` renders them. They were captured
+headlessly with Puppeteer against a local stack (Mermaid rendered from a locally
+inlined build, Swagger from `localhost:3000/doc`, RabbitMQ clipped to
+`#queues-table-section` so the logged-in username stays out of the shot). To
+redo one, bring the stack up locally and re-shoot the same view — never point
+the capture at production.

@@ -5,30 +5,33 @@
 | **Storefront** | https://fe-react-vite.quangtruong01234.workers.dev |
 | **Shipping console** | https://web-flow-ghn.vercel.app |
 | **API docs** | `/doc` on the deployed gateway (Swagger) |
-| **2-minute video** | _link pending — see [`VIDEO-SCRIPT.md`](./VIDEO-SCRIPT.md)_ |
 
 > ⏰ **The backend runs 14:00–19:00 ICT (UTC+7) only.** This is a portfolio
 > deployment on free-tier infrastructure, not a 24/7 service. Both frontends
 > stay online outside that window, but they cannot load data — the EC2 instance
-> is stopped. If you are reading this outside the window, the video shows the
-> same flows end to end.
+> is stopped. If you are reading this outside the window, the three flows below
+> describe what the running system does, and the screenshots in the root
+> [`README.md`](../README.md) show it.
 
 ---
 
 ## Accounts
 
-> ⚠️ **To the maintainer:** create dedicated demo accounts with publishable
-> passwords and fill this table in. Do **not** paste the internal accounts from
-> `../.agent-local/test-accounts.md` — those are development credentials and
-> must never enter this repository.
+These five accounts exist for this demo only. They hold no real data, the
+payments behind them are sandbox payments, and they are reset whenever the seed
+is re-run — please do not treat them as yours.
 
 | # | Username | Password | Role | What it can do |
 |---|---|---|---|---|
-| 1 | `demo.buyer` | _(fill in)_ | `user` | Browse, cart, checkout, pay, track, review, post |
-| 2 | `demo.seller` | _(fill in)_ | `shop` | Everything above, plus manage its own products, stock and orders |
-| 3 | `demo.seller2` | _(fill in)_ | `shop` | A second shop — shows multi-seller checkout splitting one cart into several orders |
-| 4 | `demo.shipper` | _(fill in)_ | `shipping` | Shipping console: waybills, GHN sync, delivery history |
-| 5 | `demo.admin` | _(fill in)_ | `admin` | Role changes, moderation queue, platform vouchers, every order |
+| 1 | `demo.buyer` | `DemoTryBuy!2026` | `user` | Browse, cart, checkout, pay, track, review, post |
+| 2 | `demo.seller` | `DemoTryBuy!2026` | `shop` | Everything above, plus manage its own products, stock and orders |
+| 3 | `demo.seller2` | `DemoTryBuy!2026` | `shop` | A second shop — shows multi-seller checkout splitting one cart into several orders |
+| 4 | `demo.shipper` | `DemoTryBuy!2026` | `shipping_manager` | Shipping console: waybills, GHN sync, delivery history |
+| 5 | `demo.admin` | `DemoTryBuy!2026` | `admin` | Role changes, moderation queue, platform vouchers, every order |
+
+The role names are the literal values the API uses. There is no `shipping`
+role — the shipping console is gated on `shipping_manager` (read + update) and
+`logistics_operator` (read only).
 
 Payments run against the **ZaloPay and VNPay sandboxes**. No real money moves;
 use the test card details the sandbox shows on its own payment page.
@@ -118,27 +121,30 @@ default:
 | **Storefront** | https://fe-react-vite.quangtruong01234.workers.dev |
 | **Console giao hàng** | https://web-flow-ghn.vercel.app |
 | **Tài liệu API** | `/doc` trên gateway đã deploy (Swagger) |
-| **Video 2 phút** | _chưa có link — xem [`VIDEO-SCRIPT.md`](./VIDEO-SCRIPT.md)_ |
 
 > ⏰ **Backend chỉ chạy 14:00–19:00 giờ Việt Nam.** Đây là bản deploy cho
 > portfolio trên hạ tầng free-tier, không phải dịch vụ 24/7. Hai frontend vẫn
 > online ngoài khung giờ đó nhưng không tải được dữ liệu vì EC2 đã tắt. Nếu bạn
-> đọc ngoài khung giờ, video ghi lại đầy đủ các luồng bên dưới.
+> đọc ngoài khung giờ, ba luồng bên dưới mô tả đúng những gì hệ thống làm khi
+> chạy, còn ảnh chụp màn hình nằm ở [`README.md`](../README.md) gốc.
 
 ## Tài khoản
 
-> ⚠️ **Lưu ý cho người bảo trì:** tạo tài khoản demo riêng với mật khẩu có thể
-> công khai rồi điền vào bảng này. **Không** dán tài khoản nội bộ từ
-> `../.agent-local/test-accounts.md` — đó là credential phát triển và không bao
-> giờ được đưa vào repo.
+Năm tài khoản này chỉ dùng cho bản demo. Chúng không chứa dữ liệu thật, thanh
+toán phía sau là sandbox, và sẽ bị xoá mỗi lần chạy lại seed — mong bạn đừng coi
+chúng là tài khoản của mình.
 
 | # | Tài khoản | Mật khẩu | Vai trò | Làm được gì |
 |---|---|---|---|---|
-| 1 | `demo.buyer` | _(điền)_ | `user` | Xem hàng, giỏ hàng, đặt, thanh toán, theo dõi, đánh giá, đăng bài |
-| 2 | `demo.seller` | _(điền)_ | `shop` | Như trên, thêm quản lý sản phẩm, tồn kho và đơn của shop mình |
-| 3 | `demo.seller2` | _(điền)_ | `shop` | Shop thứ hai — để thấy một giỏ hàng tách thành nhiều đơn theo shop |
-| 4 | `demo.shipper` | _(điền)_ | `shipping` | Console giao hàng: vận đơn, đồng bộ GHN, lịch sử giao |
-| 5 | `demo.admin` | _(điền)_ | `admin` | Đổi vai trò, kiểm duyệt, voucher sàn, xem mọi đơn |
+| 1 | `demo.buyer` | `DemoTryBuy!2026` | `user` | Xem hàng, giỏ hàng, đặt, thanh toán, theo dõi, đánh giá, đăng bài |
+| 2 | `demo.seller` | `DemoTryBuy!2026` | `shop` | Như trên, thêm quản lý sản phẩm, tồn kho và đơn của shop mình |
+| 3 | `demo.seller2` | `DemoTryBuy!2026` | `shop` | Shop thứ hai — để thấy một giỏ hàng tách thành nhiều đơn theo shop |
+| 4 | `demo.shipper` | `DemoTryBuy!2026` | `shipping_manager` | Console giao hàng: vận đơn, đồng bộ GHN, lịch sử giao |
+| 5 | `demo.admin` | `DemoTryBuy!2026` | `admin` | Đổi vai trò, kiểm duyệt, voucher sàn, xem mọi đơn |
+
+Tên vai trò ở đây là giá trị thật mà API dùng. Không có vai trò `shipping` —
+console giao hàng chặn theo `shipping_manager` (đọc + ghi) và
+`logistics_operator` (chỉ đọc).
 
 Thanh toán chạy trên **sandbox ZaloPay và VNPay** — không có tiền thật. Dùng
 thông tin thẻ test mà trang thanh toán sandbox hiển thị.

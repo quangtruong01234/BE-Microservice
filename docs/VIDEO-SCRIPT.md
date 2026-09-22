@@ -1,5 +1,10 @@
 # 2-minute demo video — script
 
+> **Not recorded.** The video was dropped in favour of the written walkthrough
+> in [`DEMO.md`](./DEMO.md) and the screenshots in the root
+> [`README.md`](../README.md); nothing links to a video anywhere. This script is
+> kept as-is so the recording can happen later without re-planning it.
+
 A recruiter watches for thirty seconds before deciding. So the first sentence
 says what the system is, and every later second shows something working rather
 than something being explained.
