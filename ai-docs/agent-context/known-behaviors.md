@@ -31,7 +31,7 @@
   hard-deleted (by definition unreferenced) SKUs deactivate inventory.
 
 ## `paymentUrl` asymmetry on checkout (PAYURL-01, confirmed on prod 2026-08-03, not a defect)
-<!-- kb: id=PAYURL-01; group=orders; files=apps/gateway/src/order/order.service.ts; sha=786c66f55d0a; verified=prod:2026-08-03; keys=paymentUrl,orderUrl,payment-url,single-seller,multi-seller,checkout response,link thanh toán,url thanh toán; summary=Single-seller checkout returns NO paymentUrl; GET /:id/payment-url answers with the key orderUrl. -->
+<!-- kb: id=PAYURL-01; group=orders; files=apps/gateway/src/order/order.service.ts; sha=7f8798a2ade6; verified=prod:2026-08-03; keys=paymentUrl,orderUrl,payment-url,single-seller,multi-seller,checkout response,link thanh toán,url thanh toán; summary=Single-seller checkout returns NO paymentUrl; GET /:id/payment-url answers with the key orderUrl. -->
 
 - Multi-seller basket: `POST /api/order` returns `{orders:[…], paymentUrl}`.
 - Single-seller basket (`apps/gateway/src/order/order.service.ts:390-419`):
@@ -42,7 +42,7 @@
 Never write a test asserting `paymentUrl` on the single-seller shape.
 
 ## Sellers cannot set shipping status by hand (ORD-RBAC-01, 2026-08-13)
-<!-- kb: id=ORD-RBAC-01; group=orders; files=apps/gateway/src/order/order.controller.ts,apps/user/src/rbac/grants.ts; sha=82e9314a8219; verified=unrecorded:2026-08-13; keys=ship,deliver,complete,shipping status,seller 403,admin-only,shipping_manager,trạng thái giao,cập nhật trạng thái đơn,đổi trạng thái đơn; summary=ship/deliver/complete are admin-only; a seller gets 403 before the order is even loaded. -->
+<!-- kb: id=ORD-RBAC-01; group=orders; files=apps/gateway/src/order/order.controller.ts,apps/user/src/rbac/grants.ts; sha=876e9175669e; verified=unrecorded:2026-08-13; keys=ship,deliver,complete,shipping status,seller 403,admin-only,shipping_manager,trạng thái giao,cập nhật trạng thái đơn,đổi trạng thái đơn; summary=ship/deliver/complete are admin-only; a seller gets 403 before the order is even loaded. -->
 
 `PATCH /api/order/:id/{ship,deliver,complete}` is **admin-only**. Role `shop`
 (and every other non-admin role) gets a **403** _"Shipping status after
@@ -67,7 +67,7 @@ does not exist or that they do not own. Deliberate, not an oversight:
   and `logistics_operator` get 403 here too and use the `admin/ghn/*` routes.
 
 ## `paidAt` gates the seller transitions (ORD-GUARD-01, 2026-08-11)
-<!-- kb: id=ORD-GUARD-01; group=orders; files=apps/orders/src/orders.service.ts; sha=cc66fc8703f1; verified=unrecorded:2026-08-11; keys=paidAt,paid_at,assertOnlinePaymentSettled,ready-to-ship,confirm,payment settled,COD,chưa thanh toán,đã thanh toán chưa; summary=A NULL paidAt on a non-COD order blocks every seller transition with a 400 — admin included, no override. -->
+<!-- kb: id=ORD-GUARD-01; group=orders; files=apps/orders/src/orders.service.ts; sha=e073b567b07f; verified=unrecorded:2026-08-11; keys=paidAt,paid_at,assertOnlinePaymentSettled,ready-to-ship,confirm,payment settled,COD,chưa thanh toán,đã thanh toán chưa; summary=A NULL paidAt on a non-COD order blocks every seller transition with a 400 — admin included, no override. -->
 
 `orders.paid_at` is the ONLY payment fact the orders service owns — payments
 lives on Node B and speaks to orders only through the `payment_completed`
@@ -153,7 +153,7 @@ duplicate-product message still comes from the explicit pre-check.
   (a GET commits the pre-update body after the PATCH invalidation).
 
 ## Cancel-with-waybill — detached GHN cancel (BUG-D, fixed 2026-08-03)
-<!-- kb: id=BUG-D; group=orders; files=apps/orders/src/orders.service.ts; sha=cc66fc8703f1; verified=unrecorded:2026-08-03; keys=cancel waybill,GHN cancel,detached,cancelShippingOrderBestEffort,live waybill,buyer cancel; summary=Buyer cancel detaches the GHN cancel — two failed attempts leave a live waybill on a CANCELED order. -->
+<!-- kb: id=BUG-D; group=orders; files=apps/orders/src/orders.service.ts; sha=e073b567b07f; verified=unrecorded:2026-08-03; keys=cancel waybill,GHN cancel,detached,cancelShippingOrderBestEffort,live waybill,buyer cancel; summary=Buyer cancel detaches the GHN cancel — two failed attempts leave a live waybill on a CANCELED order. -->
 
 `GhnModule` uses `HttpModule.register({timeout:5000})` (was axios default `0` =
 infinite), and the buyer-cancel GHN leg is detached
@@ -231,7 +231,7 @@ status "<x>"` and now logs at **warn**, so a new GHN vocabulary word is loud.
   — see GHN-FAIL-NTF-01 immediately below.
 
 ## A failed delivery attempt notifies the buyer ONCE (GHN-FAIL-NTF-01, 2026-09-11)
-<!-- kb: id=GHN-FAIL-NTF-01; group=ghn; files=apps/notification/src/notification.controller.ts,apps/orders/src/orders.service.ts; sha=4893600e7d66; verified=unrecorded:2026-09-11; keys=failed delivery attempt,delivery_fail notification,shipping_history dedupe,redelivery,order.delivery_attempt_failed,delivery_fail,giao thất bại,giao hàng thất bại,thông báo giao hàng; summary=The buyer is notified on the FIRST delivery_fail only, deduped via shipping_history; in-app only, no email, no seller copy. -->
+<!-- kb: id=GHN-FAIL-NTF-01; group=ghn; files=apps/notification/src/notification.controller.ts,apps/orders/src/orders.service.ts; sha=d56c59d011cb; verified=unrecorded:2026-09-11; keys=failed delivery attempt,delivery_fail notification,shipping_history dedupe,redelivery,order.delivery_attempt_failed,delivery_fail,giao thất bại,giao hàng thất bại,thông báo giao hàng; summary=The buyer is notified on the FIRST delivery_fail only, deduped via shipping_history; in-app only, no email, no seller copy. -->
 
 `delivery_fail` is the only one of the ten `GHN_STATUSES_WITHOUT_LOCAL_STATUS`
 that reaches the buyer. The local status is untouched (GHN-FAIL-01 above stands);
@@ -273,7 +273,7 @@ the notification is the entire effect.
   duplicate in-app line, and GHN's retries are hours apart, not milliseconds.
 
 ## A finished order never hears about a missed attempt (GHN-FAIL-NTF-02, 2026-09-14)
-<!-- kb: id=GHN-FAIL-NTF-02; group=ghn; files=apps/orders/src/orders.service.ts; sha=cc66fc8703f1; verified=unrecorded:2026-09-14; keys=NO_REDELIVERY_STATUSES,finished order notification,canceled order,RETURN_REQUESTED,stale waybill,giao thất bại,đơn đã huỷ; summary=A CANCELED/COMPLETED/REFUNDED order is never told about a missed attempt; RETURN_REQUESTED still is. -->
+<!-- kb: id=GHN-FAIL-NTF-02; group=ghn; files=apps/orders/src/orders.service.ts; sha=e073b567b07f; verified=unrecorded:2026-09-14; keys=NO_REDELIVERY_STATUSES,finished order notification,canceled order,RETURN_REQUESTED,stale waybill,giao thất bại,đơn đã huỷ; summary=A CANCELED/COMPLETED/REFUNDED order is never told about a missed attempt; RETURN_REQUESTED still is. -->
 
 Found by `/sweep` auditing GHN-FAIL-NTF-01 before it was pushed; shipped in the
 same unpushed batch, so the narrowed rule is the only one that ever reaches prod.
@@ -341,7 +341,7 @@ extra GHN calls) turns a silent 0 into `400 GHN_MESSAGE.DISTRICT_NOT_FOUND` /
   stored pair (4 distinct, 16 orders) passes.
 
 ## The stored delivery ETA is refreshed by the manual sync, never by the webhook (GHN-ETA-01, 2026-09-11)
-<!-- kb: id=GHN-ETA-01; group=ghn; files=apps/orders/src/ghn/ghn.service.ts,apps/orders/src/entity/order.entity.ts,apps/orders/src/orders.service.ts; sha=7cef450839fe; verified=unrecorded:2026-09-11; keys=expected_delivery_time,leadtime,ETA,delivery date,ghn sync,waybill create,thời gian giao dự kiến,ngày giao dự kiến; summary=The stored ETA is refreshed by the manual sync only, never by the webhook; create and detail name the field differently. -->
+<!-- kb: id=GHN-ETA-01; group=ghn; files=apps/orders/src/ghn/ghn.service.ts,apps/orders/src/entity/order.entity.ts,apps/orders/src/orders.service.ts; sha=0f09a00386ef; verified=unrecorded:2026-09-11; keys=expected_delivery_time,leadtime,ETA,delivery date,ghn sync,waybill create,thời gian giao dự kiến,ngày giao dự kiến; summary=The stored ETA is refreshed by the manual sync only, never by the webhook; create and detail name the field differently. -->
 
 `orders.expected_delivery_time` holds the absolute timestamp GHN quotes. It is
 written at waybill create (the only place it arrives for free) and refreshed on
@@ -374,7 +374,7 @@ recovering the value would cost one GHN call per order and a past order's ETA
 has no reader.
 
 ## Order create rejects an undeliverable address, but still places on a GHN outage (GHN-CREATE-01, 2026-08-13)
-<!-- kb: id=GHN-CREATE-01; group=ghn; files=apps/orders/src/orders.service.ts; sha=cc66fc8703f1; verified=unrecorded:2026-08-13; keys=getShippingFeeOrZero,order create,fee 0,undeliverable address,shipping fee,GHN outage; summary=Order create 400s on a GHN refusal but still places the order at fee 0 on a GHN outage. -->
+<!-- kb: id=GHN-CREATE-01; group=ghn; files=apps/orders/src/orders.service.ts; sha=e073b567b07f; verified=unrecorded:2026-08-13; keys=getShippingFeeOrZero,order create,fee 0,undeliverable address,shipping fee,GHN outage; summary=Order create 400s on a GHN refusal but still places the order at fee 0 on a GHN outage. -->
 
 `POST /api/order` prices shipping through `getShippingFeeOrZero()`
 (`orders.service.ts`), which used to swallow **every** GHN preview error and fall
@@ -711,7 +711,7 @@ a user. See `CHANGELOG.md` 2026-08-11 for the design.
   `POST /api/inventory` after creating a product; doing so is a guaranteed 409.
 
 ## Order item `image` — one key on HTTP, two inside (ORDER-SHAPE-01, 2026-08-11; collapsed by OVERFETCH-01, 2026-08-20)
-<!-- kb: id=ORDER-SHAPE-01; group=orders; aka=RET-NUM-01; files=apps/gateway/src/order/order.service.ts; sha=786c66f55d0a; verified=unrecorded:2026-08-11; keys=order item image,productImage,decorateItem,exposeOrder,refundAmount,subtotal,DECIMAL transformer,ảnh sản phẩm trong đơn; summary=HTTP emits `image` only; productImage survives internally and on the one admin GHN console detail route. -->
+<!-- kb: id=ORDER-SHAPE-01; group=orders; aka=RET-NUM-01; files=apps/gateway/src/order/order.service.ts; sha=7f8798a2ade6; verified=unrecorded:2026-08-11; keys=order item image,productImage,decorateItem,exposeOrder,refundAmount,subtotal,DECIMAL transformer,ảnh sản phẩm trong đơn; summary=HTTP emits `image` only; productImage survives internally and on the one admin GHN console detail route. -->
 
 Order items used to carry BOTH `image` and `productImage` on the decorated read
 paths. Since OVERFETCH-01 every buyer/seller path through `exposeOrder` emits
@@ -807,7 +807,7 @@ upload_presets/<name>` came back with `settings: {"folder":"trybuy/products"}`
   video uploads.
 
 ## The voucher quota gate is an admission gate, not the cap (VOUCHER-CONC-01, 2026-08-18)
-<!-- kb: id=VOUCHER-CONC-01; group=vouchers; files=apps/orders/src/orders.service.ts; sha=cc66fc8703f1; verified=unrecorded:2026-08-18; keys=voucher quota,Redis quota,JUST_FULLY_REDEEMED,claimVoucherQuota,flash code,voucher,mã giảm giá; summary=The Redis voucher quota is an admission gate that fails OPEN and can read pessimistically for up to 300s. -->
+<!-- kb: id=VOUCHER-CONC-01; group=vouchers; files=apps/orders/src/orders.service.ts; sha=e073b567b07f; verified=unrecorded:2026-08-18; keys=voucher quota,Redis quota,JUST_FULLY_REDEEMED,claimVoucherQuota,flash code,voucher,mã giảm giá; summary=The Redis voucher quota is an admission gate that fails OPEN and can read pessimistically for up to 300s. -->
 
 `voucher:quota:<voucherId>` in Redis is claimed at the top of `placeOrder`,
 before the GHN fee preview and before any stock is reserved, so a burst on a
@@ -832,13 +832,17 @@ plus a reservation that then needs compensating. What it is NOT is the cap.
   `FULLY_REDEEMED`. The gate only ever produces 409 `JUST_FULLY_REDEEMED` — the
   same status the DB-level race loser has always returned. That ordering is what
   keeps the change release class A; do not reorder them.
-- **Cancelling never gives a redemption back.** `used_count` is not decremented
-  anywhere — not by buyer cancel, not by the post-commit payment-init failure
-  path, which cancels the order and releases stock but leaves the redemption
-  standing. The Redis mirror deliberately matches that: the claim is kept on
-  commit and only refunded when the checkout did NOT commit. If a future change
-  makes cancellation restore `used_count`, the mirror has to learn the same
-  rule.
+- **Cancelling DOES give the redemption back — superseded by VOUCHER-CANCEL-01
+  (2026-08-26).** As originally shipped (2026-08-18) the claim was kept on commit
+  and refunded only when the checkout did not commit, so `used_count` was never
+  decremented. Eight days later `releaseVoucherRedemption()` was added to every
+  cancel path — buyer cancel, the GHN-originated cancel, and the post-commit
+  payment-init failure — and it deletes the `voucher_redemptions` row,
+  `GREATEST(used_count - 1, 0)`s the counter, and calls `releaseVoucherQuota()`
+  so the Redis mirror learns the same rule. Read VOUCHER-CANCEL-01 for the
+  residuals (cancel-farming is now possible by design). What is unchanged here:
+  the release is best-effort, so a failed one leaves the mirror pessimistically
+  high — the same tolerated state as a lost refund above.
 - **The per-user re-check inside `redeemVoucher` must stay a LOCKING read.**
   Under MySQL REPEATABLE READ a plain SELECT answers from the snapshot the
   transaction took before its conditional UPDATE, which cannot see the row
@@ -1405,7 +1409,7 @@ Things that are easy to get wrong here:
   account is still reachable by sending its literal `"   "`.
 
 ## Cancelling an order gives the voucher back (VOUCHER-CANCEL-01, 2026-08-26)
-<!-- kb: id=VOUCHER-CANCEL-01; group=vouchers; files=apps/orders/src/orders.service.ts; sha=cc66fc8703f1; verified=unrecorded:2026-08-26; keys=voucher cancel,releaseVoucherRedemption,used_count,cancel farming,redemption back,voucher; summary=Cancelling gives the redemption back, so cancel-farming a limited code is possible by design. -->
+<!-- kb: id=VOUCHER-CANCEL-01; group=vouchers; files=apps/orders/src/orders.service.ts; sha=e073b567b07f; verified=unrecorded:2026-08-26; keys=voucher cancel,releaseVoucherRedemption,used_count,cancel farming,redemption back,voucher; summary=Cancelling gives the redemption back, so cancel-farming a limited code is possible by design. -->
 
 `releaseVoucherRedemption()` deletes the `voucher_redemptions` row, decrements
 `used_count` and drops the Redis quota mirror on every cancel path.
@@ -1420,7 +1424,7 @@ Residuals, deliberate:
   was permanently burning a slot for an order that was never fulfilled.
 
 ## A loosening voucher edit cannot be walked back (VOUCHER-EDIT-01, 2026-08-26)
-<!-- kb: id=VOUCHER-EDIT-01; group=vouchers; files=apps/orders/src/orders.service.ts; sha=cc66fc8703f1; verified=unrecorded:2026-08-26; keys=voucher edit,isStricterCap,loosening,usageLimit,redeemed voucher,tightening,voucher; summary=On a redeemed voucher only loosening is allowed, so a mistaken widening cannot be walked back. -->
+<!-- kb: id=VOUCHER-EDIT-01; group=vouchers; files=apps/orders/src/orders.service.ts; sha=e073b567b07f; verified=unrecorded:2026-08-26; keys=voucher edit,isStricterCap,loosening,usageLimit,redeemed voucher,tightening,voucher; summary=On a redeemed voucher only loosening is allowed, so a mistaken widening cannot be walked back. -->
 
 On a REDEEMED voucher only LOOSENING is allowed (`isStricterCap()` in
 `orders.service.ts`); an untouched voucher edits freely. So the reverse of a
