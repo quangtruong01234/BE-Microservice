@@ -16,6 +16,104 @@ Design rationale: [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 
 ---
 
+## Live demo
+
+| | |
+|---|---|
+| **Storefront** | https://fe-react-vite.quangtruong01234.workers.dev |
+| **Shipping console** | https://web-flow-ghn.vercel.app |
+| **API docs** | `/doc` on the deployed gateway (Swagger) |
+
+> ⏰ **The backend runs 14:00–19:00 ICT (UTC+7) only**, to keep hosting cost
+> near zero. Both frontends stay online 24/7, but outside that window they
+> cannot log in or load data. The screenshots below show each flow on the
+> running system.
+
+| Username | Role | Use it for |
+|---|---|---|
+| `demo.buyer` | `user` | Browse, cart, checkout, pay, track orders |
+| `demo.seller` | `shop` | Manage own products, stock and incoming orders |
+| `demo.seller2` | `shop` | Second shop — one cart splits into one order per shop |
+| `demo.shipper` | `shipping_manager` | Shipping console: waybills, GHN sync, COD |
+| `demo.admin` | `admin` | Role changes, moderation, platform vouchers |
+
+All five accounts share one password, listed in [`docs/DEMO.md`](./docs/DEMO.md).
+Demo data only; payments go through the VNPay / ZaloPay sandboxes — no real
+money moves.
+
+### Flow 1 — Buying (≈4 min · storefront · `demo.buyer`)
+
+1. Browse the catalog without logging in. Search `ao thun` — it finds *áo thun*.
+   Product URLs read `prod_…`, never a database id.
+2. Log in and add items from two different shops to the cart.
+3. Check out, optionally with a voucher. The cart splits into one order per
+   shop; stock is reserved, not decremented.
+4. Pay through the VNPay or ZaloPay sandbox (or COD). The order becomes `PAID`
+   when the signed webhook lands, not when the browser returns.
+5. Track the order. The status stepper and in-app notifications update in real
+   time over Socket.IO as the seller and carrier act.
+
+| Checkout | Order detail |
+|---|---|
+| ![Checkout: address, payment method (ZaloPay · VNPay · COD), order total](./docs/img/demo/buyer-checkout.png) | ![Order detail: opaque id ord_…, status stepper, GHN waybill code](./docs/img/demo/buyer-order-detail.png) |
+| Address, payment method (ZaloPay · VNPay · COD), order total | Opaque id `ord_…`, status stepper, GHN waybill code |
+
+### Flow 2 — Selling (≈3 min · storefront · `demo.seller`)
+
+1. Log in as the seller and open **Orders**. Only this shop's items are
+   visible — the buyer's order from the other shop is not.
+2. Unpaid online orders are blocked: they cannot be confirmed until payment
+   lands. COD orders are exempt, since cash is collected on delivery.
+3. Confirm the order. The status moves to *Confirmed* and the buyer is notified
+   immediately.
+4. Mark it ready to ship. The GHN waybill is handed to the carrier and the order
+   appears in the shipping console.
+
+| Seller queue | After confirming |
+|---|---|
+| ![Seller queue: unpaid order blocked, COD order ready to confirm](./docs/img/demo/seller-queue.png) | ![After confirming: the next action is ready to ship](./docs/img/demo/seller-confirmed.png) |
+| Unpaid order blocked, COD order ready to confirm | The next action is "ready to ship" |
+
+### Flow 3 — Shipping (≈3 min · shipping console · `demo.shipper`)
+
+1. Log in to the console. A `user` account is refused — the console is
+   role-gated, not merely hidden.
+2. Open **GHN Sync** and press **Sync** on an order. The console never calls GHN
+   directly; the backend pulls the status and records who synced and how.
+3. Open the shipment detail: receiver, payment and COD amount, read-only carrier
+   fields, and the webhook/sync timeline. *Update COD* is offered only while the
+   parcel has not entered transit.
+4. Switch back to the storefront as the buyer: the new status and its
+   notification are already there.
+
+| GHN Sync | Shipment detail |
+|---|---|
+| ![GHN Sync: pending count, per-order sync, last-synced time](./docs/img/demo/shipping-sync.png) | ![Shipment detail: payment and COD, read-only carrier fields, action panel](./docs/img/demo/shipping-detail.png) |
+| Pending count, per-order sync, last-synced time | Payment & COD, read-only carrier fields, action panel |
+
+### What to look at
+
+- **Press "Pay" twice.** Submit twice, or let the webhook arrive twice — the
+  order is charged once. Every consumer is idempotent on the order id, because
+  at-least-once delivery makes redelivery normal.
+- **Race the last unit.** Check out the final item of a SKU in two browsers at
+  once. One succeeds, the other gets a clean "out of stock" — never a negative
+  stock row.
+- **The ids in the URL.** `ord_…`, `prod_…`, `usr_…`. Internal numeric keys
+  never leave the gateway, so ids cannot be enumerated; ownership is still
+  checked after the id resolves.
+- **The payment webhook.** Replay it with a tampered signature (the route is in
+  Swagger) and it is rejected. Order state changes on the signed callback, never
+  on the browser redirect.
+- **A role change mid-session.** As `demo.admin`, promote `demo.buyer` to
+  `shop`. The role lives in the JWT, so it takes effect on next login;
+  `GET /api/user/me` surfaces the drift so the UI can prompt a re-login.
+
+Screenshots use demo data only; names, phone numbers and addresses are
+fictional.
+
+---
+
 ## Screenshots
 
 | Architecture | Swagger UI | RabbitMQ queues |

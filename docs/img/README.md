@@ -9,6 +9,11 @@ the README stays fast to load on a phone; PNG, roughly 1600 px wide.
 | `swagger.png` | `http://localhost:3000/doc` with a few controller groups expanded, so the HTTP surface is visible at a glance. |
 | `rabbitmq.png` | The RabbitMQ management UI at `http://localhost:15672`, queues tab, with the TryBuy queues and their consumer counts. |
 
+`demo/` holds six product screenshots used by the root `README.md` "Live demo"
+section — two per flow (buyer, seller, shipping console). They are copies of
+the ones in the interview demo guide, shot on demo data with fictional names,
+phone numbers and addresses.
+
 Crop out anything that identifies the production host, a real email address, or
 a token. The production hostname must never appear in this repository, images
 included.
