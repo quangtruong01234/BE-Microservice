@@ -150,7 +150,8 @@ flowchart TB
     end
 
     GW -- "TCP RPC" --> A
-    GW -- "TCP RPC" --> B
+    GW -- "TCP RPC" --> INV
+    GW -- "TCP RPC" --> PAY
     A <-. "RabbitMQ events" .-> B
 
     A --- MY[("MySQL 8")]
@@ -172,7 +173,7 @@ flowchart TB
 | notification | 3009 | MySQL | In-app notifications and transactional mail (no HTTP listener) |
 | chat | 3012 | MySQL | Conversations and messages |
 | inventory | 3002 | PostgreSQL | Stock levels and the reservation ledger |
-| rewards | 3004 | PostgreSQL | Reward points |
+| rewards | 3004 | PostgreSQL | Reward points — event-only (RabbitMQ consumer), not reachable through the gateway |
 | payments | 3005 | PostgreSQL | Payment records, ZaloPay and VNPay integration |
 
 Shared libraries: `@app/common` (RabbitMQ, filters, resilience), `@app/cached`
