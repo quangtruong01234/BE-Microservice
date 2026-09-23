@@ -168,6 +168,25 @@
   is private on Free — the section simply does not render. Accepted (CD-04): a
   green CI on `main` ships with nobody in the loop. If that ever needs a brake,
   the options are a paid plan or moving the trigger to `push: tags: ['v*']`.
+- **A down Aiven instance silently cancels the release** (DEPLOY-PG-01, hit
+  2026-09-16, resolved by the user restarting the service — but the failure mode
+  recurs every time an instance is down). The migrate step runs on the EC2 BEFORE
+  `pm2 startOrRestart` under `set -e`, so a nodeB leg dying on `getaddrinfo
+  ENOTFOUND <pg host>` aborts the whole run and `if: failure()` resets prod to the
+  previous sha. Node B needs no deploy to recover: pm2 holds
+  inventory/payments/rewards in *waiting restart* and they reconnect on their own
+  once DNS resolves (`GET /api/products/with-inventory/all` went 500 → 200 with
+  real `availableStock`, not the `inventory: null` BATCH-FAIL-01 degrade). The
+  code deploy does NOT retry itself — nothing re-fires `workflow_run` without a
+  new push, so `gh workflow run Deploy --ref main` is the recovery step.
+- **A green push is NOT a release — verify with a runtime probe, never the git
+  head** (learned 2026-09-16). The 14:07Z deploy of `87fc2f8` failed on the
+  nodeB migrate leg and the `if: failure()` step rolled prod back, so
+  `git ls-remote origin main` reported the new sha while prod still served the
+  old code. Any statement that something "is live" must come from curling prod
+  for the behaviour itself. Note the probe window: the EC2 runs on a schedule
+  (~08:00–18:00 VN), so outside it every probe returns curl code `000` — that is
+  the box being off, not a broken deploy, and it is not evidence either way.
 - **Two traps the first CD run walked into** (both fixed in `19309f6`, keep in
   mind for any future deploy script): `npm run db:migrate:*` must be called with
   `-- --confirm-production`, because `scripts/migrate-database.mjs` refuses an
@@ -246,12 +265,12 @@
   INFORMATION_SCHEMA, no backfill (the ETA exists only in a GHN response, so
   recovering it for old rows would cost one API call per order). Dev auto-created
   the column via `synchronize:true`, so `db:migrate:status` reports it `[pending]`
-  on DEV — cosmetic ledger gap only. **NOT YET APPLIED TO PROD** as of
-  2026-09-11. Prod forces `synchronize:false`, so this must run before the code
-  that reads/writes the column deploys; the deploy workflow migrates under
-  `set -euo pipefail` before `pm2 startOrRestart`, so pushing the branch applies
-  it in the right order. Until then prod orders simply carry no such field —
-  every read still answers 200 (release class B).
+  on DEV — cosmetic ledger gap only. **APPLIED TO PROD 2026-09-16.** It landed in
+  the 14:07Z deploy that then failed on the nodeB leg: the `if: failure()` step
+  rolls back the CODE, never the SCHEMA, so the column survived the rollback. The
+  14:39Z redeploy confirms it — `[apply] target=nodeA pending-check=8` with no
+  pending entries, `target=nodeB pending-check=0`. Worth remembering generally: a
+  rolled-back deploy can still leave prod's schema advanced past its code.
 
 ### Pre-cutoff applied-migration history (fresh-DB reference only)
 

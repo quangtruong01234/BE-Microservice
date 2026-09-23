@@ -6,6 +6,69 @@
 
 ## Completed Milestones
 
+- **SWEEP-0923 — the sweep found no code to fix and fixed the documentation
+  instead: four stale claims in the two files agents actually trust, including a
+  migration ledger that said prod was missing a column it has had since
+  2026-09-16 (2026-09-23). Release class A — no source file touched.**
+  - **Why there was no code item.** Both work sources were read and came up
+    empty of ready work. `../.agent-local/backend-handoff.md` §Open holds three
+    notes and no requests; `../.agent-local/release-gate.md` §Holding is empty.
+    The snapshot's one concrete code item — 3 `orphan-handler` warnings for
+    `INVENTORY_FIND_ALL` / `INVENTORY_FIND_BY_SKU` / `INVENTORY_REMOVE` — was
+    **already done**: the handlers are absent from
+    `apps/inventory/src/inventory.controller.ts` and `check:conventions` reports
+    0 warnings. Everything else in the backlog is explicitly gated on a product
+    decision, a requester, or infrastructure that free-tier-only rules out.
+  - **Audit found zero new defects** across five mechanical classes:
+    `@EventPattern` handlers missing ack/nack (0), `.send()` missing
+    `.pipe(timeout())` (0 real — the 2 hits were an HTTP `res.send()` in
+    `metrics.controller.ts` and a doc comment in `resilient-client-tcp.ts`),
+    array query fields missing `@Transform` (0 — all three in
+    `get-products-query.dto.ts` are wrapped), unbounded `repository.find()` (the
+    `getPostPublicIdsByIds` / `getCommentPublicIdsByIds` /
+    `getOrderPublicIdsByIds` spot-checks are all `In(ids)` with an empty-input
+    early return), and `@MessagePattern` handlers returning void (0). Baseline
+    green: `tsc --noEmit` 0, `lint:check` 0, `check:conventions` 0 warnings,
+    58 anchors OK, 55 tracked entries none stale.
+  - **The actual defect: four documented claims had drifted from reality.** Each
+    was measured before being rewritten, not assumed.
+    1. **`ops-runtime.md` migration ledger said
+       `nodeA-20260911-001-add-expected-delivery-time-to-orders` was "NOT YET
+       APPLIED TO PROD"** — it has been applied since 2026-09-16. This was the
+       dangerous one: the ledger is the authority on prod's schema, and it was
+       understating it. Corrected, with the generalisable reason it was missed —
+       the migration landed in the 14:07Z deploy that then failed, and
+       `if: failure()` rolls back the CODE, never the SCHEMA, so **a rolled-back
+       deploy can leave prod's schema advanced past its code**.
+    2. **snapshot "Waiting on the frontend push only"** — the frontend went out
+       2026-09-16; `release-gate.md` has SEARCH-01 (+ROLE-ADMIN-01) under
+       **Released** with both sides on prod and 3 green runtime probes. Section
+       deleted.
+    3. **snapshot claimed 3 live `orphan-handler` warnings** — 0. Deleted.
+    4. **snapshot said `GET /api/order/seller/export` was "live locally, class
+       B, not yet pushed"** — `git show 80ca461:apps/gateway/src/order/order.controller.ts`
+       has `@Get("seller/export")` at line 610 and the ledger records the deploy
+       on 2026-09-21. Corrected to PUSHED.
+  - **What was verified as still accurate and deliberately left alone:**
+    CTX-PROV-02's "43 of 58 anchors `unrecorded` (9 prod, 6 local)" — the
+    measured tally matches exactly.
+  - **Two recurring ops facts moved out of the snapshot into `ops-runtime.md`
+    §CI/CD**, where they belong and where a deploy task will actually look for
+    them: DEPLOY-PG-01's failure mode (a down Aiven instance aborts the migrate
+    step under `set -e`, `if: failure()` reverts the sha, and nothing re-fires
+    `workflow_run` — `gh workflow run Deploy --ref main` is the recovery), and
+    "a green push is NOT a release" (verify with a runtime probe against prod,
+    never `git ls-remote`). The latter now also records the probe window: the
+    EC2 runs ~08:00–18:00 VN, so outside it curl returns `000`, which is the box
+    being off and is **not evidence either way**.
+  - **Net effect on the file every session pays for:** `snapshot.md` 2570 → 2244
+    words (−13%), and the three entries that would have sent a future session to
+    re-fix finished work are gone.
+  - **Not verified on prod this session:** the EC2 was off (01:58 VN). No claim
+    above rests on a probe run tonight — the SEARCH-01 release rests on the three
+    probes the ledger recorded on 2026-09-16, and the export route on the pushed
+    tree plus the ledger's deploy record.
+
 - **REPO-PRES-01 — the repository was made readable by a stranger: public docs,
   a measurement script, MIT licence, and the dead code that would have been the
   first thing a reviewer tripped over (2026-09-21). Release class A — no runtime

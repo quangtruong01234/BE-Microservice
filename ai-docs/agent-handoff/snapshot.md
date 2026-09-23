@@ -36,40 +36,14 @@ DONE — see `CHANGELOG.md`. The public-id (PUBID) contract lives in
 
 Nothing is mid-implementation. What is genuinely open:
 
-### Waiting on the frontend push only
-
-`api` is **LIVE ON PROD at `87fc2f8`** (deployed 2026-09-16 14:39Z by a
-`workflow_dispatch` redeploy after DEPLOY-PG-01 was fixed). SEARCH-01,
-ROLE-ADMIN-01, AUTHOR-NAME-01 and NAME-TRIM-01 are all verified **on prod** —
-see CHANGELOG. `../.agent-local/release-gate.md` has the entry in **Ready to
-release** with `api: ✅ live`; the remaining step is the `frontend` push, which
-is the FE agent's to make.
-
-**Lesson worth keeping: a green push is not a release.** The 14:07Z deploy of
-this same sha failed and rolled back, so `git ls-remote origin main` reported
-the new head while prod served the old code. Verify a release with a runtime
-probe against prod, never with the git head.
-
 ### Prod-owed
 
-- ~~DEPLOY-PG-01 — the prod Aiven PostgreSQL instance is gone~~ → **RESOLVED
-  2026-09-16**, user restarted the service. Kept here for the failure mode, which
-  will recur every time that instance is down: the CD migrate step runs on the
-  EC2 BEFORE `pm2 startOrRestart`, under `set -e`, so a nodeB leg that dies
-  (`getaddrinfo ENOTFOUND <pg host>`) aborts the whole run and the `if: failure()`
-  step resets prod to the previous sha — **a green CI plus a green push then
-  produce no release at all**, which is exactly what happened at 14:07Z. Node B
-  itself needed no deploy to recover: pm2 had inventory/payments/rewards in
-  *waiting restart* (↺21/22/21) and they came back on their own once DNS
-  resolved, `GET /api/products/with-inventory/all` going 500 → 200 with real
-  `availableStock` rows (not the `inventory: null` BATCH-FAIL-01 degrade). The
-  redeploy then had to be dispatched by hand — nothing re-fires `workflow_run`
-  without a new push, so `gh workflow run Deploy --ref main` is the recovery step.
-- ~~Migration `nodeA-20260911-001-add-expected-delivery-time-to-orders` is not
-  applied to prod~~ → **APPLIED TO PROD 2026-09-16** (GHN-ETA-01). The failed
-  14:07Z run applied it before the nodeB leg died; the rollback reverted the CODE,
-  not the schema. The 14:39Z redeploy confirms it — `[apply] target=nodeA
-  pending-check=8` with no pending entries, `target=nodeB pending-check=0`.
+Nothing is owed to prod. Schema and code are in sync — the last outstanding
+migration (`nodeA-20260911-001-add-expected-delivery-time-to-orders`) was applied
+2026-09-16, and DEPLOY-PG-01 was resolved the same day; both failure modes now
+live in `ops-runtime.md` (§CI/CD and §Database migrations). One config gap
+remains, deliberately unfilled:
+
 - **`METRICS_TOKEN` is UNSET in `local/nodeA/.env`**, so `GET /metrics` 404s on
   prod (verified 2026-08-15). Set it only when a scraper actually exists. Only
   the gateway is instrumented; the registry is per-process, so
@@ -104,11 +78,6 @@ probe against prod, never with the git head.
   a `PartialType` — the redeclaration is what encodes the deliberate
   create-vs-edit `null` asymmetry documented in VOUCHER-NULL-01. A gate demanding
   what known-behaviors.md forbids is the wrong gate.
-  Left behind as untested surface, not a bug: **3 `orphan-handler` warnings** —
-  `INVENTORY_FIND_ALL`, `INVENTORY_FIND_BY_SKU`, `INVENTORY_REMOVE` in
-  `apps/inventory/src/inventory.controller.ts` are reachable over TCP but no
-  gateway calls them. Delete them or give them a caller; until then the checker
-  prints them every run without failing.
 
 ### Planned but not started
 
@@ -116,10 +85,10 @@ Full designs (scope, shape, landmines, release class) live in
 `ai-docs/agent-context/planned-work.md` — load it with the Read tool when you
 pick one up. Do not re-derive them:
 
-- **EXPORT-CSV-01 T4 / T5** — T1–T3 SHIPPED 2026-09-16 (`GET /api/order/seller/export`
-  is live locally, class B, not yet pushed), **audited complete 2026-09-19**, and
-  **timezone-corrected 2026-09-20** (EXPORT-TZ-01, see CHANGELOG — 15 tests now
-  pin the money rules, both caps, and VN wall-clock under four process zones).
+- **EXPORT-CSV-01 T4 / T5** — T1–T3 SHIPPED 2026-09-16, **audited complete
+  2026-09-19**, **timezone-corrected 2026-09-20** (EXPORT-TZ-01, see CHANGELOG —
+  15 tests pin the money rules, both caps, and VN wall-clock under four process
+  zones) and **PUSHED 2026-09-21** — `GET /api/order/seller/export` is on prod.
   Still unbuilt and still optional: T4 an admin/platform-wide export, T5 an async
   job for windows over the caps. Neither has a requester — build on demand, not
   speculatively.
