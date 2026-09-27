@@ -33,7 +33,8 @@ export const ERROR_CODE = {
    */
   UNAUTHENTICATED: "UNAUTHENTICATED",
   /**
-   * `POST /api/user/change-password`: the session is fine, the submitted
+   * `POST /api/user/change-password`, and `PATCH /api/user/:id` when it changes
+   * the email (EMAIL-REAUTH-01): the session is fine, the submitted
    * `currentPassword` is wrong. The client must keep the user where they are
    * and flag the current-password field.
    */

@@ -48,6 +48,8 @@ export const USER_MESSAGE = {
   ADDRESS_NOT_FOUND: "Address not found",
   CANNOT_UPDATE_ANOTHER_USER: "Cannot update another user",
   CURRENT_PASSWORD_INCORRECT: "Current password is incorrect",
+  CURRENT_PASSWORD_REQUIRED_FOR_EMAIL_CHANGE:
+    "currentPassword is required to change the email",
   NEW_PASSWORD_SAME_AS_CURRENT:
     "New password must be different from the current password",
   CANNOT_CHANGE_OWN_ROLE:
@@ -256,6 +258,8 @@ export const ORDER_MESSAGE = {
   REJECT_REASON_REQUIRED:
     "A reject reason is required to reject a return request",
   CART_ITEM_NOT_FOUND: "Cart item not found",
+  CART_LINE_QUANTITY_EXCEEDED: (max: number): string =>
+    `A cart line cannot hold more than ${max} units`,
   CANNOT_ACCESS_OTHERS_ORDERS: "You cannot access another user's orders",
   DUPLICATE_REQUEST_IN_PROGRESS:
     "A duplicate order request is already being processed",

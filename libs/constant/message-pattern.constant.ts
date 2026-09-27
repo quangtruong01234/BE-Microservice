@@ -85,6 +85,9 @@ export const ORDER_MESSAGE_PATTERN = {
   VOUCHER_UPDATE: "order.voucher_update",
   VOUCHER_DEACTIVATE: "order.voucher_deactivate",
   ANALYTICS: "order.analytics",
+  // RAIL-RANK-01 — storefront right-rail rankings (units sold, rolling window).
+  TOP_SELLING_SELLERS: "order.top_selling_sellers",
+  TOP_SELLING_PRODUCTS: "order.top_selling_products",
 };
 
 export const PAYMENT_MESSAGE_PATTERN = {
