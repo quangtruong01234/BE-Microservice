@@ -131,3 +131,22 @@ export type ProductRiskFeedbackResult = {
   note: string | null;
   updatedAt: string | Date;
 };
+
+/**
+ * RAIL-RANK-01: one row of the orders service's `order.top_selling_products`
+ * ranking (internal product id, order-time public-id snapshot, units sold).
+ */
+export interface TopSellingProduct {
+  productId: number;
+  productPublicId: string | null;
+  soldCount: number;
+}
+
+/**
+ * RAIL-RANK-01: `GET /api/products/trending` row — the usual
+ * ProductWithInventory plus the units sold in the ranking window (0 for a
+ * backfilled product).
+ */
+export interface TrendingProduct extends ProductWithInventory {
+  soldCount: number;
+}

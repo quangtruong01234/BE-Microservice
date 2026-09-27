@@ -39,6 +39,8 @@ import {
   ProductRiskBackfillResult,
   ProductDuplicateAdvisory,
   ProductRiskFeedbackResult,
+  TopSellingProduct,
+  TrendingProduct,
 } from "./product.types";
 import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 
@@ -66,6 +68,11 @@ export class ProductService {
   private static readonly PUBLIC_READ_CACHE_TTL_SECONDS = 10;
   private static readonly LIST_CACHE_PREFIX = "gw:products:list:";
   private static readonly DETAIL_CACHE_PREFIX = "gw:products:detail:";
+  // RAIL-RANK-01: the trending rail is a 30-day aggregate, so a minute of
+  // staleness is invisible while it saves ~10 TCP round trips per request.
+  private static readonly TRENDING_CACHE_PREFIX = "gw:products:trending:";
+  private static readonly TRENDING_CACHE_TTL_SECONDS = 60;
+  private static readonly TRENDING_BACKFILL_POOL_SIZE = 50;
 
   private buildListCacheKey(query: GetProductsQueryDto): string {
     const sortedQueryEntries = Object.entries(
@@ -93,13 +100,10 @@ export class ProductService {
   private async writePublicCache(
     cacheKey: string,
     payload: unknown,
+    ttlSeconds: number = ProductService.PUBLIC_READ_CACHE_TTL_SECONDS,
   ): Promise<void> {
     try {
-      await this.cached.set(
-        cacheKey,
-        JSON.stringify(payload),
-        ProductService.PUBLIC_READ_CACHE_TTL_SECONDS,
-      );
+      await this.cached.set(cacheKey, JSON.stringify(payload), ttlSeconds);
     } catch (error) {
       this.logger.warn(
         `Public read cache set failed for ${cacheKey}: ${(error as Error).message}`,
@@ -1465,6 +1469,22 @@ export class ProductService {
   async getProductsWithInventory(
     productIds: string[],
   ): Promise<ProductWithInventory[]> {
+    if (!productIds || productIds.length === 0) {
+      return [];
+    }
+    return (await this.exposeProductReferences(
+      await this.loadProductsWithInventory(productIds),
+    )) as ProductWithInventory[];
+  }
+
+  /**
+   * The body of `getProductsWithInventory` minus the PUBID exposure, so a
+   * caller that still needs the internal numeric `id` (RAIL-RANK-01 ordering)
+   * can finish its work before exposing. Accepts internal ids or public ids.
+   */
+  private async loadProductsWithInventory(
+    productIds: Array<number | string>,
+  ): Promise<ProductWithInventory[]> {
     try {
       if (!productIds || productIds.length === 0) {
         return [];
@@ -1563,7 +1583,7 @@ export class ProductService {
         await this.enrichProductsWithUserInfo(resolvedProducts);
 
       // Combine products with their inventory data
-      const results = enrichedProducts.map((product) => ({
+      return enrichedProducts.map((product) => ({
         ...(this.attachCategoryIds(
           product as object,
         ) as unknown as ProductWithInventory),
@@ -1571,15 +1591,166 @@ export class ProductService {
           (inventoryMap.get(
             Number(product.id),
           ) as unknown as ProductWithInventory["inventory"]) ?? null,
-      })) as ProductWithInventory[];
-
-      return (await this.exposeProductReferences(
-        results,
-      )) as ProductWithInventory[];
+      }));
     } catch (error) {
       this.logger.error(`Error fetching products with inventory:`, error);
       throw error;
     }
+  }
+
+  /**
+   * RAIL-RANK-01 — the storefront "Đang hot" rail. Products ranked by units
+   * sold over the orders service's rolling window, kept only while active and
+   * in stock, then backfilled from the highest-`ratingCount` active products.
+   * `viewCount` / `likesCount` are never written, so neither can rank anything.
+   *
+   * Every ranking input fails OPEN: an orders outage leaves the pure backfill,
+   * an inventory outage skips the stock filter. Only the product leg — the one
+   * that can answer "what is this product" — may fail the request.
+   */
+  async getTrendingProducts(limit: number): Promise<TrendingProduct[]> {
+    const cacheKey = `${ProductService.TRENDING_CACHE_PREFIX}${limit}`;
+    const cachedTrending = await this.readPublicCache(cacheKey);
+    if (Array.isArray(cachedTrending)) {
+      return cachedTrending as TrendingProduct[];
+    }
+
+    try {
+      const ranking = await this.fetchTopSellingProducts();
+      const soldCountByProductId = new Map(
+        ranking.map((row) => [Number(row.productId), Number(row.soldCount)]),
+      );
+      const trendingProducts = await this.pickSellableProducts(
+        ranking.map((row) => Number(row.productId)),
+        limit,
+      );
+
+      if (trendingProducts.length < limit) {
+        const backfillPage = await this.fetchProductsPage({
+          isActive: true,
+          sortBy: "ratingCount",
+          sortOrder: "DESC",
+          page: 1,
+          limit: ProductService.TRENDING_BACKFILL_POOL_SIZE,
+        });
+        const chosenIds = new Set(
+          trendingProducts.map((product) => Number(product.id)),
+        );
+        const backfillIds = backfillPage.items
+          .map((product) => Number(product.id))
+          .filter((productId) => !chosenIds.has(productId));
+        trendingProducts.push(
+          ...(await this.pickSellableProducts(
+            backfillIds,
+            limit - trendingProducts.length,
+          )),
+        );
+      }
+
+      const exposedTrending = (await this.exposeProductReferences(
+        trendingProducts.map((product) => ({
+          ...product,
+          soldCount: soldCountByProductId.get(Number(product.id)) ?? 0,
+        })),
+      )) as TrendingProduct[];
+      await this.writePublicCache(
+        cacheKey,
+        exposedTrending,
+        ProductService.TRENDING_CACHE_TTL_SECONDS,
+      );
+      return exposedTrending;
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "get trending products",
+        "Product Service",
+      );
+    }
+  }
+
+  private async fetchTopSellingProducts(): Promise<TopSellingProduct[]> {
+    try {
+      const ranking = (await firstValueFrom(
+        this.ordersClient
+          .send(ORDER_MESSAGE_PATTERN.TOP_SELLING_PRODUCTS, {})
+          .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
+      )) as unknown;
+      return Array.isArray(ranking) ? (ranking as TopSellingProduct[]) : [];
+    } catch (error: unknown) {
+      this.logger.warn(
+        `Top-selling product ranking unavailable, using the backfill only: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return [];
+    }
+  }
+
+  /**
+   * Total sellable stock per product, summed over EVERY inventory row: a
+   * SKU-matrix product has one row per SKU and no base row (STOCK-SYNC-01), so
+   * the single row `loadProductsWithInventory` attaches is not its stock.
+   * `null` = inventory unreachable, and the caller skips the stock filter.
+   */
+  private async fetchAvailableStockByProductId(
+    productIds: number[],
+  ): Promise<Map<number, number> | null> {
+    try {
+      const inventoryItems = await firstValueFrom(
+        this.inventoryClient
+          .send<
+            InventoryData[]
+          >(INVENTORY_MESSAGE_PATTERNS.INVENTORY_GET_BY_PRODUCT_IDS, productIds)
+          .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
+      );
+      const stockByProductId = new Map<number, number>();
+      (Array.isArray(inventoryItems) ? inventoryItems : []).forEach((item) => {
+        const productId = Number(item.productId);
+        stockByProductId.set(
+          productId,
+          (stockByProductId.get(productId) ?? 0) +
+            Number(item.availableStock ?? 0),
+        );
+      });
+      return stockByProductId;
+    } catch (error: unknown) {
+      this.logger.warn(
+        `Inventory unavailable for the trending stock filter, skipping it: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * The first `limit` of `candidateIds` (internal ids, in the caller's order)
+   * that resolve to an active, in-stock product. Returns unexposed rows.
+   */
+  private async pickSellableProducts(
+    candidateIds: number[],
+    limit: number,
+  ): Promise<ProductWithInventory[]> {
+    if (candidateIds.length === 0 || limit <= 0) {
+      return [];
+    }
+    const [products, stockByProductId] = await Promise.all([
+      this.loadProductsWithInventory(candidateIds),
+      this.fetchAvailableStockByProductId(candidateIds),
+    ]);
+    const productById = new Map(
+      products.map((product) => [Number(product.id), product]),
+    );
+    return candidateIds
+      .map((productId) => productById.get(productId))
+      .filter(
+        (product): product is ProductWithInventory =>
+          product !== undefined &&
+          product.isActive === true &&
+          (stockByProductId === null ||
+            (stockByProductId.get(Number(product.id)) ?? 0) > 0),
+      )
+      .slice(0, limit);
   }
 
   async getAllProductsWithInventory(

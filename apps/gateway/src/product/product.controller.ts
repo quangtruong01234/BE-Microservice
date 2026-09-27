@@ -32,6 +32,7 @@ import {
   ProductRiskBackfillDto,
   ProductDuplicateImageCheckDto,
   ProductRiskFeedbackDto,
+  TrendingProductsQueryDto,
 } from "./dto";
 import { CreateReviewDto, ReviewQueryDto } from "./dto/review.dto";
 import {
@@ -52,6 +53,7 @@ import {
   ProductRiskSummary,
   ProductData,
   ProductWithInventory,
+  TrendingProduct,
 } from "./product.types";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
 import { PaginatedResponse } from "@app/common";
@@ -514,6 +516,22 @@ export class ProductController {
     @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.PRODUCT)) id: string,
   ): Promise<unknown> {
     return await this.productService.getSkusByProduct(id);
+  }
+
+  // Declared before `:id` so "trending" is never parsed as a product id.
+  @Get("trending")
+  @Public()
+  @ApiOperation({
+    summary: "Trending products (storefront right rail)",
+    description:
+      "Active, in-stock products ranked by units sold over the last 30 days; backfilled by ratingCount when too few sold. Each item carries soldCount (0 for backfilled items).",
+  })
+  @ApiResponse({ status: 200, description: "Trending products retrieved." })
+  @ApiResponse({ status: 400, description: "limit outside 1..20." })
+  async getTrendingProducts(
+    @Query(ValidationPipe) query: TrendingProductsQueryDto,
+  ): Promise<TrendingProduct[]> {
+    return await this.productService.getTrendingProducts(query.limit ?? 5);
   }
 
   @Get(":id")

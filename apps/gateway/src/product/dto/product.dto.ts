@@ -4,12 +4,15 @@ import {
   ArrayMaxSize,
   IsArray,
   IsBoolean,
+  IsInt,
   IsNumber,
   IsOptional,
   IsString,
   Matches,
+  Max,
   Min,
 } from "class-validator";
+import { Type } from "class-transformer";
 import { IsPublicId } from "../../common/validators/is-public-id.validator";
 import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 
@@ -75,3 +78,19 @@ export class CreateSkuGatewayDto {
 }
 
 export class UpdateSkuGatewayDto extends PartialType(CreateSkuGatewayDto) {}
+
+/** RAIL-RANK-01 — query for the storefront "Đang hot" rail. */
+export class TrendingProductsQueryDto {
+  @ApiPropertyOptional({
+    description: "Max products to return",
+    default: 5,
+    minimum: 1,
+    maximum: 20,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(20)
+  @Type(() => Number)
+  limit?: number = 5;
+}
