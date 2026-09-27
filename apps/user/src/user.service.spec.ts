@@ -2,7 +2,11 @@ import { getRepositoryToken } from "@nestjs/typeorm";
 import { Test, TestingModule } from "@nestjs/testing";
 import { CachedService } from "@app/cached";
 import { CloudinaryService, MailerService } from "@app/common";
-import { ConflictException } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  UnauthorizedException,
+} from "@nestjs/common";
 import { DataSource, QueryFailedError } from "typeorm";
 import * as bcrypt from "bcryptjs";
 import { Role, RoleName, RoleStatus } from "./entity/role.entity";
@@ -295,5 +299,71 @@ describe("UserService", () => {
         },
       }),
     );
+  });
+
+  describe("updateUser — EMAIL-REAUTH-01", () => {
+    const echoSaved = (entity: User): Promise<User> =>
+      Promise.resolve({ ...entity });
+
+    it("saves an unchanged email without asking for currentPassword", async () => {
+      userRepository.findOne.mockResolvedValue({ ...persistedUser });
+      userRepository.save.mockImplementation(echoSaved);
+
+      const updated = await service.updateUser(1, {
+        name: "New Name",
+        email: persistedUser.email,
+      });
+
+      expect(updated).toMatchObject({ name: "New Name" });
+      expect(userRepository.find).not.toHaveBeenCalled();
+    });
+
+    it("rejects an email change without currentPassword with 400", async () => {
+      userRepository.findOne.mockResolvedValue({ ...persistedUser });
+
+      await expect(
+        service.updateUser(1, { email: "other@example.com" }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(userRepository.save).not.toHaveBeenCalled();
+    });
+
+    it("rejects a wrong currentPassword with 401 + INVALID_CURRENT_PASSWORD", async () => {
+      userRepository.findOne.mockResolvedValue({
+        ...persistedUser,
+        password: await bcrypt.hash("password123", 4),
+      });
+
+      const failure = service.updateUser(1, {
+        email: "other@example.com",
+        currentPassword: "wrong-password",
+      });
+
+      await expect(failure).rejects.toBeInstanceOf(UnauthorizedException);
+      await expect(failure).rejects.toMatchObject({
+        response: { errorCode: "INVALID_CURRENT_PASSWORD" },
+      });
+      // The taken-email probe must not run before the password is proven.
+      expect(userRepository.find).not.toHaveBeenCalled();
+      expect(userRepository.save).not.toHaveBeenCalled();
+    });
+
+    it("changes the email with the right currentPassword and never persists it", async () => {
+      userRepository.findOne.mockResolvedValue({
+        ...persistedUser,
+        password: await bcrypt.hash("password123", 4),
+      });
+      userRepository.find.mockResolvedValue([]);
+      userRepository.save.mockImplementation(echoSaved);
+
+      const updated = await service.updateUser(1, {
+        email: "other@example.com",
+        currentPassword: "password123",
+      });
+
+      expect(updated).toMatchObject({ email: "other@example.com" });
+      expect(updated).not.toHaveProperty("password");
+      const [persisted] = userRepository.save.mock.calls[0] as [User];
+      expect(persisted).not.toHaveProperty("currentPassword");
+    });
   });
 });

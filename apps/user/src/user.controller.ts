@@ -89,9 +89,12 @@ export class UserController {
 
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.GET_FEATURED_SELLERS })
   async getFeaturedSellers(
-    @Payload() data: { limit: number },
+    @Payload() data: { limit: number; rankedSellerIds?: number[] },
   ): Promise<unknown> {
-    return this.userService.getFeaturedSellers(data.limit);
+    return this.userService.getFeaturedSellers(
+      data.limit,
+      Array.isArray(data.rankedSellerIds) ? data.rankedSellerIds : [],
+    );
   }
 
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.SEARCH_USERS })

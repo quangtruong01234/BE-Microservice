@@ -18,6 +18,7 @@ import {
   In,
   QueryFailedError,
   Repository,
+  SelectQueryBuilder,
 } from "typeorm";
 import { RegisterUserDto } from "./dto/register-user.dto";
 import { LoginUserDto } from "./dto/login-user.dto";
@@ -485,31 +486,67 @@ export class UserService {
     return rows.map((row) => Number(row.userId));
   }
 
+  /**
+   * RAIL-RANK-01: `rankedSellerIds` is the orders service's units-sold ranking
+   * (best first), resolved by the gateway. Ranked ids that are still active
+   * SHOP accounts come first, in rank order; the rest of `limit` is backfilled
+   * with the newest active shops — which is also the whole answer when the
+   * ranking is empty or its leg failed (fail-open to the old behaviour).
+   */
   async getFeaturedSellers(
     limit: number,
+    rankedSellerIds: number[] = [],
   ): Promise<Pick<User, "id" | "publicId" | "username" | "name" | "avatar">[]> {
+    const rankedIds = [
+      ...new Set(
+        rankedSellerIds.map(Number).filter((id) => Number.isInteger(id)),
+      ),
+    ];
+    const rankedSellers =
+      rankedIds.length > 0
+        ? await this.buildFeaturedSellersQuery()
+            .andWhere("user.id IN (:...rankedIds)", { rankedIds })
+            .getMany()
+        : [];
+    const sellerById = new Map(
+      rankedSellers.map((seller) => [seller.id, seller]),
+    );
+    const featuredSellers = rankedIds
+      .map((id) => sellerById.get(id))
+      .filter((seller): seller is User => seller !== undefined)
+      .slice(0, limit);
+    if (featuredSellers.length >= limit) return featuredSellers;
+
+    const backfillQuery = this.buildFeaturedSellersQuery()
+      .orderBy("user.createdAt", "DESC")
+      .limit(limit - featuredSellers.length);
+    if (featuredSellers.length > 0) {
+      backfillQuery.andWhere("user.id NOT IN (:...chosenIds)", {
+        chosenIds: featuredSellers.map((seller) => seller.id),
+      });
+    }
+    return [...featuredSellers, ...(await backfillQuery.getMany())];
+  }
+
+  private buildFeaturedSellersQuery(): SelectQueryBuilder<User> {
     // Query builder skips the eager `role` relation, so the join below is the
     // only one (a partial `select` via find() double-joins eager relations on
-    // MySQL — see getMe). "Featured" = newest active shop accounts. `limit()`
-    // not `take()`: the role join is many-to-one (no row multiplication), and
-    // take() wraps a DISTINCT id subquery whose ORDER BY column would have to
-    // be in the SELECT on MySQL.
+    // MySQL — see getMe). `limit()` not `take()`: the role join is many-to-one
+    // (no row multiplication), and take() wraps a DISTINCT id subquery whose
+    // ORDER BY column would have to be in the SELECT on MySQL.
     return this.userRepository
       .createQueryBuilder("user")
       .innerJoin("user.role", "role", "role.rol_name = :roleName", {
         roleName: RoleName.SHOP,
       })
       .where("user.isActive = :isActive", { isActive: true })
-      .orderBy("user.createdAt", "DESC")
-      .limit(limit)
       .select([
         "user.id",
         "user.publicId",
         "user.username",
         "user.name",
         "user.avatar",
-      ])
-      .getMany();
+      ]);
   }
 
   /**
@@ -584,13 +621,39 @@ export class UserService {
     if (!user) {
       throw new NotFoundException(USER_MESSAGE.NOT_FOUND);
     }
-    // `email` is UNIQUE — same 409-not-500 contract as register.
-    if (dto.email && dto.email !== user.email) {
-      await this.assertCredentialsAvailable({ email: dto.email }, userId);
+    // Never let the re-auth secret reach the entity.
+    const { currentPassword, ...profileChanges } = dto;
+    if (profileChanges.email && profileChanges.email !== user.email) {
+      // EMAIL-REAUTH-01: reset codes go to this address, so a stolen session
+      // must not be able to redirect it. Same 401 + errorCode as
+      // changePassword so the FE handles both with one branch (CHG-PW-02).
+      if (!currentPassword) {
+        throw new BadRequestException(
+          USER_MESSAGE.CURRENT_PASSWORD_REQUIRED_FOR_EMAIL_CHANGE,
+        );
+      }
+      const isCurrentPasswordValid = await bcrypt.compare(
+        currentPassword,
+        user.password,
+      );
+      if (!isCurrentPasswordValid) {
+        this.logger.warn(
+          `updateUser: wrong current password on email change for user ${userId}`,
+        );
+        throw new UnauthorizedException({
+          message: USER_MESSAGE.CURRENT_PASSWORD_INCORRECT,
+          errorCode: ERROR_CODE.INVALID_CURRENT_PASSWORD,
+        });
+      }
+      // `email` is UNIQUE — same 409-not-500 contract as register.
+      await this.assertCredentialsAvailable(
+        { email: profileChanges.email },
+        userId,
+      );
     }
     // Capture before Object.assign overwrites avatar on the same instance.
     const previousAvatar = user.avatar;
-    Object.assign(user, dto);
+    Object.assign(user, profileChanges);
     let saved: User;
     try {
       saved = await this.userRepository.save(user);
