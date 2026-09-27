@@ -20,6 +20,28 @@ an emit + a handler + a notification type; the open question is product-side
 others liked your post", rather than one notification per like). FE needs
 nothing until that is decided.
 
+## CAPTCHA-01 — invisible captcha (Cloudflare Turnstile) on register / forgot-password
+
+Decided 2026-09-26 from a security review; deferred by the user ("làm captcha
+sau"). Gap it closes: `POST /api/user/register` and `forgot-password` are only
+guarded by the per-IP `@RateLimit` (10/60s) + nginx `limit_req`, so a script
+rotating IPs can mass-create accounts or spam reset mails. Turnstile is free, has
+no image puzzle in the normal case, and is verified server-side with one HTTPS
+call to `https://challenges.cloudflare.com/turnstile/v0/siteverify`.
+
+Rollout in three steps so no deploy window breaks the storefront:
+1. **BE, class B** — gateway accepts an OPTIONAL `captchaToken` on register and
+   forgot-password; a guard verifies it when present. Env: `TURNSTILE_SECRET_KEY`,
+   `CAPTCHA_ENFORCE=false`. A siteverify outage fails OPEN (log + allow) — same
+   posture as VOUCHER-CONC-01; the rate limit is still behind it.
+2. **FE** — render the widget (site key via Vite env), send the token.
+3. **Flip `CAPTCHA_ENFORCE=true`** on prod once the FE is live: a missing/invalid
+   token is then a 400 with a closed-set `errorCode` (e.g. `CAPTCHA_REQUIRED`).
+
+Scope: NOT on login (rate limit + bcrypt cost suffice; captcha on login hurts
+every returning user). Needs the user to create the Turnstile site + keys in the
+Cloudflare dashboard (free) — that is the blocker, not code.
+
 ## VOUCHER-SHOP-01 phase 2 — Shopee-style stacking + multi-shop apportionment
 
 Phase 1 + VOUCHER-EDIT-01 are shipped and released (see `CHANGELOG.md`

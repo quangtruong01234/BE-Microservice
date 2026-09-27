@@ -112,6 +112,19 @@
   background connect, self-healing Proxy reconnect. If a nodeB service is ever
   found down, check whether its compiled `dist/apps/<svc>/main` process is
   actually running — `nest --watch` does NOT auto-restart a runtime crash.
+- **Local dev: Cloudflare WARP stalls TLS handshakes to Aiven Postgres**
+  (LOCAL-INV-01, 2026-09-25). With WARP on (interface `CloudflareWARP`, MTU
+  1300), TCP connect and the `SSLRequest` to the Aiven PG host succeed, but the
+  TLS handshake hung in 4 of 6 probes. Before the fix this wedged the whole
+  inventory pool: it worked right after a restart, then every inventory route
+  answered 408/500 `Timeout has occurred`. `PostgresDatabaseModule` now sets
+  `connectionTimeoutMillis: 10000` and TCP keep-alive, so a stalled attempt
+  fails and frees its slot, and the service recovers without a restart. It does
+  not make a lossy path usable: in the verification soak, requests kept
+  answering 408/500 for about five minutes while WARP was congested.
+  **Fix the path, not the code:** exclude `*.aivencloud.com`
+  from WARP (split tunnel), or turn WARP off, while running nodeB. MySQL
+  (`database.module.ts`) already had a 10s `connectTimeout`.
 - **CORS**: one shared gateway delegate `apps/gateway/src/common/cors.ts`
   (`gatewayCorsOptions`) used by HTTP + both WS gateways (`/chat`,
   `/notifications`). Allows: no-Origin requests, any origin in `FRONTEND_URL`
@@ -271,6 +284,20 @@
   14:39Z redeploy confirms it — `[apply] target=nodeA pending-check=8` with no
   pending entries, `target=nodeB pending-check=0`. Worth remembering generally: a
   rolled-back deploy can still leave prod's schema advanced past its code.
+
+- **`nodeA-20260925-001-add-cart-unique-constraints`** — AUD-0925-02 /
+  CART-UNIQ-01: merges duplicate carts/lines, then adds `uq_carts_user_id` and
+  the functional `uq_cart_items_cart_product_sku`
+  (`cart_id, product_id, (COALESCE(sku_id,0))`, needs MySQL ≥ 8.0.13). Guarded
+  by INFORMATION_SCHEMA, safe to re-run. Unlike 20260818-001 it MERGES
+  duplicates instead of aborting, so the CD migrate step cannot be blocked by
+  user-created data. **Applied to DEV Aiven 2026-09-25** (0 duplicates there;
+  the merge was exercised on scratch copies). **Not yet on prod** — the next CD
+  deploy applies it before `pm2 startOrRestart`. The code does not depend on it
+  to run (without the index the `ER_DUP_ENTRY` paths simply never fire), so the
+  order of schema vs code is harmless. On a real table MySQL drops the implicit
+  FK index `FK_6385a745d9e12a89b859bb25623` because the new index's `cart_id`
+  prefix now serves the FK — expected, not a failed apply.
 
 ### Pre-cutoff applied-migration history (fresh-DB reference only)
 

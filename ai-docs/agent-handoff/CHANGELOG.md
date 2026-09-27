@@ -6,6 +6,267 @@
 
 ## Completed Milestones
 
+- **EMAIL-REAUTH-01 + register password floor (2026-09-26). Release class C
+  (held in `release-gate.md`); the register half alone is B.**
+  - **Origin.** A security review against a "vibe-coded site" checklist. Most
+    items were already closed (PUBID ownership checks, no mass-assignable role,
+    no email in public embeds, parameterized queries). Two weak points were
+    fixed; captcha was deferred as CAPTCHA-01 in `planned-work.md`.
+  - **Register:** `RegisterUserDto.password` gets `@MinLength(6)`, the same floor
+    as reset and change-password. Login is left unconstrained so older short
+    passwords still sign in.
+  - **Email change** (`apps/user/src/user.service.ts` `updateUser`):
+    - A changed `email` needs `currentPassword`: missing is a 400, wrong is a
+      401 + `INVALID_CURRENT_PASSWORD`.
+    - The password check now runs before the 409 taken-email probe.
+    - `currentPassword` is destructured off before `Object.assign`.
+    - `PATCH /api/user/:id` gets `@RateLimit(10/60s)` so it is not a
+      password-guessing oracle.
+    - Full contract in known-behaviors → EMAIL-REAUTH-01.
+  - **Evidence.**
+    - 8 new unit tests (4 user service, 4 gateway DTO); 44 user tests green.
+    - `check:conventions` exit 0.
+    - Local curl as `canceltest1779978329`:
+      - Register with a 5-character password: 400.
+      - Unchanged email with no password: 200.
+      - Changed email with no password: 400.
+      - Wrong password: 401 + errorCode.
+      - Right password: 200, email changed and then restored.
+      - Taken email with the right password: 409.
+      - The 11th call in 60s: 429.
+
+- **AUD-0925-04 — `GET /api/user/featured-sellers` is cached 60s per limit
+  (2026-09-25). Release class A: response shape unchanged.**
+  - **Problem.** RAIL-RANK-01 had the gateway call the orders service's 30-day
+    `TOP_SELLING_SELLERS` `GROUP BY` and then the user service on every request
+    for the seller rail. Only `/api/products/trending` had the 60s cache, but
+    the KB summary said both did.
+  - **Fix** (`apps/gateway/src/user/user.service.ts`, `user.module.ts`):
+    - Follows the trending pattern: `gw:user:featured-sellers:<limit>`, TTL 60s,
+      via `CachedService` (`CachedModule` now imported into `UserModule`; it
+      reuses the same singleton, so no new Redis client).
+    - Best-effort both ways: a Redis get error or a non-array entry reads as a
+      miss, and a failed set is only logged.
+    - The cached value is the exposed boundary shape (`usr_…` id, `soldCount`).
+    - A degraded answer (orders ranking down, so backfill) is cached, as it is
+      for trending.
+    - A user-service failure throws before the write, so an error is never
+      cached.
+  - **Evidence.** DEV with a live gateway and docker Redis:
+    - Cold call gives a 200 in 0.50s, writes the key, and Redis `TTL` reads 55.
+    - A sentinel planted under the key is served verbatim in 0.22s, so the
+      orders and user legs are skipped.
+    - `limit=3` writes its own key.
+    - With no cookie, the call gets a 401 (the guard runs before the cache).
+    - Jest: `user-featured-sellers.service.spec.ts` has 5 new cache tests (hit,
+      per-limit write in the boundary shape, no-cache-on-error, Redis down
+      both ways, corrupt entry). Full suite 50/50 suites and 587/587 tests.
+      tsc, eslint and `check:conventions` are green.
+  - **Docs.** The RAIL-RANK-01 "Caching" paragraph now covers both rails, and
+    `files=` gained the gateway user service. RAIL-RANK-01 and ROLE-ADMIN-01
+    were rebaselined after re-reading each one against the code.
+
+- **AUD-0925-03 — cart line quantity is an integer in 1..999 (2026-09-25).
+  Release class B: the current storefront only sends integers ≤ 99.**
+  - **Problem.** `POST /api/cart` and `PATCH /api/cart/items/:id` took
+    `@IsNumber() @Min(1|0)` with no `@IsInt`/`@Max`, and repeated adds summed
+    with no ceiling: `1e10` or enough adds reached MySQL out-of-range, giving
+    a 500 (SHAPE-01 rule 3), and `1.5` was silently stored as 2.
+  - **Fix.** `MAX_CART_LINE_QUANTITY = 999` (`libs/constant/cart.constant.ts`).
+    Both gateway DTOs are `@IsInt() @Max(999)`. Orders `incrementLine` rejects
+    a summed line over 999 with a 400 `A cart line cannot hold more than 999
+    units` (`ORDER_MESSAGE.CART_LINE_QUANTITY_EXCEEDED`). The `ER_DUP_ENTRY`
+    fallback now re-reads the winning line and goes through the same check,
+    instead of incrementing by key.
+  - **Evidence.** DEV:
+    - `POST` rejects `1.5`, `1000` and `1e10` with a 400.
+    - Adding 998, then 2, gives a 400 with the ceiling message; the line stays
+      at 998.
+    - Adding 1 then gives a 201 with the line at 999.
+    - `PATCH` rejects `1000` and `1.5` with a 400. `PATCH 5` gives a 200.
+
+    Jest cart suite 13/13 (3 new, 1 rewritten); tsc and eslint green.
+  - **Residual.** The ceiling check reads, then increments. Two racing adds can
+    each pass, so a line can overshoot 999 by at most one request's quantity
+    (≤ 999). That is still far below INT max, which is the 500 the check
+    prevents. A line already over 999 can still be PATCHed down. Out of scope:
+    `CreateOrderDto.quantity` is still `@IsInt() @Min(1)` with no `@Max`.
+
+- **AUD-0925-02 → CART-UNIQ-01 — one cart per user, one line per item,
+  enforced by the DB (2026-09-25). Release class A: response shape unchanged.**
+  - **Problem.** `carts` / `cart_items` had only primary keys and `addItem`
+    was find-then-insert with no lock: a double-tapped first add seated two
+    carts (items "vanished" between reads), a concurrent add of the same item
+    seated two lines, and every cart access full-scanned `carts`.
+  - **Migration** `nodeA-20260925-001-add-cart-unique-constraints`: merges
+    duplicate carts (oldest wins, items moved) and duplicate lines (oldest wins,
+    quantity summed and clamped to INT max), then adds `uq_carts_user_id` and
+    the functional `uq_cart_items_cart_product_sku`
+    `(cart_id, product_id, (COALESCE(sku_id,0)))`. A generated column (the
+    audit's suggestion) was rejected — TypeORM dev sync re-diffs generated
+    columns. The functional index is declared `synchronize: false` in the
+    entity so dev sync leaves it alone.
+  - **Code** (`apps/orders/src/cart.service.ts`): `findOrCreateCart` re-reads
+    the winner on `ER_DUP_ENTRY`; `addQuantityToLine` uses an atomic
+    `increment` for an existing line and as the fallback when the line insert
+    loses the race. `skuId || null` so a `0` (which the gateway already treats
+    as "no SKU") cannot collide with the SKU-less key and lose the add.
+  - **Evidence.** Merge exercised on scratch copies (3 carts → 1, lines summed,
+    clamp hit, re-run no-op, all 4 duplicate inserts rejected). DEV: indexes
+    survived a dev-sync reboot; sequential adds 2+3 → one line of 5; 8 parallel
+    adds to an empty cart → 8×201, one cart, one line of 8; `skuId: 0` + no-SKU
+    add → one `skuId: null` line of 3. Jest cart suite 10/10 (5 new), tsc,
+    eslint, `check:conventions` green.
+  - **Residuals** (CART-UNIQ-01): remove-last-item racing an add can still lose
+    the add (pre-existing cascade); merged lines are not clamped to stock.
+
+- **LOCAL-INV-01 — Postgres pool no longer wedges when a handshake stalls
+  (2026-09-25). Release class A: no contract change.**
+  - **Problem (FE backend-handoff).** On local dev, inventory (TCP 3002)
+    accepted connections but never replied. `with-inventory/all` returned 500,
+    and `low-stock` and `shop/stats` returned 408 `Timeout has occurred`. It
+    worked right after a restart, then hung permanently.
+  - **Root cause, environment.** Cloudflare WARP is on (MTU 1300). The path to
+    the Aiven PG host is lossy: DF pings take ~1.5s or time out. TCP connect and
+    the `SSLRequest` succeed, but the TLS handshake hung in 4 of 6 probes.
+  - **Root cause, code.** pg-pool counts a client against `max` as soon as it
+    starts connecting. With no `connectionTimeoutMillis`, a stalled connect
+    holds its slot forever, and every queued acquire waits forever. Idle
+    eviction after 10s forces new handshakes, so the 5 local slots
+    (`PG_POOL_SIZE=5`) fill with stuck handshakes within minutes. This is not a
+    transaction leak: a stuck handshake never reaches the server as a session.
+    `pg_stat_activity` between soak rounds showed 0 app sessions and no
+    `idle in transaction` (only `pg_cron`; `max_connections` = 20).
+  - **Fix.** Changed `libs/database/src/postgres-database.module.ts` (used by
+    inventory, payments and rewards). `extra` now adds
+    `connectionTimeoutMillis: 10000`, `keepAlive: true` and
+    `keepAliveInitialDelayMillis: 10000`.
+    - `max` is unchanged, so the Aiven connection budget (SCALE-02) is
+      unchanged.
+    - `idleTimeoutMillis` deliberately stays at pg-pool's default 10s. A longer
+      window would keep up to `max` sessions open per service between bursts,
+      which is a SCALE-02 budget change this fix does not need.
+  - **Evidence.**
+    - A deterministic repro (a stalling fake server, `max=5`, 7 acquires):
+      before the fix, 5 slots were held and 7 callers were still waiting at 8s;
+      after it, 0 slots were held and all 7 were rejected with a connect
+      timeout.
+    - A 9-round soak on the live stack, 75s apart so each round forces fresh
+      handshakes, with WARP still on. The three reported routes returned 200
+      in r1–r3 and r5. They returned 500/408/408 at ~5.3–5.9s in r4 and in
+      r6–r9, which is about five minutes straight. The code fix does NOT make
+      a lossy path usable. What it changes is recovery. The r6–r9 failures
+      came from an inventory process (started 13:22:01Z) that was never
+      restarted, and at 13:30Z that same process answered all three routes
+      with 200 (2.6–4.0s). Before the fix, only a restart recovered it.
+      A TLS probe at 13:29Z completed 6 of 6 handshakes.
+    - tsc, `lint:check`, `check:conventions` and jest (50 suites / 574 tests)
+      all pass.
+  - **Impact.** A pool acquire now fails after 10s instead of hanging. The
+    gateway has already timed out at 5/10s by then. An RMQ consumer nacks per
+    its policy. The acquire fails before BEGIN, so no transaction is left
+    half-open. On startup, TypeORM now retries a stalled first connect instead
+    of hanging. Prod was not measured. The environment fix (a WARP split tunnel
+    for `*.aivencloud.com`) is in `ops-runtime.md` §Production runtime.
+
+- **XSS-DESC-01 — product `description` is sanitized on write (2026-09-25).
+  Release class B: the current FE keeps working, and hostile markup no longer
+  survives.**
+  - **Problem (FE backend-handoff, 🔴).** `description` HTML was stored as sent
+    and rendered raw by `ProductDetail.tsx` (`dangerouslySetInnerHTML`). That
+    let any seller plant a stored XSS for every buyer, e.g.
+    `<img src=x onerror=fetch(...document.cookie)>`.
+  - **Fix.** Added `sanitizeRichTextHtml` in
+    `libs/common/src/utils/rich-text-html.util.ts`. It is dependency-free
+    because `npm install` is denied.
+    - It parses the HTML and rebuilds it, keeping only the tiptap editor's tag
+      and attribute allow-list.
+    - It decodes entities and normalizes URLs before checking the scheme.
+    - Links always get `rel="noopener noreferrer nofollow"`, and `img[src]`
+      must be http(s).
+    - It is idempotent.
+    - Plain text with no `<` is returned as sent, so `R&D` stays searchable.
+      A value without `<` cannot hold markup. This was added after the
+      regression review.
+    - Product search also matches `description` against the keyword's
+      entity-escaped form (`escapeRichTextSearchTerm` in `@app/common`), so
+      `R&D` finds editor-written `R&amp;D`. The extra `OR` is added only when the
+      keyword holds `&`, `<` or `>`. Verified on DEV: `R&D Pro` and
+      `size < 10 & R&D` both hit a description stored escaped. Class B: the
+      result set is a superset of before.
+    - It is applied in `createProduct` and `applyProductUpdate`, which are the
+      only writers of the column. `null` still clears and `undefined` still
+      leaves the column untouched.
+  - **Who can write it.** Only `shop` (create:own) and `admin`, per
+    `apps/user/src/rbac/grants.ts`. Promotion to shop is admin-only.
+  - **Legacy data.** Checked DEV (22 descriptions) and prod's active catalog (20
+    descriptions): 0 suspicious and 0 would change, so no backfill was needed.
+  - **Tests.**
+    - `rich-text-html.util.spec.ts` (54): editor passthrough, script vectors
+      and URL-obfuscation vectors, attribute breakout, structure repair,
+      idempotency, a linear-time guard, and interop with the UP-03 Cloudinary
+      extractor.
+    - `product.service.spec.ts`: create and update sanitize; null clears;
+      absent is untouched.
+  - **Self-test (DEV, shop account).** Each call returned the expected status
+    with the stored value sanitized:
+    - POST with a hostile description → 201.
+    - GET → the same sanitized value.
+    - PATCH with a hostile description → 200.
+    - PATCH `null` → 200 with `null`.
+  - **Residuals.** Recorded in known-behaviors XSS-DESC-01:
+    - Legacy rows are cleaned only on their next edit.
+    - Output can grow toward the 64 KB `TEXT` limit.
+    - An all-hostile description is stored as `""`.
+
+- **RAIL-RANK-01 — "Seller nổi bật" and "Đang hot" now rank by real units sold
+  (2026-09-25). Release class B — one additive field and one new public route.**
+  - **Problem (FE backend-handoff).** `GET /api/user/featured-sellers` returned
+    the newest shops, ranked by nothing, and the storefront "Đang hot" rail sorted
+    the product list by `viewCount`. Nothing ever writes `viewCount`, so it is 0
+    everywhere, and with no tie-breaker the order was arbitrary.
+  - **Signal.** The orders service ranks by `SUM(quantity)` over a rolling
+    30-day window of orders in `CONFIRMED`..`COMPLETED`, through two new TCP
+    patterns, `order.top_selling_sellers` and `order.top_selling_products`.
+  - **Sellers.** The gateway forwards `rankedSellerIds` to the user service,
+    which keeps the ids that are still active SHOP accounts in rank order and
+    backfills with the newest shops. The response gains `soldCount`.
+  - **Products.** New route `GET /api/products/trending?limit=1..20`
+    (`@Public()`).
+    - It returns ranked products that are active and in stock, with stock summed
+      across SKU rows. When the ranking runs short it backfills by `ratingCount`
+      (`soldCount: 0` on backfilled items).
+    - Each item has the `with-inventory/multiple` shape plus `soldCount`.
+    - The result is cached for 60s.
+  - **Failure handling.** The orders and inventory legs fail open. Only a
+    product-service failure fails the trending request.
+  - **Drive-by.** The product list sort gets a `productId DESC` tie-breaker.
+  - **Files.**
+    - `libs/constant/message-pattern.constant.ts`
+    - `apps/orders/src/orders.{service,controller,types}.ts`
+    - `apps/user/src/user.{service,controller}.ts`
+    - `apps/gateway/src/user/{user.module,user.service,user.types}.ts`
+    - `apps/gateway/src/product/{product.service,product.controller,product.types,dto/product.dto,dto/index}.ts`
+    - `apps/product/src/product.service.ts`
+  - **Tests.**
+    - New: `product-trending.service.spec.ts` (6) and
+      `user-featured-sellers.service.spec.ts` (2).
+    - Updated: `product.service.spec.ts` (the query-builder mock now has
+      `addOrderBy`) and `user-role-staleness.service.spec.ts` (constructor
+      argument).
+  - **Self-test (local, `testuser_403`).**
+    - `featured-sellers` → 200: `test1` with `soldCount` 1, ahead of the newer
+      `techstore_demo` with `soldCount` 0.
+    - `trending?limit=5` → 200 with 5 items: JBL Flip 6 with sold 1, then 4
+      backfilled items. All are active and in stock.
+    - `limit=0` and `limit=21` → 400.
+    - Items match `with-inventory/multiple` byte for byte, apart from
+      `soldCount`.
+  - **Recorded.**
+    - Residuals: `known-behaviors.md` → RAIL-RANK-01.
+    - Handoffs: `frontend-handoff.md` entry written; `backend-handoff.md` entry
+      moved to Done.
+
 - **SWEEP-0923 — the sweep found no code to fix and fixed the documentation
   instead: four stale claims in the two files agents actually trust, including a
   migration ledger that said prod was missing a column it has had since

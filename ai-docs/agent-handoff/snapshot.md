@@ -38,8 +38,13 @@ Nothing is mid-implementation. What is genuinely open:
 
 ### Prod-owed
 
-Nothing is owed to prod. Schema and code are in sync — the last outstanding
-migration (`nodeA-20260911-001-add-expected-delivery-time-to-orders`) was applied
+- **`nodeA-20260925-001-add-cart-unique-constraints`** (CART-UNIQ-01) — applied
+  to DEV 2026-09-25, not yet on prod. Needs no manual step: the next CD deploy
+  applies it before the restart, and the code runs correctly without it. Drop
+  this line once the deploy log shows it applied.
+
+Before that, the last outstanding migration
+(`nodeA-20260911-001-add-expected-delivery-time-to-orders`) was applied
 2026-09-16, and DEPLOY-PG-01 was resolved the same day; both failure modes now
 live in `ops-runtime.md` (§CI/CD and §Database migrations). One config gap
 remains, deliberately unfilled:
@@ -55,7 +60,7 @@ remains, deliberately unfilled:
   scaffolds were DELETED 2026-09-11 (E2E-SCAFFOLD-01), so the suite no longer
   lies about its coverage — but the gap they pretended to fill is still open.
   Anything real needs live Redis/RabbitMQ/Aiven in CI, which collides with
-  free-tier-only; unit coverage (42 suites / 444 tests) is what exists today.
+  free-tier-only; unit coverage (50 suites / 587 tests) is what exists today.
 - **CD-03 — build-on-runner deploy variant.** Only if the EC2 gets
   smaller/slower (CI-built `dist/` rsync + `npm ci --omit=dev` + restart). Not
   needed while CD-01 works.
@@ -79,6 +84,16 @@ remains, deliberately unfilled:
   create-vs-edit `null` asymmetry documented in VOUCHER-NULL-01. A gate demanding
   what known-behaviors.md forbids is the wrong gate.
 
+### Audit backlog (SWEEP-0925, `/sweep audit` 2026-09-25 — recorded, not fixed)
+
+**Backlog empty.** -02/-03 DONE → CART-UNIQ-01; -04 DONE → RAIL-RANK-01
+(see CHANGELOG). The one standing instruction:
+
+- ~~AUD-0925-01 — `order_created` consumers not idempotent under outbox
+  redelivery~~ → **DROPPED 2026-09-25 by the user**: rewards has no FE yet.
+  Do not re-record the rewards double-credit (`reward_points` has no
+  UNIQUE(order_id)) until the FE builds rewards.
+
 ### Planned but not started
 
 Full designs (scope, shape, landmines, release class) live in
@@ -92,6 +107,8 @@ pick one up. Do not re-derive them:
   Still unbuilt and still optional: T4 an admin/platform-wide export, T5 an async
   job for windows over the caps. Neither has a requester — build on demand, not
   speculatively.
+- **CAPTCHA-01** — invisible Turnstile captcha on register/forgot-password
+  (deferred 2026-09-26; blocked on the user creating Turnstile keys).
 - **SOCIAL-LIKE-NTF-01** — liking a post notifies nobody (product decision, needs batching).
 - **VOUCHER-SHOP-01 phase 2** — Shopee-style stacking + multi-shop apportionment.
 - **AI-03 / AI-04** — Sell From Photo, Visual Search (Gemini; AI-04 adds 1 migration).
@@ -129,6 +146,7 @@ pick one up. Do not re-derive them:
 - ORD-CRON-01 — No orders @Cron ever fired before 2026-08-13; the stale-reservation sweep then started with a backlog.
 - EXPORT-CSV-01 — The seller CSV export is one row per ORDER ITEM, and the four order-level money columns are written on each order's first row only so a column SUM does not double-count.
 - EXPORT-TZ-01 — Order timestamps and every from/to day window are Vietnam wall-clock computed in code, because the server TZ is UTC on prod and UTC+7 on dev — do NOT "fix" a zone bug by setting TZ or the connection timezone.
+- CART-UNIQ-01 — carts.user_id and cart_items (cart_id, product_id, COALESCE(sku_id,0)) are UNIQUE, so a racing add re-reads the winning cart or atomically increments the winning line; a line holds an integer 1..999 (a summed add past 999 is a 400, racing adds can overshoot by one request); skuId 0 means no SKU, and a concurrent remove-last-item can still drop an add.
 
 **GHN**
 - GHN-ADDR-01 — Free-text address resolution is best-effort and can match a wrong-but-valid location; sending both ids skips it.
@@ -150,6 +168,8 @@ pick one up. Do not re-derive them:
 - PATCH-ATOMIC-01 — A product PATCH is up to three writes across two DBs and is NOT atomic — a failed PATCH does not mean nothing changed.
 - INV-CONTRACT-01 — inventory_v2.sku is a warehouse label with no resolver — it drifts from products.sku on purpose.
 - PATCH-NULL-01 — null on a product PATCH clears exactly six nullable columns; anywhere else it is a 400 by design.
+- RAIL-RANK-01 — Featured sellers and GET /api/products/trending rank by units sold over a rolling 30 days of CONFIRMED..COMPLETED orders, backfill with soldCount 0, fail open on the orders/inventory legs and cache 60s; viewCount/likesCount/isTrending are still never written.
+- XSS-DESC-01 — Product description is allow-list sanitized on WRITE (create and PATCH) by a dependency-free rebuild sanitizer, so the storefront may render it raw; rows written before 2026-09-25 are cleaned only on their next edit.
 
 **Data shape / errors**
 - QUERY-ARRAY-01 — ?x[]= is a 400 by design; use repeated keys or a scalar, and wrap any new array query field with @Transform.
@@ -187,6 +207,7 @@ pick one up. Do not re-derive them:
 - RESET-EXHAUST-01 — Five reset rejections share one 400; only the attempt-limit one carries an errorCode, via a separate marker key.
 - RESET-TTL-01 — The reset code lives 60s, not 600 — live on prod since 2026-09-10.
 - CHG-PW-01 — change-password revokes nothing — an attacker’s stolen session survives it until its own expiry.
+- EMAIL-REAUTH-01 — PATCH /api/user/:id requires currentPassword only when email actually changes (missing is a 400, wrong is a 401 with INVALID_CURRENT_PASSWORD); an unchanged email is re-sendable without it and the route is throttled 10/min.
 - MAIL-BOUNCE-01 — Mail to the fixture domain / RFC-reserved names is dropped before SMTP after a 45h bounce flood.
 - ROLE-ADMIN-01 — A role change reaches the JWT only on the target’s NEXT login; GET /api/user/me exposes the drift as a signal only.
 
