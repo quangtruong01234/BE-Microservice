@@ -27,6 +27,8 @@ import {
   isPublicId,
   isRmqPublisherLive,
   PaginatedResponse,
+  escapeRichTextSearchTerm,
+  sanitizeRichTextHtml,
 } from "@app/common";
 import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 import { EXCHANGE } from "@app/common/constants/exchange";
@@ -1150,6 +1152,11 @@ export class ProductService {
 
     const product = this.productRepository.create({
       ...rest,
+      // Rendered raw by the storefront — clean on write (XSS-DESC-01).
+      description:
+        typeof rest.description === "string"
+          ? sanitizeRichTextHtml(rest.description)
+          : rest.description,
       publicId: generatePublicId(PUBLIC_ID_PREFIXES.PRODUCT),
       categories,
     });
@@ -1233,9 +1240,14 @@ export class ProductService {
       this.productRepository.createQueryBuilder("product");
 
     if (search) {
+      // description is stored HTML (XSS-DESC-01): `&`, `<`, `>` in its text are
+      // entity-escaped, so a keyword holding one also matches its escaped form.
+      const htmlSearch = escapeRichTextSearchTerm(search);
       queryBuilder.andWhere(
-        "(product.name LIKE :search OR product.description LIKE :search OR product.sku LIKE :search)",
-        { search: `%${search}%` },
+        htmlSearch === search
+          ? "(product.name LIKE :search OR product.description LIKE :search OR product.sku LIKE :search)"
+          : "(product.name LIKE :search OR product.description LIKE :search OR product.description LIKE :htmlSearch OR product.sku LIKE :search)",
+        { search: `%${search}%`, htmlSearch: `%${htmlSearch}%` },
       );
     }
 
@@ -1314,6 +1326,10 @@ export class ProductService {
       .addSelect(`product.${sortBy}`, "sortValue")
       .distinct(true)
       .orderBy("sortValue", sortOrder)
+      // Tie-breaker: without it rows sharing a sort value (every product with
+      // ratingCount 0, say) come back in engine order, which can repeat or skip
+      // a product across pages and reshuffles the RAIL-RANK-01 backfill.
+      .addOrderBy("productId", "DESC")
       .offset(skip)
       .limit(limit)
       .getRawMany<{ productId: string }>();
@@ -1652,6 +1668,11 @@ export class ProductService {
       delete rest.categoryIds;
       delete rest.skuList;
       delete rest.version;
+      // Rendered raw by the storefront — clean on write (XSS-DESC-01). `null`
+      // (clear) and `undefined` (untouched) pass through as-is.
+      if (typeof rest.description === "string") {
+        rest.description = sanitizeRichTextHtml(rest.description);
+      }
       Object.assign(product, rest);
 
       // The entity was loaded with its `brand` relation, and TypeORM writes

