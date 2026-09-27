@@ -111,6 +111,9 @@ import {
   VoucherEvaluationContext,
   VoucherPreview,
   SellerOrdersExportQuery,
+  TopSellingQuery,
+  TopSellingSeller,
+  TopSellingProduct,
 } from "./orders.types";
 
 /**
@@ -173,6 +176,23 @@ const NO_REDELIVERY_STATUSES = new Set<OrderStatus>([
   OrderStatus.COMPLETED,
   OrderStatus.REFUNDED,
 ]);
+
+/**
+ * RAIL-RANK-01: the orders that count as a sale for the storefront rankings.
+ * Everything the buyer committed to and has not backed out of — PENDING (an
+ * unpaid online checkout) and CANCELED / RETURN_REQUESTED / REFUNDED are out.
+ * Wider than analytics' COMPLETED-only on purpose: an order takes days to
+ * complete, and a "what is selling now" rail that lags a week is not that.
+ */
+const TOP_SELLING_STATUSES: OrderStatus[] = [
+  OrderStatus.CONFIRMED,
+  OrderStatus.PROCESSING,
+  OrderStatus.SHIPPED,
+  OrderStatus.DELIVERING,
+  OrderStatus.COMPLETED,
+];
+const TOP_SELLING_WINDOW_DAYS = 30;
+const TOP_SELLING_MAX_ROWS = 50;
 
 /**
  * GHN-ETA-01: turn the ISO 8601 UTC timestamp GHN quotes into a Date for the
@@ -1977,6 +1997,80 @@ export class OrdersService {
       counts.all += count;
     }
     return counts;
+  }
+
+  /**
+   * RAIL-RANK-01 — sellers ranked by units sold over the rolling window. The
+   * caller (gateway) filters out inactive / non-shop accounts and backfills, so
+   * this over-returns up to TOP_SELLING_MAX_ROWS rather than exactly `limit`.
+   */
+  async getTopSellingSellers(
+    query: TopSellingQuery,
+  ): Promise<TopSellingSeller[]> {
+    const rows = await this.buildTopSellingQuery(query.limit)
+      .select("oi.sellerId", "sellerId")
+      .addSelect("SUM(oi.quantity)", "soldCount")
+      .addSelect("COUNT(DISTINCT o.id)", "orderCount")
+      .groupBy("oi.sellerId")
+      .orderBy("soldCount", "DESC")
+      .addOrderBy("orderCount", "DESC")
+      .addOrderBy("oi.sellerId", "ASC")
+      .getRawMany<{ sellerId: string; soldCount: string }>();
+
+    return rows.map((row) => ({
+      sellerId: Number(row.sellerId),
+      soldCount: Number(row.soldCount),
+    }));
+  }
+
+  /**
+   * RAIL-RANK-01 — products ranked by units sold over the rolling window.
+   * `productPublicId` is the order-time snapshot (NULL on rows older than
+   * 2026-07-17); the gateway resolves products by the internal id anyway.
+   */
+  async getTopSellingProducts(
+    query: TopSellingQuery,
+  ): Promise<TopSellingProduct[]> {
+    const rows = await this.buildTopSellingQuery(query.limit)
+      .select("oi.productId", "productId")
+      .addSelect("MAX(oi.productPublicId)", "productPublicId")
+      .addSelect("SUM(oi.quantity)", "soldCount")
+      .addSelect("COUNT(DISTINCT o.id)", "orderCount")
+      .groupBy("oi.productId")
+      .orderBy("soldCount", "DESC")
+      .addOrderBy("orderCount", "DESC")
+      .addOrderBy("oi.productId", "ASC")
+      .getRawMany<{
+        productId: string;
+        productPublicId: string | null;
+        soldCount: string;
+      }>();
+
+    return rows.map((row) => ({
+      productId: Number(row.productId),
+      productPublicId: row.productPublicId ?? null,
+      soldCount: Number(row.soldCount),
+    }));
+  }
+
+  private buildTopSellingQuery(
+    requestedLimit: number | undefined,
+  ): SelectQueryBuilder<OrderItem> {
+    const rowLimit = Math.min(
+      Math.max(Number(requestedLimit) || TOP_SELLING_MAX_ROWS, 1),
+      TOP_SELLING_MAX_ROWS,
+    );
+    // A rolling window is zone-independent (an instant minus N days), so this
+    // is not one of the calendar-day windows EXPORT-TZ-01 governs.
+    const sinceDate = new Date(
+      Date.now() - TOP_SELLING_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+    );
+    return this.orderItemRepository
+      .createQueryBuilder("oi")
+      .innerJoin("oi.order", "o")
+      .where("o.status IN (:...statuses)", { statuses: TOP_SELLING_STATUSES })
+      .andWhere("o.createdAt >= :sinceDate", { sinceDate })
+      .limit(rowLimit);
   }
 
   /**

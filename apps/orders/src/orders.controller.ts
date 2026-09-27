@@ -19,6 +19,9 @@ import type {
   AvailableVoucher,
   VoucherPreview,
   SellerOrdersExportQuery,
+  TopSellingQuery,
+  TopSellingSeller,
+  TopSellingProduct,
 } from "./orders.types";
 import { EVENT } from "@app/common/constants/event";
 import {
@@ -155,6 +158,20 @@ export class OrdersController {
     @Payload() query: AnalyticsQuery,
   ): Promise<OrderAnalytics> {
     return this.ordersService.getAnalytics(query);
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.TOP_SELLING_SELLERS)
+  async getTopSellingSellers(
+    @Payload() query: TopSellingQuery,
+  ): Promise<TopSellingSeller[]> {
+    return this.ordersService.getTopSellingSellers(query ?? {});
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.TOP_SELLING_PRODUCTS)
+  async getTopSellingProducts(
+    @Payload() query: TopSellingQuery,
+  ): Promise<TopSellingProduct[]> {
+    return this.ordersService.getTopSellingProducts(query ?? {});
   }
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.GET_ALL_ORDERS)

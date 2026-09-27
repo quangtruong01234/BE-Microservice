@@ -95,6 +95,26 @@ export interface SellerOrdersExportQuery {
   status?: string;
 }
 
+/**
+ * RAIL-RANK-01 — storefront "Seller nổi bật" / "Đang hot" rankings: units sold
+ * over a rolling window of committed orders. Ties break on distinct orders,
+ * then on the lower id, so the rail is stable between refreshes.
+ */
+export interface TopSellingQuery {
+  limit?: number;
+}
+
+export interface TopSellingSeller {
+  sellerId: number;
+  soldCount: number;
+}
+
+export interface TopSellingProduct {
+  productId: number;
+  productPublicId: string | null;
+  soldCount: number;
+}
+
 export interface RevenuePoint {
   period: string;
   revenue: number;
