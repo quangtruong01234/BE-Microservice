@@ -34,7 +34,9 @@ export class InventoryController {
 
   @MessagePattern(INVENTORY_MESSAGE_PATTERNS.INVENTORY_CREATE)
   async createInventory(data: CreateInventoryDto): Promise<Inventory> {
-    this.logger.log(`[INVENTORY-TCP] Create inventory`, data);
+    this.logger.log(
+      `[INVENTORY-TCP] Create inventory for product ${data.productId}${data.productSkuId ? ` (SKU ${data.productSkuId})` : ""}`,
+    );
     return this.inventoryService.create(data);
   }
 
@@ -54,7 +56,9 @@ export class InventoryController {
 
   @MessagePattern(INVENTORY_MESSAGE_PATTERNS.INVENTORY_GET_BY_PRODUCT_IDS)
   async getInventoryByProductIds(productIds: number[]): Promise<Inventory[]> {
-    this.logger.log(`[INVENTORY-TCP] Get inventory by product ids`, productIds);
+    this.logger.log(
+      `[INVENTORY-TCP] Get inventory by product ids (${productIds.length} ids)`,
+    );
     return this.inventoryService.getInventoryByProductIds(productIds);
   }
 
