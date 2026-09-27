@@ -292,8 +292,9 @@
   by INFORMATION_SCHEMA, safe to re-run. Unlike 20260818-001 it MERGES
   duplicates instead of aborting, so the CD migrate step cannot be blocked by
   user-created data. **Applied to DEV Aiven 2026-09-25** (0 duplicates there;
-  the merge was exercised on scratch copies). **Not yet on prod** — the next CD
-  deploy applies it before `pm2 startOrRestart`. The code does not depend on it
+  the merge was exercised on scratch copies). **APPLIED TO PROD 2026-09-27** by
+  the CD deploy of `2456fbf` (`[applied]` at 14:16:59Z, before the 14:18:08Z
+  `pm2 startOrRestart`). The code does not depend on it
   to run (without the index the `ER_DUP_ENTRY` paths simply never fire), so the
   order of schema vs code is harmless. On a real table MySQL drops the implicit
   FK index `FK_6385a745d9e12a89b859bb25623` because the new index's `cart_id`

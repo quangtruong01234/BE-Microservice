@@ -38,14 +38,10 @@ Nothing is mid-implementation. What is genuinely open:
 
 ### Prod-owed
 
-- **`nodeA-20260925-001-add-cart-unique-constraints`** (CART-UNIQ-01) — applied
-  to DEV 2026-09-25, not yet on prod. Needs no manual step: the next CD deploy
-  applies it before the restart, and the code runs correctly without it. Drop
-  this line once the deploy log shows it applied.
-
-Before that, the last outstanding migration
-(`nodeA-20260911-001-add-expected-delivery-time-to-orders`) was applied
-2026-09-16, and DEPLOY-PG-01 was resolved the same day; both failure modes now
+No migration is owed: the last one
+(`nodeA-20260925-001-add-cart-unique-constraints`, CART-UNIQ-01) was applied to
+prod by the 2026-09-27 CD deploy. DEPLOY-PG-01 was resolved 2026-09-16; both
+migration failure modes now
 live in `ops-runtime.md` (§CI/CD and §Database migrations). One config gap
 remains, deliberately unfilled:
 
