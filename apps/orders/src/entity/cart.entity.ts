@@ -5,9 +5,12 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   OneToMany,
+  Index,
 } from "typeorm";
 import { CartItem } from "./cart-item.entity";
 
+// One cart per user (AUD-0925-02) — also the index every cart read goes through.
+@Index("uq_carts_user_id", ["userId"], { unique: true })
 @Entity("carts")
 export class Cart {
   @PrimaryGeneratedColumn()

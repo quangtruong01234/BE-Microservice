@@ -1,7 +1,13 @@
-import { Injectable, Logger, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { IsNull, Repository } from "typeorm";
+import { IsNull, QueryFailedError, Repository } from "typeorm";
 import { ORDER_MESSAGE } from "libs/constant/response-message.constant";
+import { MAX_CART_LINE_QUANTITY } from "libs/constant/cart.constant";
 import { Cart } from "./entity/cart.entity";
 import { CartItem } from "./entity/cart-item.entity";
 
@@ -33,6 +39,102 @@ export class CartService {
     return { id: null, userId, createdAt: null, updatedAt: null, items: [] };
   }
 
+  private isDuplicateEntry(error: unknown): boolean {
+    return (
+      error instanceof QueryFailedError &&
+      (error.driverError as { code?: string })?.code === "ER_DUP_ENTRY"
+    );
+  }
+
+  /**
+   * `uq_carts_user_id` is what makes this safe, not the lookup: two concurrent
+   * first adds both miss the read, one insert wins, and the loser re-reads the
+   * winner's row instead of seating a second cart (AUD-0925-02).
+   */
+  private async findOrCreateCart(userId: number): Promise<Cart> {
+    const existing = await this.cartRepository.findOne({ where: { userId } });
+    if (existing) return existing;
+
+    try {
+      return await this.cartRepository.save(
+        this.cartRepository.create({ userId }),
+      );
+    } catch (error: unknown) {
+      if (!this.isDuplicateEntry(error)) throw error;
+      const winner = await this.cartRepository.findOne({ where: { userId } });
+      if (!winner) throw error;
+      return winner;
+    }
+  }
+
+  /**
+   * Adds to the existing line with an atomic `quantity = quantity + ?`, never a
+   * read-modify-write — two concurrent adds of the same item must sum, not have
+   * one overwrite the other. `uq_cart_items_cart_product_sku` turns a racing
+   * second insert into ER_DUP_ENTRY, which then takes the increment path.
+   */
+  private async addQuantityToLine(
+    cartId: number,
+    line: {
+      productId: number;
+      skuId: number | null;
+      skuTierIdx: string | null;
+      quantity: number;
+    },
+  ): Promise<void> {
+    const lineWhere = {
+      cartId,
+      productId: line.productId,
+      skuId: line.skuId ?? IsNull(),
+    };
+
+    const existingItem = await this.cartItemRepository.findOne({
+      where: lineWhere,
+    });
+    if (existingItem) {
+      await this.incrementLine(existingItem, line.quantity);
+      return;
+    }
+
+    try {
+      await this.cartItemRepository.insert({
+        cartId,
+        productId: line.productId,
+        skuId: line.skuId,
+        skuTierIdx: line.skuTierIdx,
+        quantity: line.quantity,
+      });
+    } catch (error: unknown) {
+      if (!this.isDuplicateEntry(error)) throw error;
+      // Re-read rather than increment by key: the winner goes through the same
+      // ceiling check, and a winner deleted meanwhile surfaces as an error
+      // instead of an increment that matches nothing and drops the add.
+      const winner = await this.cartItemRepository.findOne({
+        where: lineWhere,
+      });
+      if (!winner) throw error;
+      await this.incrementLine(winner, line.quantity);
+    }
+  }
+
+  /**
+   * The ceiling is checked on the read value, so two racing adds can each pass
+   * and overshoot by at most one request's quantity — bounded far below INT
+   * max, which is the 500 this guard exists to prevent (AUD-0925-03).
+   */
+  private async incrementLine(item: CartItem, quantity: number): Promise<void> {
+    if (item.quantity + quantity > MAX_CART_LINE_QUANTITY) {
+      throw new BadRequestException(
+        ORDER_MESSAGE.CART_LINE_QUANTITY_EXCEEDED(MAX_CART_LINE_QUANTITY),
+      );
+    }
+    await this.cartItemRepository.increment(
+      { id: item.id },
+      "quantity",
+      quantity,
+    );
+  }
+
   async addItem(payload: {
     userId: number;
     productId: number;
@@ -42,39 +144,17 @@ export class CartService {
   }): Promise<Cart | EmptyCart> {
     const { userId, productId, skuId, skuTierIdx, quantity } = payload;
 
-    let cart = await this.cartRepository.findOne({
-      where: { userId },
-      relations: ["items"],
+    const cart = await this.findOrCreateCart(userId);
+    await this.addQuantityToLine(cart.id, {
+      productId,
+      // `||`, not `??`: the gateway already treats a falsy skuId as "no SKU"
+      // (it skips SKU validation), and a stored 0 would collide with the
+      // SKU-less line under the COALESCE(sku_id, 0) key, so the fallback
+      // increment on `sku_id = 0` would match nothing and lose the add.
+      skuId: skuId || null,
+      skuTierIdx: skuTierIdx ?? null,
+      quantity,
     });
-
-    if (!cart) {
-      cart = await this.cartRepository.save(
-        this.cartRepository.create({ userId }),
-      );
-      cart.items = [];
-    }
-
-    const existingItem = await this.cartItemRepository.findOne({
-      where: {
-        cartId: cart.id,
-        productId,
-        skuId: skuId ?? IsNull(),
-      },
-    });
-
-    if (existingItem) {
-      existingItem.quantity += quantity;
-      await this.cartItemRepository.save(existingItem);
-    } else {
-      const newItem = this.cartItemRepository.create({
-        cartId: cart.id,
-        productId,
-        skuId: skuId ?? null,
-        skuTierIdx: skuTierIdx ?? null,
-        quantity,
-      });
-      await this.cartItemRepository.save(newItem);
-    }
 
     // Not `as Promise<Cart>`: the re-read can legitimately miss if the row was
     // deleted between the write and here (a concurrent clear/remove-last-item

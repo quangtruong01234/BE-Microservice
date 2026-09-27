@@ -6,9 +6,19 @@ import {
   UpdateDateColumn,
   ManyToOne,
   JoinColumn,
+  Index,
 } from "typeorm";
 import { Cart } from "./cart.entity";
 
+/**
+ * One line per (cart, product, SKU-or-none), AUD-0925-02. The real definition is
+ * a MySQL functional index — `(cart_id, product_id, (COALESCE(sku_id, 0)))`,
+ * because a plain UNIQUE never treats two NULL sku_ids as equal — which TypeORM
+ * cannot express. `synchronize: false` declares the name so dev auto-sync
+ * leaves the migration-created index alone instead of dropping it as unknown.
+ * Source of truth: nodeA-20260925-001-add-cart-unique-constraints.
+ */
+@Index("uq_cart_items_cart_product_sku", { synchronize: false })
 @Entity("cart_items")
 export class CartItem {
   @PrimaryGeneratedColumn()
