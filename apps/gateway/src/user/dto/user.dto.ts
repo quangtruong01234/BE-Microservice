@@ -37,8 +37,11 @@ export class RegisterUserDto {
   @IsEmail()
   declare email: string;
 
-  @ApiProperty({ example: "password123" })
+  // Same floor as reset/change-password. Login stays unconstrained on purpose:
+  // accounts created before this floor may hold a shorter password.
+  @ApiProperty({ example: "password123", minLength: 6 })
   @IsString()
+  @MinLength(6)
   declare password: string;
 }
 
@@ -190,10 +193,29 @@ export class UpdateUserGatewayDto {
   @MinLength(1)
   declare name?: string;
 
-  @ApiPropertyOptional({ example: "john@example.com" })
+  @ApiPropertyOptional({
+    example: "john@example.com",
+    description:
+      "Changing it requires `currentPassword` (EMAIL-REAUTH-01). Re-sending " +
+      "the unchanged address does not.",
+  })
   @IsOptional()
   @IsEmail()
   declare email?: string;
+
+  // EMAIL-REAUTH-01: the email is where reset codes go, so changing it with a
+  // stolen session alone would hand the account over via forgot-password.
+  // Only checked by the user service when `email` actually differs.
+  @ApiPropertyOptional({
+    example: "currentPassword123",
+    description:
+      "Required only when `email` changes. Missing ⇒ 400; wrong ⇒ 401 with " +
+      "errorCode INVALID_CURRENT_PASSWORD. Ignored otherwise.",
+  })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  declare currentPassword?: string;
 
   @ApiPropertyOptional({
     example:

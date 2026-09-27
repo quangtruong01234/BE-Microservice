@@ -14,22 +14,36 @@ import {
 } from "./dto/user-address.dto";
 import { firstValueFrom, timeout, catchError } from "rxjs";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
-import { USER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
+import {
+  ORDER_MESSAGE_PATTERN,
+  USER_MESSAGE_PATTERN,
+} from "libs/constant/message-pattern.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
 import { retryOnTransportError } from "../common/exception/transport-error";
 import { assertCloudinaryUrlsOwnedBy } from "../common/media/cloudinary-ownership";
 import { JwtService } from "@nestjs/jwt";
-import { UserData, UserRole } from "./user.types";
+import { TopSellingSeller, UserData, UserRole } from "./user.types";
 import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
+import { CachedService } from "@app/cached";
 
 @Injectable()
 export class UserService {
   private readonly logger = new Logger(UserService.name);
 
+  // AUD-0925-04: the featured-sellers rail is a 30-day aggregate, exactly like
+  // the trending rail, so it gets the same 60s cache. The response depends on
+  // `limit` only (no req.user), so one entry per limit serves every caller.
+  private static readonly FEATURED_SELLERS_CACHE_PREFIX =
+    "gw:user:featured-sellers:";
+  private static readonly FEATURED_SELLERS_CACHE_TTL_SECONDS = 60;
+
   constructor(
     @Inject(NAME_SERVICE_TCP.USER_SERVICE)
     private readonly userClient: ClientProxy,
     private readonly jwtService: JwtService,
+    @Inject(NAME_SERVICE_TCP.ORDERS_SERVICE)
+    private readonly ordersClient: ClientProxy,
+    private readonly cached: CachedService,
   ) {}
 
   /**
@@ -303,11 +317,93 @@ export class UserService {
     }
   }
 
-  async getFeaturedSellers(limit: number): Promise<unknown> {
+  /**
+   * RAIL-RANK-01: best-effort units-sold ranking from the orders service. A
+   * failure degrades to `[]`, which makes the user service answer with the
+   * newest shops — the rail is decoration, not worth a 502.
+   */
+  private async fetchTopSellingSellers(): Promise<TopSellingSeller[]> {
     try {
+      const ranking: unknown = await firstValueFrom(
+        this.ordersClient
+          .send(ORDER_MESSAGE_PATTERN.TOP_SELLING_SELLERS, {})
+          .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
+      );
+      return Array.isArray(ranking) ? (ranking as TopSellingSeller[]) : [];
+    } catch (error: unknown) {
+      this.logger.warn(
+        `Top-selling seller ranking unavailable, falling back to newest shops: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return [];
+    }
+  }
+
+  /**
+   * AUD-0925-04: the cache is best-effort both ways — a Redis failure reads as
+   * a miss and a failed write is only logged, so Redis can never fail the rail.
+   */
+  private async readFeaturedSellersCache(
+    cacheKey: string,
+  ): Promise<unknown[] | null> {
+    try {
+      const cachedPayload = await this.cached.get(cacheKey);
+      if (cachedPayload === null) {
+        return null;
+      }
+      const cachedSellers: unknown = JSON.parse(cachedPayload);
+      return Array.isArray(cachedSellers) ? cachedSellers : null;
+    } catch (error: unknown) {
+      this.logger.warn(
+        `Featured sellers cache get failed for ${cacheKey}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return null;
+    }
+  }
+
+  private async writeFeaturedSellersCache(
+    cacheKey: string,
+    featuredSellers: unknown[],
+  ): Promise<void> {
+    try {
+      await this.cached.set(
+        cacheKey,
+        JSON.stringify(featuredSellers),
+        UserService.FEATURED_SELLERS_CACHE_TTL_SECONDS,
+      );
+    } catch (error: unknown) {
+      this.logger.warn(
+        `Featured sellers cache set failed for ${cacheKey}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  async getFeaturedSellers(limit: number): Promise<unknown> {
+    const cacheKey = `${UserService.FEATURED_SELLERS_CACHE_PREFIX}${limit}`;
+    const cachedSellers = await this.readFeaturedSellersCache(cacheKey);
+    if (cachedSellers !== null) {
+      return cachedSellers;
+    }
+
+    try {
+      const ranking = await this.fetchTopSellingSellers();
+      const soldCountBySellerId = new Map(
+        ranking.map((row) => [Number(row.sellerId), Number(row.soldCount)]),
+      );
       const sellers = (await firstValueFrom(
         this.userClient
-          .send({ cmd: USER_MESSAGE_PATTERN.GET_FEATURED_SELLERS }, { limit })
+          .send(
+            { cmd: USER_MESSAGE_PATTERN.GET_FEATURED_SELLERS },
+            {
+              limit,
+              rankedSellerIds: ranking.map((row) => Number(row.sellerId)),
+            },
+          )
           .pipe(
             timeout(TCP_TIMEOUT_MS.READ),
             retryOnTransportError(),
@@ -316,9 +412,21 @@ export class UserService {
             }),
           ),
       )) as unknown;
-      return Array.isArray(sellers)
-        ? sellers.map((seller) => this.exposeUser(seller))
-        : sellers;
+      if (!Array.isArray(sellers)) {
+        return sellers;
+      }
+      // soldCount is additive (RAIL-RANK-01); a backfilled shop sold 0 units
+      // inside the ranking window, or the ranking leg failed.
+      const featuredSellers = sellers.map((seller: { id?: unknown }) => ({
+        ...(this.exposeUser(seller) as Record<string, unknown>),
+        soldCount: soldCountBySellerId.get(Number(seller.id)) ?? 0,
+      }));
+      // A degraded answer (ranking leg down → pure backfill) is cached too, as
+      // on the trending rail: otherwise every call would re-wait a failing
+      // orders service. A user-service failure throws before this line, so an
+      // error is never cached.
+      await this.writeFeaturedSellersCache(cacheKey, featuredSellers);
+      return featuredSellers;
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,

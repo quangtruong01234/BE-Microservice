@@ -86,3 +86,35 @@ describe("RegisterUserDto username trimming (NAME-TRIM-01)", () => {
     expect(validateAs(RegisterUserDto, registration("john_doe"))).toEqual([]);
   });
 });
+
+describe("RegisterUserDto password floor", () => {
+  const withPassword = (password: string): Record<string, unknown> => ({
+    username: "john_doe",
+    email: "john@example.com",
+    password,
+  });
+
+  it("rejects a password shorter than 6 characters", () => {
+    expect(validateAs(RegisterUserDto, withPassword("12345"))).toEqual([
+      "password",
+    ]);
+  });
+
+  it("accepts a 6-character password", () => {
+    expect(validateAs(RegisterUserDto, withPassword("123456"))).toEqual([]);
+  });
+});
+
+describe("UpdateUserGatewayDto currentPassword (EMAIL-REAUTH-01)", () => {
+  it("whitelists currentPassword next to an email change", () => {
+    expect(
+      validate({ email: "new@example.com", currentPassword: "password123" }),
+    ).toEqual([]);
+  });
+
+  it("rejects an empty currentPassword", () => {
+    expect(validate({ email: "new@example.com", currentPassword: "" })).toEqual(
+      ["currentPassword"],
+    );
+  });
+});

@@ -37,3 +37,12 @@ export type UserData = {
   role?: UserRole | null;
   [key: string]: unknown;
 };
+
+/**
+ * RAIL-RANK-01: one row of the orders service's `order.top_selling_sellers`
+ * ranking (internal seller id, units sold in the rolling window).
+ */
+export type TopSellingSeller = {
+  sellerId: number;
+  soldCount: number;
+};

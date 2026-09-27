@@ -312,12 +312,26 @@ export class UserController {
 
   @Patch(":id")
   @UseGuards(JwtAuthGuard)
+  // EMAIL-REAUTH-01 makes this route verify a password, so it must not be an
+  // unthrottled guessing oracle. Profile edits never come close to 10/min.
+  @RateLimit({ limit: 10, ttl: 60 })
   @ApiOperation({ summary: "Update user profile (own account only)" })
   @ApiBody({ type: UpdateUserGatewayDto })
   @ApiResponse({ status: 200, description: "Updated user profile." })
-  @ApiResponse({ status: 400, description: "Invalid user id format." })
+  @ApiResponse({
+    status: 400,
+    description:
+      "Invalid user id format, or `email` changes without `currentPassword`.",
+  })
+  @ApiResponse({
+    status: 401,
+    description:
+      "`currentPassword` is wrong on an email change (errorCode INVALID_CURRENT_PASSWORD — the cookie stays valid).",
+  })
   @ApiResponse({ status: 403, description: "Forbidden." })
   @ApiResponse({ status: 404, description: "User not found." })
+  @ApiResponse({ status: 409, description: "Email is already registered." })
+  @ApiResponse({ status: 429, description: "Too many attempts." })
   async updateUser(
     @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.USER)) id: string,
     @Body() dto: UpdateUserGatewayDto,

@@ -1,5 +1,6 @@
 import { ClientProxy } from "@nestjs/microservices";
 import { JwtService } from "@nestjs/jwt";
+import { CachedService } from "@app/cached";
 import { of } from "rxjs";
 import { UserService } from "./user.service";
 
@@ -40,6 +41,8 @@ describe("UserService getMe role staleness", () => {
     service = new UserService(
       userClient as unknown as ClientProxy,
       jwtService as unknown as JwtService,
+      {} as unknown as ClientProxy,
+      {} as unknown as CachedService,
     );
   });
 
