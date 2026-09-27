@@ -1181,7 +1181,7 @@ Also deliberate:
   so an already-emailed reset code cannot be replayed afterwards.
 
 ## Changing the email needs the current password (EMAIL-REAUTH-01, 2026-09-26)
-<!-- kb: id=EMAIL-REAUTH-01; group=auth; files=apps/user/src/user.service.ts; sha=0da41f63d852; verified=local:2026-09-26; keys=email change,change email,currentPassword,re-auth,reauth,PATCH user,update profile,account takeover,đổi email,sửa hồ sơ,mật khẩu hiện tại; summary=PATCH /api/user/:id requires currentPassword only when email actually changes (missing is a 400, wrong is a 401 with INVALID_CURRENT_PASSWORD); an unchanged email is re-sendable without it and the route is throttled 10/min. -->
+<!-- kb: id=EMAIL-REAUTH-01; group=auth; files=apps/user/src/user.service.ts; sha=0da41f63d852; verified=prod:2026-09-27; keys=email change,change email,currentPassword,re-auth,reauth,PATCH user,update profile,account takeover,đổi email,sửa hồ sơ,mật khẩu hiện tại; summary=PATCH /api/user/:id requires currentPassword only when email actually changes (missing is a 400, wrong is a 401 with INVALID_CURRENT_PASSWORD); an unchanged email is re-sendable without it and the route is throttled 10/min. -->
 
 Why: reset codes are mailed to `users.email`, so before this a stolen session
 alone could point the email at the attacker and then take the password via
