@@ -19,13 +19,31 @@ import {
 } from "libs/constant/message-pattern.constant";
 import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 import { Notification } from "./entities/notification.entity";
-import { NOTIFICATION_TEXT_MAX_LENGTH } from "./notification.constants";
+import {
+  LIKE_NOTIFICATION_CAS_MAX_ATTEMPTS,
+  LIKE_NOTIFICATION_COUNT_PATTERN,
+  LIKE_NOTIFICATION_SINGLE_MESSAGE,
+  LIKE_NOTIFICATION_TYPE,
+  NOTIFICATION_TEXT_MAX_LENGTH,
+} from "./notification.constants";
 import { NotificationMetadata, UserEmailInfo } from "./notification.types";
 
 function truncateNotificationText(
   text: string | null | undefined,
 ): string | null {
   return text == null ? null : text.slice(0, NOTIFICATION_TEXT_MAX_LENGTH);
+}
+
+export function buildLikeNotificationMessage(likeCount: number): string {
+  return likeCount <= 1
+    ? LIKE_NOTIFICATION_SINGLE_MESSAGE
+    : `${likeCount} people liked your post`;
+}
+
+/** Inverse of `buildLikeNotificationMessage`; anything unrecognised counts as 1. */
+export function parseLikeNotificationCount(message: string): number {
+  const match = LIKE_NOTIFICATION_COUNT_PATTERN.exec(message);
+  return match ? Number(match[1]) : 1;
 }
 
 @Injectable()
@@ -99,7 +117,90 @@ export class NotificationService {
       preview: truncateNotificationText(metadata.preview),
     });
     const saved = await this.notificationRepository.save(notification);
+    this.pushNotification(userId, saved, orderPublicId);
 
+    this.logger.log(
+      `[NOTIFICATION] Saved type=${type} orderId=${orderId} userId=${userId}`,
+    );
+  }
+
+  /**
+   * SOCIAL-LIKE-NTF-01 — fold a like into the owner's single unread `like` row
+   * for this post, or open a new one when there is none (the previous one was
+   * read, or this is the first like). The update is a compare-and-swap on the
+   * message it read, so two racing likes cannot lose a count: the loser
+   * re-reads and retries. Only a same-instant FIRST like can still open two
+   * rows — there is no unique key to stop it (no migration, by decision).
+   */
+  async upsertLikeNotification(
+    postOwnerId: number,
+    postId: number,
+    likerId: number,
+  ): Promise<void> {
+    for (
+      let attempt = 1;
+      attempt <= LIKE_NOTIFICATION_CAS_MAX_ATTEMPTS;
+      attempt++
+    ) {
+      const unreadLike = await this.notificationRepository.findOne({
+        where: {
+          userId: postOwnerId,
+          type: LIKE_NOTIFICATION_TYPE,
+          postId,
+          isRead: false,
+        },
+        order: { id: "DESC" },
+      });
+
+      if (!unreadLike) {
+        await this.saveNotification(
+          postOwnerId,
+          LIKE_NOTIFICATION_TYPE,
+          null,
+          buildLikeNotificationMessage(1),
+          { postId, actorId: likerId },
+        );
+        return;
+      }
+
+      // The latest liker again (like → unlike → like) is not a new person.
+      if (Number(unreadLike.actorId) === likerId) return;
+
+      const nextMessage = buildLikeNotificationMessage(
+        parseLikeNotificationCount(unreadLike.message) + 1,
+      );
+      const bumpedAt = new Date();
+      const swapped = await this.notificationRepository.update(
+        { id: unreadLike.id, message: unreadLike.message, isRead: false },
+        { message: nextMessage, actorId: likerId, createdAt: bumpedAt },
+      );
+      if (swapped.affected === 1) {
+        this.pushNotification(
+          postOwnerId,
+          {
+            ...unreadLike,
+            message: nextMessage,
+            actorId: likerId,
+            createdAt: bumpedAt,
+          },
+          null,
+        );
+        this.logger.log(
+          `[NOTIFICATION] Aggregated like postId=${postId} userId=${postOwnerId} — ${nextMessage}`,
+        );
+        return;
+      }
+    }
+    throw new Error(
+      `like notification for post ${postId} kept losing the compare-and-swap`,
+    );
+  }
+
+  private pushNotification(
+    userId: number,
+    notification: Notification,
+    orderPublicId: string | null,
+  ): void {
     if (!this.fanoutChannel || !isRmqPublisherLive(this.fanoutChannel)) {
       this.logger.warn(
         "[NOTIFICATION] fanoutChannel unavailable — WS push skipped",
@@ -114,7 +215,10 @@ export class NotificationService {
               pattern: EVENT.NOTIFY_USER_PUSH_EVENT,
               data: {
                 userId,
-                notification: this.exposeNotification(saved, orderPublicId),
+                notification: this.exposeNotification(
+                  notification,
+                  orderPublicId,
+                ),
               },
             }),
           ),
@@ -125,10 +229,6 @@ export class NotificationService {
         );
       }
     }
-
-    this.logger.log(
-      `[NOTIFICATION] Saved type=${type} orderId=${orderId} userId=${userId}`,
-    );
   }
 
   async getUserNotifications(

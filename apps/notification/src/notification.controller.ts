@@ -669,6 +669,38 @@ export class NotificationController {
     }
   }
 
+  @EventPattern(EVENT.POST_LIKED_EVENT)
+  async handlePostLiked(
+    @Payload()
+    data: {
+      postId: number;
+      postOwnerId: number;
+      likerId: number;
+    },
+    @Ctx() context: RmqContext,
+  ): Promise<void> {
+    const { postId, postOwnerId, likerId } = data;
+    try {
+      // Social already skips self-likes; this guards a replayed/odd payload.
+      if (postOwnerId !== likerId) {
+        await this.notificationService.upsertLikeNotification(
+          postOwnerId,
+          postId,
+          likerId,
+        );
+      }
+      this.rmqService.ack(context);
+    } catch (err) {
+      this.logger.error(
+        `[NOTIFICATION] handlePostLiked failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      const channel = context.getChannelRef() as {
+        nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
+      };
+      channel.nack(context.getMessage(), false, true); // requeue: DB error
+    }
+  }
+
   @EventPattern(EVENT.BRAND_REVIEWED_EVENT)
   async handleBrandReviewed(
     @Payload()
