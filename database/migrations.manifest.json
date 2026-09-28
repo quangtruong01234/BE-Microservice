@@ -133,6 +133,26 @@
       "destructive": false,
       "manualOnly": false,
       "enabled": true
+    },
+    {
+      "id": "nodeA-20260928-001-add-export-jobs",
+      "target": "nodeA",
+      "dialect": "mysql",
+      "file": "database/migrations/nodeA/20260928-001-add-export-jobs.sql",
+      "category": "schema",
+      "destructive": false,
+      "manualOnly": false,
+      "enabled": true
+    },
+    {
+      "id": "nodeA-20260928-002-add-order-checkout-voucher-columns",
+      "target": "nodeA",
+      "dialect": "mysql",
+      "file": "database/migrations/nodeA/20260928-002-add-order-checkout-voucher-columns.sql",
+      "category": "schema",
+      "destructive": false,
+      "manualOnly": false,
+      "enabled": true
     }
   ]
 }
