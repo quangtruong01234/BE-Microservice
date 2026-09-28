@@ -1,4 +1,4 @@
-import { CsvColumn, toCsv } from "./csv.util";
+import { CsvColumn, toCsv, toCsvHeader, toCsvRows } from "./csv.util";
 
 interface Row {
   name: string;
@@ -126,6 +126,25 @@ describe("toCsv", () => {
     it('renders an empty literal as a blank cell, not =""', () => {
       const csv = toCsv([{ name: "a", qty: 1, code: "" }], COLUMNS);
       expect(bodyLines(csv)[1]).toBe("a,1,");
+    });
+  });
+
+  describe("chunked rendering", () => {
+    it("toCsvHeader + toCsvRows per chunk is byte-identical to one toCsv", () => {
+      const rows: Row[] = [
+        { name: "a", qty: 1, code: "01" },
+        { name: "b, c", qty: 2, code: null },
+        { name: "=cmd", qty: 3, code: "02" },
+      ];
+      const chunked =
+        toCsvHeader(COLUMNS) +
+        toCsvRows(rows.slice(0, 2), COLUMNS) +
+        toCsvRows(rows.slice(2), COLUMNS);
+      expect(chunked).toBe(toCsv(rows, COLUMNS));
+    });
+
+    it("renders an empty chunk as an empty string", () => {
+      expect(toCsvRows([], COLUMNS)).toBe("");
     });
   });
 });

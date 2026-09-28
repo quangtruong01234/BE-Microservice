@@ -10,6 +10,7 @@ export const EVENT = {
   INVENTORY_STOCK_CHANGED_EVENT: "inventory.stock_changed",
   COMMENT_CREATED_EVENT: "social.comment_created",
   REPLY_CREATED_EVENT: "social.reply_created",
+  POST_LIKED_EVENT: "social.post_liked",
   BRAND_REVIEWED_EVENT: "product.brand_reviewed",
   CATEGORY_REVIEWED_EVENT: "product.category_reviewed",
   SKU_UPSERTED_EVENT: "sku.upserted",

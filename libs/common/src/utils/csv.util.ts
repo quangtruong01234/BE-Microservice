@@ -71,6 +71,40 @@ function literalCell(raw: string): string {
   return `="${raw.replace(/["\r\n,]/g, " ").trim()}"`;
 }
 
+function renderRow<TRow>(
+  row: TRow,
+  columns: readonly CsvColumn<TRow>[],
+): string {
+  return columns
+    .map((column) => {
+      const value = column.value(row);
+      const raw = value === null || value === undefined ? "" : String(value);
+      if (raw === "") {
+        return "";
+      }
+      return column.literal ? literalCell(raw) : escapeCell(raw);
+    })
+    .join(",");
+}
+
+/**
+ * BOM + header line, CRLF-terminated — the first piece of a document rendered
+ * in chunks. `toCsvHeader(cols) + toCsvRows(chunk1, cols) + toCsvRows(chunk2,
+ * cols)` is byte-identical to one `toCsv()` over all rows.
+ */
+export function toCsvHeader<TRow>(columns: readonly CsvColumn<TRow>[]): string {
+  const header = columns.map((column) => escapeCell(column.header)).join(",");
+  return `${CSV_BOM}${header}\r\n`;
+}
+
+/** Data lines only, each CRLF-terminated — append after `toCsvHeader()`. */
+export function toCsvRows<TRow>(
+  rows: readonly TRow[],
+  columns: readonly CsvColumn<TRow>[],
+): string {
+  return rows.map((row) => `${renderRow(row, columns)}\r\n`).join("");
+}
+
 /**
  * Render `rows` as an Excel-compatible CSV document (BOM + CRLF line endings).
  *
@@ -81,21 +115,5 @@ export function toCsv<TRow>(
   rows: readonly TRow[],
   columns: readonly CsvColumn<TRow>[],
 ): string {
-  const lines: string[] = [
-    columns.map((column) => escapeCell(column.header)).join(","),
-  ];
-
-  for (const row of rows) {
-    const cells = columns.map((column) => {
-      const value = column.value(row);
-      const raw = value === null || value === undefined ? "" : String(value);
-      if (raw === "") {
-        return "";
-      }
-      return column.literal ? literalCell(raw) : escapeCell(raw);
-    });
-    lines.push(cells.join(","));
-  }
-
-  return `${CSV_BOM}${lines.join("\r\n")}\r\n`;
+  return toCsvHeader(columns) + toCsvRows(rows, columns);
 }

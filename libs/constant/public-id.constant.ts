@@ -14,6 +14,7 @@ export const PUBLIC_ID_PREFIXES = {
   ADDRESS: "addr",
   RETURN_REQUEST: "rr",
   NOTIFICATION: "ntf",
+  EXPORT_JOB: "exp",
 } as const;
 
 export type PublicIdPrefix =

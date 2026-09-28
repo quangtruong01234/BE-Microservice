@@ -48,6 +48,14 @@ export const ERROR_CODE = {
    * telling them apart would turn the endpoint into an account oracle.
    */
   RESET_CODE_EXHAUSTED: "RESET_CODE_EXHAUSTED",
+  /**
+   * `POST /api/user/register` and `POST /api/user/forgot-password`
+   * (CAPTCHA-01), only while `CAPTCHA_ENFORCE=true`: the Turnstile token was
+   * missing, malformed, or refused by Cloudflare. The client should reset the
+   * widget and let the user submit again. One code for all three on purpose —
+   * they lead to the same action.
+   */
+  CAPTCHA_REQUIRED: "CAPTCHA_REQUIRED",
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODE)[keyof typeof ERROR_CODE];

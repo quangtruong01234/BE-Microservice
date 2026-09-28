@@ -23,6 +23,8 @@ export const AUTH_MESSAGE = {
   NOT_AUTHENTICATED: "User not authenticated",
   LOGOUT_SUCCESS: "Logged out successfully",
   UNKNOWN_ACTION: (action: string): string => `Unknown action: ${action}`,
+  CAPTCHA_REQUIRED:
+    "Captcha verification failed or is missing. Please complete the challenge and try again.",
 } as const;
 
 export const UPLOAD_MESSAGE = {
@@ -176,6 +178,18 @@ export const ORDER_MESSAGE = {
     `Export window is ${days} days; the maximum is ${maxDays}. Narrow the date range.`,
   EXPORT_TOO_MANY_ROWS: (rows: number, maxRows: number): string =>
     `Export matches ${rows} item rows; the maximum is ${maxRows}. Narrow the date range or filter by status.`,
+  EXPORT_JOB_NOT_FOUND: "Export job not found",
+  EXPORT_JOB_TOO_MANY_ACTIVE: (maxActive: number): string =>
+    `You already have ${maxActive} export jobs pending or running. Wait for one to finish.`,
+  EXPORT_JOB_NOT_READY: (state: string): string =>
+    `Export job is ${state}; the file is not ready yet.`,
+  EXPORT_JOB_FAILED: (reason: string): string => `Export job failed: ${reason}`,
+  EXPORT_JOB_EXPIRED: "Export file has expired. Request a new export.",
+  EXPORT_JOB_FILE_TOO_LARGE: (sizeBytes: number, maxBytes: number): string =>
+    `Export file is ${sizeBytes} bytes; the maximum is ${maxBytes}. Narrow the date range or filter by status.`,
+  EXPORT_JOB_INTERRUPTED: "Export job was interrupted. Request a new export.",
+  EXPORT_JOB_UNEXPECTED_FAILURE:
+    "Export failed unexpectedly. Request a new export.",
   NO_GHN_ORDER_CODE: (orderId: number | string): string =>
     `Order ${orderId} has no GHN order code`,
   GHN_ACTION_NOT_ALLOWED: (
@@ -283,8 +297,11 @@ export const VOUCHER_MESSAGE = {
   PERCENT_VALUE_INVALID: "Percent discount value must be between 1 and 100",
   FIXED_VALUE_INVALID: "Fixed discount value must be greater than 0",
   NOT_FOUND_BY_ID: (id: number | string): string => `Voucher ${id} not found`,
-  SINGLE_SELLER_ONLY:
-    "Voucher codes are only supported on single-seller orders",
+  // VOUCHER-SHOP-01 phase 2: the stacking limits of one checkout.
+  ONE_PLATFORM_VOUCHER: "Only one platform voucher can be applied per checkout",
+  ONE_SHOP_VOUCHER_PER_SELLER: (code: string): string =>
+    `Voucher ${code} is a second voucher from the same shop — only one shop voucher per shop can be applied`,
+  CODE_REQUIRED: "Provide `code` or at least one entry in `voucherCodes`",
   // VOUCHER-SHOP-01: a shop voucher priced against a basket that contains none
   // of that shop's items.
   WRONG_SELLER: (code: string): string =>
