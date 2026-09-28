@@ -548,7 +548,44 @@ export class SocialService {
         "1",
       ),
     ]);
+    await this.emitPostLiked(payload.postId, payload.userId);
     return { liked: true, postId: payload.postId, likeCount: newCount };
+  }
+
+  /**
+   * SOCIAL-LIKE-NTF-01 — tell notification a post was liked, so it can fold
+   * the like into the owner's aggregated `like` row. Best-effort: the like is
+   * already committed, so neither a lookup failure nor a dead broker may turn
+   * it into an error. Self-likes notify nobody.
+   */
+  private async emitPostLiked(postId: number, likerId: number): Promise<void> {
+    try {
+      const post = await this.postRepository.findOne({
+        where: { id: postId },
+        select: { id: true, userId: true },
+      });
+      if (!post || post.userId === likerId) return;
+      if (!this.fanoutChannel || !isRmqPublisherLive(this.fanoutChannel)) {
+        this.logger.warn(
+          "[SOCIAL] fanoutChannel unavailable — like notification skipped",
+        );
+        return;
+      }
+      this.fanoutChannel.publish(
+        EXCHANGE.SOCIAL_EXCHANGE,
+        EVENT.POST_LIKED_EVENT,
+        Buffer.from(
+          JSON.stringify({
+            data: { postId, postOwnerId: post.userId, likerId },
+            pattern: EVENT.POST_LIKED_EVENT,
+          }),
+        ),
+      );
+    } catch (err: unknown) {
+      this.logger.warn(
+        `[SOCIAL] like notification skipped for post ${postId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   async unlikePost(payload: {
