@@ -163,3 +163,29 @@ export interface OrderAnalyticsResponse {
     revenue: number;
   }[];
 }
+
+/**
+ * EXPORT-CSV-01 T5 — an async export job as the orders service returns it
+ * (mirror of `apps/orders/src/orders.types.ts`; ids are already public).
+ */
+export interface ExportJobView {
+  id: string;
+  scope: "seller" | "admin";
+  from: string;
+  to: string;
+  statusFilter: string | null;
+  state: "pending" | "running" | "done" | "failed" | "expired";
+  rowCount: number | null;
+  fileName: string | null;
+  fileSizeBytes: number | null;
+  errorMessage: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  expiresAt: string | null;
+}
+
+export interface ExportJobDownload {
+  fileName: string;
+  contentBase64: string;
+}

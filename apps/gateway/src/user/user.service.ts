@@ -20,6 +20,7 @@ import {
 } from "libs/constant/message-pattern.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
 import { retryOnTransportError } from "../common/exception/transport-error";
+import { stripCaptchaToken } from "../common/guards/captcha.guard";
 import { assertCloudinaryUrlsOwnedBy } from "../common/media/cloudinary-ownership";
 import { JwtService } from "@nestjs/jwt";
 import { TopSellingSeller, UserData, UserRole } from "./user.types";
@@ -131,7 +132,10 @@ export class UserService {
       return this.exposeUser(
         await firstValueFrom(
           this.userClient
-            .send({ cmd: USER_MESSAGE_PATTERN.REGISTER_USER }, dto)
+            .send(
+              { cmd: USER_MESSAGE_PATTERN.REGISTER_USER },
+              stripCaptchaToken(dto),
+            )
             .pipe(
               timeout(TCP_TIMEOUT_MS.WRITE),
               catchError((err: unknown) => {
@@ -175,7 +179,10 @@ export class UserService {
     try {
       return (await firstValueFrom(
         this.userClient
-          .send({ cmd: USER_MESSAGE_PATTERN.FORGOT_PASSWORD }, dto)
+          .send(
+            { cmd: USER_MESSAGE_PATTERN.FORGOT_PASSWORD },
+            stripCaptchaToken(dto),
+          )
           .pipe(
             timeout(TCP_TIMEOUT_MS.WRITE),
             catchError((err: unknown) => {

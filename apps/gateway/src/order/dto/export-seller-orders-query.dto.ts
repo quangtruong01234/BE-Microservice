@@ -1,6 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { IsDateString, IsIn, IsOptional } from "class-validator";
 import { ORDER_STATUS_VALUES } from "libs/constant/order-status.constant";
+import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
+import { IsPublicId } from "../../common/validators/is-public-id.validator";
 
 /**
  * EXPORT-CSV-01. Both bounds are REQUIRED here, unlike `AnalyticsQueryDto`
@@ -33,4 +35,19 @@ export class ExportSellerOrdersQueryDto {
   @IsOptional()
   @IsIn(ORDER_STATUS_VALUES)
   declare status?: string;
+}
+
+/**
+ * EXPORT-CSV-01 T4 — the platform-wide export. Same window rules and caps as
+ * the seller route; `sellerId` narrows it to one shop.
+ */
+export class ExportAdminOrdersQueryDto extends ExportSellerOrdersQueryDto {
+  @ApiPropertyOptional({
+    description:
+      "Restrict the export to one seller (public user id). Omit for every seller.",
+    example: "usr_a1b2c3d4e5f6g7h8",
+  })
+  @IsOptional()
+  @IsPublicId(PUBLIC_ID_PREFIXES.USER)
+  declare sellerId?: string;
 }

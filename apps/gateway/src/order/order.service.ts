@@ -37,12 +37,17 @@ import { SellerOrdersQueryDto } from "./dto/seller-orders-query.dto";
 import { ShippingFeeDto } from "./dto/shipping-fee.dto";
 import { AdminGhnOrdersQueryDto } from "./dto/admin-ghn-orders-query.dto";
 import { AnalyticsQueryDto } from "./dto/analytics-query.dto";
-import { ExportSellerOrdersQueryDto } from "./dto/export-seller-orders-query.dto";
+import {
+  ExportAdminOrdersQueryDto,
+  ExportSellerOrdersQueryDto,
+} from "./dto/export-seller-orders-query.dto";
 import {
   AdminGhnOrderListItem,
   AdminGhnOrderListResult,
   BuyerInfo,
   EnrichedOrderItem,
+  ExportJobDownload,
+  ExportJobView,
   OrderAnalyticsResponse,
   OrderItemDetail,
   OrderResponse,
@@ -64,6 +69,17 @@ import { READ_ONLY_SHIPPING_ACTIONS } from "libs/constant/shipping.constant";
 const HYDRATED_USER_KEY_BY_REFERENCE: Record<string, string> = {
   reviewedBy: "reviewer",
 };
+
+/**
+ * VOUCHER-SHOP-01 phase 2: `voucherCodes` plus the legacy single-code field.
+ * The orders service trims, upper-cases and dedupes.
+ */
+function mergeVoucherCodes(
+  voucherCodes: string[] | undefined,
+  voucherCode: string | undefined,
+): string[] {
+  return [...(voucherCodes ?? []), ...(voucherCode ? [voucherCode] : [])];
+}
 
 @Injectable()
 export class OrderService {
@@ -309,12 +325,9 @@ export class OrderService {
       ]),
     );
     const isMultiSeller = uniqueSellerIds.size > 1;
-
-    if (isMultiSeller && dto.voucherCode) {
-      // Discount-splitting across sellers has no defined semantics yet; keep
-      // vouchers to single-seller orders.
-      throw new BadRequestException(VOUCHER_MESSAGE.SINGLE_SELLER_ONLY);
-    }
+    // VOUCHER-SHOP-01 phase 2: codes stack on multi-seller baskets too; the
+    // orders service enforces one shop voucher per seller + one platform one.
+    const voucherCodes = mergeVoucherCodes(dto.voucherCodes, dto.voucherCode);
 
     try {
       if (isMultiSeller) {
@@ -327,6 +340,7 @@ export class OrderService {
               toDistrictId: dto.toDistrictId ?? null,
               toWardCode: dto.toWardCode ?? null,
               items: enrichedItems,
+              voucherCodes,
             })
             .pipe(
               timeout(TCP_TIMEOUT_MS.WRITE),
@@ -399,7 +413,7 @@ export class OrderService {
             toDistrictId: dto.toDistrictId ?? null,
             toWardCode: dto.toWardCode ?? null,
             items: enrichedItems,
-            voucherCode: dto.voucherCode ?? null,
+            voucherCodes,
           })
           .pipe(
             timeout(TCP_TIMEOUT_MS.WRITE),
@@ -439,25 +453,19 @@ export class OrderService {
     dto: ValidateVoucherDto,
   ): Promise<unknown> {
     const enrichedItems = await this.enrichOrderItems(dto.items);
-    const uniqueSellerIds = new Set(enrichedItems.map((i) => i.sellerId));
-    if (uniqueSellerIds.size > 1) {
-      throw new BadRequestException(VOUCHER_MESSAGE.SINGLE_SELLER_ONLY);
-    }
-    const itemsTotal = enrichedItems.reduce(
-      (sum, item) => sum + item.price * item.quantity,
-      0,
-    );
     return this.exposeUserReferences(
       await this.errorHandledSend(
         ORDER_MESSAGE_PATTERN.VOUCHER_VALIDATE,
         {
           userId,
-          code: dto.code,
-          itemsTotal,
-          // VOUCHER-SHOP-01: single-seller basket (enforced above), so the whole
-          // subtotal belongs to this seller — a shop voucher issued by anyone
-          // else must be rejected rather than silently priced platform-wide.
-          sellerId: enrichedItems[0]?.sellerId ?? null,
+          codes: mergeVoucherCodes(dto.voucherCodes, dto.code),
+          // Each item carries its seller, so a shop voucher is priced against
+          // its own shop's slice even in a multi-seller basket.
+          items: enrichedItems.map((item) => ({
+            price: item.price,
+            quantity: item.quantity,
+            sellerId: item.sellerId,
+          })),
         },
         "validate voucher",
       ),
@@ -1131,6 +1139,180 @@ export class OrderService {
       MicroserviceErrorHandler.handleError(
         error,
         "export seller orders csv",
+        "Orders Service",
+      );
+    }
+  }
+
+  /**
+   * EXPORT-CSV-01 T4 — platform-wide export. The optional `usr_…` filter is
+   * resolved here (an unknown one is the user service's 404); orders only ever
+   * sees the numeric id, and puts the seller's PUBLIC id in the file itself.
+   */
+  async exportAdminOrdersCsv(
+    query: ExportAdminOrdersQueryDto,
+  ): Promise<Buffer> {
+    try {
+      const sellerId =
+        query.sellerId == null
+          ? undefined
+          : await this.resolveUserId(query.sellerId);
+      const result = await firstValueFrom(
+        this.ordersClient
+          .send<{
+            type: string;
+            data: number[];
+          }>(ORDER_MESSAGE_PATTERN.EXPORT_ADMIN_ORDERS_CSV, {
+            sellerId,
+            from: query.from,
+            to: query.to,
+            status: query.status,
+          })
+          .pipe(
+            timeout(TCP_TIMEOUT_MS.WRITE),
+            retryOnTransportError(),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      );
+      return Buffer.from(result.data);
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "export admin orders csv",
+        "Orders Service",
+      );
+    }
+  }
+
+  /**
+   * EXPORT-CSV-01 T5 — queue an async export. `requestedBy` is the caller's
+   * JWT id; a seller job always exports the caller's own orders. NO
+   * `retryOnTransportError()`: this inserts a row, and a replay after a lost
+   * response would queue a duplicate job.
+   */
+  async createExportJob(
+    requestedBy: number,
+    scope: "seller" | "admin",
+    query: ExportSellerOrdersQueryDto | ExportAdminOrdersQueryDto,
+  ): Promise<ExportJobView> {
+    try {
+      let sellerId: number | null = null;
+      if (scope === "seller") {
+        sellerId = requestedBy;
+      } else if ("sellerId" in query && query.sellerId != null) {
+        sellerId = await this.resolveUserId(query.sellerId);
+      }
+      return await firstValueFrom(
+        this.ordersClient
+          .send<ExportJobView>(ORDER_MESSAGE_PATTERN.EXPORT_JOB_CREATE, {
+            requestedBy,
+            scope,
+            sellerId,
+            from: query.from,
+            to: query.to,
+            status: query.status,
+          })
+          .pipe(
+            timeout(TCP_TIMEOUT_MS.WRITE),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "create export job",
+        "Orders Service",
+      );
+    }
+  }
+
+  async listExportJobs(requestedBy: number): Promise<ExportJobView[]> {
+    try {
+      return await firstValueFrom(
+        this.ordersClient
+          .send<ExportJobView[]>(ORDER_MESSAGE_PATTERN.EXPORT_JOB_LIST, {
+            requestedBy,
+          })
+          .pipe(
+            timeout(TCP_TIMEOUT_MS.READ),
+            retryOnTransportError(),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "list export jobs",
+        "Orders Service",
+      );
+    }
+  }
+
+  async getExportJob(
+    requestedBy: number,
+    jobId: string,
+  ): Promise<ExportJobView> {
+    try {
+      return await firstValueFrom(
+        this.ordersClient
+          .send<ExportJobView>(ORDER_MESSAGE_PATTERN.EXPORT_JOB_GET, {
+            requestedBy,
+            jobId,
+          })
+          .pipe(
+            timeout(TCP_TIMEOUT_MS.READ),
+            retryOnTransportError(),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "get export job",
+        "Orders Service",
+      );
+    }
+  }
+
+  /**
+   * The file arrives base64-encoded (see `ExportJobDownload`). WRITE timeout,
+   * not READ: a file can be up to 16 MB, which is more than a row read.
+   */
+  async downloadExportJob(
+    requestedBy: number,
+    jobId: string,
+  ): Promise<{ fileName: string; content: Buffer }> {
+    try {
+      const download = await firstValueFrom(
+        this.ordersClient
+          .send<ExportJobDownload>(ORDER_MESSAGE_PATTERN.EXPORT_JOB_DOWNLOAD, {
+            requestedBy,
+            jobId,
+          })
+          .pipe(
+            timeout(TCP_TIMEOUT_MS.WRITE),
+            retryOnTransportError(),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      );
+      return {
+        fileName: download.fileName,
+        content: Buffer.from(download.contentBase64, "base64"),
+      };
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "download export job",
         "Orders Service",
       );
     }

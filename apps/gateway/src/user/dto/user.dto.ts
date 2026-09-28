@@ -11,6 +11,7 @@ import {
   Length,
   Matches,
   Max,
+  MaxLength,
   Min,
   MinLength,
 } from "class-validator";
@@ -43,6 +44,19 @@ export class RegisterUserDto {
   @IsString()
   @MinLength(6)
   declare password: string;
+
+  // CAPTCHA-01: CaptchaGuard reads and verifies this off the raw body before
+  // validation runs; it is declared here only so whitelist validation accepts
+  // it. The gateway strips it before the TCP call to the user service.
+  @ApiPropertyOptional({
+    description:
+      "Cloudflare Turnstile token from the storefront widget. Optional until the backend sets CAPTCHA_ENFORCE=true; then a missing or refused token is a 400 with errorCode CAPTCHA_REQUIRED.",
+    maxLength: 2048,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  captchaToken?: string;
 }
 
 export class LoginUserDto {
@@ -68,6 +82,19 @@ export class ForgotPasswordDto {
   @ApiProperty({ example: "john@example.com" })
   @IsEmail()
   declare email: string;
+
+  // CAPTCHA-01: CaptchaGuard reads and verifies this off the raw body before
+  // validation runs; it is declared here only so whitelist validation accepts
+  // it. The gateway strips it before the TCP call to the user service.
+  @ApiPropertyOptional({
+    description:
+      "Cloudflare Turnstile token from the storefront widget. Optional until the backend sets CAPTCHA_ENFORCE=true; then a missing or refused token is a 400 with errorCode CAPTCHA_REQUIRED.",
+    maxLength: 2048,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  captchaToken?: string;
 }
 
 export class ResetPasswordDto {

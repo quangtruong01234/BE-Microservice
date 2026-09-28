@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
+  ArrayMaxSize,
   IsArray,
   IsBoolean,
   IsEnum,
@@ -26,11 +27,29 @@ export enum VoucherDiscountType {
 }
 
 export class ValidateVoucherDto {
-  @ApiProperty({ description: "Voucher / discount code", example: "SALE10" })
+  @ApiPropertyOptional({
+    description:
+      "Legacy single voucher code — merged into voucherCodes. Send at least one code across the two fields.",
+    example: "SALE10",
+  })
+  @IsOptional()
   @IsString()
   @IsNotEmpty()
   @MaxLength(64)
-  declare code: string;
+  code?: string;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      "Voucher codes to price together, with the same stacking rules as order create (one shop voucher per seller, one platform voucher).",
+    example: ["SHOPSALE", "FREESHIP50"],
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  @MaxLength(64, { each: true })
+  voucherCodes?: string[];
 
   @ApiProperty({
     type: [OrderItemDto],

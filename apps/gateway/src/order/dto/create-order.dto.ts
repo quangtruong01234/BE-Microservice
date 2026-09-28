@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
+  ArrayMaxSize,
   IsArray,
   IsEnum,
   IsInt,
@@ -110,11 +111,24 @@ export class CreateOrderDto {
 
   @ApiPropertyOptional({
     description:
-      "Voucher / discount code to apply (single-seller orders only). Validated and priced server-side.",
+      "Legacy single voucher code — merged into voucherCodes. Validated and priced server-side.",
     example: "SALE10",
   })
   @IsOptional()
   @IsString()
   @MaxLength(64)
   voucherCode?: string;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      "Voucher codes to stack: at most one shop voucher per seller in the basket plus at most one platform voucher. Works on single- and multi-seller baskets; the platform discount is split across the sub-orders.",
+    example: ["SHOPSALE", "FREESHIP50"],
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  @MaxLength(64, { each: true })
+  voucherCodes?: string[];
 }

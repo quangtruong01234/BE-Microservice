@@ -40,6 +40,7 @@ import {
 import { Public } from "../common/decorators/public.decorator";
 import { Roles } from "../common/decorators/roles.decorator";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
+import { CaptchaGuard } from "../common/guards/captcha.guard";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
 import {
   AUTH_COOKIE_NAME,
@@ -60,10 +61,15 @@ export class UserController {
   @Post("register")
   @Public()
   @RateLimit({ limit: 10, ttl: 60 })
+  @UseGuards(CaptchaGuard)
   @ApiOperation({ summary: "Register new user" })
   @ApiBody({ type: RegisterUserDto })
   @ApiResponse({ status: 201, description: "User registered successfully." })
-  @ApiResponse({ status: 400, description: "Bad Request." })
+  @ApiResponse({
+    status: 400,
+    description:
+      "Bad Request. With CAPTCHA_ENFORCE=true, a missing or refused captchaToken is a 400 with errorCode CAPTCHA_REQUIRED.",
+  })
   async register(@Body() dto: RegisterUserDto): Promise<unknown> {
     return await this.userService.register(dto);
   }
@@ -91,6 +97,7 @@ export class UserController {
   @Post("forgot-password")
   @Public()
   @RateLimit({ limit: 5, ttl: 60 })
+  @UseGuards(CaptchaGuard)
   @ApiOperation({
     summary:
       "Request a password-reset verification code (sent to the registered email)",
@@ -101,7 +108,11 @@ export class UserController {
     description:
       "Generic acknowledgement (does not reveal whether the email exists).",
   })
-  @ApiResponse({ status: 400, description: "Bad Request." })
+  @ApiResponse({
+    status: 400,
+    description:
+      "Bad Request. With CAPTCHA_ENFORCE=true, a missing or refused captchaToken is a 400 with errorCode CAPTCHA_REQUIRED.",
+  })
   async forgotPassword(@Body() dto: ForgotPasswordDto): Promise<unknown> {
     return await this.userService.forgotPassword(dto);
   }

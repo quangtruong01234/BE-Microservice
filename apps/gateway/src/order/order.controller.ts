@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Headers,
+  HttpCode,
   Param,
   ParseIntPipe,
   Patch,
@@ -15,6 +16,7 @@ import {
 } from "@nestjs/common";
 import { Request, Response } from "express";
 import { OrderService } from "./order.service";
+import { ExportJobView } from "./order.types";
 import {
   ApiTags,
   ApiOperation,
@@ -29,7 +31,10 @@ import { GetOrdersByUserQueryDto } from "./dto/get-orders-query.dto";
 import { SellerOrdersQueryDto } from "./dto/seller-orders-query.dto";
 import { AdminGhnOrdersQueryDto } from "./dto/admin-ghn-orders-query.dto";
 import { AnalyticsQueryDto } from "./dto/analytics-query.dto";
-import { ExportSellerOrdersQueryDto } from "./dto/export-seller-orders-query.dto";
+import {
+  ExportAdminOrdersQueryDto,
+  ExportSellerOrdersQueryDto,
+} from "./dto/export-seller-orders-query.dto";
 import {
   SetGhnDemoStatusDto,
   UpdateGhnCodDto,
@@ -48,6 +53,7 @@ import {
   VouchersQueryDto,
 } from "./dto/voucher.dto";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
+import { Roles } from "../common/decorators/roles.decorator";
 import { CheckPermission } from "../common/decorators/check-permission.decorator";
 import { ParsePublicIdPipe } from "../common/pipes/parse-public-id.pipe";
 import { hasPermission } from "../common/rbac/has-permission.util";
@@ -645,6 +651,160 @@ export class OrderController {
       `attachment; filename="trybuy-orders-${fromDay}-${toDay}.csv"`,
     );
     res.end(csvBuffer);
+  }
+
+  // EXPORT-CSV-01 T4 — the same file across every seller. `@Roles("admin")`,
+  // NOT `@CheckPermission("order", "read:any")`: the shop role holds that
+  // grant too, and this file carries every seller's buyer names and phones.
+  @Get("admin/export")
+  @UseGuards(JwtAuthGuard)
+  @Roles("admin")
+  @ApiOperation({
+    summary: "Admin: export every seller's orders as a CSV file",
+    description:
+      "Same file, same rules and same 90-day / 5.000-row caps as " +
+      "GET /api/order/seller/export, across all sellers (or one, with " +
+      "`sellerId`). Two columns are appended at the END so the seller " +
+      "layout stays a prefix: `sellerId` (public `usr_` id) and " +
+      "`sellerUsername`.",
+  })
+  @ApiResponse({ status: 200, description: "CSV file (text/csv, UTF-8 BOM)." })
+  @ApiResponse({
+    status: 400,
+    description: "Invalid date range, or over the 90-day / 5.000-row cap.",
+  })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  @ApiResponse({ status: 403, description: "Forbidden — admin only." })
+  @ApiResponse({ status: 404, description: "Unknown sellerId." })
+  async exportAdminOrders(
+    @Query(ValidationPipe) query: ExportAdminOrdersQueryDto,
+    @Res() res: Response,
+  ): Promise<void> {
+    const csvBuffer = await this.orderService.exportAdminOrdersCsv(query);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    const fromDay = query.from.slice(0, 10);
+    const toDay = query.to.slice(0, 10);
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="trybuy-orders-all-${fromDay}-${toDay}.csv"`,
+    );
+    res.end(csvBuffer);
+  }
+
+  // EXPORT-CSV-01 T5 — async export jobs, for windows over the synchronous
+  // caps. Every `export/jobs` lookup is scoped to the caller: another user's
+  // job id is a 404, never a 403.
+  @Post("seller/export/jobs")
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(202)
+  @ApiOperation({
+    summary: "Queue an async CSV export of the logged-in seller's orders",
+    description:
+      "Same file as GET /api/order/seller/export, built in the background. " +
+      "Caps are 366 days and 50.000 item rows (checked now, as a 400, and " +
+      "again when the job runs). At most 3 jobs may be pending/running per " +
+      "user (429). Poll GET /api/order/export/jobs/:id until `state` is " +
+      "`done`, then fetch /download. The file is kept for 24 hours.",
+  })
+  @ApiBody({ type: ExportSellerOrdersQueryDto })
+  @ApiResponse({ status: 202, description: "Job queued (state `pending`)." })
+  @ApiResponse({
+    status: 400,
+    description: "Invalid date range, or over the 366-day / 50.000-row cap.",
+  })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  @ApiResponse({ status: 429, description: "Too many active export jobs." })
+  async createSellerExportJob(
+    @Body(ValidationPipe) dto: ExportSellerOrdersQueryDto,
+    @Req() req: Request,
+  ): Promise<ExportJobView> {
+    const requestedBy = req.user?.id ?? 0;
+    return this.orderService.createExportJob(requestedBy, "seller", dto);
+  }
+
+  @Post("admin/export/jobs")
+  @UseGuards(JwtAuthGuard)
+  @Roles("admin")
+  @HttpCode(202)
+  @ApiOperation({
+    summary: "Admin: queue an async CSV export of every seller's orders",
+    description:
+      "Same file as GET /api/order/admin/export (two seller columns " +
+      "appended), with the async caps and lifecycle of " +
+      "POST /api/order/seller/export/jobs.",
+  })
+  @ApiBody({ type: ExportAdminOrdersQueryDto })
+  @ApiResponse({ status: 202, description: "Job queued (state `pending`)." })
+  @ApiResponse({
+    status: 400,
+    description: "Invalid date range, or over the 366-day / 50.000-row cap.",
+  })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  @ApiResponse({ status: 403, description: "Forbidden — admin only." })
+  @ApiResponse({ status: 404, description: "Unknown sellerId." })
+  @ApiResponse({ status: 429, description: "Too many active export jobs." })
+  async createAdminExportJob(
+    @Body(ValidationPipe) dto: ExportAdminOrdersQueryDto,
+    @Req() req: Request,
+  ): Promise<ExportJobView> {
+    const requestedBy = req.user?.id ?? 0;
+    return this.orderService.createExportJob(requestedBy, "admin", dto);
+  }
+
+  @Get("export/jobs")
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({
+    summary: "List the caller's export jobs (latest 20, newest first)",
+  })
+  @ApiResponse({ status: 200, description: "Export jobs." })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  async listExportJobs(@Req() req: Request): Promise<ExportJobView[]> {
+    const requestedBy = req.user?.id ?? 0;
+    return this.orderService.listExportJobs(requestedBy);
+  }
+
+  @Get("export/jobs/:id")
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: "Get one of the caller's export jobs (poll this)" })
+  @ApiResponse({ status: 200, description: "Export job." })
+  @ApiResponse({ status: 400, description: "Malformed job id." })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  @ApiResponse({ status: 404, description: "No such job for this caller." })
+  async getExportJob(
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.EXPORT_JOB))
+    id: string,
+    @Req() req: Request,
+  ): Promise<ExportJobView> {
+    const requestedBy = req.user?.id ?? 0;
+    return this.orderService.getExportJob(requestedBy, id);
+  }
+
+  @Get("export/jobs/:id/download")
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: "Download a finished export job's CSV file" })
+  @ApiResponse({ status: 200, description: "CSV file (text/csv, UTF-8 BOM)." })
+  @ApiResponse({ status: 400, description: "Malformed job id." })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  @ApiResponse({ status: 404, description: "No such job for this caller." })
+  @ApiResponse({
+    status: 409,
+    description: "Job is still pending/running, or failed (reason in message).",
+  })
+  @ApiResponse({ status: 410, description: "The file expired (24h)." })
+  async downloadExportJob(
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.EXPORT_JOB))
+    id: string,
+    @Req() req: Request,
+    @Res() res: Response,
+  ): Promise<void> {
+    const requestedBy = req.user?.id ?? 0;
+    const download = await this.orderService.downloadExportJob(requestedBy, id);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${download.fileName}"`,
+    );
+    res.end(download.content);
   }
 
   @Get("admin/analytics")
