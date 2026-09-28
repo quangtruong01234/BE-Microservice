@@ -156,6 +156,31 @@ export class Order {
   })
   voucherCode!: string | null;
 
+  // VOUCHER-SHOP-01 phase 2: the platform code when it is stacked on a shop
+  // voucher on this same order — `voucherCode` then holds the shop code. Null
+  // whenever at most one code applies (that one lives in `voucherCode`).
+  @Column({
+    name: "platform_voucher_code",
+    type: "varchar",
+    length: 64,
+    nullable: true,
+    default: null,
+  })
+  platformVoucherCode!: string | null;
+
+  // Shared by the sub-orders of ONE multi-shop checkout; null on a single-seller
+  // order. A platform voucher is redeemed once per checkout, and this is how its
+  // redemption finds the other sub-orders when one of them is canceled.
+  @Index("idx_orders_checkout_id")
+  @Column({
+    name: "checkout_id",
+    type: "varchar",
+    length: 36,
+    nullable: true,
+    default: null,
+  })
+  checkoutId!: string | null;
+
   // Discount applied to the goods subtotal by the voucher (VND).
   @Column({
     name: "discount_amount",

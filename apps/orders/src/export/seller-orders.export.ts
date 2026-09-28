@@ -99,3 +99,36 @@ export const SELLER_EXPORT_COLUMNS: CsvColumn<SellerExportRow>[] = [
   { header: "trackingCode", value: (row) => row.trackingCode, literal: true },
   { header: "ghnStatus", value: (row) => row.ghnStatus },
 ];
+
+/**
+ * Rows fetched and rendered per round-trip. Bounds the ORM entities held at
+ * once (the rendered text still accumulates, which is the point of buffering —
+ * see `exportSellerOrdersCsv`). Order ids stay stable across chunks because the
+ * query sorts by (createdAt, order.id, item.id).
+ */
+export const EXPORT_CHUNK_ROWS = 2000;
+
+/**
+ * EXPORT-CSV-01 T5 — caps for the ASYNC job. 50.000 rows is ~12 MB of CSV,
+ * inside the 16 MB MEDIUMBLOB the file is stored in; raising this cap means
+ * changing that column first.
+ */
+export const EXPORT_JOB_MAX_WINDOW_DAYS = 366;
+export const EXPORT_JOB_MAX_ROWS = 50000;
+
+/**
+ * EXPORT-CSV-01 T4 — the platform-wide file adds who sold each line. Appended
+ * AFTER the seller columns, never interleaved: the admin file is then a strict
+ * superset of the seller file, so a pivot built on one opens the other.
+ */
+export interface AdminExportRow extends SellerExportRow {
+  /** The seller's public `usr_…` id — never the numeric id (PUBID). */
+  sellerId: string;
+  sellerUsername: string;
+}
+
+export const ADMIN_EXPORT_COLUMNS: CsvColumn<AdminExportRow>[] = [
+  ...SELLER_EXPORT_COLUMNS,
+  { header: "sellerId", value: (row) => row.sellerId },
+  { header: "sellerUsername", value: (row) => row.sellerUsername },
+];

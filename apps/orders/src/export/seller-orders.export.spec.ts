@@ -14,6 +14,9 @@ import { VoucherRedemption } from "../entity/voucher-redemption.entity";
 import { ShippingHistory } from "../entity/shipping-history.entity";
 import { GhnService } from "../ghn/ghn.service";
 import { OrdersService } from "../orders.service";
+import { of, throwError } from "rxjs";
+import { USER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
+import { EXPORT_CHUNK_ROWS } from "./seller-orders.export";
 
 /**
  * EXPORT-CSV-01 — the invariants of the seller export itself.
@@ -116,12 +119,14 @@ describe("OrdersService.exportSellerOrdersCsv (EXPORT-CSV-01)", () => {
     items: OrderItem[],
     histories: ShippingHistory[] = [],
     rowCount = items.length,
+    userClient: ClientProxy = {} as ClientProxy,
   ): {
     service: OrdersService;
     getCount: jest.Mock;
     getMany: jest.Mock;
     where: jest.Mock;
     andWhere: jest.Mock;
+    offset: jest.Mock;
   } {
     const getCount = jest.fn().mockResolvedValue(rowCount);
     const getMany = jest.fn().mockResolvedValue(items);
@@ -135,6 +140,8 @@ describe("OrdersService.exportSellerOrdersCsv (EXPORT-CSV-01)", () => {
       andWhere,
       orderBy: jest.fn(),
       addOrderBy: jest.fn(),
+      offset: jest.fn(),
+      limit: jest.fn(),
       getCount,
       getMany,
     };
@@ -144,6 +151,8 @@ describe("OrdersService.exportSellerOrdersCsv (EXPORT-CSV-01)", () => {
       "andWhere",
       "orderBy",
       "addOrderBy",
+      "offset",
+      "limit",
     ]) {
       qb[key].mockReturnValue(qb);
     }
@@ -152,7 +161,7 @@ describe("OrdersService.exportSellerOrdersCsv (EXPORT-CSV-01)", () => {
       { publish: jest.fn(), connection: {} } as unknown as Channel,
       {} as HttpService,
       {} as ClientProxy,
-      {} as ClientProxy,
+      userClient,
       {} as ClientProxy,
       {} as Repository<Order>,
       {
@@ -168,7 +177,7 @@ describe("OrdersService.exportSellerOrdersCsv (EXPORT-CSV-01)", () => {
       {} as GhnService,
       {} as CachedService,
     );
-    return { service, getCount, getMany, where, andWhere };
+    return { service, getCount, getMany, where, andWhere, offset: qb.offset };
   }
 
   const exportQuery = { sellerId: 7, from: "2026-08-01", to: "2026-08-31" };
@@ -275,11 +284,11 @@ describe("OrdersService.exportSellerOrdersCsv (EXPORT-CSV-01)", () => {
     // getOrdersBySeller() resolves product ids and then joins EVERY item of any
     // matching order — that is what would make lineTotal sum to someone else's
     // revenue if checkout ever stops splitting orders per seller.
-    const { service, where } = createService([exportItem(exportOrder())]);
+    const { service, andWhere } = createService([exportItem(exportOrder())]);
 
     await service.exportSellerOrdersCsv(exportQuery);
 
-    expect(where).toHaveBeenCalledWith("item.sellerId = :sellerId", {
+    expect(andWhere).toHaveBeenCalledWith("item.sellerId = :sellerId", {
       sellerId: 7,
     });
   });
@@ -382,11 +391,11 @@ describe("OrdersService.exportSellerOrdersCsv (EXPORT-CSV-01)", () => {
       // on the first day, so every order placed in the first seven hours of the
       // seller's day was missing from the file — and the file gave no hint that
       // a whole morning had been excluded.
-      const { service, andWhere } = createService([exportItem(exportOrder())]);
+      const { service, where } = createService([exportItem(exportOrder())]);
 
       await service.exportSellerOrdersCsv(exportQuery);
 
-      const [, params] = andWhere.mock.calls[0] as [
+      const [, params] = where.mock.calls[0] as [
         string,
         { fromDate: Date; toDate: Date },
       ];
@@ -414,5 +423,129 @@ describe("OrdersService.exportSellerOrdersCsv (EXPORT-CSV-01)", () => {
 
     expect(rows[1][COL.ghnStatus]).toBe("delivered");
     expect(rows[1][COL.trackingCode]).toBe('="GHN123456789012"');
+  });
+
+  it("keeps the money columns first-row-only across a chunk boundary", async () => {
+    // One order whose items straddle the 2000-row chunk: the continuation row
+    // in chunk 2 must NOT restart the order as if it were new.
+    const order = exportOrder();
+    const firstChunk = Array.from({ length: EXPORT_CHUNK_ROWS }, (_, index) =>
+      exportItem(order, { id: index + 1 }),
+    );
+    const secondChunk = [exportItem(order, { id: EXPORT_CHUNK_ROWS + 1 })];
+    const { service, getMany, offset } = createService([]);
+    getMany
+      .mockResolvedValueOnce(firstChunk)
+      .mockResolvedValueOnce(secondChunk);
+
+    const rows = parseCsv(await service.exportSellerOrdersCsv(exportQuery));
+
+    expect(offset.mock.calls.map(([value]) => value as number)).toEqual([
+      0,
+      EXPORT_CHUNK_ROWS,
+    ]);
+    expect(rows).toHaveLength(1 + EXPORT_CHUNK_ROWS + 1);
+    expect(rows[1][COL.orderTotal]).toBe("119000");
+    expect(rows[rows.length - 1][COL.orderTotal]).toBe("");
+    expect(rows[rows.length - 1][COL.shippingFee]).toBe("");
+  });
+
+  describe("exportAdminOrdersCsv (T4)", () => {
+    const adminQuery = { from: "2026-08-01", to: "2026-08-31" };
+    const userClientReturning = (
+      users: unknown,
+    ): { client: ClientProxy; send: jest.Mock } => {
+      const send = jest.fn().mockReturnValue(of(users));
+      return { client: { send } as unknown as ClientProxy, send };
+    };
+
+    it("appends sellerId (public id) and sellerUsername after the seller columns", async () => {
+      const { client, send } = userClientReturning([
+        { id: 7, publicId: "usr_seller7", username: "shop7" },
+      ]);
+      const order = exportOrder();
+      const { service, andWhere } = createService(
+        [exportItem(order, { sellerId: 7 })],
+        [],
+        1,
+        client,
+      );
+
+      const rows = parseCsv(await service.exportAdminOrdersCsv(adminQuery));
+
+      expect(rows[0].slice(-2)).toEqual(["sellerId", "sellerUsername"]);
+      // The seller layout is a strict prefix of the admin layout.
+      expect(rows[0][COL.orderId]).toBe("orderId");
+      expect(rows[0][COL.ghnStatus]).toBe("ghnStatus");
+      expect(rows[1].slice(-2)).toEqual(["usr_seller7", "shop7"]);
+      // No numeric id leaks into the file (PUBID).
+      expect(rows[1]).not.toContain("7");
+      // Platform-wide: no seller filter at all.
+      expect(andWhere).not.toHaveBeenCalledWith(
+        "item.sellerId = :sellerId",
+        expect.anything(),
+      );
+      expect(send).toHaveBeenCalledWith(
+        { cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS },
+        { userIds: [7] },
+      );
+    });
+
+    it("filters on one seller when the admin passes sellerId", async () => {
+      const { client } = userClientReturning([
+        { id: 9, publicId: "usr_seller9", username: "shop9" },
+      ]);
+      const { service, andWhere } = createService(
+        [exportItem(exportOrder(), { sellerId: 9 })],
+        [],
+        1,
+        client,
+      );
+
+      await service.exportAdminOrdersCsv({ ...adminQuery, sellerId: 9 });
+
+      expect(andWhere).toHaveBeenCalledWith("item.sellerId = :sellerId", {
+        sellerId: 9,
+      });
+    });
+
+    it("fails closed when the sellers cannot be resolved", async () => {
+      const send = jest
+        .fn()
+        .mockReturnValue(throwError(() => new Error("user service down")));
+      const { service } = createService(
+        [exportItem(exportOrder(), { sellerId: 7 })],
+        [],
+        1,
+        { send } as unknown as ClientProxy,
+      );
+
+      await expect(service.exportAdminOrdersCsv(adminQuery)).rejects.toThrow(
+        "user service down",
+      );
+    });
+
+    it("leaves the seller cells blank for a seller the user service no longer knows", async () => {
+      const { client } = userClientReturning([]);
+      const { service } = createService(
+        [exportItem(exportOrder(), { sellerId: 7 })],
+        [],
+        1,
+        client,
+      );
+
+      const rows = parseCsv(await service.exportAdminOrdersCsv(adminQuery));
+
+      expect(rows[1].slice(-2)).toEqual(["", ""]);
+    });
+
+    it("keeps the 90-day sync cap", async () => {
+      const { service, getCount } = createService([]);
+
+      await expect(
+        service.exportAdminOrdersCsv({ from: "2026-01-01", to: "2026-12-31" }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(getCount).not.toHaveBeenCalled();
+    });
   });
 });

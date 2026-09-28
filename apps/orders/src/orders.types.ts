@@ -2,7 +2,7 @@ import { PaymentMethod } from "@app/common";
 import { OrderStatus } from "./entity/order.entity";
 import { OrderItem } from "./entity/order_item.entity";
 import { OrderReturnRequest } from "./entity/order-return-request.entity";
-import { VoucherDiscountType } from "./entity/voucher.entity";
+import { Voucher, VoucherDiscountType } from "./entity/voucher.entity";
 import { GhnOrderDetail } from "./ghn/ghn.types";
 import { VoucherIneligibleReason } from "libs/constant/response-message.constant";
 
@@ -93,6 +93,35 @@ export interface SellerOrdersExportQuery {
   from: string;
   to: string;
   status?: string;
+}
+
+/**
+ * EXPORT-CSV-01 T4 — the platform-wide export. `sellerId` is an optional
+ * filter (already resolved from `usr_…` by the gateway); absent means every
+ * seller.
+ */
+export interface AdminOrdersExportQuery {
+  sellerId?: number;
+  from: string;
+  to: string;
+  status?: string;
+}
+
+/**
+ * The one scope every export path renders from: `sellerId: null` is the
+ * platform-wide file. Kept separate from the two request shapes so the sync
+ * routes and the async job (T5) cannot drift into two row builders.
+ */
+export interface OrderExportScope {
+  sellerId: number | null;
+  from: string;
+  to: string;
+  status?: string;
+}
+
+export interface OrderExportCaps {
+  maxWindowDays: number;
+  maxRows: number;
 }
 
 /**
@@ -225,13 +254,48 @@ export interface VoucherEvaluation {
   amountToAdd: number;
 }
 
-/** What a single-seller voucher preview answers with. */
+/** One code applied to a checkout, priced (VOUCHER-SHOP-01 phase 2). */
+export interface CheckoutVoucher {
+  voucher: Voucher;
+  discountAmount: number;
+}
+
+/**
+ * Every code of one checkout, resolved: at most one shop voucher per seller
+ * plus at most one platform voucher, whose discount is split across the
+ * sellers pro rata to what each still charges after its shop voucher.
+ */
+export interface CheckoutVoucherPlan {
+  /** In request order — the order the preview reports them back in. */
+  vouchers: CheckoutVoucher[];
+  shopVoucherBySellerId: Map<number, CheckoutVoucher>;
+  platformVoucher: CheckoutVoucher | null;
+  platformShareBySellerId: Map<number, number>;
+  totalDiscount: number;
+}
+
+/** One line of a voucher preview. */
+export interface VoucherPreviewLine {
+  code: string;
+  scope: "platform" | "shop";
+  /** Owning shop (numeric here; the gateway swaps it for the `usr_` public id). */
+  sellerId: number | null;
+  discountType: VoucherDiscountType;
+  discountAmount: number;
+}
+
+/**
+ * What a voucher preview answers with. `code`/`discountType` describe the
+ * FIRST code (the phase-1 single-code shape); `discountAmount` is the total
+ * over every code, and `vouchers` itemises them.
+ */
 export interface VoucherPreview {
   code: string;
   discountType: VoucherDiscountType;
   discountAmount: number;
   itemsTotal: number;
   finalItemsTotal: number;
+  vouchers: VoucherPreviewLine[];
 }
 
 /** One row of the buyer-facing basket voucher list. */
@@ -250,4 +314,59 @@ export interface AvailableVoucher {
   discountAmount: number;
   applicableSubtotal: number;
   amountToAdd: number;
+}
+
+/** T4 — the seller label appended to each admin export row. */
+export interface ExportSellerLabel {
+  publicId: string;
+  username: string;
+}
+
+// EXPORT-CSV-01 T5 — async export jobs -----------------------------------------
+
+/**
+ * `requestedBy` is the caller's numeric id (from the JWT, never the body).
+ * On a `seller` job `sellerId` is that same caller; on an `admin` job it is
+ * the optional, already-resolved seller filter.
+ */
+export interface CreateExportJobPayload {
+  requestedBy: number;
+  scope: "seller" | "admin";
+  sellerId: number | null;
+  from: string;
+  to: string;
+  status?: string;
+}
+
+export interface ExportJobLookupPayload {
+  requestedBy: number;
+  /** The job's public `exp_…` id. */
+  jobId: string;
+}
+
+/** What leaves the orders service for a job — no numeric id. */
+export interface ExportJobView {
+  id: string;
+  scope: "seller" | "admin";
+  from: string;
+  to: string;
+  statusFilter: string | null;
+  state: "pending" | "running" | "done" | "failed" | "expired";
+  rowCount: number | null;
+  fileName: string | null;
+  fileSizeBytes: number | null;
+  errorMessage: string | null;
+  createdAt: Date;
+  startedAt: Date | null;
+  finishedAt: Date | null;
+  expiresAt: Date | null;
+}
+
+/**
+ * The file travels as base64, not as a Buffer: a Buffer is JSON-serialized
+ * over TCP as `{ type, data: number[] }`, ~4 bytes per byte on the wire.
+ */
+export interface ExportJobDownload {
+  fileName: string;
+  contentBase64: string;
 }

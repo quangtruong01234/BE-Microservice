@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  InternalServerErrorException,
   Logger,
   NotFoundException,
   ServiceUnavailableException,
@@ -29,7 +30,8 @@ import {
   generatePublicId,
   isPublicId,
   isRmqPublisherLive,
-  toCsv,
+  toCsvHeader,
+  toCsvRows,
   startOfVnDay,
   endOfVnDay,
   startOfVnDayBefore,
@@ -54,6 +56,9 @@ import {
 } from "libs/constant/shipping.constant";
 import { generateInvoicePdf, InvoiceParty } from "./invoice/invoice.generator";
 import {
+  ADMIN_EXPORT_COLUMNS,
+  AdminExportRow,
+  EXPORT_CHUNK_ROWS,
   EXPORT_MAX_ROWS,
   EXPORT_MAX_WINDOW_DAYS,
   ONE_DAY_MS,
@@ -110,11 +115,41 @@ import {
   VoucherEvaluation,
   VoucherEvaluationContext,
   VoucherPreview,
+  CheckoutVoucher,
+  CheckoutVoucherPlan,
   SellerOrdersExportQuery,
+  AdminOrdersExportQuery,
+  OrderExportScope,
+  OrderExportCaps,
+  ExportSellerLabel,
   TopSellingQuery,
   TopSellingSeller,
   TopSellingProduct,
 } from "./orders.types";
+import { apportionByWeight } from "./voucher/apportion-discount";
+
+/** Sum of a per-seller amount map. */
+function sumMapValues(valueByKey: Map<number, number>): number {
+  let total = 0;
+  for (const amount of valueByKey.values()) {
+    total += amount;
+  }
+  return total;
+}
+
+/**
+ * Every code behind an order's `discountAmount`, for display (invoice, CSV):
+ * the shop code, then the platform code when both applied (VOUCHER-SHOP-01
+ * phase 2), joined with " + ".
+ */
+function formatOrderVoucherCodes(
+  order: Pick<Order, "voucherCode" | "platformVoucherCode">,
+): string | null {
+  const codes = [order.voucherCode, order.platformVoucherCode].filter(
+    (code): code is string => Boolean(code),
+  );
+  return codes.length ? codes.join(" + ") : null;
+}
 
 /**
  * Neutralize the SQL LIKE wildcards in user input so a buyer typing `_` or `%`
@@ -122,6 +157,7 @@ import {
  * MySQL's default LIKE escape character is a backslash, so no ESCAPE clause is
  * needed (TypeORM's `Like()` does not emit one).
  */
+
 const escapeLikeTerm = (term: string): string =>
   term.replace(/[\\%_]/g, (character) => `\\${character}`);
 
@@ -295,7 +331,7 @@ export class OrdersService {
       productImage?: string | null;
       skuLabel?: string | null;
     }>,
-    voucherCode?: string | null,
+    voucherCodes: string[] = [],
     ghnAddress?: GhnResolvedAddress,
   ): Promise<Order> {
     // Single-seller path: gateway enriches every item with the same sellerId
@@ -334,35 +370,25 @@ export class OrdersService {
       (sum, item) => sum + item.price * item.quantity,
       0,
     );
-    // F3: validate + price the voucher (if any) against the goods subtotal
-    // before reserving stock so an invalid code fails fast. The redemption is
-    // consumed atomically inside the create transaction below.
-    const voucherResult = voucherCode
-      ? await this.validateVoucherForCheckout(
-          userId,
-          voucherCode,
-          itemsTotal,
-          // Single-seller path, so the seller's slice IS the whole basket —
-          // but a shop voucher issued by a DIFFERENT shop still has to be
-          // rejected, which is what passing the map (not just the total) buys.
-          this.buildSubtotalBySellerId(
-            items.map((item) => ({
-              price: item.price,
-              quantity: item.quantity,
-              sellerId,
-            })),
-          ),
-        )
-      : null;
-    const discountAmount = voucherResult?.discountAmount ?? 0;
+    // F3: validate + price the vouchers (if any) against the goods subtotal
+    // before reserving stock so an invalid code fails fast. The redemptions are
+    // consumed atomically inside the create transaction below. Single-seller
+    // path, so the seller's slice IS the whole basket — but a shop voucher
+    // issued by a DIFFERENT shop still has to be rejected, which is what
+    // passing the map (not just the total) buys.
+    const voucherPlan = await this.resolveCheckoutVouchers(
+      userId,
+      voucherCodes,
+      new Map([[sellerId, itemsTotal]]),
+    );
+    const discountAmount = voucherPlan.totalDiscount;
     // VOUCHER-CONC-01: take the quota slot HERE — before the GHN round trip and
     // before any stock is reserved. On a flash voucher the DB cap alone rejects
     // the losers only at the very end, after each of them has already burnt an
     // outbound GHN call and a reservation that then has to be compensated. The
     // Redis counter turns that into a rejection that costs one round trip.
-    const hasClaimedVoucherQuota = voucherResult
-      ? await this.claimVoucherQuota(voucherResult.voucher)
-      : false;
+    const claimedVoucherIds =
+      await this.claimCheckoutVoucherQuotas(voucherPlan);
 
     let order: Order;
     let outboxRow: OrderOutbox;
@@ -399,8 +425,7 @@ export class OrdersService {
               reservationKey,
               toDistrictId: ghnAddress?.districtId ?? null,
               toWardCode: ghnAddress?.wardCode ?? null,
-              voucherCode: voucherResult ? voucherResult.voucher.code : null,
-              discountAmount: voucherResult ? discountAmount : null,
+              ...this.buildOrderVoucherFields(voucherPlan, sellerId),
             }),
           );
           const orderItems = items.map((item) =>
@@ -427,15 +452,12 @@ export class OrdersService {
           // commit — so on a hot code this statement's position decides the
           // whole endpoint's throughput. Keep it the last thing before commit;
           // it used to also span the order-items and outbox inserts.
-          if (voucherResult) {
-            await this.redeemVoucher(
-              manager,
-              voucherResult.voucher,
-              userId,
-              savedOrder.id,
-              discountAmount,
-            );
-          }
+          await this.redeemCheckoutVouchers(
+            manager,
+            voucherPlan,
+            userId,
+            new Map([[sellerId, savedOrder]]),
+          );
           return { savedOrder, outbox };
         },
       );
@@ -445,9 +467,7 @@ export class OrdersService {
       if (reservedKey) {
         await this.releaseReservedItems(items, reservedKey);
       }
-      if (hasClaimedVoucherQuota && voucherResult) {
-        await this.releaseVoucherQuota(voucherResult.voucher.id);
-      }
+      await this.releaseVoucherQuotas(claimedVoucherIds);
       throw error;
     }
 
@@ -972,7 +992,241 @@ export class OrdersService {
   }
 
   /**
-   * Give a canceled order's voucher redemption back (VOUCHER-CANCEL-01).
+   * Resolve every code of one checkout into a priced plan (VOUCHER-SHOP-01
+   * phase 2): at most one shop voucher per seller and at most one platform
+   * voucher. Shop vouchers are priced first, each against its own seller's
+   * slice. The platform voucher is then priced against what the buyer still
+   * pays for goods after them — its `minOrderAmount` and percentage both see
+   * that post-shop-voucher total — and split across the sellers pro rata to it.
+   *
+   * A repeated code collapses silently (a double tap is not a second voucher).
+   * Every rejection is the same 400/404 a single code gets.
+   */
+  private async resolveCheckoutVouchers(
+    userId: number,
+    rawCodes: string[],
+    subtotalBySellerId: Map<number, number>,
+  ): Promise<CheckoutVoucherPlan> {
+    const codes = [
+      ...new Set(
+        rawCodes
+          .map((code) => this.normalizeVoucherCode(code))
+          .filter((code) => code.length > 0),
+      ),
+    ];
+    const plan: CheckoutVoucherPlan = {
+      vouchers: [],
+      shopVoucherBySellerId: new Map(),
+      platformVoucher: null,
+      platformShareBySellerId: new Map(),
+      totalDiscount: 0,
+    };
+    if (!codes.length) {
+      return plan;
+    }
+
+    // Scope first, in one query, so a stacking violation is reported before
+    // any code is priced.
+    const scopedVouchers = await this.voucherRepository.find({
+      where: { code: In(codes) },
+      select: { id: true, code: true, sellerId: true },
+    });
+    const ownerSellerIdByCode = new Map(
+      scopedVouchers.map((voucher) => [voucher.code, voucher.sellerId ?? null]),
+    );
+    let platformCode: string | null = null;
+    const shopCodes: string[] = [];
+    const shopSellerIds = new Set<number>();
+    for (const code of codes) {
+      if (!ownerSellerIdByCode.has(code)) {
+        throw new NotFoundException(
+          VOUCHER_MESSAGE.NOT_FOUND_OR_INACTIVE(code),
+        );
+      }
+      const ownerSellerId = ownerSellerIdByCode.get(code) ?? null;
+      if (ownerSellerId === null) {
+        if (platformCode !== null) {
+          throw new BadRequestException(VOUCHER_MESSAGE.ONE_PLATFORM_VOUCHER);
+        }
+        platformCode = code;
+        continue;
+      }
+      if (shopSellerIds.has(ownerSellerId)) {
+        throw new BadRequestException(
+          VOUCHER_MESSAGE.ONE_SHOP_VOUCHER_PER_SELLER(code),
+        );
+      }
+      shopSellerIds.add(ownerSellerId);
+      shopCodes.push(code);
+    }
+
+    const itemsTotal = sumMapValues(subtotalBySellerId);
+    const checkoutVoucherByCode = new Map<string, CheckoutVoucher>();
+    for (const code of shopCodes) {
+      const shopVoucher = await this.validateVoucherForCheckout(
+        userId,
+        code,
+        itemsTotal,
+        subtotalBySellerId,
+      );
+      plan.shopVoucherBySellerId.set(
+        Number(shopVoucher.voucher.sellerId),
+        shopVoucher,
+      );
+      checkoutVoucherByCode.set(code, shopVoucher);
+    }
+
+    if (platformCode !== null) {
+      // What each seller still charges for goods once its shop voucher is off:
+      // the platform voucher's base, and the weight its discount is split by.
+      const remainingBySellerId = new Map<number, number>();
+      for (const [sellerId, subtotal] of subtotalBySellerId) {
+        const shopDiscount =
+          plan.shopVoucherBySellerId.get(sellerId)?.discountAmount ?? 0;
+        remainingBySellerId.set(
+          sellerId,
+          Math.max(Math.round(subtotal) - shopDiscount, 0),
+        );
+      }
+      const platformVoucher = await this.validateVoucherForCheckout(
+        userId,
+        platformCode,
+        sumMapValues(remainingBySellerId),
+        remainingBySellerId,
+      );
+      plan.platformVoucher = platformVoucher;
+      plan.platformShareBySellerId = apportionByWeight(
+        platformVoucher.discountAmount,
+        remainingBySellerId,
+      );
+      checkoutVoucherByCode.set(platformCode, platformVoucher);
+    }
+
+    plan.vouchers = codes
+      .map((code) => checkoutVoucherByCode.get(code))
+      .filter(
+        (checkoutVoucher): checkoutVoucher is CheckoutVoucher =>
+          checkoutVoucher !== undefined,
+      );
+    plan.totalDiscount = plan.vouchers.reduce(
+      (sum, checkoutVoucher) => sum + checkoutVoucher.discountAmount,
+      0,
+    );
+    return plan;
+  }
+
+  /**
+   * The voucher columns of one seller's order: its shop voucher plus its share
+   * of the platform voucher. `voucherCode` holds whichever code applies — the
+   * shop one when both do, with the platform one then in `platformVoucherCode`.
+   */
+  private buildOrderVoucherFields(
+    plan: CheckoutVoucherPlan,
+    sellerId: number,
+  ): Pick<Order, "voucherCode" | "platformVoucherCode" | "discountAmount"> {
+    const shopVoucher = plan.shopVoucherBySellerId.get(sellerId) ?? null;
+    const platformShare = plan.platformShareBySellerId.get(sellerId) ?? 0;
+    const platformCode =
+      plan.platformVoucher && platformShare > 0
+        ? plan.platformVoucher.voucher.code
+        : null;
+    if (!shopVoucher && platformCode === null) {
+      return {
+        voucherCode: null,
+        platformVoucherCode: null,
+        discountAmount: null,
+      };
+    }
+    return {
+      voucherCode: shopVoucher ? shopVoucher.voucher.code : platformCode,
+      platformVoucherCode: shopVoucher ? platformCode : null,
+      discountAmount: (shopVoucher?.discountAmount ?? 0) + platformShare,
+    };
+  }
+
+  /** The plan's vouchers in id order — the one lock order every checkout uses. */
+  private sortCheckoutVouchersById(
+    plan: CheckoutVoucherPlan,
+  ): CheckoutVoucher[] {
+    return [...plan.vouchers].sort(
+      (left, right) => left.voucher.id - right.voucher.id,
+    );
+  }
+
+  /**
+   * {@link claimVoucherQuota} for every code of the checkout. Returns the ids
+   * that took a slot; if one code is out of quota, the slots already taken are
+   * handed back before the 409 propagates.
+   */
+  private async claimCheckoutVoucherQuotas(
+    plan: CheckoutVoucherPlan,
+  ): Promise<number[]> {
+    const claimedVoucherIds: number[] = [];
+    try {
+      for (const { voucher } of this.sortCheckoutVouchersById(plan)) {
+        if (await this.claimVoucherQuota(voucher)) {
+          claimedVoucherIds.push(voucher.id);
+        }
+      }
+    } catch (error) {
+      await this.releaseVoucherQuotas(claimedVoucherIds);
+      throw error;
+    }
+    return claimedVoucherIds;
+  }
+
+  private async releaseVoucherQuotas(voucherIds: number[]): Promise<void> {
+    for (const voucherId of voucherIds) {
+      await this.releaseVoucherQuota(voucherId);
+    }
+  }
+
+  /**
+   * Redeem every code of the checkout ONCE, inside its create transaction. A
+   * shop voucher is recorded against its seller's order; the platform voucher,
+   * for its full discount, against the lowest-id order that carries a share of
+   * it — {@link releaseVoucherRedemption} moves it to a live sibling if that
+   * order is later canceled. Vouchers are taken in id order so two checkouts
+   * sharing codes always lock the voucher rows in the same order.
+   */
+  private async redeemCheckoutVouchers(
+    manager: EntityManager,
+    plan: CheckoutVoucherPlan,
+    userId: number,
+    orderBySellerId: Map<number, Order>,
+  ): Promise<void> {
+    const platformAnchorOrderIds = [...plan.platformShareBySellerId]
+      .filter(([, share]) => share > 0)
+      .map(([sellerId]) => orderBySellerId.get(sellerId)?.id)
+      .filter((orderId): orderId is number => orderId !== undefined);
+    const platformAnchorOrderId = platformAnchorOrderIds.length
+      ? Math.min(...platformAnchorOrderIds)
+      : undefined;
+    for (const { voucher, discountAmount } of this.sortCheckoutVouchersById(
+      plan,
+    )) {
+      const ownerSellerId = voucher.sellerId ?? null;
+      const orderId =
+        ownerSellerId === null
+          ? platformAnchorOrderId
+          : orderBySellerId.get(ownerSellerId)?.id;
+      if (orderId === undefined) {
+        throw new InternalServerErrorException(
+          `Voucher ${voucher.code} has no order to be redeemed against`,
+        );
+      }
+      await this.redeemVoucher(
+        manager,
+        voucher,
+        userId,
+        orderId,
+        discountAmount,
+      );
+    }
+  }
+
+  /**
+   * Give a canceled order's voucher redemptions back (VOUCHER-CANCEL-01).
    *
    * Until now only a checkout that failed mid-flight returned its slot, so the
    * `voucher_redemptions` row and `used_count` outlived every cancellation: a
@@ -980,6 +1234,15 @@ export class OrdersService {
    * out of that code forever, and each canceled order permanently burned one of
    * `usage_limit`. A canceled order was never fulfilled, so neither counter
    * should keep counting it.
+   *
+   * VOUCHER-SHOP-01 phase 2: an order can hold two redemptions (its shop
+   * voucher and the checkout's platform voucher). The platform one belongs to
+   * the whole multi-shop checkout, so while another sub-order that shares it is
+   * still live it MOVES to that sibling instead of being returned — the buyer
+   * keeps the discount on the live orders, so the code stays used. Every
+   * sub-order of the checkout is row-locked in id order first: a sibling cannot
+   * be canceled between "it is live" and "the redemption now points at it", and
+   * two sibling cancels always queue in the same order.
    *
    * The DELETE is the concurrency guard. Two racing cancels can both read the
    * row, but the second one's delete reports `affected: 0` once the first
@@ -995,79 +1258,139 @@ export class OrdersService {
       return;
     }
     try {
-      const releasedVoucherId = await this.orderRepository.manager.transaction(
-        async (manager): Promise<number | null> => {
-          const redemption = await manager.findOne(VoucherRedemption, {
+      const releasedVoucherIds = await this.orderRepository.manager.transaction(
+        async (manager): Promise<number[]> => {
+          const liveSiblings = order.checkoutId
+            ? (
+                await manager.find(Order, {
+                  where: { checkoutId: order.checkoutId },
+                  select: {
+                    id: true,
+                    status: true,
+                    voucherCode: true,
+                    platformVoucherCode: true,
+                  },
+                  order: { id: "ASC" },
+                  lock: { mode: "pessimistic_write" },
+                })
+              ).filter(
+                (sibling) =>
+                  sibling.id !== order.id &&
+                  sibling.status !== OrderStatus.CANCELED,
+              )
+            : [];
+          const redemptions = await manager.find(VoucherRedemption, {
             where: { orderId: order.id },
           });
-          if (!redemption) {
-            return null;
+          if (!redemptions.length) {
+            return [];
           }
-          const deleted = await manager.delete(VoucherRedemption, {
-            id: redemption.id,
+          const vouchers = await manager.find(Voucher, {
+            where: { id: In(redemptions.map((row) => row.voucherId)) },
+            select: { id: true, code: true, sellerId: true },
           });
-          if (!deleted.affected) {
-            return null;
+          const voucherById = new Map(
+            vouchers.map((voucher) => [voucher.id, voucher]),
+          );
+
+          const released: number[] = [];
+          for (const redemption of redemptions) {
+            const voucher = voucherById.get(redemption.voucherId);
+            const heir =
+              voucher && (voucher.sellerId ?? null) === null
+                ? liveSiblings.find(
+                    (sibling) =>
+                      sibling.voucherCode === voucher.code ||
+                      sibling.platformVoucherCode === voucher.code,
+                  )
+                : undefined;
+            if (voucher && heir) {
+              const moved = await manager.update(
+                VoucherRedemption,
+                { id: redemption.id, orderId: order.id },
+                { orderId: heir.id },
+              );
+              if (moved.affected) {
+                this.logger.log(
+                  `[ORDERS] Platform voucher ${voucher.code} redemption moved from canceled order ${order.id} to order ${heir.id}`,
+                );
+              }
+              continue;
+            }
+            const deleted = await manager.delete(VoucherRedemption, {
+              id: redemption.id,
+            });
+            if (!deleted.affected) {
+              continue;
+            }
+            // GREATEST floors the counter at 0 so a manual DB fixup that
+            // already decremented cannot drive used_count negative and make the
+            // voucher look like it has more room than usage_limit allows.
+            await manager
+              .createQueryBuilder()
+              .update(Voucher)
+              .set({ usedCount: () => "GREATEST(used_count - 1, 0)" })
+              .where("id = :id", { id: redemption.voucherId })
+              .execute();
+            released.push(redemption.voucherId);
           }
-          // GREATEST floors the counter at 0 so a manual DB fixup that already
-          // decremented cannot drive used_count negative and make the voucher
-          // look like it has more room than usage_limit allows.
-          await manager
-            .createQueryBuilder()
-            .update(Voucher)
-            .set({ usedCount: () => "GREATEST(used_count - 1, 0)" })
-            .where("id = :id", { id: redemption.voucherId })
-            .execute();
-          return redemption.voucherId;
+          return released;
         },
       );
-      if (releasedVoucherId === null) {
+      if (!releasedVoucherIds.length) {
         return;
       }
-      await this.releaseVoucherQuota(releasedVoucherId);
+      await this.releaseVoucherQuotas(releasedVoucherIds);
       this.logger.log(
-        `[ORDERS] Voucher ${order.voucherCode} redemption returned by canceled order ${order.id}`,
+        `[ORDERS] ${releasedVoucherIds.length} voucher redemption(s) returned by canceled order ${order.id}`,
       );
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "unknown error";
       this.logger.error(
-        `[ORDERS] Could not return the redemption of voucher ${order.voucherCode} for canceled order ${order.id}: ${message}`,
+        `[ORDERS] Could not return the voucher redemption(s) of canceled order ${order.id}: ${message}`,
       );
     }
   }
 
   /**
-   * Buyer-facing preview: validate a code against a goods subtotal and return
-   * the discount it would produce, without consuming a redemption.
+   * Buyer-facing preview: price every code against the basket exactly as
+   * order create will, without consuming a redemption. Items carry their
+   * `sellerId`, so a shop voucher is priced against its own shop's slice even
+   * in a multi-shop basket.
    */
   async previewVoucher(
     userId: number,
-    code: string,
-    itemsTotal: number,
-    sellerId?: number | null,
+    codes: string[],
+    items: Array<{ price: number; quantity: number; sellerId: number }>,
   ): Promise<VoucherPreview> {
-    // The gateway keeps this endpoint single-seller, so the seller's slice is
-    // the whole subtotal. An absent sellerId leaves the map empty, which makes
-    // every shop voucher WRONG_SELLER — a platform voucher still previews.
-    const subtotalBySellerId = new Map<number, number>();
-    if (sellerId != null && Number.isFinite(Number(sellerId))) {
-      subtotalBySellerId.set(Number(sellerId), itemsTotal);
-    }
-    const { voucher, discountAmount } = await this.validateVoucherForCheckout(
-      userId,
-      code,
-      itemsTotal,
-      subtotalBySellerId,
+    const itemsTotal = items.reduce(
+      (sum, item) => sum + item.price * item.quantity,
+      0,
     );
+    const plan = await this.resolveCheckoutVouchers(
+      userId,
+      codes,
+      this.buildSubtotalBySellerId(items),
+    );
+    const [firstVoucher] = plan.vouchers;
+    if (!firstVoucher) {
+      throw new BadRequestException(VOUCHER_MESSAGE.CODE_REQUIRED);
+    }
     return {
-      code: voucher.code,
-      discountType: voucher.discountType,
-      discountAmount,
+      code: firstVoucher.voucher.code,
+      discountType: firstVoucher.voucher.discountType,
+      discountAmount: plan.totalDiscount,
       itemsTotal,
-      finalItemsTotal: itemsTotal - discountAmount,
+      finalItemsTotal: itemsTotal - plan.totalDiscount,
+      vouchers: plan.vouchers.map(({ voucher, discountAmount }) => ({
+        code: voucher.code,
+        scope: (voucher.sellerId ?? null) === null ? "platform" : "shop",
+        sellerId: voucher.sellerId ?? null,
+        discountType: voucher.discountType,
+        discountAmount,
+      })),
     };
   }
-
   async createVoucher(input: {
     code: string;
     description?: string | null;
@@ -1354,6 +1677,7 @@ export class OrdersService {
       productImage?: string | null;
       skuLabel?: string | null;
     }>,
+    voucherCodes: string[] = [],
     ghnAddress?: GhnResolvedAddress,
   ): Promise<Order[]> {
     // Check stock in inventory for all items before creating any order
@@ -1393,22 +1717,42 @@ export class OrdersService {
     }, new Map());
     const sellerIds = [...grouped.keys()];
 
+    // VOUCHER-SHOP-01 phase 2: price every code against the per-shop slices
+    // before any GHN call or reservation, so a bad code costs nothing. One
+    // redemption per code per checkout; the platform discount is split across
+    // the sub-orders and `checkoutId` ties them together for the cancel path.
+    const voucherPlan = await this.resolveCheckoutVouchers(
+      userId,
+      voucherCodes,
+      this.buildSubtotalBySellerId(items),
+    );
+    const claimedVoucherIds =
+      await this.claimCheckoutVoucherQuotas(voucherPlan);
+    const checkoutId = randomUUID();
+
     // Each seller group ships separately → one GHN fee per child order.
     // Computed before the transaction so external HTTP calls never hold a DB lock.
+    // A GHN refusal is a 400 (GHN-CREATE-01), and the quota slots above are
+    // already taken, so they are handed back before it propagates.
     const shippingFeeBySeller = new Map<number, number>();
-    for (const sellerId of sellerIds) {
-      const sellerItems = grouped.get(sellerId) ?? [];
-      const sellerItemsTotal = sellerItems.reduce(
-        (sum, item) => sum + item.price * item.quantity,
-        0,
-      );
-      const fee = await this.getShippingFeeOrZero(
-        shippingAddress,
-        paymentMethod === PaymentMethod.COD ? sellerItemsTotal : 0,
-        sellerItems,
-        ghnAddress,
-      );
-      shippingFeeBySeller.set(sellerId, fee);
+    try {
+      for (const sellerId of sellerIds) {
+        const sellerItems = grouped.get(sellerId) ?? [];
+        const sellerItemsTotal = sellerItems.reduce(
+          (sum, item) => sum + item.price * item.quantity,
+          0,
+        );
+        const fee = await this.getShippingFeeOrZero(
+          shippingAddress,
+          paymentMethod === PaymentMethod.COD ? sellerItemsTotal : 0,
+          sellerItems,
+          ghnAddress,
+        );
+        shippingFeeBySeller.set(sellerId, fee);
+      }
+    } catch (error) {
+      await this.releaseVoucherQuotas(claimedVoucherIds);
+      throw error;
     }
 
     const reservationKeyBySeller = new Map(
@@ -1430,6 +1774,7 @@ export class OrdersService {
           reservationKeyBySeller.get(sellerId) as string,
         );
       }
+      await this.releaseVoucherQuotas(claimedVoucherIds);
       throw error;
     }
 
@@ -1438,14 +1783,22 @@ export class OrdersService {
 
     try {
       await this.orderRepository.manager.transaction(async (manager) => {
+        const orderBySellerId = new Map<number, Order>();
         for (const sellerId of sellerIds) {
           const sellerItems = grouped.get(sellerId) ?? [];
           const shippingFee = shippingFeeBySeller.get(sellerId) ?? 0;
+          const voucherFields = this.buildOrderVoucherFields(
+            voucherPlan,
+            sellerId,
+          );
+          // Discount applies to goods only, never to shipping.
           const total =
             sellerItems.reduce(
               (sum, item) => sum + item.price * item.quantity,
               0,
-            ) + shippingFee;
+            ) -
+            (voucherFields.discountAmount ?? 0) +
+            shippingFee;
 
           const order = await manager.save(
             manager.create(Order, {
@@ -1460,8 +1813,11 @@ export class OrdersService {
               reservationKey: reservationKeyBySeller.get(sellerId),
               toDistrictId: ghnAddress?.districtId ?? null,
               toWardCode: ghnAddress?.wardCode ?? null,
+              checkoutId,
+              ...voucherFields,
             }),
           );
+          orderBySellerId.set(sellerId, order);
 
           const orderItems = sellerItems.map((item) =>
             manager.create(OrderItem, {
@@ -1494,6 +1850,13 @@ export class OrdersService {
           );
           createdOrders.push(order);
         }
+        // VOUCHER-CONC-01: redeem LAST, after every sub-order row exists.
+        await this.redeemCheckoutVouchers(
+          manager,
+          voucherPlan,
+          userId,
+          orderBySellerId,
+        );
       });
     } catch (error) {
       for (const sellerId of sellerIds) {
@@ -1502,6 +1865,7 @@ export class OrdersService {
           reservationKeyBySeller.get(sellerId) as string,
         );
       }
+      await this.releaseVoucherQuotas(claimedVoucherIds);
       throw error;
     }
 
@@ -3736,7 +4100,7 @@ export class OrdersService {
         total: order.total,
         shippingFee: order.shippingFee,
         discountAmount: order.discountAmount,
-        voucherCode: order.voucherCode,
+        voucherCode: formatOrderVoucherCodes(order),
         codAmount: order.codAmount,
         paymentMethod: order.paymentMethod,
         shippingAddress: order.shippingAddress,
@@ -3890,44 +4254,132 @@ export class OrdersService {
    * failure mode a CSV export has.
    */
   async exportSellerOrdersCsv(query: SellerOrdersExportQuery): Promise<Buffer> {
+    const scope: OrderExportScope = { ...query, sellerId: query.sellerId };
+    const { fromDate, toDate } = await this.assertOrderExportWithinCaps(scope, {
+      maxWindowDays: EXPORT_MAX_WINDOW_DAYS,
+      maxRows: EXPORT_MAX_ROWS,
+    });
+    return this.renderOrderExportCsv(scope, fromDate, toDate, false);
+  }
+
+  /**
+   * EXPORT-CSV-01 T4 — the same file across every seller (or one, when the
+   * admin filters), with `sellerId` (`usr_…`) and `sellerUsername` appended.
+   * Same sync caps as the seller route: a wider window is the async job's (T5).
+   */
+  async exportAdminOrdersCsv(query: AdminOrdersExportQuery): Promise<Buffer> {
+    const scope: OrderExportScope = {
+      ...query,
+      sellerId: query.sellerId ?? null,
+    };
+    const { fromDate, toDate } = await this.assertOrderExportWithinCaps(scope, {
+      maxWindowDays: EXPORT_MAX_WINDOW_DAYS,
+      maxRows: EXPORT_MAX_ROWS,
+    });
+    return this.renderOrderExportCsv(scope, fromDate, toDate, true);
+  }
+
+  /**
+   * Window check, then COUNT — both BEFORE any row is fetched, so an oversized
+   * request is a cheap 400. Public because the async job (T5) validates at
+   * create time with its own, wider caps.
+   */
+  async assertOrderExportWithinCaps(
+    scope: OrderExportScope,
+    caps: OrderExportCaps,
+  ): Promise<{ fromDate: Date; toDate: Date; rowCount: number }> {
     const { fromDate, toDate } = this.resolveAnalyticsRange(
-      query.from,
-      query.to,
+      scope.from,
+      scope.to,
     );
     const windowDays = Math.ceil(
       (toDate.getTime() - fromDate.getTime()) / ONE_DAY_MS,
     );
-    if (windowDays > EXPORT_MAX_WINDOW_DAYS) {
+    if (windowDays > caps.maxWindowDays) {
       throw new BadRequestException(
-        ORDER_MESSAGE.EXPORT_RANGE_TOO_WIDE(windowDays, EXPORT_MAX_WINDOW_DAYS),
+        ORDER_MESSAGE.EXPORT_RANGE_TOO_WIDE(windowDays, caps.maxWindowDays),
       );
     }
 
     // COUNT first and refuse with the REAL row count: "narrow the range" with
     // no number leaves the seller guessing how much to narrow it by.
-    const rowCount = await this.buildSellerExportQuery(
-      query,
+    const rowCount = await this.buildOrderExportQuery(
+      scope,
       fromDate,
       toDate,
     ).getCount();
-    if (rowCount > EXPORT_MAX_ROWS) {
+    if (rowCount > caps.maxRows) {
       throw new BadRequestException(
-        ORDER_MESSAGE.EXPORT_TOO_MANY_ROWS(rowCount, EXPORT_MAX_ROWS),
+        ORDER_MESSAGE.EXPORT_TOO_MANY_ROWS(rowCount, caps.maxRows),
       );
     }
+    return { fromDate, toDate, rowCount };
+  }
 
-    const items = await this.buildSellerExportQuery(
-      query,
-      fromDate,
-      toDate,
-    ).getMany();
+  /**
+   * Render the file in chunks of EXPORT_CHUNK_ROWS. `withSellerColumns` is the
+   * CALLER's choice, not derived from `sellerId`: an admin filtering on one
+   * seller still gets the admin layout.
+   *
+   * The seller columns fail CLOSED: if the user service cannot resolve the
+   * sellers the whole export fails, rather than shipping numeric ids (PUBID)
+   * or a file with a silently blank column.
+   */
+  async renderOrderExportCsv(
+    scope: OrderExportScope,
+    fromDate: Date,
+    toDate: Date,
+    withSellerColumns: boolean,
+  ): Promise<Buffer> {
+    const parts: string[] = [
+      withSellerColumns
+        ? toCsvHeader(ADMIN_EXPORT_COLUMNS)
+        : toCsvHeader(SELLER_EXPORT_COLUMNS),
+    ];
+    // Spans chunks: an order whose items straddle a chunk boundary must still
+    // get its order-level money columns on its first row ONLY.
+    const seenOrderIds = new Set<number>();
+    const sellerById = new Map<number, ExportSellerLabel>();
 
+    for (let offset = 0; ; offset += EXPORT_CHUNK_ROWS) {
+      const items = await this.buildOrderExportQuery(scope, fromDate, toDate)
+        .offset(offset)
+        .limit(EXPORT_CHUNK_ROWS)
+        .getMany();
+      if (items.length > 0) {
+        const rows = await this.mapOrderExportRows(items, seenOrderIds);
+        if (withSellerColumns) {
+          await this.resolveExportSellers(items, sellerById);
+          const adminRows: AdminExportRow[] = rows.map((row, index) => {
+            const seller = sellerById.get(Number(items[index].sellerId));
+            return {
+              ...row,
+              sellerId: seller?.publicId ?? "",
+              sellerUsername: seller?.username ?? "",
+            };
+          });
+          parts.push(toCsvRows(adminRows, ADMIN_EXPORT_COLUMNS));
+        } else {
+          parts.push(toCsvRows(rows, SELLER_EXPORT_COLUMNS));
+        }
+      }
+      if (items.length < EXPORT_CHUNK_ROWS) {
+        break;
+      }
+    }
+
+    return Buffer.from(parts.join(""), "utf8");
+  }
+
+  private async mapOrderExportRows(
+    items: OrderItem[],
+    seenOrderIds: Set<number>,
+  ): Promise<SellerExportRow[]> {
     const latestHistory = await this.findLatestShippingHistory([
       ...new Set(items.map((item) => Number(item.order.id))),
     ]);
 
-    const seenOrderIds = new Set<number>();
-    const rows: SellerExportRow[] = items.map((item) => {
+    return items.map((item) => {
       const order = item.order;
       const orderId = Number(order.id);
       // `shippingFee` and `orderTotal` belong to the ORDER, not to the item.
@@ -3958,14 +4410,38 @@ export class OrdersService {
         // row would be indistinguishable from the deliberate blank on a
         // continuation row, so "no voucher" has to render as a real 0.
         discountAmount: isFirstRowOfOrder ? (order.discountAmount ?? 0) : null,
-        voucherCode: isFirstRowOfOrder ? order.voucherCode : null,
+        voucherCode: isFirstRowOfOrder ? formatOrderVoucherCodes(order) : null,
         orderTotal: isFirstRowOfOrder ? Number(order.total) : null,
         trackingCode: order.ghnOrderCode,
         ghnStatus: latestHistory.get(orderId)?.ghnStatus ?? null,
       };
     });
+  }
 
-    return Buffer.from(toCsv(rows, SELLER_EXPORT_COLUMNS), "utf8");
+  /** One GET_USERS_BY_IDS per chunk, only for sellers not already resolved. */
+  private async resolveExportSellers(
+    items: OrderItem[],
+    sellerById: Map<number, ExportSellerLabel>,
+  ): Promise<void> {
+    const missingSellerIds = [
+      ...new Set(items.map((item) => Number(item.sellerId))),
+    ].filter((sellerId) => !sellerById.has(sellerId));
+    if (missingSellerIds.length === 0) {
+      return;
+    }
+    const sellers = await firstValueFrom(
+      this.userClient
+        .send<
+          { id: number; publicId: string | null; username: string }[]
+        >({ cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS }, { userIds: missingSellerIds })
+        .pipe(timeout(10000)),
+    );
+    for (const seller of sellers ?? []) {
+      sellerById.set(Number(seller.id), {
+        publicId: seller.publicId ?? "",
+        username: seller.username,
+      });
+    }
   }
 
   /**
@@ -3974,18 +4450,20 @@ export class OrdersService {
    * `leftJoinAndSelect`s *every* item of any order containing one of them —
    * harmless today because checkout splits orders per seller, but it is exactly
    * what would make `lineTotal` stop summing to this seller's revenue if orders
-   * are ever un-split.
+   * are ever un-split. `sellerId: null` drops the filter (platform-wide).
+   *
+   * `offset/limit` (raw SQL), not `skip/take`: item → order is many-to-one, so
+   * one SQL row is one item and a plain LIMIT pages correctly.
    */
-  private buildSellerExportQuery(
-    query: SellerOrdersExportQuery,
+  private buildOrderExportQuery(
+    scope: OrderExportScope,
     fromDate: Date,
     toDate: Date,
   ): SelectQueryBuilder<OrderItem> {
     const qb = this.orderItemRepository
       .createQueryBuilder("item")
       .innerJoinAndSelect("item.order", "order")
-      .where("item.sellerId = :sellerId", { sellerId: query.sellerId })
-      .andWhere("order.createdAt BETWEEN :fromDate AND :toDate", {
+      .where("order.createdAt BETWEEN :fromDate AND :toDate", {
         fromDate,
         toDate,
       })
@@ -3993,8 +4471,11 @@ export class OrdersService {
       .addOrderBy("order.id", "ASC")
       .addOrderBy("item.id", "ASC");
 
-    if (query.status) {
-      qb.andWhere("order.status = :status", { status: query.status });
+    if (scope.sellerId !== null) {
+      qb.andWhere("item.sellerId = :sellerId", { sellerId: scope.sellerId });
+    }
+    if (scope.status) {
+      qb.andWhere("order.status = :status", { status: scope.status });
     }
     return qb;
   }

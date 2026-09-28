@@ -2032,6 +2032,8 @@ describe("OrdersService VOUCHER-CONC-01 — voucher quota gate", () => {
       }),
     };
     const voucherRepository = {
+      // resolveCheckoutVouchers scopes every code in one query first.
+      find: jest.fn().mockResolvedValue(voucher ? [voucher] : []),
       findOne: jest.fn().mockResolvedValue(voucher),
       create: jest.fn((input: Partial<Voucher>) => input as Voucher),
       save,
@@ -2077,7 +2079,7 @@ describe("OrdersService VOUCHER-CONC-01 — voucher quota gate", () => {
   }
 
   const placeWithVoucher = (service: OrdersService): Promise<Order> =>
-    service.placeOrder(18, PaymentMethod.COD, "address", [item], "FLASH");
+    service.placeOrder(18, PaymentMethod.COD, "address", [item], ["FLASH"]);
 
   it("rejects the loser before GHN is called and before stock is reserved", async () => {
     const { service, transaction, ghnPreview, inventorySend, claim } =

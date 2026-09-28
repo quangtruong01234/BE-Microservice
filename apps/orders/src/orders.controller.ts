@@ -12,6 +12,7 @@ import {
   RmqContext,
 } from "@nestjs/microservices";
 import { OrdersService } from "./orders.service";
+import { OrderExportJobService } from "./export/order-export-job.service";
 import type {
   AnalyticsQuery,
   OrderAnalytics,
@@ -19,9 +20,14 @@ import type {
   AvailableVoucher,
   VoucherPreview,
   SellerOrdersExportQuery,
+  AdminOrdersExportQuery,
   TopSellingQuery,
   TopSellingSeller,
   TopSellingProduct,
+  CreateExportJobPayload,
+  ExportJobLookupPayload,
+  ExportJobView,
+  ExportJobDownload,
 } from "./orders.types";
 import { EVENT } from "@app/common/constants/event";
 import {
@@ -49,6 +55,18 @@ function toGhnResolvedAddress(
   return undefined;
 }
 
+/**
+ * The codes of one checkout: `voucherCodes` (VOUCHER-SHOP-01 phase 2) plus the
+ * legacy single `voucherCode`, which an older gateway may still send. The
+ * service dedupes and normalizes.
+ */
+function mergeVoucherCodes(
+  voucherCodes: string[] | undefined,
+  voucherCode: string | null | undefined,
+): string[] {
+  return [...(voucherCodes ?? []), ...(voucherCode ? [voucherCode] : [])];
+}
+
 @UseFilters(new HttpToRpcExceptionFilter())
 @Controller("orders")
 export class OrdersController {
@@ -56,6 +74,7 @@ export class OrdersController {
   constructor(
     private readonly ordersService: OrdersService,
     private readonly rmqService: RmqService,
+    private readonly orderExportJobService: OrderExportJobService,
   ) {}
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.CREATE_ORDER)
@@ -78,19 +97,19 @@ export class OrdersController {
         weight?: number;
       }[];
       voucherCode?: string | null;
+      voucherCodes?: string[];
     },
   ): Promise<Order> {
     this.logger.log(
       `[ORDERS] Received create_order request with payload: ${JSON.stringify(payload)}`,
     );
-    const { userId, paymentMethod, shippingAddress, items, voucherCode } =
-      payload;
+    const { userId, paymentMethod, shippingAddress, items } = payload;
     return await this.ordersService.placeOrder(
       userId,
       paymentMethod,
       shippingAddress,
       items,
-      voucherCode,
+      mergeVoucherCodes(payload.voucherCodes, payload.voucherCode),
       toGhnResolvedAddress(payload.toDistrictId, payload.toWardCode),
     );
   }
@@ -114,6 +133,8 @@ export class OrdersController {
         tierIdx?: number[];
         weight?: number;
       }[];
+      voucherCode?: string | null;
+      voucherCodes?: string[];
     },
   ): Promise<Order[]> {
     const { userId, paymentMethod, shippingAddress, items } = payload;
@@ -122,6 +143,7 @@ export class OrdersController {
       paymentMethod,
       shippingAddress,
       items,
+      mergeVoucherCodes(payload.voucherCodes, payload.voucherCode),
       toGhnResolvedAddress(payload.toDistrictId, payload.toWardCode),
     );
   }
@@ -362,6 +384,43 @@ export class OrdersController {
     return await this.ordersService.exportSellerOrdersCsv(payload);
   }
 
+  @MessagePattern(ORDER_MESSAGE_PATTERN.EXPORT_ADMIN_ORDERS_CSV)
+  async exportAdminOrdersCsv(
+    @Payload() payload: AdminOrdersExportQuery,
+  ): Promise<Buffer> {
+    return await this.ordersService.exportAdminOrdersCsv(payload);
+  }
+
+  // EXPORT-CSV-01 T5 — async export jobs. `requestedBy` always comes from the
+  // gateway's JWT, so a lookup can only ever reach the caller's own jobs.
+  @MessagePattern(ORDER_MESSAGE_PATTERN.EXPORT_JOB_CREATE)
+  async createExportJob(
+    @Payload() payload: CreateExportJobPayload,
+  ): Promise<ExportJobView> {
+    return await this.orderExportJobService.createJob(payload);
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.EXPORT_JOB_LIST)
+  async listExportJobs(
+    @Payload() payload: { requestedBy: number },
+  ): Promise<ExportJobView[]> {
+    return await this.orderExportJobService.listJobs(payload.requestedBy);
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.EXPORT_JOB_GET)
+  async getExportJob(
+    @Payload() payload: ExportJobLookupPayload,
+  ): Promise<ExportJobView> {
+    return await this.orderExportJobService.getJob(payload);
+  }
+
+  @MessagePattern(ORDER_MESSAGE_PATTERN.EXPORT_JOB_DOWNLOAD)
+  async downloadExportJob(
+    @Payload() payload: ExportJobLookupPayload,
+  ): Promise<ExportJobDownload> {
+    return await this.orderExportJobService.downloadJob(payload);
+  }
+
   @MessagePattern(ORDER_MESSAGE_PATTERN.GHN_WEBHOOK)
   async handleGhnWebhook(
     @Payload() payload: { ghnOrderCode: string; ghnStatus: string },
@@ -570,16 +629,14 @@ export class OrdersController {
     @Payload()
     data: {
       userId: number;
-      code: string;
-      itemsTotal: number;
-      sellerId?: number | null;
+      codes: string[];
+      items: Array<{ price: number; quantity: number; sellerId: number }>;
     },
   ): Promise<VoucherPreview> {
     return this.ordersService.previewVoucher(
       data.userId,
-      data.code,
-      data.itemsTotal,
-      data.sellerId ?? null,
+      data.codes,
+      data.items,
     );
   }
 

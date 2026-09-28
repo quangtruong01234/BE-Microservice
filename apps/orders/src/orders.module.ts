@@ -18,6 +18,8 @@ import { resolveTypeOrmSynchronize } from "@app/database";
 import { OrderItem } from "./entity/order_item.entity";
 import { Order } from "./entity/order.entity";
 import { OrderOutbox } from "./entity/order-outbox.entity";
+import { ExportJob } from "./entity/export-job.entity";
+import { OrderExportJobService } from "./export/order-export-job.service";
 import { ShippingHistory } from "./entity/shipping-history.entity";
 import { OrderReturnRequest } from "./entity/order-return-request.entity";
 import { Voucher } from "./entity/voucher.entity";
@@ -90,6 +92,7 @@ import { GhnModule } from "./ghn/ghn.module";
         OrderReturnRequest,
         Voucher,
         VoucherRedemption,
+        ExportJob,
       ],
       synchronize: resolveTypeOrmSynchronize(),
       timezone: "Z",
@@ -107,12 +110,14 @@ import { GhnModule } from "./ghn/ghn.module";
       OrderReturnRequest,
       Voucher,
       VoucherRedemption,
+      ExportJob,
     ]),
   ],
   controllers: [OrdersController, CartController],
   providers: [
     OrdersService,
     CartService,
+    OrderExportJobService,
     { provide: APP_FILTER, useClass: AllRpcExceptionFilter },
   ],
 })
