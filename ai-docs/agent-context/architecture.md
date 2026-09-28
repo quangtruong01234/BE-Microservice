@@ -30,7 +30,7 @@ See the active agent entry point (`AGENTS.md` or `.claude/CLAUDE.md`) for the se
 const result = await firstValueFrom(
   this.client
     .send(PRODUCT_MESSAGE_PATTERN.FIND_ALL, payload)
-    .pipe(timeout(10000)),
+    .pipe(timeout(TCP_TIMEOUT_MS.READ)),
 );
 ```
 

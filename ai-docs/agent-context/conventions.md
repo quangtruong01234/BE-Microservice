@@ -60,14 +60,14 @@ apps/<service>/src/
 
 Gateway is the only HTTP-facing service. Every gateway service method must:
 1. Use `MicroserviceErrorHandler` for error handling
-2. Apply `.pipe(timeout(10000))` on every TCP call
+2. Apply `.pipe(timeout(TCP_TIMEOUT_MS.READ | .WRITE))` on every TCP call — never a literal
 3. Include `@ApiProperty()` on every DTO field (Swagger)
 
 ```typescript
 // Correct gateway pattern
 async getProduct(id: string): Promise<ProductResponseDto> {
   return this.errorHandler.handleResponse(
-    this.client.send(PRODUCT_MESSAGE_PATTERN.FIND_BY_ID, id).pipe(timeout(10000))
+    this.client.send(PRODUCT_MESSAGE_PATTERN.FIND_BY_ID, id).pipe(timeout(TCP_TIMEOUT_MS.READ))
   );
 }
 ```
@@ -275,13 +275,6 @@ throw new NotFoundException('resource not found');
 - Use `MicroserviceErrorHandler.handleError(error, operation, serviceName)` in all gateway services
 - Never expose raw DB errors, stack traces, or internal paths to the HTTP response body
 
-## General Rules
-
-- Search `libs/` before adding any utility, constant, config, or helper — it likely already exists
-- Prefer extending existing modules over creating new ones
-- No unnecessary refactors unless explicitly requested
-- Minimal diff — do not reformat or rename things outside the task scope
-
 ---
 
 ## Common TCP Bugs (đã gặp, phải tránh)
@@ -318,9 +311,7 @@ Khi truyền sang external API expecting number: `Math.round(Number(value ?? 0))
 Áp dụng cho: `cod_amount`, `price`, `total`, bất kỳ DECIMAL column nào.
 
 ### 4. @Payload() trong RabbitMQ @EventPattern — không unwrap data.data
-NestJS strips packet envelope trước khi deliver.
-❌ Sai: `data.data.orderId`
-✅ Đúng: `data.orderId`
+See § Backend: RabbitMQ @EventPattern — Payload Unwrapping above.
 
 ### 5. @MessagePattern handlers — luôn return giá trị, không bao giờ return void
 NestJS TCP transport không gửi response khi handler trả về `void`/`undefined`.

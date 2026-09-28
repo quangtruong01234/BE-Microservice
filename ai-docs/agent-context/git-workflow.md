@@ -18,6 +18,30 @@
 - Do not commit: `.env`, `local/`, `dist/`, `node_modules/`.
 - SQL migration must be a separate commit, placed **before** the commit that implements the related service change.
 
+## Never commit the production hostname
+
+The production API domain (the DDNS host serving the gateway behind nginx on
+EC2) must never appear in anything pushed to GitHub — source, `.env.example`,
+workflows, `ai-docs/`, `docs/`, comments, tests or commit messages. Not the full
+URL, not the bare hostname, not the registrable domain: it points a reader
+straight at the live box.
+
+- Committed files use the placeholder `<PROD_API_DOMAIN>` — e.g.
+  `https://<PROD_API_DOMAIN>/api/order`. Keep it greppable; no per-file variants.
+- The real value lives in `../.agent-local/prod-endpoints.md` (the `MCR/` root,
+  outside every repo). Read it for a prod curl, a deploy check or a log fetch;
+  never copy it in.
+- Uncommitted runtime config is the exception: the GitHub Actions secret
+  `EC2_HOST` and the gitignored `local/node*/.env` are its correct home.
+  `.env.example` is committed, so it gets the placeholder.
+- **Before committing:** read the host from `../.agent-local/prod-endpoints.md`
+  and `git grep -i` **both** the full hostname and its registrable domain — a
+  bare `example.com` in a comment is the leak a full-URL search misses. Both must
+  return nothing; replace any match with the placeholder.
+- The rule covers new and touched content. The domain still exists in past
+  commits; purging history is a rewrite + force-push and needs the user's
+  explicit go-ahead — never do it unprompted.
+
 ## Release Gate — check BEFORE pushing to `main`
 
 Committing is free; **pushing is a production deploy**. Merging into `main`

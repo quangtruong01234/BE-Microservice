@@ -48,6 +48,8 @@ disagree, source wins — and the mismatch gets reported, not silently followed.
 
 - Every gateway TCP call needs `.pipe(timeout(TCP_TIMEOUT_MS.READ | .WRITE))`
   and `MicroserviceErrorHandler`. Every gateway DTO field needs `@ApiProperty()`.
+  `READ` (5 s) is for pure DB/cache reads, `WRITE` (10 s) for mutations and any
+  call with an external-API leg (`libs/constant/tcp-timeout.constant.ts`).
 - Message patterns, queue names and ports live in `@app/constant` or
   `@app/common/src/constants/`. Never inline a pattern string or a port number.
 - A `@MessagePattern` handler always returns a value — `null` for side-effect
@@ -78,8 +80,9 @@ disagree, source wins — and the mismatch gets reported, not silently followed.
 
 - ES modules only — never `require()`.
 - Path aliases only; no relative import deeper than `../../`. `@app/constant`,
-  `@app/common`, `@app/cached`, `@app/database`. An alias missing from
-  `tsconfig` gets reported, not worked around with a relative path.
+  `@app/common`, `@app/cached`, `@app/database`, and `@app/testing`
+  (`test/utils/` mock factories, specs only). An alias missing from `tsconfig`
+  gets reported, not worked around with a relative path.
 - Prefer lodash per-method imports (`import groupBy from 'lodash/groupBy'`) over
   hand-rolled data manipulation, unless it is trivially a one-liner or sits in a
   hot consumer path.

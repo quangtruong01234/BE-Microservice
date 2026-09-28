@@ -111,7 +111,7 @@ Service → Node group mapping:
 
 ### Step 3 — Gateway layer
 
-- Read gateway service method → confirm `timeout(10000)` and `MicroserviceErrorHandler` are present
+- Read gateway service method → confirm `timeout(TCP_TIMEOUT_MS.READ | .WRITE)` (right tier, never a literal) and `MicroserviceErrorHandler` are present
 - Compare pattern constant: gateway `.send(PATTERN, ...)` vs microservice `@MessagePattern(PATTERN)` — must be the same import from `libs/constant/`
 - Call `GET /api/gateway/health` — which services report unhealthy?
 
@@ -131,8 +131,8 @@ Service → Node group mapping:
 FE code is out of scope for this repo. Backend-side check only: gateway CORS
 (`apps/gateway/src/common/cors.ts` — `FRONTEND_URL` env, localhost bypass only in
 dev) and whether the failing route requires the HttpOnly `access_token` cookie.
-If the cause is FE-side, report it via the FE handoff files (see CLAUDE.md
-"Frontend handoff") instead of editing FE code here.
+If the cause is FE-side, report it via the FE handoff files (see `docs/AGENT-WORKFLOW.md`
+§5 "Frontend handoff") instead of editing FE code here.
 
 ---
 
@@ -161,8 +161,30 @@ Check:
 ## Fix Format — output before closing every debug session
 
 ```
+SUMMARY:    <one sentence, user-visible symptom>
+SERVICE:    <service(s)> | LEG: HTTP | TCP | RMQ | cron | external (GHN/ZaloPay/...) | NODE: A | B
+EXPECTED:   <what should happen — cite the contract: api.md / a DTO / a known-behaviors id>
+ACTUAL:     <what happened — status code + key response field, or the log line>
+REPRO:      <the failing curl or trigger, and the account ROLE it needs (user/shop/admin);
+             never the password — accounts live in ../.agent-local/test-accounts.md>
 ROOT CAUSE: <one sentence>
 EVIDENCE:   <file:line or command output that proves it>
 CHANGED:    <list of files modified>
-VERIFIED:   tsc ✓ | port ✓ | (manual test needed: <describe what>)
+REGRESSION: <unit test name/path that fails without the fix, or "none — <why>">
+VERIFIED:   tsc ✓ | lint ✓ | REPRO now returns <expected> ✓
+            (or ⏳ PENDING RUNTIME TEST — recorded in snapshot.md Known Issues)
+RELEASE:    A | B | C  (docs/AGENT-WORKFLOW.md §5 release gate)
+RESIDUAL:   none | <known-behaviors.md id, new or updated>
 ```
+
+Where it goes afterwards:
+
+- Paste the whole block into the task's `ai-docs/agent-handoff/CHANGELOG.md`
+  entry, so expected / actual / repro / root cause stay searchable in one fixed
+  shape — `snapshot.md` holds live state only and loses it.
+- If the bug belongs to a feature that has a spec directory
+  (`ai-docs/specs/<feature>/`), also write the block to
+  `ai-docs/specs/<feature>/bugs/<ID>.md`.
+- `RESIDUAL` ≠ none ⇒ still follow the `known-behaviors.md` procedure (anchor,
+  `kb-hint.mjs --rebaseline <id>`, `--index --write`). This block does not
+  replace it.

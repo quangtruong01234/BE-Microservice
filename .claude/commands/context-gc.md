@@ -39,7 +39,7 @@ paid on EVERY session — finished work in snapshot.md is pure recurring cost.
    `ai-docs/agent-context/` → delete from snapshot (keep the context file
    version).
 6. **Verify the context set** while you're here:
-   - Both keyword tables (in `.claude/CLAUDE.md` AND `AGENTS.md`) list every
+   - Both keyword tables (in `.claude/CLAUDE.md` AND `docs/AGENT-WORKFLOW.md` §1) list every
      on-demand context file — including any file this GC created — and no
      deleted file.
    - No content was LOST: everything removed from snapshot exists verbatim (or

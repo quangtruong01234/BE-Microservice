@@ -47,10 +47,10 @@ without re-explaining the workflow each time.
    `> ⏳ IN-PROGRESS (sweep): <item id> — step: <researching|implementing|validating|self-testing|closing>`
    Update the step label as you advance through the phases. Never keep more
    than one marker at a time. This line is what a fresh session resumes from.
-4. Follow the standard orchestration from CLAUDE.md:
+4. Follow the standard orchestration (`docs/AGENT-WORKFLOW.md` §6):
    - 1 service, clear scope → implement directly
    - > 1 file or TCP/RabbitMQ → `researcher` → implement
-   - > 2 services or migration → `researcher` → `planner` → implement → `code-reviewer`
+   - > 2 services or migration → `researcher` → `planner` (writes the spec) → implement → `test-guard` → `code-reviewer`
 5. Implement with minimal diff. New SQL migrations go in
    `database/migrations/nodeA|nodeB/<YYYYMMDD-NNN-name>.sql` + an entry in
    `database/migrations.manifest.json` (post-cutoff policy — never edit
@@ -58,7 +58,10 @@ without re-explaining the workflow each time.
    (existence-guarded). Remember: prod forces `synchronize:false` for ALL
    services, so a schema change must be applied there via the manifest runner
    BEFORE deploying code that depends on it.
-6. Validate: `tsc --noEmit` + eslint zero errors (hooks enforce this too).
+6. Validate: `tsc --noEmit` + eslint zero errors (hooks enforce this too), and
+   a unit test for the touched leg — added or extended, seen red once, run with
+   a scoped `npx jest <path>` (procedure: `.claude/agents/test-guard.md`; mocks
+   from `@app/testing`). No test possible ⇒ say why in the CHANGELOG entry.
 7. Self-test per the Self-Test Protocol: read `../.agent-local/test-accounts.md`,
    login, curl each affected endpoint, assert status + body. Never hand curls to
    the user. If nodeA/nodeB are not running, report that runtime verification is

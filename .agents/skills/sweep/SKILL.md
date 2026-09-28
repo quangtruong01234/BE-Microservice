@@ -46,11 +46,19 @@ In fix mode, read both sources and merge their open work:
    - More than 2 services or migration: researcher, planner, implement,
      code-reviewer.
    - Bug/crash: use `$debug` directly.
-6. Implement with minimal diff. New SQL migrations go in `database/` and must be
-   idempotent; remember social runs `synchronize:false`.
+6. Implement with minimal diff. New SQL migrations go in
+   `database/migrations/nodeA|nodeB/<YYYYMMDD-NNN-name>.sql` + an entry in
+   `database/migrations.manifest.json` (post-cutoff policy — never edit
+   `database/prod-baseline-20260717/`), and must be idempotent
+   (existence-guarded). Remember: prod forces `synchronize:false` for ALL
+   services, so a schema change must be applied there via the manifest runner
+   BEFORE deploying code that depends on it.
 7. Validate with the repo Definition of Done:
    - Format/lint changed TypeScript files as required by `AGENTS.md`.
    - Run `npx tsc --noEmit` after TypeScript changes.
+   - Add or extend a unit test for the touched leg, seen red once, run with a
+     scoped `npx jest <path>` (procedure: `.claude/agents/test-guard.md`; mocks
+     from `@app/testing`). No test possible: say why in the CHANGELOG entry.
    - Run endpoint self-tests when endpoints change.
 8. Close the loop:
    - Remove the `IN-PROGRESS (sweep)` marker from `snapshot.md`.

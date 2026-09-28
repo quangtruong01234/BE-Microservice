@@ -26,7 +26,8 @@ $review <file-or-folder>   # reviews a specific path
 - [ ] `tsc --noEmit` passes with zero errors
 
 ### Backend: Gateway
-- [ ] Every `ClientProxy.send()` call has `.pipe(timeout(10000))`
+- [ ] Every `ClientProxy.send()` call has `.pipe(timeout(TCP_TIMEOUT_MS.READ | .WRITE))`
+  — never a literal; `READ` for pure reads, `WRITE` for mutations and external-API legs
 - [ ] Every gateway method uses `MicroserviceErrorHandler`
 - [ ] Every gateway DTO field has `@ApiProperty()`
 - [ ] No internal numeric id for a converted domain leaves an HTTP or WebSocket
@@ -52,3 +53,28 @@ $review <file-or-folder>   # reviews a specific path
 - [ ] No unnecessary refactors outside the task scope
 - [ ] No orphaned files (imports cleaned up)
 - [ ] Follows existing folder structure for the service/feature
+
+---
+
+## Report format
+
+Same format as the Claude Code `code-reviewer` agent
+(`.claude/agents/code-reviewer.md`), so a report from either tool can be pasted
+as the top comment of a PR.
+
+- **Scale to the diff.** A one-line fix gets a one-line report; do not
+  manufacture observations.
+- **Banner first**, one line:
+  `✅ OK` | `⚠️ OK WITH COMMENTS` | `❌ BAD` followed by
+  `— <n> Blocker · <n> Important · <n> Suggestion`.
+  `❌ BAD` ⇔ at least one Blocker; `⚠️` ⇔ no Blocker, at least one Important.
+- **Each finding** has `File:` (path:line), `Rule:` and `Detail:`. `Rule:` names
+  where the rule is written: an `AGENTS.md` section, an
+  `ai-docs/agent-context/*.md` heading, a `docs/AGENT-WORKFLOW.md` section, an
+  eslint rule id, a `check:conventions` invariant, a `known-behaviors.md` id — or
+  `defect` for a real bug, with the concrete failing input in `Detail:`. A
+  finding that cannot be traced to one of these is dropped.
+- **Verification notes**: suspicious hunks that were checked and are fine, one
+  line each with the reason. Omit when empty.
+- **Verdict** on its own line: `PASS — OK to run tests` or
+  `BLOCKED — fix <n> blockers first` (list them).

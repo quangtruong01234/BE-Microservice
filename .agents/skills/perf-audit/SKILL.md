@@ -91,7 +91,7 @@ Run every category relevant to `<path>`. For each, locate the real code and conf
 
 ### I — Timeout tuning
 
-- `timeout(10000)` everywhere ties up gateway on slow upstream. Flag endpoints where 10s is unrealistically high for the operation.
+- Gateway TCP timeouts are tiered via `TCP_TIMEOUT_MS` (`libs/constant/tcp-timeout.constant.ts`): READ=5000 for pure reads, WRITE=10000 for mutations and external-API legs (GHN/ZaloPay/VNPay). Flag any new call using a hardcoded number or the wrong tier (a pure read on WRITE, or an external-API leg on READ).
 
 ---
 

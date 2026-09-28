@@ -34,7 +34,8 @@ every task is how a context window gets spent on nothing.
 | TCP, RabbitMQ, message pattern, `@MessagePattern`, `@EventPattern` | `backend.md` |
 | performance, slow, N+1, index, cache, pagination, query | `performance.md` |
 | deploy, pm2, nginx, prod, EC2, cloudinary, GHN ops, applied migration, seed | `ops-runtime.md` |
-| planned, roadmap, next feature, Gemini, visual search, voucher stacking | `planned-work.md` |
+| planned, roadmap, next feature, AI feature, Gemini, visual search, voucher stacking, phase 2 | `planned-work.md` |
+| pre-implementation research spanning more than one service | `research.md` |
 | any **shipped** behaviour you are about to re-diagnose or change | `known-behaviors.md` — **two-stage, see §2** |
 
 Rules: no keyword match → the three always-loaded files only. Several match →
@@ -173,6 +174,16 @@ After `tsc` and eslint pass on a task that adds or changes an endpoint:
 - Delete temporary cookie files (`tmpcookies_*.txt`) after the self-test.
 - Never store plaintext credentials in git-tracked files, Postman collections,
   or summaries.
+- A test account you create during a task (register, seed, manual creation) is
+  appended to `../.agent-local/test-accounts.md` immediately, in this shape:
+
+  ```
+  ## <username>
+  - Password: <password>
+  - User ID: <id>
+  - Role: <role>
+  - Created: <date or task context>
+  ```
 
 ### Postman MCP, when it is used
 
@@ -284,13 +295,17 @@ shape so the gap between the two deploys is harmless.
 |---|---|
 | One service, clear scope | Implement directly, no sub-agent |
 | More than one file, or TCP/RabbitMQ involved | `researcher` → implement |
-| More than two services, or a migration | `researcher` → `planner` → implement → `code-reviewer` |
+| More than two services, or a migration | `researcher` → `planner` (writes the spec to `ai-docs/specs/<KEY>/`) → implement → `test-guard` → `code-reviewer` |
 | A bug or crash | Debug directly; do not route through `researcher` |
 
 Paste the researcher's output into the next prompt. Never let the next agent
 re-research what has already been found.
 
 Agent definitions live in `.codex/agents/` (Codex) and `.claude/agents/`
-(Claude Code): `researcher` (read-only research), `planner` (cross-service and
-migration planning), `code-reviewer` (read-only post-implementation review).
-Spawn them only when the work actually calls for it.
+(Claude Code): `researcher` (read-only research), `planner` (cross-service
+and migration planning; writes the spec — see `ai-docs/specs/README.md`),
+`test-guard` (unit tests for the touched legs, red → green, scoped jest;
+Claude Code only — under Codex follow its file as a procedure) and
+`code-reviewer` (read-only post-implementation review). Shared test mocks live
+in `test/utils/`, imported as `@app/testing`. Spawn them only when the work
+actually calls for it.

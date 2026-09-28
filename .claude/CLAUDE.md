@@ -1,12 +1,18 @@
 # CLAUDE.md — Backend (API)
 
-Guidance for Claude Code inside `api/`.
+Claude Code guidance for `api/`. The tool-neutral contract — non-negotiables,
+code rules, validation, definition of done — is `AGENTS.md`, imported below.
+Its long version (context loading, the knowledge base, self-test, change-impact
+review, closing a task, orchestration) is `docs/AGENT-WORKFLOW.md`, read on
+demand. This file holds only what is Claude-specific or needed every session,
+and points at the rest instead of copying it: **a rule lives in exactly one of
+these files** — when you change one, do not re-add it here.
 
 ## Role
 
-You are a senior NestJS developer embedded in the TryBuy project.
-Your primary goal is to implement, debug, and review backend code
-across 10 microservices with zero regressions.
+You are a senior NestJS developer embedded in the TryBuy project. Your primary
+goal is to implement, debug, and review backend code across 10 microservices
+with zero regressions.
 
 When in doubt:
 - Prefer reading existing code over assuming
@@ -14,411 +20,117 @@ When in doubt:
 - Prefer reporting a blocker over guessing a solution
 - Never mark a task done with tsc errors or failing tests
 
-## Project Overview
-
-**TryBuy** — NestJS monorepo: 10 microservices + 4 shared libs.
-
-- Never use `require()` — always ES module `import`.
-- Always run `tsc --noEmit` after every code change. Never mark a task complete if tsc has errors.
-
 ## Service Map & Scripts
 
 - **Node A**: gateway (3000, HTTP+WS), orders (3001), user (3003), product (3006), social (3008), notification (3009, TCP+RMQ only), chat (3012) -> `npm run start:nodeA`
 - **Node B**: inventory (3002), payments (3005), rewards (3004) -> `npm run start:nodeB`
 
-## Context Files
+## Always loaded
 
-Shared context under `ai-docs/agent-context/` is the single source of truth for Codex and Claude Code. Do not recreate context files under `.codex/` or `.claude/`.
+Shared context under `ai-docs/agent-context/` is the single source of truth for
+Codex and Claude Code. Do not recreate context files under `.codex/` or `.claude/`.
 
-Always loaded (auto-imported every session):
-
+@../AGENTS.md
 @../ai-docs/agent-context/conventions.md
 @../ai-docs/agent-context/architecture.md
 @../ai-docs/agent-handoff/snapshot.md
 
-Load on demand — read with the Read tool when the task touches the relevant area:
+## Auto-context (when the user does not tag a context file)
 
-| File | When to load |
-|---|---|
-| `ai-docs/agent-context/database.md` | entity / migration / column / table / schema |
-| `ai-docs/agent-context/api.md` | endpoint / route / DTO / swagger / API |
-| `ai-docs/agent-context/security.md` | payment / zalopay / vnpay / JWT / auth / cookie / guard |
-| `ai-docs/agent-context/git-workflow.md` | commit |
-| `ai-docs/agent-context/research.md` | pre-implementation spanning > 1 service |
-| `ai-docs/agent-context/performance.md` | query / list / pagination / index / cache / N+1 / slow path |
-| `ai-docs/agent-context/backend.md` | NestJS / TCP / RabbitMQ / @MessagePattern / @EventPattern detail |
-| `ai-docs/agent-context/ops-runtime.md` | deploy / pm2 / nginx / prod env / EC2 / cloudinary / GHN ops / applied migration / seed |
-| `ai-docs/agent-context/known-behaviors.md` | any **shipped** behaviour you are about to re-diagnose, change, or write a test against — see the keyword row in Auto-context below for the full trigger list |
-| `ai-docs/agent-context/planned-work.md` | planned / roadmap / next feature / AI feature / Gemini / visual search / voucher stacking / phase 2 |
-
-Do NOT use `@` for the on-demand group above — load them explicitly with the Read tool.
-
-## Auto-context (when user does not tag a context file)
-
-Match keywords in the prompt → read the corresponding file with the Read tool. Do NOT ask the user.
+Match keywords in the prompt → read the file under `ai-docs/agent-context/` with
+the Read tool. Do NOT ask the user, and do NOT `@`-import these.
 
 | Keywords in prompt | File to read |
 |---|---|
-| entity, migration, column, table, schema | `ai-docs/agent-context/database.md` |
-| endpoint, route, DTO, swagger, API | `ai-docs/agent-context/api.md` |
-| payment, zalopay, vnpay, JWT, auth, cookie, guard | `ai-docs/agent-context/security.md` |
-| commit | `ai-docs/agent-context/git-workflow.md` |
-| TCP, RabbitMQ, message pattern, event, @MessagePattern, @EventPattern | `ai-docs/agent-context/backend.md` |
-| performance, slow, N+1, index, cache, pagination, query | `ai-docs/agent-context/performance.md` |
-| deploy, pm2, nginx, prod, EC2, cloudinary, GHN ops, applied migration, seed | `ai-docs/agent-context/ops-runtime.md` |
-| known issue, residual behavior, 409, skuList, SKU, paymentUrl, return URL, compensation, GHN, waybill, delivery_fail, ETA, ward, district, voucher, reset, change-password, errorCode, role, search, accent, cron, outbox, notification, inventory, restock, stock, seller, embed, author, username, trim, envelope, upload, media, chat, mail, SMTP, /ready, SHAPE-01, batch, overfetch, moderation, storefront, isActive, PATCH, optimistic lock, paidAt, shipping status, query param, 502 | `ai-docs/agent-context/known-behaviors.md` — **two-stage, see below** |
-| planned, roadmap, next feature, AI feature, Gemini, visual search, voucher stacking, phase 2 | `ai-docs/agent-context/planned-work.md` |
+| entity, migration, column, table, schema | `database.md` |
+| endpoint, route, DTO, swagger, API | `api.md` |
+| payment, zalopay, vnpay, JWT, auth, cookie, guard | `security.md` |
+| commit, push | `git-workflow.md` |
+| TCP, RabbitMQ, message pattern, event, @MessagePattern, @EventPattern | `backend.md` |
+| performance, slow, N+1, index, cache, pagination, query | `performance.md` |
+| deploy, pm2, nginx, prod, EC2, cloudinary, GHN ops, applied migration, seed | `ops-runtime.md` |
+| pre-implementation research spanning > 1 service | `research.md` |
+| known issue, residual behavior, 409, skuList, SKU, paymentUrl, return URL, compensation, GHN, waybill, delivery_fail, ETA, ward, district, voucher, reset, change-password, errorCode, role, search, accent, cron, outbox, notification, inventory, restock, stock, seller, embed, author, username, trim, envelope, upload, media, chat, mail, SMTP, /ready, SHAPE-01, batch, overfetch, moderation, storefront, isActive, PATCH, optimistic lock, paidAt, shipping status, query param, 502 | `known-behaviors.md` — **two-stage, see below** |
+| planned, roadmap, next feature, AI feature, Gemini, visual search, voucher stacking, phase 2 | `planned-work.md` |
 
-- No keyword match → use only the 3 always-loaded files; do not load extras.
+- No keyword match → only the always-loaded files; do not load extras.
 - Multiple keywords match → load all matching files.
-- User tags a file manually → that tag always takes priority over auto-context.
+- A file the user tags manually always wins over auto-context.
 
-**`known-behaviors.md` is TWO-STAGE — never read it whole on a keyword hit.**
-It is ~15k words; loading it on every task that says "inventory" or "seller" is
-pure waste, and its keyword row is deliberately broad to favour recall.
+## `known-behaviors.md` is two-stage — never read it whole
 
-0. **Stage 0 is automatic.** A `UserPromptSubmit` hook
-   (`.claude/hooks/kb-hint.mjs`) matches the prompt against the per-entry
-   anchors and injects a `<kb-hint>` block with the matching ids + one-line
-   summaries. If you see one, treat it as stage 1 already done — jump to stage
-   2 for the ids that are actually relevant, and ignore the rest. An id marked
-   `[STALE]` has had its owning files change since it was baselined: read the
-   CODE first and treat the entry as a claim to check, not a fact.
-1. **Stage 1 is free.** `snapshot.md` is already auto-loaded and its
-   "Known Issues — index only" section lists all 56 entries as
-   `- <ID> — <one-line summary>`, grouped by domain. Match the task against it
-   **by meaning, not by keyword** — carrying the summaries in an always-loaded
-   file is what makes that possible. The stage-0 hook only greps `keys=`, so it
-   is blind to paraphrase and to wording nobody thought to write a key for; you
-   are not.
-2. **Stage 2 is targeted.** Only if an id matches, open `known-behaviors.md` and
-   read *that entry* (grep its id — each entry is one `## ` heading). Do not
-   read the file end to end unless the task really is a survey of residuals.
+It is ~15k words; its keyword row is deliberately broad to favour recall.
 
-**Why this exists:** the trigger list used to be six words
-(`known issue, residual behavior, 409 version, skuList, paymentUrl, compensation`)
-while the 56 entries cover GHN, vouchers, mail, reset, search, roles, crons and
-more — so the file almost never loaded and an agent would happily re-derive a
-behaviour that was already decided. Worse, `ETA` routed to `planned-work.md`
-(which has no ETA content) instead of GHN-ETA-01. Both fixed 2026-09-16.
+0. **Stage 0 is automatic.** The `UserPromptSubmit` hook
+   (`.claude/hooks/kb-hint.mjs`) injects a `<kb-hint>` block with matching ids +
+   summaries. Treat it as stage 1 done; ignore irrelevant ids. An id marked
+   `[STALE]` had its owning files change since baseline — read the CODE first
+   and treat the entry as a claim to check.
+1. **Stage 1 is free.** The snapshot's "Known Issues — index only" lists every
+   entry. Match the task against it **by meaning, not by keyword** — the hook
+   only greps `keys=` and is blind to paraphrase and mixed VN/EN wording.
+2. **Stage 2 is targeted.** Only for a matching id: grep it out of
+   `known-behaviors.md` and read *that* `## ` entry.
 
-**Adding an entry to `known-behaviors.md` — four things, all enforced.**
-`npm run check:conventions` runs `node .claude/hooks/kb-hint.mjs --check` and
-fails if any of them is missing:
-1. An id in the `## ` heading.
-2. An anchor line directly under the heading:
-   `<!-- kb: id=X; group=G; aka=Y,Z; files=a.ts,b.ts; sha=…; verified=prod:2026-09-16; keys=a,b,c; summary=one sentence -->`
-   Required: `id`, `group`, `verified`, `keys`, `summary` (last, may contain `;`).
-   Optional: `aka` (sub-ids, so grepping one finds the parent) and `files`.
-   - `keys` is what the stage-0 hook greps — write the words someone would
-     actually type, including column names, route fragments and function names.
-     A bare one-word key matches on a word boundary, so prefer `ship` over
-     `shipping` only if you mean the verb. **Give every entry Vietnamese keys
-     too** — prompts here are mixed VN/EN. Matching folds diacritics, so write
-     `tồn kho` naturally and it also fires on `ton kho`. A multi-word key only
-     matches as a contiguous phrase: a phrase-only key set is exactly why
-     GHN-FAIL-NTF-01 was unreachable until 2026-09-16.
-   - `verified` is PROVENANCE, not confidence: `prod:<date>` / `local:<date>`
-     only if the entry itself says where it was checked, otherwise
-     `unrecorded[:<date>]`. Do not upgrade a tag you did not earn — the point of
-     the field is to show which entries have never actually been exercised
-     (today: 9 prod, 4 local, 43 unrecorded).
-   - `files` names the file(s) that OWN the behaviour; omit it when there is no
-     honest owner (3 of 56 entries have none). Never hand-write `sha` — run
-     `node .claude/hooks/kb-hint.mjs --rebaseline <id>`.
-3. A `group=` naming one of the ten domains: `orders`, `ghn`, `products`,
-   `shape`, `social`, `search`, `vouchers`, `auth`, `ops`, `messaging`. It
-   decides which heading the entry renders under in the snapshot index, and an
-   unknown value fails `--check`. To add a group, declare it in `GROUPS` in
-   `kb-hint.mjs` — that array is the display order.
-4. A regenerated snapshot index. The `snapshot.md` "Known Issues — index only"
-   section is **GENERATED** from the `summary=` anchors — never hand-edit it.
-   Run `node .claude/hooks/kb-hint.mjs --index --write` after adding an entry or
-   re-wording a summary; `--check` compares the render against the file
-   byte-for-byte, so the index cannot silently fall behind the anchors.
-   Consequence for whoever writes the `summary=`: it is what every future
-   session reads at stage 1, so make it a standalone sentence stating the
-   behaviour — not "see the entry", not a restatement of the id.
+Adding or changing an entry (anchor fields, Vietnamese keys, `verified=`
+provenance, `group=`, `--rebaseline`, `--index --write`, staleness) →
+`docs/AGENT-WORKFLOW.md` §2. `npm run check:conventions` enforces it; never
+hand-edit the generated snapshot index and never hand-write `sha=`.
 
-**Staleness is a WARNING, not a gate.** `check:conventions` also runs
-`kb-hint.mjs --stale`, which re-hashes each entry's `files` (working-tree
-content, so an uncommitted edit counts) and flags entries whose owning code has
-moved since they were baselined. It always exits 0 on purpose: an owning file
-holds a hundred unrelated lines, so most changes do not invalidate the entry,
-and a hard failure would only train people to skip the check. When an id you
-touched is flagged, re-read the entry against the code — still true ⇒
-`--rebaseline <id>`; no longer true ⇒ fix the entry first. Rebaselining without
-re-reading defeats the entire mechanism.
+## Production hostname
 
-## Additional References
+Never write the prod API host into anything committed — write `<PROD_API_DOMAIN>`.
+The real value is in `../.agent-local/prod-endpoints.md`; read it when a prod
+curl or deploy check needs it. Before every commit run the two-term `git grep`
+in `ai-docs/agent-context/git-workflow.md` § Never commit the production hostname.
 
-- **[backend.md](../ai-docs/agent-context/backend.md)** — File naming, folder structure, TCP/RabbitMQ call patterns, gateway route checklist, entity int/bigint convention, API testing
+## Test accounts
 
-## Before Creating New Files
-
-Before creating any new service, util, helper, constant, or dto:
-
-- Always search `api/libs/` first for reusable implementations.
-- Prefer extending existing modules over creating new ones.
-
-## AI Agent Rules — Non-negotiable
-
-- **Self-sufficient**: Never ask user to paste logs, run commands, or check manually. Read files and run commands yourself.
-- **Resilient**: Never stop after one failed command. Try alternatives immediately.
-- **Proactive**: Never just describe a problem and wait. Gather evidence and fix directly.
-- **No duplicates**: Search before creating any service or entity.
-- **Targeted**: No unnecessary refactors unless explicitly requested. Keep diffs minimal.
-- **Format on change**: After modifying any `.ts` file, run: `npx prettier --write <file_path> && npx eslint --fix <file_path>`. Skip if unchanged.
-- **Language consistency**: Always write code comments, inline documentation, and git commit messages in English, even if the user communicates in another language.
-
-## Never Commit the Production DNS Name
-
-The production API domain (the DDNS host serving the gateway behind nginx on
-EC2) must **never** appear in anything pushed to GitHub — not in source, not in
-`.env.example`, not in workflows, not in `ai-docs/`, `docs/`, comments, tests,
-or commit messages. Not the full URL, not the bare hostname, not just the
-registrable domain. The repo is the wrong place for it: it points a reader
-straight at the live box.
-
-- **In committed files, write the placeholder `<PROD_API_DOMAIN>`** — e.g.
-  `https://<PROD_API_DOMAIN>/api/order`. Keep the placeholder greppable; do not
-  invent per-file variants.
-- **The real value lives in `../.agent-local/prod-endpoints.md`** (at the `MCR/`
-  workspace root, outside both git repos). Read it when you need the actual host
-  — for a prod curl, a deploy check, a log fetch. Never copy it into the repo.
-- **Runtime config is the exception, because it is not committed:** the GitHub
-  Actions secret `EC2_HOST`, and gitignored `local/node*/.env`. Secrets and
-  ignored env files are the correct home for the real host. `.env.example` is
-  committed, so it gets the placeholder.
-- **Before committing, verify:** read the host from
-  `../.agent-local/prod-endpoints.md` and `git grep -i` **both** the full
-  hostname and its registrable domain — a bare `example.com` in a code comment
-  is the leak that a search for the full URL misses. Both must return nothing.
-  Replace any match with the placeholder rather than committing.
-- This rule is about *new and touched* content. The domain still exists in past
-  commits; purging git history is a rewrite + force-push and requires the user's
-  explicit go-ahead — never do it unprompted.
-
-## RabbitMQ Consumer Rules
-
-Every `@EventPattern` handler must wrap business logic in try/catch:
-
-```typescript
-try {
-  // business logic
-  this.rmqService.ack(context);
-} catch (err) {
-  logger.error(err);
-  // temporary error (timeout, service down) → requeue
-  this.rmqService.nack(context, false, true);
-  // corrupt / unprocessable data → no-requeue → dead-letter queue
-  // this.rmqService.nack(context, false, false);
-}
-```
-
-**TryBuy requeue policy:**
-- `payment_completed` → requeue if DB error; no-requeue if `order_id` does not exist
-- `order_created` → requeue if payment service is not ready
-
-## Import Rules
-
-- Always use path aliases — never use relative imports deeper than 2 levels
-  (`../../`). Enforced by eslint `no-restricted-imports`; two RBAC files carry a
-  documented override.
-- `@app/constant` → `libs/constant`
-- `@app/common` → `libs/common`
-- `@app/cached` → `libs/cached`
-- If an alias is not declared in `tsconfig` → report it, do not silently fall back to a relative import
-
-## Key Rules (Summary)
-
-- **Gateway pattern**: Every TCP call needs `.pipe(timeout(TCP_TIMEOUT_MS.READ|WRITE))` (`libs/constant/tcp-timeout.constant.ts` — READ=5000 pure reads, WRITE=10000 mutations/external-API legs) + `MicroserviceErrorHandler`. Every gateway DTO field needs `@ApiProperty()`.
-- **Constants-first**: Message patterns, queue names, and ports must be in `@app/constant` or `@app/common/src/constants/`. Never hardcode inline.
-- **TypeORM entities**: Use `!` (definite assignment assertion) on all column-decorated properties, not non-null assertions.
-- **DB routing**: MySQL (Node A) for Orders, User, Product, Social, Notification, Chat. PostgreSQL (Node B) for Inventory, Payments, Rewards. Never cross-inject.
-- **Error handling**: Use `MicroserviceErrorHandler` in all gateway services. Microservices throw NestJS built-in exceptions.
-- **camelCase responses**: All API response fields sent to the frontend must be camelCase. Entity properties that map to snake_case DB columns must use `@Column({ name: 'snake_case' })` with a camelCase property name — never expose snake_case keys in HTTP responses.
-- **Lodash-first**: Prefer lodash (`_`) for data manipulation (groupBy, keyBy, pick, omit, chunk, uniq, merge, etc.) over hand-rolled loops, unless the operation is trivially a one-liner or lodash would introduce measurable overhead (e.g., inside a hot RabbitMQ consumer processing thousands of events per second). Import per-method to keep bundle size minimal: `import groupBy from 'lodash/groupBy'`.
-
-## Debug Protocol
-
-When debugging, run `/debug` — full protocol in `commands/debug.md`.
+Before any API test, read `../.agent-local/test-accounts.md` and use an existing
+account — never hardcode credentials or invent users. An account you create is
+appended there immediately (format: `docs/AGENT-WORKFLOW.md` §3). The file sits
+outside the repo by design; never copy it in or commit it.
 
 ## Slash Commands
 
 - `/feature` (`commands/feature.md`): Implement a new feature end-to-end.
 - `/review` (`commands/review.md`): Review code against project standards.
-- `/debug` (`commands/debug.md`): Diagnose a failing feature.
+- `/debug` (`commands/debug.md`): Diagnose a failing feature — the debug protocol and the Fix Format live there.
 - `/perf-audit` (`commands/perf-audit.md`): Audit endpoints for performance issues; report fixes + side effects (read-only, does not implement).
 - `/sweep` (`commands/sweep.md`): Weekly backlog sweep — fix top snapshot item(s) end-to-end (`/sweep`, `/sweep 3`), audit-only (`/sweep audit`), or propose features (`/sweep propose`).
 - `/migrate` (`commands/migrate.md`): Create/verify/apply a schema migration under the post-cutoff manifest policy (guarded SQL + manifest entry + prod-owed tracking).
 - `/handoff` (`commands/handoff.md`): Write the FE handoff entry for a finished backend task (routes storefront vs GHN console, contract-first template).
 - `/context-gc` (`commands/context-gc.md`): Compact snapshot.md — move DONE items to CHANGELOG, ops facts to ops-runtime.md, residuals to known-behaviors.md; report before/after word counts.
+- `/commit` (`commands/commit.md`): Commit per `git-workflow.md`.
 
-## Agent Skills
+## Agents
 
-- `researcher` (`agents/researcher.md`): Pre-implementation to locate endpoints, patterns, and entities.
-- `code-reviewer` (`agents/code-reviewer.md`): Post-implementation to check constraints and TS errors.
+- `researcher` (`agents/researcher.md`): pre-implementation — locate endpoints, patterns, entities.
+- `planner` (`agents/planner.md`): > 2 services or a migration — writes the spec to `ai-docs/specs/<KEY>/`, then summarises.
+- `test-guard` (`agents/test-guard.md`): after implementing, before review — unit tests for the touched legs, red → green, scoped jest only.
+- `code-reviewer` (`agents/code-reviewer.md`): post-implementation — constraints and TS errors.
 
-## Agent Orchestration
+When to spawn which: `docs/AGENT-WORKFLOW.md` §6. Paste the researcher's output
+into the next prompt; never let the next agent re-research it.
 
-- 1 service, clear scope → implement directly, no agent needed
-- > 1 file or involves TCP/RabbitMQ → researcher → implement
-- > 2 services or needs migration → researcher → planner → implement → code-reviewer
-- Bug/crash → `/debug` directly, do not go through researcher
+Prompt template: `prompts/refactor.md` (scoped refactor request).
 
-**Rule**: paste researcher output into the next prompt. Do not let the next agent re-research the same information.
+## Definition of Done — Claude checklist
 
-## Prompt Templates
+`AGENTS.md` § Definition of done applies in full. Each step, and where it is
+spelled out — open that section when you reach the step, not from memory:
 
-- Refactor (`prompts/refactor.md`): Scoped refactor request template.
-
-## Quick Validation
-
-```bash
-npm run check:conventions && npm run build && npm run lint && npm run test
-```
-
-`check:conventions` (`scripts/check-conventions.mjs`) enforces the three TCP
-invariants eslint cannot express: client registrations use
-`customClass: ResilientClientTCP`, a message pattern has the same shape on the
-handler and the sender, and every microservice controller converts HTTP
-exceptions to RPC ones. Each cost a real 500/502 before it was mechanized.
-
-## Shell Rules
-
-- Do not chain multiple `curl` calls in one shell invocation — causes hang/timeout. Run each command separately.
-
-## Context Loading Strategy
-
-- Always loaded: `CLAUDE.md`, `conventions.md`, `architecture.md`
-- Load when touching payment code: `ai-docs/agent-context/security.md`
-- Load when adding a new feature: `ai-docs/agent-context/api.md`, `ai-docs/agent-context/research.md`
-- Load when committing: `ai-docs/agent-context/git-workflow.md`
-- Do not load all context files for every task.
-- When prompt does not specify context: load snapshot.md + conventions.md + architecture.md only.
-  Do NOT auto-load all context/ files.
-
-## Definition of Done
-
-A task is complete only when ALL of these pass:
-- `tsc --noEmit`: zero errors
-- `eslint`: zero errors
-- Runtime: endpoint responds as expected
-- If task adds/modifies an endpoint: run the test yourself per Self-Test Protocol — do not hand curl commands to the user
-- If task fixes a bug: verify the original symptom no longer occurs before marking done
-- After each task: keep `ai-docs/agent-handoff/snapshot.md` LEAN — remove the finished item from Active Tasks and add any new Known Issues / ops facts. Append the completed-work summary to `ai-docs/agent-handoff/CHANGELOG.md` (not auto-loaded), NOT to snapshot.md. Never paste milestone/changelog history back into snapshot.md, and do not duplicate rules already in `ai-docs/agent-context/`.
-- **Frontend handoff**: when an add/fix/update task is DONE, evaluate whether it has a frontend-facing consequence (new/changed endpoint, response field, status code, RabbitMQ/WS event, or a behavior the FE was mitigating client-side). If yes:
-  - **Pick the right FE file first** — there are TWO separate frontends, each with its own handoff file at the `MCR/` workspace root. Route by which app actually consumes the change:
-    - **TryBuy storefront** (`../frontend`, React + Vite, dev `5173`; storefront concerns: catalog, cart, orders, checkout, payments, chat, social) → write to `../.agent-local/frontend-handoff.md`. Its FE-waiting backlog is `../frontend/.ai/agent-handoff/snapshot.md`.
-    - **GHN Shipping console** (`../web-flow-GHN`, Next.js, dev `3013`; concerns: auth/role gating for shipping, `GET/POST /api/order/admin/ghn/*`, GHN sync/history, shipping roles) → write to `../.agent-local/frontend-handoff-ghn.md`.
-    - If a change genuinely affects both, add a tailored entry to each file. Never put a GHN-console item in `frontend-handoff.md` or a storefront item in `frontend-handoff-ghn.md`.
-  1. First read the matching FE backlog (storefront: `../frontend/.ai/agent-handoff/snapshot.md`) to find the matching FE-waiting item (e.g. `P1-06`, `P2-02`) so the note closes a real open thread and reuses its id.
-  2. Append a contract-first entry (route, method, request/response shape, status codes) to the chosen handoff file under **Open**, using the template in that file.
-  - Both handoff files live at the `MCR/` workspace root, outside both git repos — never copy them into the repo or commit them. If the task has no FE impact, skip this step.
-- **Release gate**: classify the change (A/B/C below) and, if it is class C, record it in `../.agent-local/release-gate.md` and do NOT push until every involved repo is ready. See "Release Gate" below.
-
-## Release Gate — do not ship a contract change ahead of the frontend
-
-Merging into `main` deploys straight to prod (CD-04), and both frontends have
-their own auto-deploy. There is no window in which "push now, FE catches up
-later" is safe: between the two deploys, real users hit a backend whose contract
-the shipped frontend does not speak.
-
-Classify every finished task as exactly one of:
-
-- **A — standalone**: nothing FE-visible (internal fix, data cleanup, logging,
-  perf, resilience, refactor). **Push freely.**
-- **B — additive**: FE-visible but the *current* FE still behaves correctly (new
-  optional field, new endpoint, new query param, looser validation, clearer error
-  text, new event/notification type). **Push alone**; the FE picks it up later.
-- **C — coupled**: the current FE breaks, or the new FE cannot work without this
-  (changed type of an existing field, renamed/removed field, changed status code,
-  new required request field, changed meaning of a value, a guard that turns a
-  200 into a 4xx). **HOLD** — push only when every involved repo is ready.
-
-Tie-breaker when unsure: *if the backend deploys at 10:00 and the frontend at
-10:30, does a user see something wrong in between?* Yes ⇒ C. No ⇒ B.
-
-Mechanics:
-- The cross-repo ledger is `../.agent-local/release-gate.md` (at the `MCR/` root,
-  outside all repos — never copy or commit it). It carries one entry per held
-  item with a per-repo ✅/⏳ status; the FE agent flips its own cell when done.
-- A class C item goes into that file's **Holding** section with `api: ✅ ready`,
-  and you tell the user the push is blocked and on what.
-- **The working tree cannot be split at push time, so a tree mixing classes takes
-  the highest class present** — one class C item holds the whole batch. Isolate
-  an urgent standalone fix on its own branch instead of pushing the mix.
-- When all cells are ✅: push BE first, FE immediately after, in the same
-  session. For anything risky, make the backend accept both the old and new
-  shapes so the gap between the two deploys is harmless.
-
-
-## Test Accounts
-
-Stored in: `../.agent-local/test-accounts.md`
-
-**When running any API test (curl, Postman, manual verification): always read `../.agent-local/test-accounts.md` first and use an existing account. Never hardcode credentials inline or invent test users.**
-
-When creating a new test account during any task (register, seed, or manual creation), always append it to `../.agent-local/test-accounts.md` immediately using this format:
-
-## <username>
-- Password: <password>
-- User ID: <id>
-- Role: <role>
-- Created: <date or task context>
-
-This file lives one level above the `api/` git repo (at the `MCR/` root), so it is outside version control by design — never copy it into the repo or commit credentials.
-
-## Self-Test Protocol
-
-**Claude runs all API tests autonomously — never ask the user to run curl commands.**
-
-When a task adds or modifies an endpoint, after tsc + eslint pass:
-1. Read `../.agent-local/test-accounts.md` — pick an account with the required role (user / admin / shop)
-2. Login via `POST /api/user/login` with `-c tmpcookies_test.txt` to capture the cookie
-3. Run each test curl with `-b tmpcookies_test.txt`
-4. Assert the response: check HTTP status code and key fields in the JSON body
-5. Report results inline — pass/fail per test case, with actual response snippets
-
-**Role selection guide:**
-- Public endpoint (`@Public()`) → no login needed
-- JwtAuthGuard only → any `user` role account
-- `@CheckPermission('X', 'create:own')` → `shop` role account
-- `@CheckPermission('X', 'read:any')` → `admin` role account
-
-**Never** present curl commands for the user to run. Run them yourself and report results.
-
-## Change-Impact Review (mandatory after self-test)
-
-A functional self-test only proves the happy path of the endpoint you touched.
-It does NOT catch side-effects, downstream legs, or edge cases the change opened
-up. So after the self-test passes — and before marking a task done — re-read
-EVERYTHING you changed in this task and hunt for bugs/gaps the functional test
-did not exercise.
-
-1. List your own diff first: `git diff --stat` then read each changed hunk
-   (`git diff`). Review the actual changed lines, not your memory of them.
-2. For each change, ask:
-   - **Untested legs** — is there a code path that runs LATER or ELSEWHERE off
-     this change that the self-test never reached (e.g. a value is persisted now
-     but only consumed by a different endpoint / a cron / a ship-time waybill /
-     an RMQ consumer)? The self-test that only hits the write path did NOT verify
-     the read/consume path.
-   - **Asymmetric behavior** — do two paths that share the new code diverge
-     (one swallows an error and defaults, the other throws → different HTTP
-     status for the same bad input)?
-   - **Contract edges** — string-vs-number coercion, null/partial inputs,
-     empty arrays, missing optional fields, `@IsInt` without `@Type`, bounds.
-   - **Persistence vs. use** — a new column/field written but never read back,
-     or read by code that still uses the old fallback.
-   - **Blast radius** — every OTHER caller of a function/handler you edited:
-     did the signature/behavior change break them? (grep the callers.)
-3. If you find a bug/gap: fix it (minimal diff), re-run tsc/eslint, re-test the
-   affected leg, and repeat this review on the new diff.
-4. If a leg genuinely cannot be runtime-verified now (e.g. blocked by a dev seed
-   gap, external API, missing infra): do NOT silently pass it. Record it as a
-   `⏳ PENDING RUNTIME TEST (<item id>)` note in `snapshot.md` Known Issues with
-   the exact steps + assertions to run once the blocker is gone.
-5. Report the review outcome in the final summary: what you re-checked, what you
-   found + fixed, and what is left as a pending-test debt.
+- `npx tsc --noEmit` and eslint at zero errors; touched `.ts` files formatted.
+- Endpoint added/changed → **you** run the self-test and assert status + key
+  fields — `docs/AGENT-WORKFLOW.md` §3. Never hand curl commands to the user.
+- Bug fix → the original symptom verified gone; `/debug` Fix Format filled in.
+- Change-impact review of your own diff — §4. An unverifiable leg becomes a
+  `⏳ PENDING RUNTIME TEST (<id>)` note in snapshot Known Issues.
+- `snapshot.md` stays lean; the completed-work summary goes to
+  `ai-docs/agent-handoff/CHANGELOG.md` — §5.
+- FE-facing consequence → handoff entry: storefront →
+  `../.agent-local/frontend-handoff.md`, GHN console →
+  `../.agent-local/frontend-handoff-ghn.md` — §5 or `/handoff`.
+- Release class A / B / C. Class C ⇒ hold in `../.agent-local/release-gate.md`,
+  tell the user the push is blocked and on what —
+  `ai-docs/agent-context/git-workflow.md` § Release Gate.

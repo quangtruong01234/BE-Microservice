@@ -63,14 +63,14 @@ deliberately bypassed nginx.
   await firstValueFrom(
     this.client
       .send(INVENTORY_MESSAGE_PATTERNS.GET_BY_PRODUCT_IDS, productIds)
-      .pipe(timeout(10000)),
+      .pipe(timeout(TCP_TIMEOUT_MS.READ)),
   );
   ```
 - Independent calls (no data dependency) run in parallel via `Promise.all` — never await them one-by-one.
   ```typescript
   const [orders, buyers] = await Promise.all([fetchOrders(), fetchBuyers(ids)]);
   ```
-- If one upstream may fail but partial result is acceptable → `Promise.allSettled`. Keep `timeout(10000)` on every call regardless.
+- If one upstream may fail but partial result is acceptable → `Promise.allSettled`. Keep `timeout(TCP_TIMEOUT_MS.READ | .WRITE)` on every call regardless.
 - If you need a batch pattern that does not exist yet → add it to `libs/constant/` + a `@MessagePattern` handler; do NOT fall back to a loop.
 
 ## Database (TypeORM)

@@ -43,7 +43,7 @@ async someOperation(dto: SomeDto): Promise<ResponseType> {
     return await firstValueFrom(
       this.client
         .send(SOME_MESSAGE_PATTERNS.OPERATION, dto)
-        .pipe(timeout(10000), catchError((e) => throwError(() => e)))
+        .pipe(timeout(TCP_TIMEOUT_MS.WRITE), catchError((e) => throwError(() => e)))
     );
   } catch (error) {
     MicroserviceErrorHandler.handleError(error, 'someOperation', 'Some Service');
@@ -51,7 +51,7 @@ async someOperation(dto: SomeDto): Promise<ResponseType> {
 }
 ```
 
-Always `timeout(10000)`. Always catch via `MicroserviceErrorHandler`. Always annotate return type.
+Always `timeout(TCP_TIMEOUT_MS.READ | .WRITE)` — READ for pure reads, WRITE for mutations and external-API legs; never a literal. Always catch via `MicroserviceErrorHandler`. Always annotate return type.
 
 ## RabbitMQ Event Pattern
 

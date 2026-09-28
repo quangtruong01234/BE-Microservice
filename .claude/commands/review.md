@@ -45,3 +45,13 @@ Use this command to review staged changes or a specific file/folder before mergi
 - [ ] No unnecessary refactors outside the task scope
 - [ ] No orphaned files (imports cleaned up)
 - [ ] Follows existing folder structure for the service/feature
+
+---
+
+## Report format
+
+Use the report format of the `code-reviewer` agent (`.claude/agents/code-reviewer.md`
+§ Every finding cites its rule / § Output format): one-line `✅ / ⚠️ / ❌` banner
+with Blocker · Important · Suggestion counts, a `Rule:` line on every finding,
+a Verification notes section, then the PASS / BLOCKED verdict. Scale the report
+to the diff.
