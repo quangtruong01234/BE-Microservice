@@ -154,12 +154,14 @@
     "testEnvironment": "node",
     "roots": [
       "<rootDir>/apps/",
-      "<rootDir>/libs/"
+      "<rootDir>/libs/",
+      "<rootDir>/test/"
     ],
     "moduleNameMapper": {
       "^@app/cached(|/.*)$": "<rootDir>/libs/cached/src/$1",
       "^@app/common(|/.*)$": "<rootDir>/libs/common/src/$1",
       "^@app/database(|/.*)$": "<rootDir>/libs/database/src/$1",
+      "^@app/testing(|/.*)$": "<rootDir>/test/utils/$1",
       "^libs/(.*)$": "<rootDir>/libs/$1"
     }
   }
