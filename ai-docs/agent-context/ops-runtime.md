@@ -105,6 +105,18 @@
   (`curl -H "Authorization: Bearer …" https://<PROD_API_DOMAIN>/metrics`).
   Only the gateway is instrumented, and the registry is per-process — do not set
   `GATEWAY_INSTANCES>1` and expect whole-gateway numbers.
+- **Captcha (CAPTCHA-01, 2026-09-28)**: Cloudflare Turnstile on
+  `POST /api/user/register` and `/forgot-password`, driven by two gateway env
+  vars in `local/nodeA/.env`. `TURNSTILE_SECRET_KEY` unset means off, which is
+  the prod state until the user creates the Turnstile site and keys. A secret
+  with `CAPTCHA_ENFORCE` not `true` means shadow: tokens are verified and logged
+  but never rejected. `CAPTCHA_ENFORCE=true` means a missing or refused token is
+  a 400 `CAPTCHA_REQUIRED`. The guard reads both vars **per request**, but the
+  gateway loads the file only at boot, so a change still needs
+  `pm2 restart gateway`. Order of rollout: secret first (shadow), FE ships the
+  widget, then enforce. Flipping enforce before the FE sends tokens 400s every
+  register. Cloudflare test secrets for a local check: `1x0000000000000000000000000000000AA`
+  (always passes) and `2x0000000000000000000000000000000AA` (always fails).
 - **nodeB idle-crash (FIXED 2026-06-26, keep the check)**: inventory/payments/
   rewards used to die silently after machine sleep / broker restart —
   `registerDirectPublisher()` opened a raw amqplib connection with no
@@ -299,6 +311,26 @@
   order of schema vs code is harmless. On a real table MySQL drops the implicit
   FK index `FK_6385a745d9e12a89b859bb25623` because the new index's `cart_id`
   prefix now serves the FK — expected, not a failed apply.
+
+- **`nodeA-20260928-001-add-export-jobs`** — EXPORT-CSV-01 T5: new table
+  `export_jobs` (job row + the CSV as MEDIUMBLOB), `uq_export_jobs_public_id`,
+  `idx_export_jobs_state`, `idx_export_jobs_requested_by`. Guarded CREATE TABLE,
+  safe to re-run, no backfill. DEV auto-created the table via
+  `synchronize:true`; `db:migrate:status` reads it `[applied]` on DEV
+  (2026-09-28). **Prod-owed.** The CD
+  migrate step applies it before `pm2 startOrRestart`; if it did not, the code
+  still boots, the 30 s worker cron logs `[EXPORT-JOB] worker pass failed` every
+  tick, and the five `export/jobs` routes 500. The sync export routes do not
+  touch the table.
+
+- **`nodeA-20260928-002-add-order-checkout-voucher-columns`** — VOUCHER-SHOP-01
+  phase 2: `orders.checkout_id` VARCHAR(36) NULL + `idx_orders_checkout_id`,
+  `orders.platform_voucher_code` NULL. Guarded by INFORMATION_SCHEMA, additive,
+  no backfill (NULL is the correct value for every pre-existing order).
+  **`[applied]` on DEV 2026-09-28. Prod-owed**, and it must land BEFORE the
+  code: the orders entity selects both columns, so without them every order read
+  and write fails with `ER_BAD_FIELD_ERROR`. The CD migrate step runs before
+  `pm2 startOrRestart`, which gives exactly that order.
 
 ### Pre-cutoff applied-migration history (fresh-DB reference only)
 

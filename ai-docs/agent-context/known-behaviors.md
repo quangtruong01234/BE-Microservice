@@ -1011,6 +1011,33 @@ alone.
   `user:<id>` room name. The registries are per-namespace, so there is no
   cross-talk between chat messages and notifications.
 
+## Likes fold into ONE unread notification per post, counted in the message text (SOCIAL-LIKE-NTF-01, 2026-09-28)
+<!-- kb: id=SOCIAL-LIKE-NTF-01; group=social; files=apps/notification/src/notification.service.ts,apps/social/src/social.service.ts; sha=c76c9587d30b; verified=local:2026-09-28; keys=like notification,post liked,social.post_liked,liked your post,people liked your post,aggregate,thích bài viết,lượt thích,thông báo like,người khác đã thích; summary=Likes fold into one unread `like` row per (owner, post) whose count lives in the message text; a read row starts a new one, self-likes and unlikes notify nothing, and the count can overshoot. -->
+
+`likePost` emits `social.post_liked` (`{postId, postOwnerId, likerId}`) after the
+like commits; notification's `upsertLikeNotification` folds it into the owner's
+newest UNREAD `like` row for that post, or opens one.
+
+- **The count lives in the message, not a column** (no migration, by decision):
+  `"Someone liked your post"` = 1, `"<N> people liked your post"` = N. The regex
+  `LIKE_NOTIFICATION_COUNT_PATTERN` is a contract with the FE, which renders
+  `"<actor> và <N-1> người khác…"` from it. Changing the wording is class C.
+- **`actorId` is the LATEST liker**, and every fold bumps `createdAt`, so the row
+  resurfaces at the top of the list. `isRead` stays false.
+- **Read resets it.** Once the owner reads the row the next like opens a fresh
+  one at count 1; the read row keeps its final count forever.
+- **The fold is a compare-and-swap on `message`** (3 attempts, then throw → nack
+  + requeue), so racing likes do not lose a count. A same-instant FIRST like can
+  still open two rows — there is no unique key.
+- **The count is "like events since last read", not distinct people.** The latest
+  liker re-liking is skipped (like → unlike → like), but alternating likers
+  (A, B, A) count 3. Unlike never decrements.
+- **Self-likes and a missing post publish nothing**; the emit is best-effort
+  (owner lookup or broker failure is a warn, the like still returns 201).
+- **The WS push of a folded row reuses the existing id.** A client that dedupes
+  pushes by id must replace in place, not ignore it (FE handoff 2026-09-28).
+- Old likes (before 2026-09-28) never produced a notification; nothing is backfilled.
+
 ## The reset-code email has no copy button, and the code is in the subject (MAIL-UI-01, 2026-08-29)
 <!-- kb: id=MAIL-UI-01; group=auth; files=libs/common/src/mailer/email-templates.ts; sha=6b01923b79a9; verified=unrecorded:2026-08-29; keys=reset code email,copy button,email template,mail subject,multipart/alternative,SMTP,mail đặt lại mật khẩu,mã xác nhận; summary=The reset-code mail has no copy button by design (clients strip script) and repeats the code in the subject. -->
 
@@ -1433,7 +1460,7 @@ Things that are easy to get wrong here:
   account is still reachable by sending its literal `"   "`.
 
 ## Cancelling an order gives the voucher back (VOUCHER-CANCEL-01, 2026-08-26)
-<!-- kb: id=VOUCHER-CANCEL-01; group=vouchers; files=apps/orders/src/orders.service.ts; sha=3a37c1ba46ae; verified=unrecorded:2026-08-26; keys=voucher cancel,releaseVoucherRedemption,used_count,cancel farming,redemption back,voucher; summary=Cancelling gives the redemption back, so cancel-farming a limited code is possible by design. -->
+<!-- kb: id=VOUCHER-CANCEL-01; group=vouchers; files=apps/orders/src/orders.service.ts; sha=9f1a8dc5c10b; verified=local:2026-09-28; keys=voucher cancel,releaseVoucherRedemption,used_count,cancel farming,redemption back,checkoutId,checkout_id,platform voucher cancel,sibling order,voucher; summary=Cancelling gives the redemption back, so cancel-farming a limited code is possible by design; a platform voucher shared by a multi-shop checkout moves to a live sibling instead until the last sub-order is canceled. -->
 
 `releaseVoucherRedemption()` deletes the `voucher_redemptions` row, decrements
 `used_count` and drops the Redis quota mirror on every cancel path.
@@ -1446,6 +1473,19 @@ Residuals, deliberate:
   VOUCHER-CONC-01).
 - **Cancel-farming a limited code is now possible by design.** The alternative
   was permanently burning a slot for an order that was never fulfilled.
+- **A platform voucher on a multi-shop checkout is NOT given back on the first
+  cancel** (VOUCHER-SHOP-01 phase 2, 2026-09-28). Its one redemption row sits
+  on the lowest-id sub-order; cancelling that order MOVES the row to a live
+  sibling (same `orders.checkout_id`), because the buyer keeps the discount on
+  the orders still live. Only the cancel of the LAST live sub-order deletes it,
+  decrements `used_count` and returns the Redis slot. The shop voucher of a
+  canceled sub-order is returned immediately, as before. Verified locally
+  2026-09-28: cancel anchor → platform row moved 180 → 181, shop row deleted,
+  quota unchanged; cancel 181 → both counters 0, quota back to 100.
+- **The kept platform discount is NOT re-priced.** A surviving sub-order keeps
+  its original platform share even if the remaining basket would no longer meet
+  the voucher's `minOrderAmount`. Re-pricing a live (possibly already paid or
+  shipped) order is worse than a slightly generous discount.
 
 ## A loosening voucher edit cannot be walked back (VOUCHER-EDIT-01, 2026-08-26)
 <!-- kb: id=VOUCHER-EDIT-01; group=vouchers; files=apps/orders/src/orders.service.ts; sha=3a37c1ba46ae; verified=unrecorded:2026-08-26; keys=voucher edit,isStricterCap,loosening,usageLimit,redeemed voucher,tightening,voucher; summary=On a redeemed voucher only loosening is allowed, so a mistaken widening cannot be walked back. -->
@@ -1467,7 +1507,7 @@ drops the VOUCHER-CONC-01 Redis quota key so the next claim re-seeds instead of
 enforcing the old cap for up to 300s.
 
 ## Shop-voucher residuals (VOUCHER-SHOP-01, deliberate)
-<!-- kb: id=VOUCHER-SHOP-01; group=vouchers; verified=unrecorded; keys=shop voucher,sellerId,platform voucher,vouchers/available,voucher 403,voucher,mã giảm giá của shop; summary=Shop-voucher residuals — sellerId is only checked to exist, available caps at 50, and sellerId:null is a platform voucher. -->
+<!-- kb: id=VOUCHER-SHOP-01; group=vouchers; files=apps/orders/src/orders.service.ts,apps/orders/src/voucher/apportion-discount.ts; sha=a59d1ffff6c4; verified=local:2026-09-28; keys=shop voucher,sellerId,platform voucher,vouchers/available,voucher 403,voucher stacking,stack voucher,voucherCodes,multi-shop voucher,platformVoucherCode,checkoutId,apportion,ghep ma,nhieu ma giam gia,voucher,mã giảm giá của shop; summary=Shop-voucher residuals — at most one shop voucher per seller plus one platform voucher per checkout, the platform discount is priced after shop vouchers and split pro rata by largest remainder; sellerId is only checked to exist, available caps at 50, and sellerId:null is a platform voucher. -->
 
 - The admin `sellerId` on `POST /api/order/admin/vouchers` is only checked to be
   an EXISTING user (404 otherwise), **not** a `shop`-role one — assigning it to
@@ -1478,6 +1518,37 @@ enforcing the old cap for up to 300s.
   purpose — otherwise walking numeric voucher ids harvests other shops' codes.
 - An explicit `sellerId: null` on voucher create is a **platform voucher**, not a
   `404 User not found`.
+
+Stacking (phase 2, 2026-09-28 — `voucherCodes: string[]` on order create and
+on `POST /api/order/voucher/validate`; the legacy single `voucherCode`/`code`
+is merged into it):
+
+- **One shop voucher per seller + one platform voucher per checkout.** A second
+  platform code or a second code from the same shop is a 400 naming it; a
+  repeated code collapses silently (a double tap is not a second voucher).
+  Codes stay globally unique, so the scope is read off the voucher row.
+- **The platform voucher is priced AFTER the shop vouchers.** Its
+  `minOrderAmount` and its percentage both see what the buyer still pays for
+  goods once the shop discounts are off — a 10% platform code on a basket with a
+  20k shop discount is 10% of (subtotal − 20k), not of the subtotal.
+- **The platform discount is split across sub-orders pro rata to that
+  post-shop-voucher remainder, largest-remainder rounding**
+  (`apportionByWeight`), so the shares always sum to the whole discount.
+  Each sub-order's `discountAmount` = its shop discount + its platform share;
+  shipping is never discounted.
+- **One redemption and one Redis quota slot per code per checkout**, not per
+  sub-order. The platform redemption row carries the FULL discount and sits on
+  the lowest-id sub-order that got a share; a sub-order with a zero share gets
+  no `platformVoucherCode`. Cancel behaviour: VOUCHER-CANCEL-01.
+- **Column mapping:** `voucherCode` holds the shop code when the order has
+  one, else the platform code; `platformVoucherCode` is set only when both
+  apply. Every sub-order of one multi-shop checkout shares `checkoutId` (a
+  UUID; `null` on single-seller and pre-2026-09-28 orders). Invoice and CSV
+  show the codes joined as `SHOP + PLATFORM`.
+- **Quota slots are claimed BEFORE the GHN fee preview** (VOUCHER-CONC-01's
+  ordering), so every failure after that point — a GHN refusal included —
+  must hand them back. The multi-shop GHN leg missed this in the first cut and
+  leaked one slot per refused checkout; caught by the 2026-09-28 self-test.
 
 ## 12 of 19 Quận 8 wards cannot be ordered to (GHN-MSG-01, prod, 2026-08-26)
 <!-- kb: id=GHN-MSG-01; group=ghn; aka=GHN-WARD-01; files=apps/orders/src/ghn/ghn.service.ts; sha=d9c9852a1dd2; verified=prod:2026-08-26; keys=unshippable ward,DESTINATION_NOT_SERVICEABLE,shipping-order/fee,retired ward,district 1450; summary=12 of 19 Quan 8 wards cannot be ordered to; do NOT "fix" it by quoting from /shipping-order/fee. -->
@@ -1699,7 +1770,7 @@ Deliberate, and not oversights:
   `forbidNonWhitelisted` rejects the key there with a 400.
 
 ## The seller CSV export is item-granular and order-level money rides row 1 only (EXPORT-CSV-01, 2026-09-16)
-<!-- kb: id=EXPORT-CSV-01; group=orders; files=apps/orders/src/orders.service.ts,apps/orders/src/export/seller-orders.export.ts,libs/common/src/utils/csv.util.ts,apps/gateway/src/order/order.controller.ts; sha=958d43009801; verified=local:2026-09-16; keys=export,csv,xuat file,xuat excel,excel,tai ve,download orders,seller export,order export,bao cao don hang,EXPORT_MAX_ROWS,EXPORT_MAX_WINDOW_DAYS,toCsv,BOM,formula injection,shippingFee blank,orderTotal blank,discountAmount,voucherCode,giam gia,ma giam gia,voucher column; summary=The seller CSV export is one row per ORDER ITEM, and the four order-level money columns are written on each order's first row only so a column SUM does not double-count. -->
+<!-- kb: id=EXPORT-CSV-01; group=orders; files=apps/orders/src/orders.service.ts,apps/orders/src/export/seller-orders.export.ts,libs/common/src/utils/csv.util.ts,apps/gateway/src/order/order.controller.ts,apps/orders/src/export/order-export-job.service.ts; sha=f89a592a4d6b; verified=local:2026-09-28; keys=export,csv,admin export,export job,async export,exp_,export_jobs,xuat file lon,xuat file,xuat excel,excel,tai ve,download orders,seller export,order export,bao cao don hang,EXPORT_MAX_ROWS,EXPORT_MAX_WINDOW_DAYS,toCsv,BOM,formula injection,shippingFee blank,orderTotal blank,discountAmount,voucherCode,giam gia,ma giam gia,voucher column; summary=The seller CSV export is one row per ORDER ITEM, and the four order-level money columns are written on each order's first row only so a column SUM does not double-count. -->
 
 `GET /api/order/seller/export?from&to[&status]` renders the caller's own order
 items as a CSV file. Five things about it look like bugs and are not.
@@ -1729,6 +1800,10 @@ that equation.
 on a first row a blank would be indistinguishable from the deliberate blank of a
 continuation row. `voucherCode` is the one exception: it is legitimately empty
 on a first row (no code), and must NEVER be non-empty on a continuation row.
+Since VOUCHER-SHOP-01 phase 2 (2026-09-28) an order with a shop code AND a
+stacked platform code shows both in that one cell as `SHOP + PLATFORM`, and
+`discountAmount` is their sum for that order (the platform part is only this
+order's share of the checkout discount).
 
 **3. `productId` and `orderId` fall back to the numeric id.** Rows written
 before PUBID have no `productPublicId`, so the cell reads `19`, not
@@ -1755,9 +1830,53 @@ REQUIRED — unlike the analytics range, which defaults to the last 30 days.
 The document is buffered whole (~1.2 MB at the cap) rather than streamed: once
 `res.write()` fires the response is committed, a later failure can no longer
 become a 4xx, and the client receives a truncated file that opens fine. That is
-the worst failure mode a CSV export has. It is synchronous for the same reason
-T5 (async job) stays unbuilt — a job table + worker + storage + poll endpoint is
-~5x the work for the same file at this catalog size.
+the worst failure mode a CSV export has. The sync routes keep their small caps
+for that reason; anything wider goes through the async job below.
+
+**Admin export (T4, 2026-09-28).** `GET /api/order/admin/export?from&to[&status][&sellerId=usr_…]`
+is the same file across every seller, with two columns appended at the END
+(`sellerId` as the public `usr_` id, `sellerUsername`) so the seller layout
+stays a byte-identical prefix. It is `@Roles("admin")`, NOT
+`@CheckPermission("order","read:any")` — role `shop` holds that grant too, and
+this file carries every seller's buyer names and phones. Same caps as the seller
+route. An unknown `sellerId` is the user service's 404.
+
+**Async export jobs (T5, 2026-09-28).** `POST /api/order/{seller|admin}/export/jobs`
+(body = the same fields as the sync query) → **202** with an `exp_…` job;
+`GET /api/order/export/jobs[/:id]` polls; `GET …/:id/download` streams the file.
+The file is a MEDIUMBLOB in `export_jobs` (nodeA migration
+`nodeA-20260928-001-add-export-jobs`), not object storage — free tier, and the
+cap keeps it under ~12 MB. Things that look like bugs and are not:
+
+- **Caps are 366 days / 50.000 item rows, checked TWICE**: synchronously on
+  create (a 400 before any row is written) and again when the worker runs, so
+  orders placed in between can still fail a job with the same 400 message,
+  stored verbatim in `errorMessage`. Any non-4xx failure is stored as the
+  generic _"Export failed unexpectedly"_ — a DB error never reaches the caller.
+- **Every lookup is scoped to the requester** (`requestedBy` from the JWT):
+  another user's job id is a **404, never a 403**, admin included — an admin
+  cannot fetch a seller's job either.
+- **Download status codes are a state machine**: pending/running/failed →
+  **409** (a failed job's message carries its reason), expired → **410**, a
+  file that vanished between the two reads (purge race) → 410.
+- **The 3-active-jobs cap (429) is soft.** It is a count-then-insert, not a
+  lock: parallel creates can all pass it (measured: 4 parallel creates → four
+  202s). It is an abuse brake, not a quota; the per-user cost is bounded by the
+  row cap anyway.
+- **A job can sit `pending` up to ~30 s.** A create nudges the worker at once,
+  but the nudge is a no-op while a pass is already running (one pass per
+  process, 5 jobs per pass); the `EVERY_30_SECONDS` cron picks the rest up.
+  Several instances are safe: a job is claimed by a conditional
+  `UPDATE … WHERE state='pending'`, and only the claimant renders it.
+- **A job stuck `running` for 15 min is failed as interrupted** (a worker died
+  mid-render); it is never retried automatically.
+- **Lifecycle:** files expire 24 h after `finishedAt` (hourly cron sets
+  `state=expired`, `file=NULL`, keeps the row); rows older than 30 days are
+  deleted, except a `running` one. `createdAt` is the DB clock while
+  `startedAt`/`finishedAt`/`expiresAt` are the app clock, so a few seconds of
+  apparent skew between them is clock drift, not queue time.
+- The file crosses TCP as base64, not as a `Buffer` (a JSON-serialized Buffer
+  is ~4 bytes per byte on the wire).
 
 **The query is item-level on `items.seller_id`, NOT `getOrdersBySeller()`.**
 That helper resolves the seller's product ids and then joins *every* item of any
@@ -1793,7 +1912,7 @@ with:
 Reported by FE as EXPORT-PUBID-01; closed will-not-do, not deferred.
 
 ## Timestamps and day windows are Vietnam time, fixed in code not in `TZ` (EXPORT-TZ-01, 2026-09-20)
-<!-- kb: id=EXPORT-TZ-01; group=orders; files=libs/common/src/utils/timezone.util.ts,libs/database/src/database.module.ts,apps/orders/src/export/seller-orders.export.ts,apps/orders/src/orders.service.ts,apps/payments/src/zalopay/zalopay.helper.ts; sha=e2b183e8270e; verified=local:2026-09-20; keys=timezone,time zone,mui gio,lech gio,sai gio,sai ngay,lech 7 tieng,7 hours,GMT+7,UTC+7,UTC,TZ,offset,Asia/Ho_Chi_Minh,orderDate,paidAt,formatVnTimestamp,startOfVnDay,endOfVnDay,toVnCalendarDay,vnWallClockShiftMinutes,resolveAnalyticsRange,setHours,getHours,DATE_FORMAT,CONVERT_TZ,revenue chart,bieu do doanh thu,analytics range,khoang ngay,app_trans_id,zalopay prefix,gio server,ngay xuat file,missing rows,thieu don,mysql2,timestamptz,CURRENT_TIMESTAMP,DatabaseModule,PostgresDatabaseModule,risk_scored_at,risk_next_retry_at,luu gio,chuan chung,gio chuan,pin storage,connection timezone,setTypeParser,createDateColumn; summary=Order timestamps and every from/to day window are Vietnam wall-clock computed in code, because the server TZ is UTC on prod and UTC+7 on dev — do NOT "fix" a zone bug by setting TZ or the connection timezone. -->
+<!-- kb: id=EXPORT-TZ-01; group=orders; files=libs/common/src/utils/timezone.util.ts,libs/database/src/database.module.ts,apps/orders/src/export/seller-orders.export.ts,apps/orders/src/orders.service.ts,apps/payments/src/zalopay/zalopay.helper.ts; sha=3cb51a5e3445; verified=local:2026-09-20; keys=timezone,time zone,mui gio,lech gio,sai gio,sai ngay,lech 7 tieng,7 hours,GMT+7,UTC+7,UTC,TZ,offset,Asia/Ho_Chi_Minh,orderDate,paidAt,formatVnTimestamp,startOfVnDay,endOfVnDay,toVnCalendarDay,vnWallClockShiftMinutes,resolveAnalyticsRange,setHours,getHours,DATE_FORMAT,CONVERT_TZ,revenue chart,bieu do doanh thu,analytics range,khoang ngay,app_trans_id,zalopay prefix,gio server,ngay xuat file,missing rows,thieu don,mysql2,timestamptz,CURRENT_TIMESTAMP,DatabaseModule,PostgresDatabaseModule,risk_scored_at,risk_next_retry_at,luu gio,chuan chung,gio chuan,pin storage,connection timezone,setTypeParser,createDateColumn; summary=Order timestamps and every from/to day window are Vietnam wall-clock computed in code, because the server TZ is UTC on prod and UTC+7 on dev — do NOT "fix" a zone bug by setting TZ or the connection timezone. -->
 
 Every date the backend *renders* or *snaps to a day boundary* is Vietnam time
 (UTC+7, fixed — no DST since 1975), derived explicitly in
@@ -2051,3 +2170,47 @@ one line, quantity 8.
   read and can be PATCHed down.
 - **The merge does not clamp to stock.** A merged line can exceed available
   stock; checkout's stock check is what refuses it, as for any over-sized line.
+
+## Captcha on register / forgot-password is env-driven and fails open (CAPTCHA-01, 2026-09-28)
+<!-- kb: id=CAPTCHA-01; group=auth; files=apps/gateway/src/common/guards/captcha.guard.ts; sha=f2f3f6047cff; verified=local:2026-09-28; keys=captcha,captchaToken,turnstile,CAPTCHA_REQUIRED,CAPTCHA_ENFORCE,TURNSTILE_SECRET_KEY,siteverify,shadow mode,bot register,mã xác thực,chống bot,đăng ký hàng loạt; summary=Turnstile on register and forgot-password has three env postures (off / shadow / enforce); only enforce ever rejects, with a 400 CAPTCHA_REQUIRED, and a siteverify outage or a secret Cloudflare rejects fails OPEN. -->
+
+`POST /api/user/register` and `POST /api/user/forgot-password` carry
+`@UseGuards(CaptchaGuard)` (gateway), which verifies an optional body field
+`captchaToken` against Cloudflare Turnstile `siteverify`. Login deliberately has
+no captcha — rate limit + bcrypt cost suffice, and a challenge on login taxes
+every returning user.
+
+- **Three postures, all env, no deploy to move between them** (read per request
+  from `local/nodeA/.env`, so a gateway restart picks a change up):
+  - `TURNSTILE_SECRET_KEY` unset → **off**. Nothing is verified. This is prod
+    until the user creates the Turnstile site + keys in the Cloudflare dashboard.
+    `CAPTCHA_ENFORCE=true` with no secret logs an ERROR per request and stays off
+    — misconfiguration never locks users out.
+  - secret set, `CAPTCHA_ENFORCE` anything but `"true"` → **shadow**. A token
+    that IS sent gets verified and a refusal is logged as a WARN, but nothing is
+    rejected. That is the window while the storefront starts sending tokens;
+    the WARN rate is the signal that it is safe to enforce.
+  - secret set + `CAPTCHA_ENFORCE=true` → **enforce**: a missing/blank token, a
+    token over 2048 chars (no network call), or a Cloudflare refusal is
+    `400 { errorCode: "CAPTCHA_REQUIRED" }`. One code for all three on purpose —
+    the client action is the same (reset the widget, resubmit).
+- **Fails OPEN on every posture** when siteverify times out (3 s), is
+  unreachable, answers non-2xx, or returns `missing-input-secret` /
+  `invalid-input-secret` / `internal-error` — those blame our config or
+  Cloudflare, not the visitor. Same stance as VOUCHER-CONC-01; the per-IP
+  `@RateLimit` still sits in front (the global rate-limit guard runs BEFORE this
+  method-level guard, so refused captchas still burn the rate budget).
+- **The guard reads the RAW body**, because guards run before the validation
+  pipe. A non-string token counts as missing to the guard; the DTO then 400s it
+  with a normal validation message (not `CAPTCHA_REQUIRED`) — only reachable
+  when the guard let it through, i.e. off/shadow.
+- **Tokens are single-use** (Turnstile `timeout-or-duplicate`). A client that
+  retries a failed submit with the same token is refused under enforce — the FE
+  must reset the widget after every submit, successful or not.
+- **`captchaToken` never reaches the user service**: `stripCaptchaToken()` drops
+  it before the TCP send. The user service's own ValidationPipe is disabled, so
+  nothing else would have.
+- **Verified locally 2026-09-28** with Cloudflare's test secrets against the real
+  siteverify: off → token accepted and ignored; enforce + always-pass secret →
+  no token 400 `CAPTCHA_REQUIRED`, dummy token passes through to the user service;
+  enforce + always-fail secret → 400; shadow + always-fail secret → passes.

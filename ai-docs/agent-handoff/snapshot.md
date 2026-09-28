@@ -38,17 +38,26 @@ Nothing is mid-implementation. What is genuinely open:
 
 ### Prod-owed
 
-No migration is owed: the last one
-(`nodeA-20260925-001-add-cart-unique-constraints`, CART-UNIQ-01) was applied to
-prod by the 2026-09-27 CD deploy. DEPLOY-PG-01 was resolved 2026-09-16; both
-migration failure modes now
-live in `ops-runtime.md` (§CI/CD and §Database migrations). One config gap
-remains, deliberately unfilled:
+- **`nodeA-20260928-001-add-export-jobs`** (EXPORT-CSV-01 T5) and
+  **`nodeA-20260928-002-add-order-checkout-voucher-columns`** (VOUCHER-SHOP-01
+  phase 2) are owed — applied on DEV, not pushed yet. The CD migrate step
+  applies them before the restart. Without -001 the five `export/jobs` routes
+  500; without -002 EVERY order read/write fails (the entity selects the new
+  columns) — details in `ops-runtime.md` §Database migrations. The previous
+  one (CART-UNIQ-01) was applied 2026-09-27.
+
+DEPLOY-PG-01 was resolved 2026-09-16; both migration failure modes now live in
+`ops-runtime.md` (§CI/CD and §Database migrations). Two config gaps remain,
+deliberately unfilled:
 
 - **`METRICS_TOKEN` is UNSET in `local/nodeA/.env`**, so `GET /metrics` 404s on
   prod (verified 2026-08-15). Set it only when a scraper actually exists. Only
   the gateway is instrumented; the registry is per-process, so
   `GATEWAY_INSTANCES>1` would need `prom-client`'s cluster aggregator.
+- **`TURNSTILE_SECRET_KEY` is UNSET on prod**, so CAPTCHA-01 is off there. It
+  is blocked on the user creating the Turnstile keys. Set the secret first
+  (shadow mode), and flip `CAPTCHA_ENFORCE=true` only after the storefront
+  sends tokens (`ops-runtime.md` §Captcha).
 
 ### Worth a decision, not yet work
 
@@ -56,7 +65,7 @@ remains, deliberately unfilled:
   scaffolds were DELETED 2026-09-11 (E2E-SCAFFOLD-01), so the suite no longer
   lies about its coverage — but the gap they pretended to fill is still open.
   Anything real needs live Redis/RabbitMQ/Aiven in CI, which collides with
-  free-tier-only; unit coverage (50 suites / 587 tests) is what exists today.
+  free-tier-only; unit coverage (51 suites / 601 tests) is what exists today.
 - **CD-03 — build-on-runner deploy variant.** Only if the EC2 gets
   smaller/slower (CI-built `dist/` rsync + `npm ci --omit=dev` + restart). Not
   needed while CD-01 works.
@@ -82,8 +91,20 @@ remains, deliberately unfilled:
 
 ### Audit backlog (SWEEP-0925, `/sweep audit` 2026-09-25 — recorded, not fixed)
 
-**Backlog empty.** -02/-03 DONE → CART-UNIQ-01; -04 DONE → RAIL-RANK-01
-(see CHANGELOG). The one standing instruction:
+-02/-03 DONE → CART-UNIQ-01; -04 DONE → RAIL-RANK-01 (see CHANGELOG).
+
+- 🔴 **ADMIN-ORDERS-RBAC-01 (found 2026-09-28 during EXPORT-CSV-01 T4, not
+  fixed — needs a user decision).** `GET /api/order/admin/orders`
+  (`order.controller.ts`, `@CheckPermission("order","read:any")`) answers 200 to
+  role `shop`: every seller's orders, including `shippingAddress` and `buyer`
+  (verified locally with the shop test account: 170 orders across 3 sellers).
+  Role `shop` holds `order read:any` in `apps/user/src/rbac/grants.ts`, so every
+  route gated on that grant alone has the same exposure. Fix = `@Roles("admin")`
+  (as the T4 export route does) or narrow the shop grant. First check whether
+  the storefront seller console calls this route: a 200 turning into a 403 is
+  release class C.
+
+The one standing instruction:
 
 - ~~AUD-0925-01 — `order_created` consumers not idempotent under outbox
   redelivery~~ → **DROPPED 2026-09-25 by the user**: rewards has no FE yet.
@@ -96,17 +117,6 @@ Full designs (scope, shape, landmines, release class) live in
 `ai-docs/agent-context/planned-work.md` — load it with the Read tool when you
 pick one up. Do not re-derive them:
 
-- **EXPORT-CSV-01 T4 / T5** — T1–T3 SHIPPED 2026-09-16, **audited complete
-  2026-09-19**, **timezone-corrected 2026-09-20** (EXPORT-TZ-01, see CHANGELOG —
-  15 tests pin the money rules, both caps, and VN wall-clock under four process
-  zones) and **PUSHED 2026-09-21** — `GET /api/order/seller/export` is on prod.
-  Still unbuilt and still optional: T4 an admin/platform-wide export, T5 an async
-  job for windows over the caps. Neither has a requester — build on demand, not
-  speculatively.
-- **CAPTCHA-01** — invisible Turnstile captcha on register/forgot-password
-  (deferred 2026-09-26; blocked on the user creating Turnstile keys).
-- **SOCIAL-LIKE-NTF-01** — liking a post notifies nobody (product decision, needs batching).
-- **VOUCHER-SHOP-01 phase 2** — Shopee-style stacking + multi-shop apportionment.
 - **AI-03 / AI-04** — Sell From Photo, Visual Search (Gemini; AI-04 adds 1 migration).
 - **AI-02F5** — pHash lookup scale path (gated on ~10k products).
 - **Redis pre-deduct stock via Lua** — gated on a real flash-sale event; the
@@ -185,6 +195,7 @@ pick one up. Do not re-derive them:
 - UPLOAD-SIZE-01 — Upload size caps are an advisory contract, NOT a security boundary — Cloudinary cannot sign a size on this account.
 - REPORT-TOTAL-01 — Reports outlive their deleted post as an audit trail, so the queue total can read lower than the raw table count.
 - CHAT-ROOM-01 — new_message targets a union of user: and conv: rooms, so a recipient no longer needs to join.
+- SOCIAL-LIKE-NTF-01 — Likes fold into one unread `like` row per (owner, post) whose count lives in the message text; a read row starts a new one, self-likes and unlikes notify nothing, and the count can overshoot.
 
 **Search**
 - SEARCH-01 — Accent-insensitivity comes from the MySQL collation, not code; % and _ are not escaped and a blank q is a 400.
@@ -192,9 +203,9 @@ pick one up. Do not re-derive them:
 **Vouchers**
 - VOUCHER-CONC-01 — The Redis voucher quota is an admission gate that fails OPEN and can read pessimistically for up to 300s.
 - VOUCHER-NULL-01 — null is a 400 on a voucher edit but still a 201 on create — the asymmetry is deliberate.
-- VOUCHER-CANCEL-01 — Cancelling gives the redemption back, so cancel-farming a limited code is possible by design.
+- VOUCHER-CANCEL-01 — Cancelling gives the redemption back, so cancel-farming a limited code is possible by design; a platform voucher shared by a multi-shop checkout moves to a live sibling instead until the last sub-order is canceled.
 - VOUCHER-EDIT-01 — On a redeemed voucher only loosening is allowed, so a mistaken widening cannot be walked back.
-- VOUCHER-SHOP-01 — Shop-voucher residuals — sellerId is only checked to exist, available caps at 50, and sellerId:null is a platform voucher.
+- VOUCHER-SHOP-01 — Shop-voucher residuals — at most one shop voucher per seller plus one platform voucher per checkout, the platform discount is priced after shop vouchers and split pro rata by largest remainder; sellerId is only checked to exist, available caps at 50, and sellerId:null is a platform voucher.
 
 **Auth / mail**
 - MAIL-UI-01 — The reset-code mail has no copy button by design (clients strip script) and repeats the code in the subject.
@@ -206,6 +217,7 @@ pick one up. Do not re-derive them:
 - EMAIL-REAUTH-01 — PATCH /api/user/:id requires currentPassword only when email actually changes (missing is a 400, wrong is a 401 with INVALID_CURRENT_PASSWORD); an unchanged email is re-sendable without it and the route is throttled 10/min.
 - MAIL-BOUNCE-01 — Mail to the fixture domain / RFC-reserved names is dropped before SMTP after a 45h bounce flood.
 - ROLE-ADMIN-01 — A role change reaches the JWT only on the target’s NEXT login; GET /api/user/me exposes the drift as a signal only.
+- CAPTCHA-01 — Turnstile on register and forgot-password has three env postures (off / shadow / enforce); only enforce ever rejects, with a 400 CAPTCHA_REQUIRED, and a siteverify outage or a secret Cloudflare rejects fails OPEN.
 
 **Ops / probes**
 - READY-01 — /ready really probes RabbitMQ but stays 200 on a broker outage; the result is cached 10s.

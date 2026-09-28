@@ -6,6 +6,267 @@
 
 ## Completed Milestones
 
+- **VOUCHER-SHOP-01 phase 2 — voucher stacking across a multi-shop checkout
+  (2026-09-28, `/sweep` batch item 5 of 5). Release class B (optional
+  `voucherCodes` field, new nullable response fields, a 400 lifted; migration
+  `nodeA-20260928-002` must run before the code).**
+  - **Contract.** `voucherCodes?: string[]` on `POST /api/order` and
+    `POST /api/order/voucher/validate`, alongside the legacy single
+    `voucherCode` / `code` (merged, de-duplicated). The gateway's
+    `SINGLE_SELLER_ONLY` voucher block is gone. Validate adds
+    `vouchers[]` (`code, scope, sellerId, discountType, discountAmount`);
+    its top-level `discountAmount` is now the checkout total. Orders gain
+    `checkoutId` and `platformVoucherCode`.
+  - **Decided with the user:** one redemption + one Redis quota slot per code
+    per CHECKOUT (not per sub-order); voucher codes stay globally unique.
+  - **Pricing.** `resolveCheckoutVouchers`: at most one shop voucher per seller
+    and one platform voucher; shop vouchers priced on their seller's slice, then
+    the platform voucher on the post-shop-voucher remainder, split pro rata by
+    largest remainder (`apps/orders/src/voucher/apportion-discount.ts`). The
+    single-seller path and `previewVoucher` run the same resolver, so list,
+    preview and apply cannot drift (the phase-1 invariant).
+  - **Cancel.** `releaseVoucherRedemption` locks the checkout's sub-orders and
+    moves the platform redemption to a live sibling; only the last cancel
+    returns it and its quota slot.
+  - **Migration** `nodeA-20260928-002-add-order-checkout-voucher-columns`
+    (`orders.checkout_id` + index, `orders.platform_voucher_code`), applied to
+    DEV, prod-owed. Invoice and seller CSV show stacked codes as `SHOP + PLAT`.
+  - **Bug caught by the self-test:** the multi-shop GHN fee leg ran after the
+    quota claim with no release, so a GHN-refused address leaked one Redis slot
+    per attempt on a capped platform voucher. Fixed (release + rethrow) and
+    pinned by a unit test, red before the fix.
+  - **Tests.** `apportion-discount.spec.ts` and
+    `checkout-vouchers.spec.ts` (11: stacking rejections, pricing order,
+    split, one redemption per code on the lowest-id order, heir move on cancel,
+    last-cancel release, GHN-refusal release).
+  - **Self-test (local, 2026-09-28).** A two-shop basket (250 000 + 99 000) with
+    a 20k shop code and a 10%/max 50k capped platform code: validate 201 →
+    shop 20 000 + platform 32 900; COD create 201 → two orders sharing one
+    `checkoutId` (43 000 and 9 900 discount), each voucher `usedCount` 1,
+    quota 100 → 99. Cancel the anchor order → platform row moved to the
+    sibling, shop row deleted, quota 99. Cancel the sibling → both counters 0,
+    quota 100. Legacy `code` on a multi-shop basket 201; empty 400; unknown 404.
+    Seller CSV shows `VSP2SHOP + VSP2PLAT`. Test vouchers deactivated.
+  - Residuals → `known-behaviors.md` VOUCHER-SHOP-01 and VOUCHER-CANCEL-01.
+    FE handoff written.
+
+- **SOCIAL-LIKE-NTF-01 — liking a post notifies the owner, aggregated per post
+  (2026-09-28, `/sweep` batch item 4 of 5). Release class B (a new notification
+  type; no existing field changes).**
+  - **Emit.** `SocialService.likePost` publishes `social.post_liked`
+    (`EVENT.POST_LIKED_EVENT`, `{postId, postOwnerId, likerId}`) on the existing
+    `social.fanout` exchange after the like commits. Best-effort: a failed owner
+    lookup or a dead broker is a warn and the like still answers 201. Self-likes
+    publish nothing. No new queue binding — notification already consumes the
+    social fanout.
+  - **Aggregate.** `NotificationService.upsertLikeNotification` folds the like
+    into the owner's newest unread `like` row for the post (compare-and-swap on
+    `message`, 3 attempts, then throw → nack + requeue) or opens one. Decided with
+    the user: one unread row per (owner, post), reset once read, no migration —
+    the count is encoded in the message (`"Someone liked your post"` /
+    `"<N> people liked your post"`) and `actorId` is the latest liker, so the FE
+    renders "An và 4 người khác đã thích bài viết của bạn". A fold bumps
+    `createdAt` and pushes the SAME notification id over WS.
+    `saveNotification`'s WS push was extracted into `pushNotification` so the
+    fold reuses it.
+  - **Tests.** `apps/notification/src/notification.like.spec.ts` (7: open, fold
+    + CAS criteria + push, latest-liker no-op, CAS retry, read-in-between, give
+    up after 3, message round-trip) — red with the service method removed.
+    `apps/social/src/social.like.spec.ts` (4: payload/exchange/routing key,
+    self-like, lookup failure, no channel) — red with the emit call removed.
+  - **Self-test (local, 2026-09-28).** Shop account posts; self-like → no
+    notification (total unchanged); admin like → `like` row "Someone liked your
+    post" with actor testadmin; second user like → SAME id, "2 people liked your
+    post", actor switched, createdAt bumped, total unchanged; that user's
+    unlike + re-like → unchanged; mark read + admin re-like → new row at count
+    1, the read row keeps "2 people". Test post deleted.
+  - Residuals (count overshoot, same-instant double row, push id reuse) →
+    `known-behaviors.md` SOCIAL-LIKE-NTF-01. FE handoff written.
+
+- **CAPTCHA-01 — Cloudflare Turnstile on register and forgot-password
+  (2026-09-28, `/sweep` batch item 3 of 5). Release class B (optional request
+  field; nothing is rejected until an env flip).**
+  - **Guard.** `apps/gateway/src/common/guards/captcha.guard.ts`
+    (`CaptchaGuard`) sits on `POST /api/user/register` and
+    `POST /api/user/forgot-password` via `@UseGuards`, after the global
+    rate-limit and JWT guards and before validation. It therefore reads
+    `captchaToken` off the raw body, and it verifies the token with one
+    `fetch` POST to Turnstile siteverify (3s timeout, `remoteip` =
+    `request.ip`).
+  - **Three env postures**, read per request:
+    - `TURNSTILE_SECRET_KEY` unset → off.
+    - Secret set, `CAPTCHA_ENFORCE` not `true` → shadow: verify and log,
+      never reject.
+    - Secret set and `CAPTCHA_ENFORCE=true` → a missing, blank, oversized
+      (> 2048 chars) or refused token is a 400 carrying the new closed-set
+      `errorCode: CAPTCHA_REQUIRED`.
+  - **Fails open in every posture:** a siteverify network error, a non-2xx
+    answer, or an error code that blames our side
+    (`missing-input-secret` / `invalid-input-secret` / `internal-error`). The
+    per-IP rate limit stays in front.
+  - **The field never leaves the gateway.** `RegisterUserDto` and
+    `ForgotPasswordDto` gained an optional `captchaToken` (`@IsString
+    @MaxLength(2048)`), and `stripCaptchaToken()` removes it before the TCP
+    send to the user service.
+  - Login is deliberately NOT covered (see `planned-work` history: captcha on
+    login hurts every returning user).
+  - **Tests.** `captcha.guard.spec.ts` has 11 tests, seen red (module missing)
+    then green. They cover: off, not enforced, blank token, pass (URL and form
+    fields asserted), refused+enforced, shadow, fetch throws, 503,
+    invalid-input-secret, oversized token, and the strip.
+  - **Self-test on the local gateway with real Cloudflare siteverify calls,
+    using Cloudflare's public test secrets:**
+    - Off: register with a token → 409 (duplicate user, so the token reached
+      nothing); forgot-password with a token → 201.
+    - Enforce with the always-pass secret: no token → 400 `CAPTCHA_REQUIRED` on
+      both routes; a dummy token → reaches the user service (409).
+    - Enforce with the always-fail secret: token → 400 `CAPTCHA_REQUIRED`.
+    - Shadow with the always-fail secret: bad token → 409, no token → 409.
+    - A non-string token → 400 validation message.
+    - `local/nodeA/.env` was restored byte-identical afterwards.
+  - **Not tested:** the FE side, because there is no widget yet.
+  - **Prod is off** until the user creates the Turnstile site and keys.
+    Rollout order is in `ops-runtime.md` §Captcha. Residuals are in
+    `known-behaviors.md` → CAPTCHA-01.
+
+- **EXPORT-CSV-01 T4 + T5 — admin export and async export jobs (2026-09-28,
+  `/sweep` batch item 1–2 of 5). Release class B (additive routes; one owed
+  nodeA migration).**
+  - **T4 — `GET /api/order/admin/export?from&to[&status][&sellerId=usr_…]`.**
+    - Same file, same 90-day / 5.000-row caps as the seller route, across all
+      sellers or one.
+    - `sellerId` (public `usr_` id) and `sellerUsername` are appended at the
+      END, so the seller layout stays a prefix.
+    - `csv.util.ts` gained `toCsvHeader` / `toCsvRows` so the document can be
+      rendered in 2.000-row chunks.
+    - `OrdersService` exposes `assertOrderExportWithinCaps` and
+      `renderOrderExportCsv`, which the sync routes and the job worker share.
+  - **Deviation from the plan: `@Roles("admin")`, not
+    `@CheckPermission("order","read:any")`.** The self-test showed role `shop`
+    got 200 on the planned gate, because shop holds that grant. The same hole
+    already exists on `GET /api/order/admin/orders`; it is recorded as 🔴
+    ADMIN-ORDERS-RBAC-01 in the snapshot and was deliberately NOT fixed here
+    (it could break an FE caller, which makes it class C).
+  - **T5 — async jobs.**
+    - `POST /api/order/{seller|admin}/export/jobs` → 202 with an `exp_…` job.
+    - `GET /api/order/export/jobs[/:id]` → poll.
+    - `GET …/:id/download` → the CSV.
+    - Caps: 366 days / 50.000 item rows, checked on create and again when the
+      job runs. At most 3 active jobs per user (429). The file is kept 24 h and
+      the row 30 days.
+    - Storage is a MEDIUMBLOB in the new `export_jobs` table (user decision:
+      the DB over Cloudinary/S3, free tier). Migration
+      `nodeA-20260928-001-add-export-jobs` is owed to prod.
+    - The worker (`OrderExportJobService`) runs every 30 s, and each create
+      triggers a run straight away:
+      - Jobs are claimed with a conditional UPDATE, so multiple instances are
+        safe.
+      - A job still `running` after 15 min is failed as interrupted.
+      - 4xx reasons are stored verbatim; anything else is stored as a generic
+        message.
+      - Ownership is scoped by `requestedBy`, so a foreign job id is a 404.
+      - The file crosses TCP as base64.
+    - New public-id prefix `exp`, 4 TCP patterns (`order.export_job_*`) and 8
+      `ORDER_MESSAGE` entries.
+  - **Tests:** `order-export-job.service.spec.ts`, 14 tests.
+    - Covers the create caps, the 429, claim/skip, the error-message split,
+      the single-pass guard, ownership, the 409/410 state machine, the base64
+      round trip, and purge never deleting a running job.
+    - Seen red by dropping `requestedBy` from the ownership lookup. Scoped
+      export and gateway order suites: 69/69.
+  - **Self-test (local, shop + admin test accounts):**
+    - seller job 202 → done (54 rows) → download 200. The header is
+      byte-identical to the sync export, BOM present, and the filename is
+      `trybuy-orders-2025-10-01-2026-09-28.csv`.
+    - admin job → 183 rows, ending in `sellerId,sellerUsername`.
+    - A job read by another user → 404, on both GET and download.
+    - shop on the admin jobs route → 403.
+    - `ord_…` as the job id → 400.
+    - A 424-day window → 400 naming the figure.
+    - An unknown body field → 400. No auth → 401.
+    - An immediate download → 409 "pending". The 6th sequential create → 429.
+    - Residual found and documented rather than fixed: 4 PARALLEL creates all
+      pass the active cap (it is count-then-insert). A 10-job burst drained to
+      `done` with no stuck row.
+  - Residuals: `known-behaviors.md` → EXPORT-CSV-01, now covering T4 and T5
+    (`verified=local:2026-09-28`, rebaselined). Migration ledger:
+    `ops-runtime.md`. FE handoff: `../.agent-local/frontend-handoff.md`.
+
+- **AGENT-CTX-02 — agent tooling adopted from the FE prompt set (2026-09-28).
+  Release class A (docs, agent definitions, test-only code; nothing FE-visible).**
+  - **Origin.** `../.agent-local/be-learn-from-fe-prompt.md` proposed T1–T6.
+    T1–T4 and T6 were adapted to this repo; **T5 was skipped**.
+  - **T4 — review report format.** `code-reviewer` scales to the size of the
+    diff. Every finding must cite its `Rule:` (an AGENTS.md section, a
+    context heading, an eslint id, a known-behaviors id, or `defect`). The
+    report opens with a ✅/⚠️/❌ banner with counts and ends with a PASS or
+    BLOCKED verdict. `/review` and the Codex review skill mirror this.
+  - **T6 — debug Fix Format.** `/debug` and the Codex debug skill end with a
+    fixed SUMMARY…RESIDUAL block (REPRO names the role, never a password). The
+    block goes into the CHANGELOG, or into `ai-docs/specs/<KEY>/bugs/` when a
+    spec exists.
+  - **T2 — CLAUDE.md deduplicated.** CLAUDE.md now @-imports `AGENTS.md` and
+    points to it instead of repeating it: 3934 → 1105 words.
+    - Blocks that only existed in CLAUDE.md were moved first:
+      - the prod-hostname procedure → `git-workflow.md`
+      - the test-account format → `AGENT-WORKFLOW.md` §3
+      - the READ/WRITE timeout semantics → AGENTS.md
+      - the research and AI-feature keywords → §1
+    - `conventions.md`:
+      - the literal `timeout(10000)` became `TCP_TIMEOUT_MS`
+      - the duplicated General Rules section was dropped
+    - The same stale `timeout(10000)` rule was swept out of the Codex
+      review/debug/perf-audit skills, `.codex/agents/code-reviewer.toml`,
+      `/debug`, and the `architecture`, `backend` and `performance` context
+      files. The Codex sweep skill's migration step now matches `/sweep`
+      (manifest path; prod is `synchronize:false` for every service).
+    - `.codex/agents/code-reviewer.toml` was still a frontend-era copy
+      (`api/index.ts`, shadcn, Tailwind, React Query rules). Its instructions
+      now mirror `.claude/agents/code-reviewer.md` verbatim, including the T4
+      report format.
+    - Always-loaded context went from 9609 to about 7681 words. The ~6000
+      target was not met: what remains is the generated snapshot index and the
+      conventions code examples, which are content, not duplication.
+    - `.codex/rules` was not touched, because it holds execpolicy only.
+  - **T1 — specs, with a narrow threshold.** New `ai-docs/specs/`, containing
+    a README and `_templates/` for requirements, design, tasks, tests and
+    bug-fix.
+    - A spec is required only above the planner threshold: more than 2
+      services, or a migration.
+    - `design.md` carries a `<!-- spec: … status= -->` anchor and an
+      existing-behaviour inventory.
+    - The `planner` (Claude and Codex) now writes the spec, then prints a
+      one-screen summary. The Codex planner is read-only, so it returns the
+      file contents for the parent to write.
+    - Updated to match:
+      - `/feature` step 3
+      - the feature skill, which also lost its stale `timeout(10000)` and
+        frontend-repo lines
+      - `AGENT-WORKFLOW.md` §6
+  - **T3 — test factories + test-guard.** `test/utils/` gains four factories:
+    `createTcpClientMock`, `createRmqContextMock`, `createRepositoryMock<T>`
+    and `createConfigMock`. They are imported through the new `@app/testing`
+    alias.
+    - Config changes:
+      - the alias was added to tsconfig `paths` and the jest
+        `moduleNameMapper`
+      - `<rootDir>/test/` was added to jest `roots`
+      - `tsconfig.build.json` already excludes `test/`
+    - New agent `.claude/agents/test-guard.md`: red → green one test at a
+      time, `[TC-n]` in test names, scoped `npx jest <path>` only, and no
+      edits to app code.
+    - Wired into `/feature`, the feature skill, `/sweep` step 6, the Codex
+      sweep skill, CLAUDE.md Agents and §6.
+    - T3.3 (mutation testing) was skipped.
+  - **Evidence.**
+    - `tsc --noEmit` exit 0; `lint:check` exit 0.
+    - `check:conventions` OK. The 11 `--stale` warnings were already there;
+      no app code was touched.
+    - `npx jest`: 51 suites / 601 tests green.
+    - `test/utils/test-utils.spec.ts` has 6 tests. Breaking the
+      `findOne` default made it fail (1 failed), and restoring it made it pass.
+    - Prod-hostname scan of all changed files: 0 hits.
+
 - **EMAIL-REAUTH-01 + register password floor (2026-09-26). Release class C
   (held in `release-gate.md`); the register half alone is B.**
   - **Origin.** A security review against a "vibe-coded site" checklist. Most

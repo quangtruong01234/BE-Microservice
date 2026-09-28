@@ -8,84 +8,6 @@
 > keeps a one-line pointer per item; the reasoning lives here. When one of these
 > ships, move its entry to `CHANGELOG.md` and delete it from this file.
 
-## SOCIAL-LIKE-NTF-01 — liking a post notifies nobody (product decision, not a bug)
-
-`comment` and `reply` both notify the post owner (verified on prod 2026-08-13 —
-badge moves in realtime, no reload). Like does not: `likePost()`
-(`apps/social/src/social.service.ts:506`) only writes `post_like` + bumps the
-cached counter, emits no event, and `apps/notification/` has no `like` handler —
-it was never implemented, so do NOT go hunting for a dropped event. Adding it is
-an emit + a handler + a notification type; the open question is product-side
-(likes are high-frequency, so it likely needs batching/throttling, e.g. "X and 4
-others liked your post", rather than one notification per like). FE needs
-nothing until that is decided.
-
-## CAPTCHA-01 — invisible captcha (Cloudflare Turnstile) on register / forgot-password
-
-Decided 2026-09-26 from a security review; deferred by the user ("làm captcha
-sau"). Gap it closes: `POST /api/user/register` and `forgot-password` are only
-guarded by the per-IP `@RateLimit` (10/60s) + nginx `limit_req`, so a script
-rotating IPs can mass-create accounts or spam reset mails. Turnstile is free, has
-no image puzzle in the normal case, and is verified server-side with one HTTPS
-call to `https://challenges.cloudflare.com/turnstile/v0/siteverify`.
-
-Rollout in three steps so no deploy window breaks the storefront:
-1. **BE, class B** — gateway accepts an OPTIONAL `captchaToken` on register and
-   forgot-password; a guard verifies it when present. Env: `TURNSTILE_SECRET_KEY`,
-   `CAPTCHA_ENFORCE=false`. A siteverify outage fails OPEN (log + allow) — same
-   posture as VOUCHER-CONC-01; the rate limit is still behind it.
-2. **FE** — render the widget (site key via Vite env), send the token.
-3. **Flip `CAPTCHA_ENFORCE=true`** on prod once the FE is live: a missing/invalid
-   token is then a 400 with a closed-set `errorCode` (e.g. `CAPTCHA_REQUIRED`).
-
-Scope: NOT on login (rate limit + bcrypt cost suffice; captcha on login hurts
-every returning user). Needs the user to create the Turnstile site + keys in the
-Cloudflare dashboard (free) — that is the blocker, not code.
-
-## VOUCHER-SHOP-01 phase 2 — Shopee-style stacking + multi-shop apportionment
-
-Phase 1 + VOUCHER-EDIT-01 are shipped and released (see `CHANGELOG.md`
-2026-08-25 / 2026-08-26). Phase 2 is NOT started.
-
-- Keep it class B by adding an optional `voucherCodes?: string[]` *alongside* the
-  existing `voucherCode` rather than changing that field's type (changing it is
-  class C and would need a `release-gate.md` hold).
-- Target is one shop voucher per shop + one platform voucher.
-- Lifting the `SINGLE_SELLER_ONLY` block (gateway `createOrder` AND
-  `validateVoucher`, `apps/gateway/src/order/order.service.ts`) belongs to
-  phase 2. **Landmine when you do:** `previewVoucher()`
-  (`apps/orders/src/orders.service.ts`) does not build the seller map from the
-  items — it assigns the WHOLE `itemsTotal` to the single `sellerId` the
-  gateway passes. That is correct today only because the gateway 400s a
-  multi-seller basket first. Lift the guard without switching preview to
-  `buildSubtotalBySellerId(items)` and a shop voucher gets priced against the
-  entire multi-shop cart, i.e. exactly the list-vs-apply drift this design
-  exists to prevent.
-- **Voucher codes are globally unique** (`uq_vouchers_code`) and checkout looks
-  a voucher up **by code alone**. So the first shop to take `SALE10` blocks
-  every other shop and the platform forever, where Shopee namespaces codes per
-  shop. Fixing it is a composite unique `(seller_id, code)` PLUS a lookup that
-  resolves the code within the basket's sellers — bigger than it looks, decide
-  in phase 2. Related minor: the shop-facing create echoes the code in its 409
-  (`ALREADY_EXISTS`), which lets a shop probe whether a rival's code exists —
-  same class as the leak closed on deactivate, low severity because codes are
-  meant to reach buyers anyway.
-- **Wrinkle to settle first:** a platform voucher across a multi-shop checkout
-  writes one `voucher_redemptions` row **per sub-order** (unique key is
-  `(voucher_id, order_id)`), so it burns N redemptions against `usage_limit`
-  where Shopee counts 1 — and the Redis quota mirror (VOUCHER-CONC-01)
-  decrements N times too. Decide the counting unit (per checkout vs per order)
-  before writing the redemption path.
-
-**Two invariants phase 2 must not break** (they are what makes phase 1 correct):
-- **One rules engine.** `evaluateVoucher()` (`apps/orders/src/orders.service.ts`)
-  is pure and non-throwing; the list maps it to a response and
-  `validateVoucherForCheckout` maps it to a 400 via `voucherRejection()`. Never
-  re-implement a rule in the list path — list and apply drifting apart is the
-  exact failure this design exists to prevent.
-- **Visible ≠ applicable.** The list is a hint; applying an ineligible code still
-  400s on `voucher/validate` and on `POST /api/order`.
-
 ## AI-03 — Sell From Photo (Gemini; no migration)
 
 - **Flow:** seller uploads photo via existing Cloudinary signature flow → FE
@@ -162,31 +84,6 @@ in one Lua step, TTL self-healing, fails open). Extending it to stock reuses
 that helper — the hard part left is per-SKU seeding and the compensation matrix,
 not the Lua. Second tier of local cache in front of Redis is also open but only
 safe for brand/category (multi-instance staleness).
-
-## EXPORT-CSV-01 — T4 / T5 only (T1–T3 SHIPPED 2026-09-16)
-
-T1 (`libs/common/src/utils/csv.util.ts`), T2 (orders TCP leg) and T3 (the live
-`GET /api/order/seller/export` route) are **done** — see `CHANGELOG.md` for what
-shipped and `known-behaviors.md` → EXPORT-CSV-01 for the residuals (one row per
-ITEM, order-level money on the first row only, the 90-day / 5.000-row caps, and
-why the file is buffered rather than streamed). Do not re-derive any of that.
-
-What is reusable for the two optional tiers below: `toCsv(rows, columns)` in
-`@app/common` handles BOM, RFC-4180 escaping, formula-injection guarding and
-`="…"` literal cells, so a new export is "query + column list". The file-over-TCP
-transport (orders returns a `Buffer`, gateway does `Buffer.from(result.data)`
-then `res.end()`) is proven by both the PDF invoice and this export.
-
-### T4 — admin export (optional, later)
-
-`GET /api/order/admin/export` across all sellers with a `sellerId` column, gated
-on `order read:any`. Reuses T1 + T2 wholesale; only the filter changes.
-
-### T5 — async job variant (gated, do NOT build speculatively)
-
-Only if "I need a full year" becomes a real, repeated complaint. Then: job row +
-worker + Cloudinary/S3 artifact + poll endpoint + expiry cron. Everything in
-T1/T2 survives the upgrade — the public route can keep its shape and answer 202.
 
 ## GHN Web console — remaining FE steps (backend ready)
 
