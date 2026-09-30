@@ -42,4 +42,33 @@ describe("RoleAuthGuard", () => {
 
     expect(guard.canActivate(createContext("admin"))).toBe(true);
   });
+
+  // ADMIN-ORDERS-RBAC-01 — `order read:any` gates the platform-wide order and
+  // voucher lists; a seller must not pass it.
+  describe("@CheckPermission('order', 'read:any')", () => {
+    function createPermissionGuard(): RoleAuthGuard {
+      const reflector = {
+        getAllAndOverride: jest.fn((key: string) => {
+          if (key === CHECK_PERMISSION_KEY) {
+            return { resource: "order", action: "read:any" };
+          }
+          return undefined;
+        }),
+      } as unknown as Reflector;
+
+      return new RoleAuthGuard(reflector);
+    }
+
+    it("allows admin", () => {
+      expect(createPermissionGuard().canActivate(createContext("admin"))).toBe(
+        true,
+      );
+    });
+
+    it.each(["shop", "user", "logistics_operator"])("rejects %s", (role) => {
+      expect(() =>
+        createPermissionGuard().canActivate(createContext(role)),
+      ).toThrow(ForbiddenException);
+    });
+  });
 });
