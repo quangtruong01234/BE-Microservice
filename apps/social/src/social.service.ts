@@ -24,6 +24,7 @@ import {
   CloudinaryService,
   isRmqPublisherLive,
   PaginatedResponse,
+  toContainsLikePattern,
 } from "@app/common";
 import { generatePublicId } from "@app/common";
 import { EXCHANGE } from "@app/common/constants/exchange";
@@ -467,14 +468,20 @@ export class SocialService {
     page: number;
     limit: number;
     viewerUserId?: number | null;
+    search?: string | null;
   }): Promise<
     PaginatedResponse<
       Post & { likeCount: number; isLiked: boolean; commentCount: number }
     >
   > {
-    const { userId, page, limit, viewerUserId } = payload;
+    const { userId, page, limit, viewerUserId, search } = payload;
     const [posts, total] = await this.postRepository.findAndCount({
-      where: { userId, isHidden: false },
+      // Same unescaped `search` semantics as getPosts (SEARCH-01).
+      where: {
+        userId,
+        isHidden: false,
+        ...(search ? { content: Like(`%${search}%`) } : {}),
+      },
       order: { createdAt: "DESC" },
       skip: (page - 1) * limit,
       take: limit,
@@ -869,12 +876,13 @@ export class SocialService {
     page: number;
     limit: number;
     viewerUserId?: number | null;
+    search?: string | null;
   }): Promise<
     PaginatedResponse<
       Post & { likeCount: number; isLiked: boolean; commentCount: number }
     >
   > {
-    const { userId, page, limit, viewerUserId } = payload;
+    const { userId, page, limit, viewerUserId, search } = payload;
     const following = await this.followRepository.find({
       where: { followerId: userId },
       select: ["followingId"],
@@ -884,7 +892,12 @@ export class SocialService {
     }
     const followingIds = following.map((f) => f.followingId);
     const [posts, total] = await this.postRepository.findAndCount({
-      where: { userId: In(followingIds), isHidden: false },
+      // Same unescaped `search` semantics as getPosts (SEARCH-01).
+      where: {
+        userId: In(followingIds),
+        isHidden: false,
+        ...(search ? { content: Like(`%${search}%`) } : {}),
+      },
       order: { createdAt: "DESC" },
       skip: (page - 1) * limit,
       take: limit,
@@ -903,6 +916,7 @@ export class SocialService {
     status?: "pending" | "resolved" | "dismissed";
     page: number;
     limit: number;
+    q?: string;
   }): Promise<
     PaginatedResponse<{
       post: Post;
@@ -918,7 +932,10 @@ export class SocialService {
       }>;
     }>
   > {
-    const { status, page, limit } = payload;
+    const { status, page, limit, q } = payload;
+    // `q` matches the post content only; the author lives in the user
+    // service and is not searched.
+    const contentPattern = toContainsLikePattern(q);
 
     // `deletePost` hard-removes the post but leaves its report rows behind, so
     // `post_reports` can hold rows pointing at a post that no longer exists.
@@ -935,13 +952,21 @@ export class SocialService {
       .orderBy("latestReportedAt", "DESC")
       .offset((page - 1) * limit)
       .limit(limit);
-    if (status) groupedQb.where("report.status = :status", { status });
+    if (status) groupedQb.andWhere("report.status = :status", { status });
+    if (contentPattern) {
+      groupedQb.andWhere("post.content LIKE :contentPattern", {
+        contentPattern,
+      });
+    }
 
     const totalQb = this.postReportRepository
       .createQueryBuilder("report")
       .innerJoin(Post, "post", "post.id = report.postId")
       .select("COUNT(DISTINCT report.postId)", "cnt");
-    if (status) totalQb.where("report.status = :status", { status });
+    if (status) totalQb.andWhere("report.status = :status", { status });
+    if (contentPattern) {
+      totalQb.andWhere("post.content LIKE :contentPattern", { contentPattern });
+    }
 
     const [grouped, totalRaw] = await Promise.all([
       groupedQb.getRawMany<{

@@ -78,6 +78,7 @@ export class SocialController {
       page: number;
       limit: number;
       viewerUserId?: number | null;
+      search?: string | null;
     },
   ): Promise<unknown> {
     return this.socialService.getPostsByUser(payload);
@@ -246,6 +247,7 @@ export class SocialController {
       page: number;
       limit: number;
       viewerUserId?: number | null;
+      search?: string | null;
     },
   ): Promise<unknown> {
     return this.socialService.getFollowingFeed(payload);
@@ -258,6 +260,7 @@ export class SocialController {
       status?: "pending" | "resolved" | "dismissed";
       page: number;
       limit: number;
+      q?: string;
     },
   ): Promise<unknown> {
     return this.socialService.listReportedPosts(payload);
