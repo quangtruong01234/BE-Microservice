@@ -23,6 +23,7 @@ export * from "./public-id/public-id.util";
 export * from "./utils/csv.util";
 export * from "./utils/timezone.util";
 export * from "./utils/rich-text-html.util";
+export * from "./utils/like-term.util";
 
 export * from "./resilience/circuit-breaker";
 export * from "./resilience/resilient-client-tcp";
