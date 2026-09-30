@@ -18,7 +18,7 @@ function resolveRedisPort(): number {
  * never fail to start because the broker is down.
  */
 export class RedisIoAdapter extends IoAdapter {
-  private readonly logger = new Logger(RedisIoAdapter.name);
+  private readonly adapterLogger = new Logger(RedisIoAdapter.name);
   private adapterConstructor: ReturnType<typeof createAdapter> | null = null;
   private pubClient: Redis | null = null;
   private subClient: Redis | null = null;
@@ -37,7 +37,9 @@ export class RedisIoAdapter extends IoAdapter {
     // the nodeB registerDirectPublisher crash). ioredis auto-reconnects.
     for (const client of [pubClient, subClient]) {
       client.on("error", (err: Error) => {
-        this.logger.warn(`Redis WS adapter client error: ${err.message}`);
+        this.adapterLogger.warn(
+          `Redis WS adapter client error: ${err.message}`,
+        );
       });
     }
 
@@ -54,13 +56,13 @@ export class RedisIoAdapter extends IoAdapter {
       this.pubClient = pubClient;
       this.subClient = subClient;
       this.adapterConstructor = createAdapter(pubClient, subClient);
-      this.logger.log(
+      this.adapterLogger.log(
         "Socket.IO Redis adapter enabled (multi-instance WS ready)",
       );
     } catch (err) {
       pubClient.disconnect();
       subClient.disconnect();
-      this.logger.warn(
+      this.adapterLogger.warn(
         `Redis unavailable for the Socket.IO adapter — falling back to the in-memory adapter (single-instance WS only): ${
           err instanceof Error ? err.message : String(err)
         }`,
