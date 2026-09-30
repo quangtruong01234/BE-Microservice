@@ -47,13 +47,14 @@ Nothing is mid-implementation. What is genuinely open:
   one (CART-UNIQ-01) was applied 2026-09-27.
 
 DEPLOY-PG-01 was resolved 2026-09-16; both migration failure modes now live in
-`ops-runtime.md` (§CI/CD and §Database migrations). Two config gaps remain,
-deliberately unfilled:
+`ops-runtime.md` (§CI/CD and §Database migrations). Two config gaps remain:
 
-- **`METRICS_TOKEN` is UNSET in `local/nodeA/.env`**, so `GET /metrics` 404s on
-  prod (verified 2026-08-15). Set it only when a scraper actually exists. Only
-  the gateway is instrumented; the registry is per-process, so
-  `GATEWAY_INSTANCES>1` would need `prom-client`'s cluster aggregator.
+- **MONITOR-01 — `METRICS_TOKEN` is generated but NOT yet on the box**, so
+  `GET /metrics` still 404s on prod. Scraper chosen 2026-09-28: Grafana Cloud
+  free tier, hosted Metrics Endpoint (setup, dashboard, series budget in
+  `ops-runtime.md` §Metrics scrape). Owed: put the token in
+  `local/nodeA/.env` on the EC2 + `pm2 restart gateway`, verify 401/200, and
+  the user creates the Grafana Cloud stack and connection.
 - **`TURNSTILE_SECRET_KEY` is UNSET on prod**, so CAPTCHA-01 is off there. It
   is blocked on the user creating the Turnstile keys. Set the secret first
   (shadow mode), and flip `CAPTCHA_ENFORCE=true` only after the storefront
@@ -93,16 +94,8 @@ deliberately unfilled:
 
 -02/-03 DONE → CART-UNIQ-01; -04 DONE → RAIL-RANK-01 (see CHANGELOG).
 
-- 🔴 **ADMIN-ORDERS-RBAC-01 (found 2026-09-28 during EXPORT-CSV-01 T4, not
-  fixed — needs a user decision).** `GET /api/order/admin/orders`
-  (`order.controller.ts`, `@CheckPermission("order","read:any")`) answers 200 to
-  role `shop`: every seller's orders, including `shippingAddress` and `buyer`
-  (verified locally with the shop test account: 170 orders across 3 sellers).
-  Role `shop` holds `order read:any` in `apps/user/src/rbac/grants.ts`, so every
-  route gated on that grant alone has the same exposure. Fix = `@Roles("admin")`
-  (as the T4 export route does) or narrow the shop grant. First check whether
-  the storefront seller console calls this route: a 200 turning into a 403 is
-  release class C.
+- ~~ADMIN-ORDERS-RBAC-01 — shop read every seller's orders via
+  `/order/admin/orders`~~ → **DONE 2026-09-28**, see CHANGELOG.
 
 The one standing instruction:
 
@@ -199,6 +192,7 @@ pick one up. Do not re-derive them:
 
 **Search**
 - SEARCH-01 — Accent-insensitivity comes from the MySQL collation, not code; % and _ are not escaped and a blank q is a 400.
+- LIST-SEARCH-01 — Nine paginated lists take an optional trimmed ?q= (max 100) that ANDs with their filters and LIKE-escapes % and _, while the social feed/user-posts ?search= stays an unescaped wildcard; every q searches only columns its owning service stores.
 
 **Vouchers**
 - VOUCHER-CONC-01 — The Redis voucher quota is an admission gate that fails OPEN and can read pessimistically for up to 300s.

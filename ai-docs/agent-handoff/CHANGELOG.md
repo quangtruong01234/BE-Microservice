@@ -6,6 +6,92 @@
 
 ## Completed Milestones
 
+- **LIST-SEARCH-01 — server-side search on paginated lists (2026-09-30,
+  `/sweep LIST-SEARCH-01`, from `backend-handoff.md` Open). Release class B:
+  additive optional query params; a call without them answers exactly as
+  before.**
+  - **Gap.** Seven paginated lists had no search param, so the FE could only
+    filter the page it had loaded. Two social routes,
+    `GET /social/users/:id/feed` and `GET /social/posts/user/:userId`, silently
+    ignored `?search=`, so the FE hid the box.
+  - **Fix.** Added a new shared util, `libs/common/src/utils/like-term.util.ts`
+    (`escapeLikeTerm`, `toContainsLikePattern`). It trims the term, returns
+    `null` for a blank one, and escapes `\ % _`. An optional `q` (trimmed,
+    `@MaxLength(100)`) was added to seven gateway query DTOs and threaded into
+    the owning service. Each `q` ANDs with the existing filters, and the total
+    counts the same filtered set:
+    - Orders: `getOrdersBySeller` matches `publicId` OR `shippingAddress`. Both
+      return-request lists match `rr.public_id` OR the parent order's
+      `public_id` via a subquery. `listVouchers` matches `code`.
+    - User: `getUsersPaginated` matches username / email / name, with no
+      `isActive` filter.
+    - Product: risk list and wishlist match `product.name`.
+    - Social: `listReportedPosts` matches `post.content` in both the page and
+      the total query. Feed and user-posts now pass `search` through with the
+      unescaped SEARCH-01 semantics of `GET /social/posts`.
+  - **Scope.** Only columns the owning service stores are searched. Buyer
+    username on seller orders, seller on risk, and author on reports would need
+    a cross-service lookup before pagination, so they are declined. The
+    residuals are in known-behaviors LIST-SEARCH-01.
+  - **Test.** Added `like-term.util.spec.ts` and `social.search.spec.ts`, and
+    extended the orders, user and product-risk specs. Stubbing the util red'd
+    7 tests; the 5 suites now pass (142).
+  - **Self-test (local, 2026-09-30).** Accounts: `testadmin`, `techstore_demo`,
+    `canceltest1779978329`. Every route passed the same checks:
+    - Blank `q` returns the baseline total.
+    - A 101-character `q` returns 400.
+    - A no-match `q` returns `total 0, totalPages 1`.
+    - A real term narrows the list and every row matches.
+    - `limit=1` paging reports the searched total.
+
+    Narrowing per route:
+
+    | Route | Baseline → filtered |
+    |---|---|
+    | `order/seller` | 49 → 8, by code and by address |
+    | `admin/vouchers` | 34 → 2 |
+    | `return-requests` | 9 → 1 by `rr_`, 9 → 5 by `ord_` |
+    | feed | 9 → 1 |
+    | posts/user | 7 → 1 |
+
+    Seeding and escaping:
+    - Reports and wishlist were checked on seeded rows (a report, then
+      dismissed; a wishlist add, then deleted).
+    - `q=%` returned 0 on vouchers and reports.
+    - Inactive-user inclusion was not runtime-checked (no inactive row locally)
+      and is unit-covered.
+  - **FE handoff.** `frontend-handoff.md` → LIST-SEARCH-01.
+
+- **ADMIN-ORDERS-RBAC-01 — a seller could read every seller's orders
+  (2026-09-28, `/sweep ADMIN-ORDERS-RBAC-01`). Release class A by the
+  pragmatic test: no FE flow calls the affected routes as `shop`.**
+  - **Hole.** Role `shop` held `order read:any` in
+    `apps/user/src/rbac/grants.ts`. Two routes are gated on that grant alone:
+    `GET /api/order/admin/orders` (every seller's orders with `buyer` and
+    `shippingAddress`) and `GET /api/order/admin/vouchers` (every platform and
+    shop voucher). Both answered 200 to a shop.
+  - **Fix.** Narrowed the shop grant to `order read:own` (one line) rather than
+    adding `@Roles("admin")` per route: the grant was the root cause, and every
+    future route gated on `order read:any` would have reopened it. Nothing
+    checks `order read:own`, and seller routes enforce ownership in the service,
+    so the narrowing changes nothing else. The analytics revenue check
+    (`hasPermission(..., "order", "read:any")`) only runs behind
+    `shipping read:any`, which a shop does not hold.
+  - **FE check.** The storefront calls both routes only from
+    `ProtectedRoute requiredRole="admin"` pages (`AdminPage`,
+    `AdminVouchersPage`); the seller voucher console uses `vouchers/mine`.
+    `web-flow-GHN/src` calls neither. No handoff entry.
+  - **Test.** `role-auth.guard.spec.ts`: `@CheckPermission('order','read:any')`
+    allows admin, rejects shop/user/logistics_operator. The shop case was red
+    before the fix.
+  - **Self-test (local, 2026-09-28).** `techstore_demo` (shop):
+    `admin/orders` 403, `admin/vouchers` 403; `seller`, `vouchers/mine`,
+    `seller/analytics` and `export/jobs` still 200. `testadmin`:
+    `admin/orders` 200 (total 172, `buyer` present), `admin/vouchers` 200
+    (total 34).
+  - **Role change needs no re-login.** The guard reads the grant table at
+    request time; the JWT only carries the role name.
+
 - **VOUCHER-SHOP-01 phase 2 — voucher stacking across a multi-shop checkout
   (2026-09-28, `/sweep` batch item 5 of 5). Release class B (optional
   `voucherCodes` field, new nullable response fields, a 400 lifted; migration

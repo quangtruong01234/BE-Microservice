@@ -99,12 +99,36 @@
   route pattern). It is **open in dev** and **404 in production unless
   `METRICS_TOKEN` is set** in `local/nodeA/.env`; when set, scrape with
   `Authorization: Bearer $METRICS_TOKEN`. nginx `location /` proxies it, so the
-  token is the only gate — if a remote Prometheus is ever added, consider an
-  `allow/deny` block on `location = /metrics` as well. No Prometheus/Grafana is
-  deployed yet; the endpoint is scrapeable by hand
+  token is the only gate. An nginx `allow/deny` on `location = /metrics` is NOT
+  an option with the scraper below: Grafana Cloud scrapes from its own shifting
+  IP ranges. The endpoint is also scrapeable by hand
   (`curl -H "Authorization: Bearer …" https://<PROD_API_DOMAIN>/metrics`).
   Only the gateway is instrumented, and the registry is per-process — do not set
   `GATEWAY_INSTANCES>1` and expect whole-gateway numbers.
+  - **Scraper = Grafana Cloud free tier, hosted "Metrics Endpoint" integration
+    (MONITOR-01, 2026-09-28)** — Grafana Cloud pulls the public URL itself, so
+    nothing runs on the EC2 (no Prometheus, no Alloy agent eating the box's
+    RAM). Setup: Connections → Add new connection → *Metrics Endpoint* → URL
+    `https://<PROD_API_DOMAIN>/metrics`, auth **Bearer** = the `METRICS_TOKEN`
+    value, interval 60s. The token value lives in
+    `../.agent-local/prod-endpoints.md`; on the box it goes in
+    `local/nodeA/.env`, then `pm2 restart gateway` (the gateway `dotenv`-loads
+    that file at boot, so a plain restart picks it up — it is not a pm2-owned
+    key). Verify: no header → 401, right header → 200 with
+    `http_requests_total`.
+  - Dashboard: `grafana/gateway-dashboard.json` (Dashboards → New → Import;
+    pick the Grafana Cloud Prometheus data source). Every query was evaluated
+    against a real Prometheus scraping the local gateway, and the JSON imported
+    cleanly into Grafana, on 2026-09-28.
+  - Budget: the free tier allows 10k active series. Each (method, route,
+    status) combination the gateway has actually served costs 14 series (11
+    histogram buckets + sum + count + the counter), plus ~100 process series,
+    so ~700 distinct combinations is the ceiling. `route` is the matched
+    pattern and unmatched paths collapse into `unmatched`, so scanner traffic
+    cannot mint series.
+  - The EC2 runs on a stop/start schedule, so the graphs have a nightly gap
+    and counters restart at 0 each morning — `rate()`/`increase()` handle the
+    reset; a raw counter panel would not.
 - **Captcha (CAPTCHA-01, 2026-09-28)**: Cloudflare Turnstile on
   `POST /api/user/register` and `/forgot-password`, driven by two gateway env
   vars in `local/nodeA/.env`. `TURNSTILE_SECRET_KEY` unset means off, which is

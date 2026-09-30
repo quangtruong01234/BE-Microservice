@@ -1703,6 +1703,42 @@ Contract edges, both verified at runtime:
   `[]` when nothing matches (SHAPE-01 rule 1). Ids are `usr_...` public ids via
   `exposeUser`; the nullable `name` rides along — see ENRICH-BATCH-01.
 
+## Paginated list search is `q`, escaped, and owner-service-only (LIST-SEARCH-01, 2026-09-30)
+<!-- kb: id=LIST-SEARCH-01; group=search; files=libs/common/src/utils/like-term.util.ts; sha=38041933421c; verified=local:2026-09-30; keys=list search,q,toContainsLikePattern,escapeLikeTerm,seller orders search,admin users search,voucher search,return request search,reports search,risk search,wishlist search,feed search,tìm kiếm danh sách,lọc,tìm đơn; summary=Nine paginated lists take an optional trimmed ?q= (max 100) that ANDs with their filters and LIKE-escapes % and _, while the social feed/user-posts ?search= stays an unescaped wildcard; every q searches only columns its owning service stores. -->
+
+`?q=` on these routes is one contract: optional, trimmed, blank ⇒ no filter,
+ANDs with the route's other filters, `total`/`totalPages`/`hasNext` describe the
+searched set, > 100 chars ⇒ 400. The pattern is built by
+`toContainsLikePattern` (`@app/common`), which escapes `\`, `%` and `_` — `?q=%`
+matches only a literal percent sign. Case and accents fold through the
+`utf8mb4_0900_ai_ci` collation, exactly as in SEARCH-01.
+
+| Route | `q` matches |
+|---|---|
+| `GET /order/seller` | order `ord_` public id, or the `shipping_address` string (recipient/address text as stored) |
+| `GET /user` (admin) | username, email or name — **inactive accounts included**, unlike `/user/search` |
+| `GET /order/admin/vouchers`, `/order/vouchers/mine` | voucher `code` |
+| `GET /order/return-requests`, `/return-requests/mine` | `rr_` public id, or the parent order's `ord_` public id |
+| `GET /social/admin/reports` | the reported post's `content` |
+| `GET /products/admin/risk` | product `name` |
+| `GET /products/wishlist` | product `name` |
+
+Deliberate limits — do not "fix" them without a design:
+
+- **Only columns the owning service stores are searched.** Buyer username on
+  seller orders, seller on the risk list, author on reports would each need a
+  cross-service lookup (user service) before the paginated query; none is done.
+- **`?search=` on `GET /social/posts/user/:userId` and
+  `GET /social/users/:id/feed` is SEARCH-01's contract, not this one:** content
+  only, `%`/`_` unescaped, blank normalized to `null` at the gateway. Followers,
+  following and comments lists still ignore `search`.
+- `getOrdersBySeller` has no `ORDER BY`, searched or not — page boundaries are
+  whatever MySQL returns. Pre-existing, not introduced here.
+
+Verified locally 2026-09-30 on every route: blank = unfiltered total, 101
+chars = 400, a real term narrows with every row matching, `limit=1` paging
+reports the searched total, `%` and `_` are literal.
+
 ## A role change only reaches the JWT on the target's NEXT login (ROLE-ADMIN-01, 2026-09-15)
 <!-- kb: id=ROLE-ADMIN-01; group=auth; files=apps/gateway/src/user/user.service.ts; sha=2e9cd115eb95; verified=prod:2026-09-16; keys=role change,tokenRole,isRoleStale,JWT role,promote shop,CANNOT_CHANGE_OWN_ROLE,đổi role,đổi quyền,phân quyền,lên shop; summary=A role change reaches the JWT only on the target’s NEXT login; GET /api/user/me exposes the drift as a signal only. -->
 
