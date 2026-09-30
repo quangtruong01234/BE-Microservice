@@ -53,6 +53,9 @@ const createQueryBuilderMock = <T extends ObjectLiteral>(terminal: {
   return queryBuilder as unknown as SelectQueryBuilder<T>;
 };
 
+const andWhereOf = (queryBuilder: SelectQueryBuilder<Product>): jest.Mock =>
+  (queryBuilder as unknown as { andWhere: jest.Mock }).andWhere;
+
 describe("ProductService product risk scoring", () => {
   const productRepository = {
     createQueryBuilder: jest.fn(),
@@ -303,6 +306,31 @@ describe("ProductService product risk scoring", () => {
     expect(response.data[0]).toEqual(
       expect.objectContaining({ riskScore: 0, riskFlags: [] }),
     );
+  });
+
+  it("narrows the admin risk list by product name when q is set", async () => {
+    const queryBuilder = createQueryBuilderMock<Product>({
+      getManyAndCount: [[], 0],
+    });
+    productRepository.createQueryBuilder.mockReturnValueOnce(queryBuilder);
+
+    await service.findProductRisks({ page: 1, limit: 20, q: " cam " });
+
+    expect(andWhereOf(queryBuilder)).toHaveBeenCalledWith(
+      "product.name LIKE :namePattern",
+      { namePattern: "%cam%" },
+    );
+  });
+
+  it("adds no name condition for a blank q", async () => {
+    const queryBuilder = createQueryBuilderMock<Product>({
+      getManyAndCount: [[], 0],
+    });
+    productRepository.createQueryBuilder.mockReturnValueOnce(queryBuilder);
+
+    await service.findProductRisks({ page: 1, limit: 20, q: "  " });
+
+    expect(andWhereOf(queryBuilder)).not.toHaveBeenCalled();
   });
 
   it("persists bounded retry metadata when scoring fails", async () => {

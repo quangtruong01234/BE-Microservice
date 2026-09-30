@@ -36,6 +36,7 @@ export type ProductRiskQuery = {
   minScore?: number;
   page?: number;
   limit?: number;
+  q?: string;
 };
 
 export type ProductRiskSummary = {

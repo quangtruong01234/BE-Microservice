@@ -12,6 +12,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import {
   DataSource,
   In,
+  Like,
   MoreThan,
   Raw,
   Repository,
@@ -29,6 +30,7 @@ import {
   PaginatedResponse,
   escapeRichTextSearchTerm,
   sanitizeRichTextHtml,
+  toContainsLikePattern,
 } from "@app/common";
 import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 import { EXCHANGE } from "@app/common/constants/exchange";
@@ -333,7 +335,11 @@ export class ProductService {
       Math.max(0, Math.trunc(query.minScore ?? 1)),
     );
 
-    const [products, total] = await this.productRepository
+    // LIST-SEARCH-01: `q` matches the product name only — the seller lives
+    // in the user service and is not searched.
+    const namePattern = toContainsLikePattern(query.q);
+
+    const riskQb = this.productRepository
       .createQueryBuilder("product")
       .addSelect("product.riskScore")
       .addSelect("product.riskFlags")
@@ -344,7 +350,11 @@ export class ProductService {
       .addSelect("product.riskLastError")
       .leftJoinAndSelect("product.brand", "brand")
       .leftJoinAndSelect("product.categories", "category")
-      .where("product.riskScore >= :minScore", { minScore })
+      .where("product.riskScore >= :minScore", { minScore });
+    if (namePattern) {
+      riskQb.andWhere("product.name LIKE :namePattern", { namePattern });
+    }
+    const [products, total] = await riskQb
       .orderBy("product.riskScore", "DESC")
       .addOrderBy("product.updatedAt", "DESC")
       .skip((page - 1) * limit)
@@ -2188,11 +2198,20 @@ export class ProductService {
     userId: number,
     page = 1,
     limit = 20,
+    q?: string,
   ): Promise<PaginatedResponse<WishlistedProduct>> {
     const safePage = Math.max(1, Math.trunc(page));
     const safeLimit = Math.min(100, Math.max(1, Math.trunc(limit)));
+    // LIST-SEARCH-01: `q` is a contains-match on the product name.
+    const namePattern = toContainsLikePattern(q);
     const [wishlistItems, total] = await this.wishlistRepository.findAndCount({
-      where: { userId, product: { isActive: true } },
+      where: {
+        userId,
+        product: {
+          isActive: true,
+          ...(namePattern ? { name: Like(namePattern) } : {}),
+        },
+      },
       relations: {
         product: {
           brand: true,

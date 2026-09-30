@@ -364,12 +364,19 @@ export class ProductController {
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.WISHLIST_LIST)
   async findWishlistByUser(
-    @Payload() data: { userId: number; page?: number; limit?: number },
+    @Payload()
+    data: {
+      userId: number;
+      page?: number;
+      limit?: number;
+      q?: string;
+    },
   ): Promise<PaginatedResponse<unknown>> {
     return this.productService.findWishlistByUser(
       data.userId,
       data.page,
       data.limit,
+      data.q,
     );
   }
 
