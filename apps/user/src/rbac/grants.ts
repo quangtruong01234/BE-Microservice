@@ -55,7 +55,10 @@ const grantList = [
   { role: "shop", resource: "product", action: "read:any", attributes: "*" },
   { role: "shop", resource: "product", action: "update:own", attributes: "*" },
   { role: "shop", resource: "product", action: "delete:own", attributes: "*" },
-  { role: "shop", resource: "order", action: "read:any", attributes: "*" },
+  // `read:own`, not `read:any` — ADMIN-ORDERS-RBAC-01. `order read:any` gates
+  // the platform-wide order and voucher lists; seller routes check ownership
+  // in the service instead of through this grant.
+  { role: "shop", resource: "order", action: "read:own", attributes: "*" },
   { role: "shop", resource: "order", action: "update:own", attributes: "*" },
   { role: "shop", resource: "inventory", action: "read:own", attributes: "*" },
   {
