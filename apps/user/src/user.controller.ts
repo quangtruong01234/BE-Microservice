@@ -47,9 +47,9 @@ export class UserController {
 
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.GET_USERS_PAGINATED })
   async getUsersPaginated(
-    @Payload() data: { page: number; limit: number },
+    @Payload() data: { page: number; limit: number; q?: string },
   ): Promise<unknown> {
-    return this.userService.getUsersPaginated(data.page, data.limit);
+    return this.userService.getUsersPaginated(data.page, data.limit, data.q);
   }
 
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.GET_USERS_BY_IDS })

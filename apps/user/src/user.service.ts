@@ -16,6 +16,7 @@ import {
   FindOptionsSelect,
   FindOptionsWhere,
   In,
+  Like,
   QueryFailedError,
   Repository,
   SelectQueryBuilder,
@@ -34,6 +35,7 @@ import {
   generatePublicId,
   isPublicId,
   renderPasswordResetEmail,
+  toContainsLikePattern,
 } from "@app/common";
 import { ERROR_CODE } from "libs/constant/error-code.constant";
 import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
@@ -77,9 +79,20 @@ export class UserService {
   async getUsersPaginated(
     page: number,
     limit: number,
+    q?: string,
   ): Promise<PaginatedResponse<SafeUser>> {
     this.logger.log(`Fetching users page=${page} limit=${limit}`);
+    // LIST-SEARCH-01: `q` matches username, email or display name. There is
+    // deliberately no isActive filter — the admin list must find locked users.
+    const searchPattern = toContainsLikePattern(q);
     const [users, total] = await this.userRepository.findAndCount({
+      where: searchPattern
+        ? [
+            { username: Like(searchPattern) },
+            { email: Like(searchPattern) },
+            { name: Like(searchPattern) },
+          ]
+        : {},
       select: {
         id: true,
         publicId: true,

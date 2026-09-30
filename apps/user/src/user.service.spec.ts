@@ -115,6 +115,35 @@ describe("UserService", () => {
     );
   });
 
+  it("searches username, email or name without an isActive filter", async () => {
+    userRepository.findAndCount.mockResolvedValue([[persistedUser], 1]);
+
+    await service.getUsersPaginated(1, 20, " test_ ");
+
+    const [{ where }] = userRepository.findAndCount.mock.calls[0] as [
+      { where: Array<Record<string, { value: string }>> },
+    ];
+    expect(where).toHaveLength(3);
+    expect(where.map((condition) => Object.keys(condition)[0])).toEqual([
+      "username",
+      "email",
+      "name",
+    ]);
+    for (const condition of where) {
+      expect(Object.values(condition)[0].value).toBe("%test\\_%");
+    }
+  });
+
+  it("lists every user when the search is blank", async () => {
+    userRepository.findAndCount.mockResolvedValue([[persistedUser], 1]);
+
+    await service.getUsersPaginated(1, 20, "   ");
+
+    expect(userRepository.findAndCount).toHaveBeenCalledWith(
+      expect.objectContaining({ where: {} }),
+    );
+  });
+
   it("does not return the password hash after registration", async () => {
     roleRepository.findOne.mockResolvedValue(role);
     userRepository.find.mockResolvedValue([]);
