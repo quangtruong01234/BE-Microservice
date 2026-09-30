@@ -9,7 +9,14 @@ import { HttpService } from "@nestjs/axios";
 import { ClientProxy } from "@nestjs/microservices";
 import { Channel } from "amqplib";
 import { of } from "rxjs";
-import { FindOperator, QueryFailedError, Repository } from "typeorm";
+import {
+  Brackets,
+  FindOperator,
+  QueryFailedError,
+  Repository,
+  WhereExpressionBuilder,
+} from "typeorm";
+import { createRepositoryMock, RepositoryMock } from "@app/testing";
 import { INVENTORY_MESSAGE_PATTERNS } from "libs/constant/message-pattern-inventory.constant";
 import { Order, OrderStatus } from "./entity/order.entity";
 import { OrderOutbox } from "./entity/order-outbox.entity";
@@ -2639,5 +2646,127 @@ describe("OrdersService VOUCHER-SHOP-01 — basket eligibility list", () => {
     await service.listAvailableVouchers(7, basket);
 
     expect(createQueryBuilder).not.toHaveBeenCalled();
+  });
+});
+
+describe("OrdersService LIST-SEARCH-01 — server-side list search", () => {
+  let orderRepo: RepositoryMock<Order>;
+  let returnRequestRepo: RepositoryMock<OrderReturnRequest>;
+  let voucherRepo: RepositoryMock<Voucher>;
+  let service: OrdersService;
+
+  // Replays a Brackets group against a recorder so the OR-ed conditions it
+  // would add are visible to the assertion.
+  const bracketConditions = (group: unknown): unknown[][] => {
+    expect(group).toBeInstanceOf(Brackets);
+    const recorded: unknown[][] = [];
+    const recorder = {
+      where: (...args: unknown[]): unknown => {
+        recorded.push(args);
+        return recorder;
+      },
+      orWhere: (...args: unknown[]): unknown => {
+        recorded.push(args);
+        return recorder;
+      },
+    };
+    (group as Brackets).whereFactory(
+      recorder as unknown as WhereExpressionBuilder,
+    );
+    return recorded;
+  };
+
+  beforeEach(() => {
+    orderRepo = createRepositoryMock<Order>();
+    returnRequestRepo = createRepositoryMock<OrderReturnRequest>();
+    voucherRepo = createRepositoryMock<Voucher>();
+    service = new OrdersService(
+      null,
+      {} as HttpService,
+      {} as ClientProxy,
+      {} as ClientProxy,
+      { send: jest.fn().mockReturnValue(of([5, 6])) } as unknown as ClientProxy,
+      orderRepo.asRepository(),
+      {} as Repository<OrderItem>,
+      createOutboxRepository().repository,
+      {} as Repository<ShippingHistory>,
+      returnRequestRepo.asRepository(),
+      voucherRepo.asRepository(),
+      {} as Repository<VoucherRedemption>,
+      {} as GhnService,
+      {} as CachedService,
+    );
+  });
+
+  it("filters vouchers by an escaped code substring, ANDed with the seller", async () => {
+    await service.listVouchers(1, 20, 9, " sale_ ");
+
+    const [{ where }] = voucherRepo.findAndCount.mock.calls[0] as [
+      { where: { sellerId?: number; code?: FindOperator<string> } },
+    ];
+    expect(where.sellerId).toBe(9);
+    expect(where.code?.value).toBe("%sale\\_%");
+  });
+
+  it("lists vouchers unfiltered for a blank q", async () => {
+    await service.listVouchers(1, 20, null, "  ");
+
+    expect(voucherRepo.findAndCount).toHaveBeenCalledWith(
+      expect.objectContaining({ where: {} }),
+    );
+  });
+
+  it("matches seller orders on order code or the shipping snapshot", async () => {
+    const qb = orderRepo.createQueryBuilder() as Record<string, jest.Mock>;
+    qb.getManyAndCount.mockResolvedValue([[], 0]);
+    qb.andWhere.mockClear();
+
+    await service.getOrdersBySeller(3, 1, 20, undefined, "0901");
+
+    expect(qb.andWhere).toHaveBeenCalledTimes(1);
+    const [group] = qb.andWhere.mock.calls[0] as [unknown];
+    expect(bracketConditions(group)).toEqual([
+      ["order.publicId LIKE :searchPattern", { searchPattern: "%0901%" }],
+      [
+        "order.shippingAddress LIKE :searchPattern",
+        { searchPattern: "%0901%" },
+      ],
+    ]);
+  });
+
+  it("matches the buyer's return requests on the rr_ or the ord_ code", async () => {
+    const qb = returnRequestRepo.createQueryBuilder() as Record<
+      string,
+      jest.Mock
+    >;
+    qb.getManyAndCount.mockResolvedValue([[], 0]);
+    qb.andWhere.mockClear();
+
+    await service.getUserReturnRequests(7, 1, 20, "ord_x");
+
+    expect(qb.where).toHaveBeenCalledWith("rr.user_id = :userId", {
+      userId: 7,
+    });
+    const [group] = qb.andWhere.mock.calls[0] as [unknown];
+    expect(bracketConditions(group)).toEqual([
+      ["rr.public_id LIKE :searchPattern", { searchPattern: "%ord\\_x%" }],
+      [
+        "rr.order_id IN (SELECT id FROM orders WHERE public_id LIKE :searchPattern)",
+        { searchPattern: "%ord\\_x%" },
+      ],
+    ]);
+  });
+
+  it("adds no search condition to the managed return queue for a blank q", async () => {
+    const qb = returnRequestRepo.createQueryBuilder() as Record<
+      string,
+      jest.Mock
+    >;
+    qb.getManyAndCount.mockResolvedValue([[], 0]);
+    qb.andWhere.mockClear();
+
+    await service.getManagedReturnRequests(1, true, 1, 20, undefined, " ");
+
+    expect(qb.andWhere).not.toHaveBeenCalled();
   });
 });

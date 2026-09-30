@@ -491,6 +491,7 @@ export class OrdersController {
       page: number;
       limit: number;
       status?: OrderStatus;
+      q?: string;
     },
   ): Promise<PaginatedResponse<Order>> {
     return this.ordersService.getOrdersBySeller(
@@ -498,6 +499,7 @@ export class OrdersController {
       data.page,
       data.limit,
       data.status,
+      data.q,
     );
   }
 
@@ -575,12 +577,19 @@ export class OrdersController {
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.RETURN_REQUEST_LIST_USER)
   async handleGetUserReturnRequests(
-    @Payload() data: { userId: number; page: number; limit: number },
+    @Payload()
+    data: {
+      userId: number;
+      page: number;
+      limit: number;
+      q?: string;
+    },
   ): Promise<PaginatedResponse<ReturnRequestView>> {
     return this.ordersService.getUserReturnRequests(
       data.userId,
       data.page,
       data.limit,
+      data.q,
     );
   }
 
@@ -593,6 +602,7 @@ export class OrdersController {
       page: number;
       limit: number;
       status?: ReturnRequestStatus;
+      q?: string;
     },
   ): Promise<PaginatedResponse<ReturnRequestView>> {
     return this.ordersService.getManagedReturnRequests(
@@ -601,6 +611,7 @@ export class OrdersController {
       data.page,
       data.limit,
       data.status,
+      data.q,
     );
   }
 
@@ -679,12 +690,14 @@ export class OrdersController {
       page: number;
       limit: number;
       sellerId?: number | null;
+      q?: string;
     },
   ): Promise<PaginatedResponse<Voucher>> {
     return this.ordersService.listVouchers(
       data.page,
       data.limit,
       data.sellerId ?? null,
+      data.q,
     );
   }
 

@@ -36,6 +36,8 @@ import {
   endOfVnDay,
   startOfVnDayBefore,
   vnWallClockShiftMinutes,
+  escapeLikeTerm,
+  toContainsLikePattern,
 } from "@app/common";
 import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 import { CachedService } from "@app/cached";
@@ -150,16 +152,6 @@ function formatOrderVoucherCodes(
   );
   return codes.length ? codes.join(" + ") : null;
 }
-
-/**
- * Neutralize the SQL LIKE wildcards in user input so a buyer typing `_` or `%`
- * in the order-code search box gets a literal match instead of a wildcard scan.
- * MySQL's default LIKE escape character is a backslash, so no ESCAPE clause is
- * needed (TypeORM's `Like()` does not emit one).
- */
-
-const escapeLikeTerm = (term: string): string =>
-  term.replace(/[\\%_]/g, (character) => `\\${character}`);
 
 /** How many owed events one outbox tick drains before yielding (RESIL-02). */
 const ORDER_OUTBOX_BATCH_SIZE = 50;
@@ -1478,9 +1470,15 @@ export class OrdersService {
     page: number,
     limit: number,
     sellerId?: number | null,
+    q?: string,
   ): Promise<PaginatedResponse<Voucher>> {
+    // LIST-SEARCH-01: `q` is a contains-match on the voucher code.
+    const codePattern = toContainsLikePattern(q);
     const [data, total] = await this.voucherRepository.findAndCount({
-      where: sellerId != null ? { sellerId } : {},
+      where: {
+        ...(sellerId != null ? { sellerId } : {}),
+        ...(codePattern ? { code: Like(codePattern) } : {}),
+      },
       order: { createdAt: "DESC" },
       skip: (page - 1) * limit,
       take: limit,
@@ -4207,11 +4205,13 @@ export class OrdersService {
     page: number,
     limit: number,
     status?: OrderStatus,
+    q?: string,
   ): Promise<PaginatedResponse<Order>> {
     const productIds = await this.getSellerProductIds(sellerId);
     if (productIds.length === 0) {
       return PaginatedResponse.of([], 0, page, limit);
     }
+    const searchPattern = toContainsLikePattern(q);
 
     // Items are joined so the seller list carries the same rows the buyer list
     // does — the gateway already enriches them with product images and SKU
@@ -4226,6 +4226,21 @@ export class OrdersService {
 
     if (status) {
       qb.andWhere("order.status = :status", { status });
+    }
+
+    // LIST-SEARCH-01: order code, or the recipient's name/phone/address held
+    // in the `name|phone|address` snapshot. The buyer's username lives in the
+    // user service and is not searched.
+    if (searchPattern) {
+      qb.andWhere(
+        new Brackets((searchQb) => {
+          searchQb
+            .where("order.publicId LIKE :searchPattern", { searchPattern })
+            .orWhere("order.shippingAddress LIKE :searchPattern", {
+              searchPattern,
+            });
+        }),
+      );
     }
 
     const [data, total] = await qb
@@ -4865,15 +4880,43 @@ export class OrdersService {
     userId: number,
     page: number,
     limit: number,
+    q?: string,
   ): Promise<PaginatedResponse<ReturnRequestView>> {
-    const [data, total] = await this.returnRequestRepository.findAndCount({
-      where: { userId },
-      order: { createdAt: "DESC" },
-      skip: (page - 1) * limit,
-      take: limit,
-    });
+    const qb = this.returnRequestRepository
+      .createQueryBuilder("rr")
+      .where("rr.user_id = :userId", { userId });
+    this.applyReturnRequestSearch(qb, q);
+    const [data, total] = await qb
+      .orderBy("rr.created_at", "DESC")
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
     const enriched = await this.attachOrderPublicIds(data);
     return PaginatedResponse.of(enriched, total, page, limit);
+  }
+
+  /**
+   * LIST-SEARCH-01: `q` matches the request code (`rr_…`) or the parent
+   * order's code (`ord_…`). A blank `q` adds no condition.
+   */
+  private applyReturnRequestSearch(
+    qb: SelectQueryBuilder<OrderReturnRequest>,
+    q?: string,
+  ): void {
+    const searchPattern = toContainsLikePattern(q);
+    if (!searchPattern) {
+      return;
+    }
+    qb.andWhere(
+      new Brackets((searchQb) => {
+        searchQb
+          .where("rr.public_id LIKE :searchPattern", { searchPattern })
+          .orWhere(
+            "rr.order_id IN (SELECT id FROM orders WHERE public_id LIKE :searchPattern)",
+            { searchPattern },
+          );
+      }),
+    );
   }
 
   // PUBID-01 — batch-attach the parent order's public id so return-request
@@ -4910,6 +4953,7 @@ export class OrdersService {
     page: number,
     limit: number,
     status?: ReturnRequestStatus,
+    q?: string,
   ): Promise<PaginatedResponse<ReturnRequestView>> {
     const qb = this.returnRequestRepository.createQueryBuilder("rr");
     if (!isAdmin) {
@@ -4925,6 +4969,7 @@ export class OrdersService {
     if (status) {
       qb.andWhere("rr.status = :status", { status });
     }
+    this.applyReturnRequestSearch(qb, q);
     const [data, total] = await qb
       .orderBy("rr.created_at", "DESC")
       .skip((page - 1) * limit)
