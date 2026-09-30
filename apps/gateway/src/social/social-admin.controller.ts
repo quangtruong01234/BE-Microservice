@@ -45,6 +45,7 @@ export class SocialAdminController {
       query.status ?? "pending",
       query.page ?? 1,
       query.limit ?? 20,
+      query.q,
     );
   }
 

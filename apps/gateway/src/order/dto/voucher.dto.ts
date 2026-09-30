@@ -15,7 +15,7 @@ import {
   Min,
   ValidateNested,
 } from "class-validator";
-import { Type } from "class-transformer";
+import { Transform, Type } from "class-transformer";
 import { OrderItemDto } from "./create-order.dto";
 import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 import { IsPublicId } from "../../common/validators/is-public-id.validator";
@@ -306,4 +306,18 @@ export class VouchersQueryDto {
   @Min(1)
   @Max(100)
   limit = 20;
+
+  @ApiPropertyOptional({
+    description:
+      "Search — case-insensitive substring match on the voucher code. Blank means no filter; total/totalPages/hasNext describe the searched set.",
+    example: "SALE",
+    maxLength: 100,
+  })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }): unknown =>
+    typeof value === "string" ? value.trim() : value,
+  )
+  @IsString()
+  @MaxLength(100)
+  q?: string;
 }

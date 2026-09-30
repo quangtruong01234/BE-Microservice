@@ -106,6 +106,7 @@ export class SocialFollowController {
       query.page ?? 1,
       query.limit ?? 20,
       viewerUserId,
+      query.search,
     );
   }
 }

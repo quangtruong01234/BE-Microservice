@@ -295,13 +295,17 @@ export class UserService {
     }
   }
 
-  async getUsersPaginated(page: number, limit: number): Promise<unknown> {
+  async getUsersPaginated(
+    page: number,
+    limit: number,
+    q?: string,
+  ): Promise<unknown> {
     try {
       const paginated = (await firstValueFrom(
         this.userClient
           .send(
             { cmd: USER_MESSAGE_PATTERN.GET_USERS_PAGINATED },
-            { page, limit },
+            { page, limit, q },
           )
           .pipe(
             timeout(TCP_TIMEOUT_MS.READ),

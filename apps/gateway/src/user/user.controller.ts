@@ -180,6 +180,7 @@ export class UserController {
     return await this.userService.getUsersPaginated(
       query.page ?? 1,
       query.limit ?? 20,
+      query.q,
     );
   }
 

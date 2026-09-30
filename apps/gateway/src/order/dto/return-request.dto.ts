@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { Type } from "class-transformer";
+import { Transform, Type } from "class-transformer";
 import {
   IsIn,
   IsInt,
@@ -56,4 +56,18 @@ export class ReturnRequestsQueryDto {
   @IsOptional()
   @IsIn(["pending_review", "approved", "rejected"])
   declare status?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "Search — case-insensitive substring match on the return request code (rr_…) or the order code (ord_…). Blank means no filter; ANDs with status, and total/totalPages/hasNext describe the searched set.",
+    example: "ord_516a",
+    maxLength: 100,
+  })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }): unknown =>
+    typeof value === "string" ? value.trim() : value,
+  )
+  @IsString()
+  @MaxLength(100)
+  declare q?: string;
 }

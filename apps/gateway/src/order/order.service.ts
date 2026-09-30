@@ -545,11 +545,12 @@ export class OrderService {
     page: number,
     limit: number,
     sellerId: number | null = null,
+    q?: string,
   ): Promise<unknown> {
     return this.exposeUserReferences(
       await this.errorHandledSend(
         ORDER_MESSAGE_PATTERN.VOUCHER_LIST,
-        { page, limit, sellerId },
+        { page, limit, sellerId, q },
         "list vouchers",
       ),
     );
@@ -1832,6 +1833,7 @@ export class OrderService {
             page: query.page ?? 1,
             limit: query.limit ?? 20,
             status: query.status,
+            q: query.q,
           })
           .pipe(
             timeout(TCP_TIMEOUT_MS.READ),
@@ -2279,6 +2281,7 @@ export class OrderService {
     userId: number,
     page: number,
     limit: number,
+    q?: string,
   ): Promise<unknown> {
     try {
       const result = (await firstValueFrom(
@@ -2287,6 +2290,7 @@ export class OrderService {
             userId,
             page,
             limit,
+            q,
           })
           .pipe(
             timeout(TCP_TIMEOUT_MS.READ),
@@ -2320,6 +2324,7 @@ export class OrderService {
     page: number,
     limit: number,
     status?: string,
+    q?: string,
   ): Promise<unknown> {
     try {
       const result = (await firstValueFrom(
@@ -2330,6 +2335,7 @@ export class OrderService {
             page,
             limit,
             status,
+            q,
           })
           .pipe(
             timeout(TCP_TIMEOUT_MS.READ),

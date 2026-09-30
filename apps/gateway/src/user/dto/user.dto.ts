@@ -152,6 +152,20 @@ export class ListUsersQueryDto {
   @Max(100)
   @Type(() => Number)
   limit?: number = 20;
+
+  @ApiPropertyOptional({
+    description:
+      "Search — case-insensitive substring match on username, email or display name. Inactive users are included. Blank means no filter; total/totalPages/hasNext describe the searched set.",
+    example: "nguyen",
+    maxLength: 100,
+  })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }): unknown =>
+    typeof value === "string" ? value.trim() : value,
+  )
+  @IsString()
+  @MaxLength(100)
+  q?: string;
 }
 
 export class FeaturedSellersQueryDto {

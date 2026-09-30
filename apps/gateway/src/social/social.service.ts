@@ -478,6 +478,7 @@ export class SocialGatewayService {
     page: number,
     limit: number,
     viewerUserId?: number | null,
+    search?: string | null,
   ): Promise<unknown> {
     try {
       const internalUserId = await this.resolveUserId(userId);
@@ -488,6 +489,7 @@ export class SocialGatewayService {
             page,
             limit,
             viewerUserId: viewerUserId ?? null,
+            search: search?.trim() ? search.trim() : null,
           })
           .pipe(
             timeout(TCP_TIMEOUT_MS.READ),
@@ -863,6 +865,7 @@ export class SocialGatewayService {
     page: number,
     limit: number,
     viewerUserId?: number | null,
+    search?: string | null,
   ): Promise<unknown> {
     try {
       const internalUserId = await this.resolveUserId(userId);
@@ -873,6 +876,7 @@ export class SocialGatewayService {
             page,
             limit,
             viewerUserId: viewerUserId ?? null,
+            search: search?.trim() ? search.trim() : null,
           })
           .pipe(
             timeout(TCP_TIMEOUT_MS.READ),
@@ -911,6 +915,7 @@ export class SocialGatewayService {
     status: "pending" | "resolved" | "dismissed" | undefined,
     page: number,
     limit: number,
+    q?: string,
   ): Promise<unknown> {
     try {
       const result = (await firstValueFrom(
@@ -919,6 +924,7 @@ export class SocialGatewayService {
             status,
             page,
             limit,
+            q,
           })
           .pipe(timeout(TCP_TIMEOUT_MS.READ)) as Observable<unknown>,
       )) as {

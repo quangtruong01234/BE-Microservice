@@ -1892,6 +1892,7 @@ export class ProductService {
             userId,
             page: query.page ?? 1,
             limit: query.limit ?? 20,
+            q: query.q,
           })
           .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
       )) as unknown;

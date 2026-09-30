@@ -1,4 +1,4 @@
-import { Type } from "class-transformer";
+import { Transform, Type } from "class-transformer";
 import {
   IsIn,
   IsInt,
@@ -39,6 +39,20 @@ export class ProductRiskQueryDto {
   @Min(1)
   @Max(100)
   limit?: number = 20;
+
+  @ApiPropertyOptional({
+    description:
+      "Search — case-insensitive substring match on the product name (the seller is not searched). Blank means no filter; ANDs with minScore, and total/totalPages/hasNext describe the searched set.",
+    example: "tai nghe",
+    maxLength: 100,
+  })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }): unknown =>
+    typeof value === "string" ? value.trim() : value,
+  )
+  @IsString()
+  @MaxLength(100)
+  q?: string;
 }
 
 export class ProductRiskBackfillDto {

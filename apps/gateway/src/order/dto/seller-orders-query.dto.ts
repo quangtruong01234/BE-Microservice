@@ -1,6 +1,13 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
-import { Type } from "class-transformer";
-import { IsInt, IsOptional, IsString, Max, Min } from "class-validator";
+import { Transform, Type } from "class-transformer";
+import {
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+} from "class-validator";
 
 export class SellerOrdersQueryDto {
   @ApiPropertyOptional({ default: 1, minimum: 1 })
@@ -22,4 +29,18 @@ export class SellerOrdersQueryDto {
   @IsOptional()
   @IsString()
   declare status?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "Search — case-insensitive substring match on the order code (ord_…) or the recipient name, phone or address. Blank means no filter; ANDs with status, and total/totalPages/hasNext describe the searched set.",
+    example: "ord_516a",
+    maxLength: 100,
+  })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }): unknown =>
+    typeof value === "string" ? value.trim() : value,
+  )
+  @IsString()
+  @MaxLength(100)
+  declare q?: string;
 }

@@ -127,6 +127,7 @@ export class SocialController {
       query.page ?? 1,
       query.limit ?? 20,
       viewerUserId,
+      query.search,
     );
   }
 

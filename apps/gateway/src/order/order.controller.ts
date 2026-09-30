@@ -409,7 +409,12 @@ export class OrderController {
     @Req() req: Request,
   ): Promise<unknown> {
     const sellerId = req.user?.id ?? 0;
-    return this.orderService.listVouchers(query.page, query.limit, sellerId);
+    return this.orderService.listVouchers(
+      query.page,
+      query.limit,
+      sellerId,
+      query.q,
+    );
   }
 
   @Patch("vouchers/:id/deactivate")
@@ -486,7 +491,12 @@ export class OrderController {
   async listVouchers(
     @Query(ValidationPipe) query: VouchersQueryDto,
   ): Promise<unknown> {
-    return this.orderService.listVouchers(query.page, query.limit);
+    return this.orderService.listVouchers(
+      query.page,
+      query.limit,
+      null,
+      query.q,
+    );
   }
 
   @Patch("admin/vouchers/:id/deactivate")
@@ -877,6 +887,7 @@ export class OrderController {
       userId,
       query.page ?? 1,
       query.limit ?? 20,
+      query.q,
     );
   }
 
@@ -903,6 +914,7 @@ export class OrderController {
       query.page ?? 1,
       query.limit ?? 20,
       query.status,
+      query.q,
     );
   }
 
