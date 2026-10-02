@@ -6,6 +6,508 @@
 
 ## Completed Milestones
 
+- **SWEEP-1002-04 — the dead `payment_completed` handler in rewards is
+  gone (2026-10-02, `/sweep` fix mode). Release class A: no contract change,
+  no migration.** Not pushed.
+  - **Problem.** `RewardsController.handlePaymentCompleted` was an empty
+    `@EventPattern(PAYMENT_COMPLETED_EVENT)` that never acked. It never fired
+    because `REWARDS_SERVICE` binds only `order.fanout` and `payment_completed`
+    is published to `payment.fanout`. It was a trap: the day someone bound
+    rewards to `payment.fanout`, every such message would sit unacked on a
+    consumer with no prefetch cap.
+  - **Fix.** Deleted the handler. `order_created` is untouched.
+  - **Test.** `apps/rewards/src/rewards.controller.spec.ts` › "subscribes to
+    order_created only" reads the Nest `PATTERN_METADATA` off every
+    controller method and expects exactly `[order_created]`. It was seen red
+    (`payment_completed` listed), then green: 4/4 tests pass. tsc and eslint
+    are clean.
+  - **Runtime** (DEV, rewards running in watch mode and rebuilt at 14:20):
+    the `REWARDS_SERVICE` queue showed 1 consumer, 0 messages, 0 unacked,
+    state `running`, with only `order.fanout` bindings. No route changed, so
+    there was nothing to curl.
+
+- **SWEEP-1002-03 — the checkout stock pre-check runs in parallel
+  (2026-10-02, `/sweep` fix mode). Release class A: no contract change, no
+  migration.** Not pushed.
+  - **Problem.** `placeOrder` (single-seller) and `placeMultiSellerOrder`
+    each awaited `INVENTORY_CHECK_STOCK` once per item before reserving, so a
+    20-item cart (the DTO max) paid 20 sequential round trips before the
+    reserve pass even started. That latency is what makes the SWEEP-1002-01
+    late-commit window reachable.
+  - **Fix.** The two duplicated loops became one private
+    `assertStockAvailable`. It sends every check at once with
+    `Promise.all` and `timeout(TCP_TIMEOUT_MS.READ)`, which replaces the
+    literal 5000 (same value). It then throws `INSUFFICIENT_STOCK` for the
+    first short item IN CART ORDER, so the 400 does not depend on which reply
+    lands first, and the message is the same one the serial loop produced.
+    The no-op `catchError(() => throwError(...))` was dropped. The reserve
+    pass stays sequential, because its compensation walks the items reserved
+    so far. The reserve/release literals are untouched.
+  - **Tests.** `apps/orders/src/orders.service.spec.ts` › "stock
+    reservation", with `Subject`-backed check replies:
+    - every single-seller check is sent before any reply arrives;
+    - on a multi-seller cart with items 2 and 3 short, answered in reverse,
+      the 400 names item 2 and no reserve is sent.
+    Both were seen red against a serial helper (1 of 3 checks sent).
+    `apps/orders`: 10 suites / 200 tests green. tsc, eslint and
+    `check:conventions` are clean.
+  - **Self-test** (DEV, buyer user 17, orders restarted on the new code):
+    - inventory logged all three checks of a 3-item cart in the same second;
+    - multi-seller `[42×1, 33×999, 44×999]` gave 400 "Insufficient stock for
+      product 33" (the first short item, not 44), with no reserve call;
+    - single-seller `[42×1, 44×999, 38×1]` gave 400 for product 44;
+    - a 2-item COD order gave 201 `ord_xbFCQVfvmqG5wXJO` in 9.3s, then was
+      canceled (200).
+  - **Found on the way → SWEEP-1002-05.** The 3-item COD order 408'd at 10.7s
+    and committed late as `ord_lArEVOlbiKd3rrG3`. On DEV each serial reserve
+    takes ~1.5s and the GHN fee ~4s. The same-key retry got 409
+    `__in_progress__` (SWEEP-1002-01 working as designed), and the order was
+    canceled (200).
+
+- **SWEEP-1002-02 — order-scoped indexes on `shipping_history` and
+  `order_return_requests` (2026-10-02, `/sweep` fix mode). Release class A:
+  no route, field or behaviour change. One index-only migration (prod-owed).**
+  Not pushed.
+  - **Problem.** `shipping_history` had only its PK, and
+    `order_return_requests` only PK + `public_id`, yet every read filters by
+    order or user: the GHN-FAIL-NTF-01 dedupe on each `delivery_fail` webhook,
+    the buyer timeline, the admin GHN history, `findLatestShippingHistory`
+    per admin GHN list row and CSV-export chunk, `requestReturn`'s
+    existing-request check and the buyer's `return-requests/mine`. Each was a
+    full scan that grows with every webhook.
+  - **Fix.** `database/migrations/nodeA/20261002-003-add-shipping-history-and-return-request-indexes.sql`
+    (+ manifest entry) adds `idx_shipping_history_order (order_id, created_at)`,
+    `idx_order_return_requests_order (order_id)` and
+    `idx_order_return_requests_user (user_id)`. Each is guarded by
+    INFORMATION_SCHEMA.STATISTICS and uses `ALGORITHM=INPLACE, LOCK=NONE`. The
+    entities carry matching `@Index` names, so `synchronize:true` on DEV and the
+    migration converge on one index set.
+  - **Verification.** No unit test is possible: an index changes no code path
+    and the specs mock the repository. Evidence instead, on DEV:
+    - EXPLAIN before: all four reads `type=ALL` with filesort.
+    - EXPLAIN after: the shipping-history reads use `ref` on
+      `idx_shipping_history_order` (the latest-row read as a backward index
+      scan, no filesort), and the return-by-order read uses `ref`.
+    - `mine` stays `ALL` on DEV only because all 16 DEV rows belong to one
+      user; a rare `user_id` uses `ref` on `idx_order_return_requests_user`.
+    - A runner re-run and a direct second execution of the SQL file are both
+      no-ops.
+    - With orders restarted on the new entities: `GET /api/order/:id/history`
+      200 (9 events), `return-requests/mine` 200 (total 16), and the admin GHN
+      history 200 (14 rows). A return request on an order whose previous
+      request was rejected gives 201, then 400 on the second attempt; it was
+      rejected again afterwards as cleanup.
+    - tsc, eslint and `check:conventions` are clean.
+  - **Note.** The user's watch-mode `start:nodeA` recompiled orders on the
+    entity edit and its `synchronize:true` created the indexes on DEV before
+    the migration ran. They were dropped and re-created by the migration so
+    the before/after EXPLAIN is real.
+- **SWEEP-1002-01 — a timed-out checkout no longer releases its
+  Idempotency-Key (2026-10-02, `/sweep` fix mode). Release class B: a same-key
+  retry after a 408/5xx is now a 409 where it used to create a second order.
+  No migration.** Not pushed.
+  - **Bug.** `OrderService.createOrder` (gateway) deleted
+    `idem:order:<userId>:<key>` on ANY error, including the 408 from
+    `timeout(TCP_TIMEOUT_MS.WRITE)` and a 502 transport failure. TCP has no
+    cancel, so orders could commit after the gateway answered, and the FE retry
+    with the same key (`frontend/src/features/cart/idempotency.ts` reuses it
+    while the cart is unchanged) placed a duplicate order, reservation and
+    payment URL. P0-04 had only tested replay-after-success and concurrency.
+  - **Fix.** New private `settleFailedIdempotencyKey`: an `HttpException`
+    with status 400..499 except 408 is a definite rejection and releases the
+    key, as before. Anything else is an unknown outcome: the key is re-set to
+    `__in_progress__` for `IDEMPOTENCY_UNKNOWN_OUTCOME_TTL_SECONDS = 300`, and a
+    warn is logged. 300s rather than the 60s the audit suggested, because the
+    orders leg can run 2N serial 5s inventory calls (SWEEP-1002-03) past the
+    gateway's 10s WRITE timeout. A failed extend falls back to the original 60s
+    lock.
+  - **Tests.** `apps/gateway/src/order/order.service.spec.ts`: the single
+    "releases the lock when the create fails" test became 4: a 4xx releases;
+    a `TimeoutError` holds 300s with no del; a 5xx holds even when the extend
+    rejects; success caches 86400s. The timeout and 5xx tests were seen red
+    against the old catch. `apps/gateway/src/order`: 3 suites / 28 tests
+    green. tsc, eslint and `check:conventions` are clean.
+  - **Self-test** (DEV, buyer user 17):
+    - quantity 999 gave 400 "Insufficient stock", and the same-key retry 400
+      again (not 409, so the key was released);
+    - a COD order gave 201 `ord_XLKd57VN0spTJetX`, and the same-key retry
+      replayed the same id, with Redis TTL 86399 (canceled afterwards, 200);
+    - with the orders service stopped, 502 then a same-key 409
+      `DUPLICATE_REQUEST_IN_PROGRESS`, Redis `__in_progress__` TTL 299, and the
+      gateway warn "Create order outcome unknown … status 502".
+  - **Docs.** known-behaviors IDEM-HOLD-01, snapshot backlog annotated, FE
+    handoff (treat a 409 after a 408/502 as "check My Orders").
+
+- **RETURN-PHOTO-01 — evidence photos on a return request (2026-10-02,
+  `/sweep 3` F14). Release class B: one optional request field and one added
+  response field. One additive nodeA migration
+  (`nodeA-20261002-002-add-return-request-image-urls`, applied on DEV,
+  prod-owed).** Not pushed.
+  - **Upload.** New logical Cloudinary folder `trybuy/returns`
+    (`LOGICAL_RETURN_FOLDER` / `getReturnUploadFolder()` in
+    `libs/common/src/cloudinary/cloudinary.constants.ts`, so the physical folder
+    is `trybuy-prod/returns` on prod). Images only: `jpg,png,webp`, 10 MB
+    advisory cap (UPLOAD-SIZE-01 still applies). The existing
+    `POST /api/upload/signature?folder=trybuy/returns` signs it with the usual
+    `<userId>_` public_id prefix.
+  - **Request.** `POST /api/order/:id/return-request` takes an optional
+    `imageUrls: string[]`: at most 5 (`RETURN_REQUEST_MAX_IMAGES`), unique, each
+    an `IsCloudinaryUrl({ folder: "trybuy/returns", media: "image" })`. The
+    gateway then runs `assertCloudinaryUrlsOwnedBy`, which gives a 403
+    `CANNOT_ATTACH_OTHERS_MEDIA` before any TCP call. Orders stores
+    `image_urls` JSON NULL, and an empty or missing list is stored as NULL.
+  - **Response.** `exposeReturnRequest` always emits `imageUrls` as an array
+    (SHAPE-01: NULL and legacy rows give `[]`). That covers create, `mine`,
+    the seller/admin list and approve/reject.
+  - **Tests**, all seen red first by reverting the store, the expose and the
+    ownership call:
+    - `apps/orders/src/orders.return-photo.spec.ts` (3): stored and returned;
+      NULL for missing and for empty.
+    - `apps/gateway/src/order/order.return-photo.spec.ts` (4): forwarded and
+      echoed; a foreign URL gives 403 with no send; null gives `[]` on create
+      and on the list read.
+    - `apps/gateway/src/order/dto/return-request.dto.spec.ts`: the DTO bounds.
+    - `upload.service.spec.ts` (+2): returns-folder signing and delete.
+    - orders + gateway/order + upload: 15 suites / 259 tests green. tsc, eslint
+      and `check:conventions` are clean.
+  - **Self-test** (DEV, a COMPLETED COD order):
+    - The signature is 201 with folder `trybuy/returns`, `jpg,png,webp`,
+      maxBytes 10485760 and public_id `17_…`.
+    - 6 URLs give a 400 ("no more than 5"), a `trybuy/posts` URL a 400, and an
+      `18_` leaf a 403.
+    - 2 owned URLs give a 201 that echoes both; no field gives a 201 with
+      `imageUrls: []`.
+    - `return-requests/mine` and the admin list show `array[2]` for the new
+      row and `[]` on all 14 legacy rows.
+    - Both test requests were rejected by the admin, and the orders are back
+      to `completed`.
+  - **Docs.** known-behaviors RETURN-PHOTO-01, ops-runtime migration bullet,
+    snapshot Prod-owed, FE handoff, release-gate (B).
+
+- **ORDER-TIMELINE-01 — buyer order timeline (2026-10-02, `/sweep 3` F13).
+  Release class B: one new read route. One additive nodeA migration
+  (`nodeA-20261002-001-add-order-status-history`, applied on DEV, prod-owed).**
+  Not pushed.
+  - **Design.** A new `order_status_history` table (orders, MySQL) holds one
+    row per committed local status change (`from_status`, `to_status`,
+    `created_at` datetime(6), index `(order_id, created_at)`). It is kept
+    apart from `shipping_history`, which is GHN-only and drives
+    lastGhnStatus plus the GHN-FAIL-NTF-01 dedupe. Every status write in
+    `orders.service.ts` calls a private best-effort `recordStatusTransition`
+    AFTER the write lands: confirm, ready-to-ship, admin advance, the
+    `payment_completed` claim, the GHN webhook/sync, GHN cancel,
+    payment-init failure cancel, `finalizeCancellation`, return request,
+    refund and reject-restore. `updateOrderStatus` now takes the
+    `fromStatus`. A failed insert logs a warn and never fails the
+    transition; a same-status write records nothing.
+  - **Route.** `GET /api/order/:id/history` (`ord_…`), `JwtAuthGuard`. The
+    gateway runs `fetchOwnedOrder` first (404 missing, 403 neither owner nor
+    admin), then `order.get_timeline` with `TCP_TIMEOUT_MS.READ`. Body
+    `{ orderId, status, events[{ kind, status, ghnStatus, at }] }`, kinds
+    `placed` (createdAt), `paid` (paidAt), `status` (history rows) and
+    `shipping` (successful WEBHOOK/MANUAL_SYNC `shipping_history` rows with a
+    ghnStatus; consecutive duplicates collapsed). Stable-sorted oldest first.
+    No internal id leaves the service.
+  - **No backfill.** Orders before 2026-10-02 show `placed`/`paid`/`shipping`
+    only — the past transitions were never stored.
+  - **Tests.** `apps/orders/src/orders.timeline.spec.ts` (7, seen red first):
+    recording order, insert failure swallowed, same-status skip, confirm
+    PENDING→CONFIRMED, 404, the merge/sort/dedupe array, the GHN where-clause
+    plus the `[placed]`-only empty case. Four existing service specs gained
+    the 15th constructor arg. orders + gateway/order: 10 suites / 208 tests
+    green; tsc, eslint and `check:conventions` clean.
+  - **Self-test (DEV, local nodeA/nodeB).** A buyer's GHN order → 200 with
+    `placed` plus four `shipping` events and no internal ids; another buyer →
+    403; unknown `ord_ZZZZZZZZZZZZZZZZ` → 404; anonymous → 401. A fresh COD
+    order canceled by the buyer → `[placed pending, status canceled]`, no
+    "status history" warn in the orders log.
+  - **Docs.** known-behaviors ORDER-TIMELINE-01, ops-runtime migration bullet,
+    snapshot Prod-owed, FE handoff, release-gate (B).
+
+- **ACCOUNT-DELETE-01 — self-service account deletion (2026-10-01, `/sweep`
+  F12). Release class B: one new route plus a reserved register prefix
+  (`deleted_`). No migration.** Not pushed.
+  - **Decisions (user).** Authored content is kept and anonymized. Open
+    orders do not block the deletion — they are auto-canceled. Deletion is
+    immediate and irreversible: password re-entry, no grace period. Own
+    calls: only PENDING/CONFIRMED/PROCESSING orders auto-cancel (shipped and
+    return orders finish normally), an admin cannot self-delete (403),
+    accounting keeps every order row (Decree 13/2023/ND-CP).
+  - **Spec.** `ai-docs/specs/ACCOUNT-DELETE-01/` (`planner`), status=done.
+  - **Route.** `DELETE /api/user/me` `{ currentPassword }`, `JwtAuthGuard`,
+    5/60s. The gateway runs seven TCP legs in order, each with
+    `TCP_TIMEOUT_MS.WRITE`, and stops at the first failure:
+    1. `user.verify_account_deletion` — 404 / 400 already deleted / 401
+       `INVALID_CURRENT_PASSWORD` / 403 admin, no write.
+    2. `order.cancel_open_orders_for_user` — buyer OR seller, sequential
+       `finalizeCancellation`.
+    3. `CART_CLEAR`.
+    4. `product.purge_user_data` — live listings → inactive, wishlist rows
+       deleted, search cache busted.
+    5. `social_purge_user_data` — follow edges in both directions.
+    6. `notification.purge_user_data`.
+    7. `user.delete_account` — the irreversible scrub, which runs LAST:
+       username `deleted_<publicId>`, email `deleted+<publicId>@deleted.invalid`,
+       name/avatar null, random password, inactive, addresses deleted, reset
+       code deleted, `validAfter` bumped, old avatar destroyed best-effort.
+
+    On success the gateway clears the auth cookie.
+  - **Reserved prefix.** Found in the change-impact review: a live account
+    could register `deleted_…` and render as "Deleted user". `RegisterUserDto`
+    now rejects that prefix case-insensitively (400). One probe account
+    created before the fix is kept in `test-accounts.md`.
+  - **Tests.** Six new spec files covering 16 tests (user, orders, product,
+    social, notification, gateway), plus 4 reserved-prefix cases in
+    `user.dto.spec.ts` (seen red, 3 failures, before the DTO change). Full
+    suite: 73 suites / 753 tests at the end of F12, before the 4 reserved-prefix
+    cases; tsc, eslint and `check:conventions` clean.
+  - **Self-test (DEV)** on a throwaway account holding a PENDING COD order:
+    - a wrong password → 401 `INVALID_CURRENT_PASSWORD`, nothing touched;
+    - the first real attempt canceled the order, then answered 503
+      "Reservation compensation failed". The release had committed after
+      orders' hardcoded 5s timeout: the DEV Aiven round trip is 270ms–1s and
+      the release makes ~8 trips. The reservation row was confirmed
+      `released` — nothing leaked;
+    - the retry → 200 `canceledOrderCount: 0` with the cookie cleared;
+    - afterwards: the old token and the old credentials are both 401, the
+      profile reads `deleted_usr_…` / null / inactive, and the order is still
+      readable as CANCELED with its address snapshot;
+    - re-registering the same username and email → 201;
+    - admin → 403 (session intact), empty body → 400, `deleted_` register
+      → 400.
+
+    An earlier attempt hit an inventory process that had hung on DEV; it was
+    restarted.
+  - **Residuals** → known-behaviors ACCOUNT-DELETE-01: the deletion is not
+    atomic (a mid-way failure leaves canceled orders on a live account; the
+    retry finishes), there is no auto-refund for a canceled paid order,
+    chat/follow to a deleted user stays possible, and shop vouchers are not
+    deactivated.
+  - **Not done, deliberately.** The 47 `kb-hint --stale` warnings, which
+    accumulated across F8–F12 edits to the large service files, were NOT
+    bulk-rebaselined. Each needs a re-read, drip-fed.
+  - **FE handoff** → `../.agent-local/frontend-handoff.md`, top of Open.
+
+- **WISHLIST-ALERT-01 — in-app wishlist alerts for back-in-stock and price drop
+  (2026-10-01, `/sweep` F11). Release class B: two new notification types and
+  one additive nullable field. One migration
+  (`nodeA-20261001-001-add-notification-product-public-id`), applied on DEV,
+  owed on prod. No email (MAIL-BOUNCE-01).**
+  - **Spec.** Written directly in `ai-docs/specs/WISHLIST-ALERT-01/`
+    (requirements, design, tasks, tests); no planner. The design work was
+    small once it was clear inventory needed no change: product already
+    receives every stock change through the STOCK-SYNC-01 mirror, so detection
+    lives where both stock and price already are.
+  - **Product.**
+    - `updateStockQuantity` claims a restock with one conditional
+      `UPDATE … WHERE stock_quantity <= 0`, which is race-safe across stock
+      events. It falls back to the plain update when nothing matched.
+    - `updateProduct` fires a price-drop alert after commit, as a `void` call.
+    - The shared `notifyWishlisters`:
+      - Skips a product with active SKUs, an inactive product, or an
+        approval-blocked one.
+      - Takes the newest 1000 wishlisters, minus the seller.
+      - Claims a per-product Redis cooldown (6h / 24h), fail-closed and only
+        once the fanout channel is live.
+      - Publishes `product.wishlist_alert` on `PRODUCT_EXCHANGE`.
+      - Never throws.
+  - **Notification.**
+    - New `@EventPattern` consumer with a payload guard: a malformed payload
+      dead-letters, a DB error requeues.
+    - `saveWishlistAlerts` writes one row per distinct user in one save, then
+      pushes each over the WS.
+    - The new column `notifications.product_public_id` is exposed as
+      `productId` and never under its own name.
+    - The gateway `NotificationItem`/`NotificationPayload` types gained
+      `productId`.
+  - **Bug caught by the self-test, not the unit tests.** The first price-drop
+    event carried `productId: "44"`, because `updated.id` is a BIGINT that
+    mysql2 hydrates as a string. The consumer guard rejected it into the DLQ.
+    The fix passes the already-numeric route id. The spec mock now returns
+    `id: "9"`, so the test went red on the string before going green.
+  - **Test.** 14 new tests:
+    - product (10): 0→>0 publishes minus the seller; no publish when already
+      in stock, when going to 0, for a SKU product, for an
+      inactive/blocked product, for a seller-only wishlist, inside the
+      cooldown, or on a Redis error (fails closed, stock write still
+      resolves); a price drop publishes with the numeric id; a raise or
+      no-change does not.
+    - notification (4): batch save plus push; `productId` is exposed and
+      `productPublicId` is not; the price-drop text; a DB error propagates.
+    - Mutations were seen red: the restock call removed, and the
+      `productPublicId` delete removed.
+    - Scoped jest: 4 suites / 48 tests green.
+    - tsc 0, eslint clean, check:conventions OK.
+  - **Self-test (DEV).**
+    - Setup: product 44 with a buyer wishlist.
+    - Back in stock: stock 0 → 105 gave `GET /api/notifications` a top row
+      `wishlist_back_in_stock` with `productId: "prod_ffc7fd3181d211f1"`; a
+      second cycle within 6h added nothing.
+    - Price drop: PATCH price 35 → 30 gave a `wishlist_price_drop` row; 30 → 28
+      inside 24h and the raise back to 39 added nothing.
+    - Older rows read `productId: null`.
+    - Cleanup: the product was restored and the wishlist entry removed.
+  - **Residuals** → known-behaviors WISHLIST-ALERT-01. The cooldown is per
+    product, so a late wishlister misses the window. Price drops come only via
+    PATCH. A NULL stock is not a restock.
+
+- **REVIEW-VERIFIED-01 — seller self-review block + `isVerifiedPurchase` on
+  product reviews (2026-10-01, `/sweep` F10). Release class B: one new 403 on
+  a path that used to 201, rendered by the FE's generic message branch, plus an
+  additive nullable field. No migration.**
+  - **Roadmap premise was half stale.** The roadmap said `createReview` only
+    checked that the product exists. In fact the gateway already called
+    `order.verify_product_purchased` before creating the review, answering 404
+    `Product not found in any completed order` to a non-buyer, and the
+    storefront already maps that 404 to "order not yet completed". That gate
+    was kept as is. Moving it to 403 would have broken the FE mapping for no
+    gain, and that move is what made the roadmap call this class C.
+  - **Real hole: a seller could review their own listing.** A seller can place
+    and complete an order on their own product; DEV has 62 orders with
+    `user_id = seller_id`. The product service `createReview` now throws 403
+    `You cannot review your own product` (`PRODUCT_MESSAGE.CANNOT_REVIEW_OWN_PRODUCT`)
+    when `product.userId` is the reviewer. A seller with no completed purchase
+    still gets the 404 first, because the gateway asks orders first.
+  - **`isVerifiedPurchase`.**
+    - Computed at read time; not stored.
+    - `GET /api/products/:id/reviews` batches the page's distinct userIds into
+      one new TCP call, `order.find_verified_purchasers`: one `IN` query for
+      COMPLETED orders holding the product, the same rule as the create gate.
+      A later refund or return therefore flips it to `false`.
+    - The orders leg is optional: if it fails or times out, the field is
+      `null` and a warn is logged. An empty page skips the call.
+    - The create response always carries `true`, since it has just passed the
+      gate.
+  - **Test.** 7 new tests:
+    - orders `findVerifiedPurchasers` (2): an empty input short-circuits; the
+      query is scoped and the ids are numbers.
+    - product `createReview` self-review block (2).
+    - gateway `isVerifiedPurchase` (3): true/false marking, null when orders is
+      down, an empty page skips orders.
+    All seen red against `HEAD` versions of the three implementation files,
+    then green. 3 suites / 157 tests pass; tsc, eslint and check:conventions
+    clean.
+  - **Self-test (local, 2026-10-01).**
+    - Buyer `canceltest1779978329` (user 17, COMPLETED order on product 42):
+      POST review → 201 `isVerifiedPurchase:true`; a second POST → 409.
+    - Seller `techstore_demo` (user 23): admin advanced their self-purchase
+      order `ord_516acccc816611f1` (COD) shipped → delivering → completed,
+      then POST on their own product 42 → 403 `You cannot review your own
+      product`.
+    - `testadmin` (no purchase) → 404 `Product not found in any completed
+      order`.
+    - GET reviews for products 42 and 43 → 200, each row
+      `isVerifiedPurchase:true`.
+    - The test review (id 13) was deleted afterwards (204). Order 119 stays
+      COMPLETED on DEV.
+  - **Docs.**
+    - known-behaviors: new REVIEW-VERIFIED-01.
+    - FE handoff in `frontend-handoff.md`.
+
+- **SESSION-REVOKE-01 — JWT session revocation + log out all devices
+  (2026-10-01, `/sweep` F9). Release class B: one new route, no body or status
+  change on an existing one; a role change now logs the target out through the
+  existing dead-session 401.**
+  - **Gap.** No JWT could be revoked. Tokens live up to 7d, logout only cleared
+    the cookie, and a password change or a role change left every existing
+    session alive (CHG-PW-01, ROLE-ADMIN-01).
+  - **Design.** We used a Redis-only per-user `validAfter` (epoch seconds) at
+    `auth:session:valid-after:<userId>`, TTL 30d (`libs/constant/session.constant.ts`).
+    This was chosen over the roadmap's `users.token_version`. It needs no
+    migration, keeps the JWT payload unchanged, and prod Redis is
+    `appendonly yes`. The cost is that it fails open on a Redis outage.
+    `SessionRevocationService` (gateway, `@Global()`
+    `SessionRevocationModule`) rejects `iat < validAfter`, strictly. A
+    missing `iat` counts as 0. A Redis error or a read slower than 500 ms lets
+    the token through with a warn log.
+  - **Where it is checked.** `JwtAuthGuard` answers 401 `UNAUTHENTICATED`.
+    `OptionalJwtAuthGuard` treats the token as anonymous. Both WebSocket
+    gateways disconnect after the connect handshake, through an async
+    `disconnectIfRevoked`.
+  - **Who bumps it.**
+    - The user service: after a successful change-password, a reset-password,
+      and a role change where the role is actually different. These writes are
+      best-effort, logged and swallowed.
+    - The new `POST /api/user/logout-all` (gateway, rate-limited 5/min). A
+      Redis failure there is a 503.
+  - **Landmine handled.** change-password would have logged the caller out.
+    The gateway now re-signs the caller's token with the same claims, a fresh
+    `iat` and the same `exp`, then sets it as the cookie. maxAge is the
+    remaining lifetime, capped at 7d for a remember-me token and 5h otherwise.
+  - **Test.** 22 new tests:
+    - `session-revocation.service.spec.ts` (8)
+    - `jwt-auth.guard.spec.ts` (4)
+    - `user-session-reissue.service.spec.ts` (4)
+    - `apps/user/src/user-session-revoke.service.spec.ts` (6)
+    The guard and the user-service legs were seen red with the check or write
+    removed. Gateway + user suites: 31 suites / 278 tests green, tsc and eslint
+    clean.
+  - **Self-test (local, 2026-10-01, `chgpw_test`, `roleprobe0915`,
+    `testadmin`).**
+    - change-password from session B: session A 401, B's re-issued cookie 200,
+      B's pre-change token 401.
+    - logout-all: 201, cookie cleared, the old token replayed gives 401.
+    - Optional-auth route with a revoked cookie: 200 anonymous.
+    - Role change: promotion makes the target's cookie 401 while the admin
+      stays 200, and re-login carries `tokenRole:"shop"`. Demotion makes the
+      `shop` cookie 401 on `/api/user/me`. A same-role PATCH keeps
+      the target at 200.
+    - `/notifications` and `/chat` with a revoked token: connect, then
+      `io server disconnect`.
+    - Accounts restored afterwards (password, role `user`).
+  - **Docs.**
+    - known-behaviors: new SESSION-REVOKE-01; CHG-PW-01 and ROLE-ADMIN-01
+      rewritten; EMAIL-REAUTH-01 reworded.
+    - api.md: logout, logout-all and role rows.
+    - FE handoff in `frontend-handoff.md`.
+
+- **RMQ-DLQ-01 — dead-letter queue + admin peek/replay (2026-10-01, `/sweep`
+  F8). Release class A: a new admin-only route, no storefront contract
+  touched.**
+  - **Gap.** Every consumer's `nack(ctx, false, false)` dropped the message for
+    good, since no queue had a dead-letter exchange. A poison message left no
+    trace but a log line.
+  - **Fix.** Queue arguments were not an option: re-declaring an existing
+    durable queue with `x-dead-letter-*` args is a `PRECONDITION_FAILED` at
+    boot. So on startup `DeadLetterService` (gateway, `apps/gateway/src/dead-letter/`)
+    asserts `trybuy.dead_letter` (new `QUEUES.DEAD_LETTER`) and PUTs two
+    policies through the management API. It fails open. Admin routes:
+    `GET /api/admin/dead-letters` (peek) and
+    `POST /api/admin/dead-letters/replay` (republish to the rejecting queue via
+    the default exchange, publisher-confirmed, then ack).
+  - **Fanout finding.** Every exchange is a FANOUT, so each queue receives every
+    event on it. Stock `ServerRMQ` rejects the ones it has no handler for with
+    requeue=false. Under the new policy each order would have dead-lettered
+    2–3 routine messages and buried real failures. So we added
+    `AckUnhandledServerRMQ` (`libs/common/src/rmq/`), returned as a
+    `CustomStrategy` from `RmqService.getOptionsTopic`. It acks those events
+    instead, dropping them just as before. All 10 fanout consumer queues use it
+    without any caller change.
+  - **Two bugs caught by the self-test, not the first unit tests.**
+    - One poison message was replayed 5 times by `count: 5`: the consumer
+      re-rejected it to the DLQ tail within the same call. Replay is now
+      bounded by the depth at call time.
+    - `count: 1` grew the DLQ 3 → 4. `connection.close()` overtook the last
+      ack still buffered on the confirm channel, so the broker requeued an
+      original that had already been republished. Replay now closes the channel
+      first.
+  - **Test.** `dead-letter.service.spec.ts` has 8 tests: poison-loop bound,
+    channel-before-connection order, orphan skip, 503, peek, policy shape, and
+    two fail-open cases. `ack-unhandled-server-rmq.spec.ts` has 3. Each new
+    spec was seen red with the fix reverted.
+  - **Self-test (local, 2026-10-01, `testadmin` plus a non-admin).**
+    - Policy on all 12 queues. Peek 200 and non-destructive; non-admin 403,
+      no cookie 401, `limit=0` 400. Replay conserved the DLQ depth.
+    - After restarting every service on the new lib: an unknown pattern on
+      `order.fanout` was acked by INVENTORY/PAYMENTS/REWARDS with the DLQ at 0.
+    - A `inventory.stock_changed` for a missing product dead-lettered with
+      `sourceQueue: inventory_events_queue`. Replaying it gave `replayed: 1`,
+      and it came back once with `replayCount: 1`.
+    - DLQ purged afterwards.
+  - **Docs.** ops-runtime §RabbitMQ dead-letter queue, known-behaviors
+    RMQ-DLQ-01, and `RABBITMQ_MANAGEMENT_*` in `local/nodeA/.env.example`.
+    Prod-owed: the RabbitMQ user needs the `policymaker` tag.
+
 - **LIST-SEARCH-01 — server-side search on paginated lists (2026-09-30,
   `/sweep LIST-SEARCH-01`, from `backend-handoff.md` Open). Release class B:
   additive optional query params; a call without them answers exactly as

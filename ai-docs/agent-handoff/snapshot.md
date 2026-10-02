@@ -34,27 +34,65 @@ DONE — see `CHANGELOG.md`. The public-id (PUBID) contract lives in
 
 ## Active Tasks
 
-Nothing is mid-implementation. What is genuinely open:
+What is genuinely open:
+
+### Feature Roadmap (`/sweep propose` 2026-10-01 — free-tier only)
+
+Order picked by the user: F8 → F9 first, then F10..F12.
+
+- [x] **F8 RMQ-DLQ-01** → **DONE 2026-10-01** (local), see CHANGELOG. Not
+  pushed. After the push, confirm the gateway logs `Dead-letter policy applied`
+  on prod — the prod RabbitMQ user needs the `policymaker` tag, or it fails
+  open with no dead-lettering (`ops-runtime.md` §RabbitMQ dead-letter queue).
+- [x] **F9 SESSION-REVOKE-01** → **DONE 2026-10-01** (local), see CHANGELOG.
+  Not pushed. Redis-only `validAfter`, no migration. Class B — a role change
+  now logs the target out (FE handoff written).
+- [x] **F10 REVIEW-VERIFIED-01** → **DONE 2026-10-01** (local), see CHANGELOG.
+  Not pushed. The purchase gate already existed (404), so the work was the
+  seller self-review 403 and a read-time `isVerifiedPurchase`; class B, not C.
+- [x] **F11 WISHLIST-ALERT-01** → **DONE 2026-10-01** (local), see CHANGELOG.
+  Not pushed. product → notification over PRODUCT_EXCHANGE (inventory was
+  untouched: it already mirrors stock into product). Class B, FE handoff written.
+- [x] **F12 ACCOUNT-DELETE-01** → **DONE 2026-10-01** (local), see CHANGELOG.
+  Not pushed. `DELETE /api/user/me` anonymizes in place, keeps content and
+  orders; no migration after all. Class B, FE handoff written.
+
+`/sweep 3` 2026-10-02 (user pick, both from the FE roadmap):
+
+- [x] **F13 ORDER-TIMELINE-01** → **DONE 2026-10-02** (local), see CHANGELOG.
+  Not pushed. New `order_status_history` table (1 additive migration, owed
+  below); transitions before the deploy are not backfilled. Class B, FE
+  handoff written.
+- [x] **F14 RETURN-PHOTO-01** → **DONE 2026-10-02** (local), see CHANGELOG.
+  Not pushed. Up to 5 owner-prefixed `trybuy/returns` images on a return
+  request, `imageUrls` always an array (1 additive migration, owed below).
+  Class B, FE handoff written.
 
 ### Prod-owed
 
-- **`nodeA-20260928-001-add-export-jobs`** (EXPORT-CSV-01 T5) and
+- **`nodeA-20260928-001-add-export-jobs`** (EXPORT-CSV-01 T5),
   **`nodeA-20260928-002-add-order-checkout-voucher-columns`** (VOUCHER-SHOP-01
-  phase 2) are owed — applied on DEV, not pushed yet. The CD migrate step
+  phase 2), **`nodeA-20261001-001-add-notification-product-public-id`**
+  (WISHLIST-ALERT-01), **`nodeA-20261002-001-add-order-status-history`**
+  (ORDER-TIMELINE-01), **`nodeA-20261002-002-add-return-request-image-urls`**
+  (RETURN-PHOTO-01) and **`nodeA-20261002-003-add-shipping-history-and-return-request-indexes`**
+  (SWEEP-1002-02, index-only, safe in any order) are owed — applied on DEV, not pushed yet. The CD migrate step
   applies them before the restart. Without -001 the five `export/jobs` routes
   500; without -002 EVERY order read/write fails (the entity selects the new
-  columns) — details in `ops-runtime.md` §Database migrations. The previous
+  columns); without 20261001-001 EVERY notification read/write fails the same
+  way; without 20261002-001 every status change only logs a warn and
+  `GET /api/order/:id/history` 500s; without 20261002-002 EVERY return-request
+  read/write fails (the entity selects `image_urls`) — details in `ops-runtime.md` §Database migrations. The previous
   one (CART-UNIQ-01) was applied 2026-09-27.
 
 DEPLOY-PG-01 was resolved 2026-09-16; both migration failure modes now live in
 `ops-runtime.md` (§CI/CD and §Database migrations). Two config gaps remain:
 
-- **MONITOR-01 — `METRICS_TOKEN` is generated but NOT yet on the box**, so
-  `GET /metrics` still 404s on prod. Scraper chosen 2026-09-28: Grafana Cloud
-  free tier, hosted Metrics Endpoint (setup, dashboard, series budget in
-  `ops-runtime.md` §Metrics scrape). Owed: put the token in
-  `local/nodeA/.env` on the EC2 + `pm2 restart gateway`, verify 401/200, and
-  the user creates the Grafana Cloud stack and connection.
+- **MONITOR-01 — the token is live on prod** (verified 2026-10-01: `GET
+  /metrics` is 401 without the header, 200 with it) and the Grafana Cloud
+  Metrics Endpoint scrape job exists (setup, dashboard, series budget in
+  `ops-runtime.md` §Metrics scrape). Owed: import
+  `grafana/gateway-dashboard.json` and confirm its panels fill.
 - **`TURNSTILE_SECRET_KEY` is UNSET on prod**, so CAPTCHA-01 is off there. It
   is blocked on the user creating the Turnstile keys. Set the secret first
   (shadow mode), and flip `CAPTCHA_ENFORCE=true` only after the storefront
@@ -73,10 +111,11 @@ DEPLOY-PG-01 was resolved 2026-09-16; both migration failure modes now live in
 - **GHN Web console (`../web-flow-GHN`)** — backend is ready; the remaining work
   is all FE. Only backend contract still blocking it: analytics charts. Steps
   and deps in `planned-work.md`.
-- **CTX-PROV-02 — 43 of 58 `known-behaviors.md` anchors carry
-  `verified=unrecorded`** (9 prod, 6 local; SEARCH-01, ROLE-ADMIN-01,
-  AUTHOR-NAME-01 and NAME-TRIM-01 were upgraded to `prod:2026-09-16` by actually
-  exercising them on prod after the release). Upgrading a tag means actually EXERCISING the
+- **CTX-PROV-02 — 40 of 68 `known-behaviors.md` anchors carry
+  `verified=unrecorded`** (9 prod, 19 local; SEARCH-01, AUTHOR-NAME-01 and
+  NAME-TRIM-01 were upgraded to `prod:2026-09-16` by actually exercising them on
+  prod after the release; ROLE-ADMIN-01 moved to `local:2026-10-01` when
+  SESSION-REVOKE-01 changed its behaviour). Upgrading a tag means actually EXERCISING the
   behaviour (services up, an account from `test-accounts.md`, curl, assert the
   documented outcome), then `verified=prod:<date>` or `local:<date>` for where
   you ran it. Editing the tag without running anything destroys the only thing
@@ -103,6 +142,34 @@ The one standing instruction:
   redelivery~~ → **DROPPED 2026-09-25 by the user**: rewards has no FE yet.
   Do not re-record the rewards double-credit (`reward_points` has no
   UNIQUE(order_id)) until the FE builds rewards.
+
+### Audit backlog (SWEEP-1002, `/sweep audit` 2026-10-02 — recorded, not fixed)
+
+**TOP FIX (next): SWEEP-1002-05** — blocked on the prod measurement below.
+
+- ~~SWEEP-1002-01 — a timed-out checkout released its Idempotency-Key~~ →
+  **DONE 2026-10-02** (local), see CHANGELOG. Not pushed. Class B.
+- ~~SWEEP-1002-02 — `shipping_history` / `order_return_requests` had no
+  order/user index~~ → **DONE 2026-10-02** (local), see CHANGELOG. Not pushed.
+  Class A; 1 index-only migration, owed above.
+- ~~SWEEP-1002-03 — checkout made 2N serial orders→inventory round trips~~
+  → **DONE 2026-10-02** (local), see CHANGELOG. Not pushed. Class A. The
+  stock pre-check now fans out; the reserve pass is still serial (-05).
+- ~~SWEEP-1002-04 — dead `payment_completed` handler in rewards~~ → **DONE
+  2026-10-02** (local), see CHANGELOG. Not pushed. Class A.
+- 🟡 **SWEEP-1002-05 — the reserve pass is still N serial inventory calls.**
+  Found while self-testing -03 on DEV: `reserveOrderItems` took ~1.5s per
+  item, on top of ~4s for the GHN fee. A 3-item COD checkout 408'd at the
+  gateway's 10s WRITE budget and committed ~1s later (IDEM-HOLD-01 held the
+  key, and the retry got a 409). Measure on prod (EC2 → Aiven) before acting.
+  Fix if it holds there: a batch `RESERVE_STOCK_MANY` in inventory that
+  reserves all lines in one PG transaction (all-or-nothing, so the
+  per-item compensation goes away). Both orders and inventory change, no
+  migration. Each reserve is one PG transaction of ~7 serial round trips
+  (`reserveStockWithLedger`), so its cost scales with the app→Aiven RTT: if
+  prod sits in Aiven's region it may not reproduce. The measurement is blocked
+  (2026-10-02 `/sweep 2`): there is no prod SSH key locally, and measuring
+  means either a real COD checkout on prod or the user reading the timings.
 
 ### Planned but not started
 
@@ -146,6 +213,9 @@ pick one up. Do not re-derive them:
 - EXPORT-CSV-01 — The seller CSV export is one row per ORDER ITEM, and the four order-level money columns are written on each order's first row only so a column SUM does not double-count.
 - EXPORT-TZ-01 — Order timestamps and every from/to day window are Vietnam wall-clock computed in code, because the server TZ is UTC on prod and UTC+7 on dev — do NOT "fix" a zone bug by setting TZ or the connection timezone.
 - CART-UNIQ-01 — carts.user_id and cart_items (cart_id, product_id, COALESCE(sku_id,0)) are UNIQUE, so a racing add re-reads the winning cart or atomically increments the winning line; a line holds an integer 1..999 (a summed add past 999 is a 400, racing adds can overshoot by one request); skuId 0 means no SKU, and a concurrent remove-last-item can still drop an add.
+- ORDER-TIMELINE-01 — GET /api/order/:id/history (owner or admin, a seller is a 403) merges placed, paid, local status changes and successful GHN webhook/sync rows oldest first; status changes exist only from 2026-10-02, are recorded best-effort after the write (a failed insert drops that event, never the transition), and consecutive identical GHN statuses collapse to one.
+- RETURN-PHOTO-01 — A return request takes up to 5 unique jpg/png/webp URLs from the trybuy/returns Cloudinary folder whose leaf starts with the caller's id (403 otherwise, before any TCP call); orders stores none as NULL and every read emits imageUrls as an array ([] for legacy rows); the URLs are not checked to exist, are fixed once created, and are never deleted from Cloudinary.
+- IDEM-HOLD-01 — POST /api/order releases its Idempotency-Key only on a definite 4xx other than 408; a 408, a 5xx or a transport failure re-holds the key as in-progress for 300s, so a same-key retry inside that window is a 409 DUPLICATE_REQUEST_IN_PROGRESS even when no order was created, and the result is never replayed for an order that committed after the gateway gave up.
 
 **GHN**
 - GHN-ADDR-01 — Free-text address resolution is best-effort and can match a wrong-but-valid location; sending both ids skips it.
@@ -169,6 +239,8 @@ pick one up. Do not re-derive them:
 - PATCH-NULL-01 — null on a product PATCH clears exactly six nullable columns; anywhere else it is a 400 by design.
 - RAIL-RANK-01 — Featured sellers and GET /api/products/trending rank by units sold over a rolling 30 days of CONFIRMED..COMPLETED orders, backfill with soldCount 0, fail open on the orders/inventory legs and cache 60s; viewCount/likesCount/isTrending are still never written.
 - XSS-DESC-01 — Product description is allow-list sanitized on WRITE (create and PATCH) by a dependency-free rebuild sanitizer, so the storefront may render it raw; rows written before 2026-09-25 are cleaned only on their next edit.
+- REVIEW-VERIFIED-01 — Reviewing without a COMPLETED order holding the product stays a 404 (not 403), a seller reviewing their own listing is a 403, and isVerifiedPurchase is resolved at read time — it flips to false after a refund/return and is null when the orders leg fails.
+- WISHLIST-ALERT-01 — A wishlisted SIMPLE product notifies its wishlisters (seller excluded, newest 1000) in-app when stock goes from <=0 to >0 or a PATCH lowers the price; one alert per product per 6h/24h window, claimed in Redis fail-closed, so a later wishlister or a second drop inside the window gets nothing; SKU products never alert.
 
 **Data shape / errors**
 - QUERY-ARRAY-01 — ?x[]= is a 400 by design; use repeated keys or a scalar, and wrap any new array query field with @Transform.
@@ -207,17 +279,20 @@ pick one up. Do not re-derive them:
 - MAIL-UI-02 — One template for all nine order mails; the CTA origin is FRONTEND_URL entry [0] and the audience decides the path.
 - RESET-EXHAUST-01 — Five reset rejections share one 400; only the attempt-limit one carries an errorCode, via a separate marker key.
 - RESET-TTL-01 — The reset code lives 60s, not 600 — live on prod since 2026-09-10.
-- CHG-PW-01 — change-password revokes nothing — an attacker’s stolen session survives it until its own expiry.
+- CHG-PW-01 — change-password revokes every session of the user and re-issues the caller's own cookie with the same exp, so the caller stays logged in and every other device gets a 401.
+- SESSION-REVOKE-01 — A JWT is rejected when its iat is older than the user's Redis validAfter, bumped by password change/reset, an actual role change and POST /api/user/logout-all; the check fails OPEN on a Redis error, a same-second token survives, and plain logout still revokes nothing.
 - EMAIL-REAUTH-01 — PATCH /api/user/:id requires currentPassword only when email actually changes (missing is a 400, wrong is a 401 with INVALID_CURRENT_PASSWORD); an unchanged email is re-sendable without it and the route is throttled 10/min.
 - MAIL-BOUNCE-01 — Mail to the fixture domain / RFC-reserved names is dropped before SMTP after a 45h bounce flood.
-- ROLE-ADMIN-01 — A role change reaches the JWT only on the target’s NEXT login; GET /api/user/me exposes the drift as a signal only.
+- ROLE-ADMIN-01 — An actual role change revokes the target’s sessions, so their next request is a 401 and the re-login carries the new role; GET /api/user/me still reports tokenRole/isRoleStale for the fail-open window.
 - CAPTCHA-01 — Turnstile on register and forgot-password has three env postures (off / shadow / enforce); only enforce ever rejects, with a 400 CAPTCHA_REQUIRED, and a siteverify outage or a secret Cloudflare rejects fails OPEN.
+- ACCOUNT-DELETE-01 — DELETE /api/user/me scrubs the user to deleted_<publicId> (name/avatar null, inactive, addresses gone, sessions revoked) but KEEPS posts, comments, reviews, chat and every order row; only PENDING..PROCESSING orders auto-cancel, the legs run in sequence and are not atomic, so a mid-way failure leaves canceled orders on a live account and the retry finishes the job; an admin cannot self-delete (403) and deleted_ is a reserved register prefix.
 
 **Ops / probes**
 - READY-01 — /ready really probes RabbitMQ but stays 200 on a broker outage; the result is cached 10s.
 
 **Messaging**
 - OUTBOX-SCOPE-01 — Only order_created is durable; every other RMQ publish is best-effort by design.
+- RMQ-DLQ-01 — A consumer nack(requeue=false) lands in trybuy.dead_letter via a broker policy the gateway applies fail-open on startup, while fanout events a queue has no handler for are ACKED and never dead-letter; replay republishes to the rejecting queue only, bounded by the DLQ depth at call time.
 
 ## Ops / Runtime Reference
 

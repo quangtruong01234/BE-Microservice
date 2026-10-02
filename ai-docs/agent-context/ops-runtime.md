@@ -356,6 +356,45 @@
   and write fails with `ER_BAD_FIELD_ERROR`. The CD migrate step runs before
   `pm2 startOrRestart`, which gives exactly that order.
 
+- **`nodeA-20261001-001-add-notification-product-public-id`** —
+  WISHLIST-ALERT-01: `notifications.product_public_id` VARCHAR(32) NULL. Guarded
+  by INFORMATION_SCHEMA, additive, no backfill (NULL is right for every existing
+  row, which is not a wishlist alert). **`[applied]` on DEV 2026-10-01.
+  Prod-owed**, and it must land BEFORE the code: the notification entity selects
+  the column, so without it every notification read and write fails with
+  `ER_BAD_FIELD_ERROR` — the bell, the list, every lifecycle notice.
+
+- **`nodeA-20261002-001-add-order-status-history`** — ORDER-TIMELINE-01: new
+  table `order_status_history` (`order_id`, `from_status` NULL, `to_status`,
+  `created_at` DATETIME(6)) + `idx_order_status_history_order (order_id,
+  created_at)`. Guarded CREATE TABLE, additive, no backfill (status changes
+  were never persisted before, so there is nothing to backfill from).
+  **`[applied]` on DEV 2026-10-02. Prod-owed.** Order of schema vs code is
+  survivable: without the table every status change still commits and only
+  logs `status history … not recorded`, but `GET /api/order/:id/history`
+  answers 500.
+
+- **`nodeA-20261002-002-add-return-request-image-urls`** — RETURN-PHOTO-01:
+  `order_return_requests.image_urls` JSON NULL. Guarded by INFORMATION_SCHEMA,
+  additive, no backfill (NULL = no photos; the gateway exposes it as `[]`).
+  **`[applied]` on DEV 2026-10-02. Prod-owed**, and it must land BEFORE the
+  code: the return-request entity selects the column, so without it every
+  return-request read and write fails with `ER_BAD_FIELD_ERROR`. No Cloudinary
+  setup needed — the prod physical folder `trybuy-prod/returns` is created on
+  first upload.
+
+- **`nodeA-20261002-003-add-shipping-history-and-return-request-indexes`** —
+  SWEEP-1002-02: `idx_shipping_history_order (order_id, created_at)`,
+  `idx_order_return_requests_order (order_id)` and
+  `idx_order_return_requests_user (user_id)`. Index-only, each guarded by
+  INFORMATION_SCHEMA.STATISTICS, online DDL (`ALGORITHM=INPLACE, LOCK=NONE`).
+  **`[applied]` on DEV 2026-10-02. Prod-owed**, but order vs code does not
+  matter: no query depends on it, it only turns the per-order full scans into
+  `ref` lookups. The entities declare the same names in `@Index`, so a DEV
+  service under `synchronize:true` creates identical indexes and the migration
+  then no-ops — a watch-mode `start:nodeA` did exactly that on DEV before the
+  migration ran.
+
 ### Pre-cutoff applied-migration history (fresh-DB reference only)
 
 All absorbed into the 2026-07-17 baseline; listed for context on WHY columns
@@ -481,6 +520,33 @@ the seed script.
   PENDING/CONFIRMED/PROCESSING orders with `ghn_order_code` null older than
   `ORDER_STALE_RESERVATION_TTL_HOURS` (default 24h), reusing the idempotent
   cancel flow. Orders with a GHN code are never swept.
+
+## RabbitMQ dead-letter queue (RMQ-DLQ-01, 2026-10-01)
+
+- **Mechanism: a broker POLICY, not queue arguments.** Re-declaring an existing
+  queue with `x-dead-letter-*` args is a `PRECONDITION_FAILED` channel error, so
+  the gateway PUTs two policies through the management HTTP API on every
+  startup: `trybuy-dead-letter` (priority 0, every queue except the DLQ and
+  `amq.*` → default exchange, routing key `trybuy.dead_letter`) and
+  `trybuy-dead-letter-cap` (priority 1, DLQ only, `max-length` 10000,
+  `drop-head`). It also asserts the durable `trybuy.dead_letter` queue.
+- **Needs the management API reachable from the gateway.** `docker-compose.yml`
+  already binds `127.0.0.1:${RABBITMQ_MANAGEMENT_PORT:-15672}` and the image has
+  the plugin. Env: `RABBITMQ_MANAGEMENT_PORT` (default 15672),
+  `RABBITMQ_MANAGEMENT_HOST` (default `RABBITMQ_HOST`); credentials are the AMQP
+  `RABBITMQ_USER`/`RABBITMQ_PASS`, so that user needs the `policymaker` (or
+  `administrator`) tag. **Fail-open**: unreachable or refused ⇒ one warn line
+  and the gateway boots anyway, with no dead-lettering. Check it applied:
+  the gateway log line `Dead-letter policy applied`, or the management UI
+  Admin → Policies on vhost `rabbit-trybuy`.
+- **Admin routes** (`@Roles("admin")`): `GET /api/admin/dead-letters?limit=1..50`
+  (peek, non-destructive — but every peeked message comes back marked
+  `redelivered`) and `POST /api/admin/dead-letters/replay {count:1..100}`
+  (republish to the queue that rejected it). Replay is bounded by the DLQ depth
+  at call time. Purge has no route: `rabbitmqctl purge_queue trybuy.dead_letter
+  -p rabbit-trybuy` inside the container.
+- Residual behaviour (what dead-letters and what never does): `known-behaviors.md`
+  → RMQ-DLQ-01.
 
 ## Payments
 

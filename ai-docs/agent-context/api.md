@@ -93,17 +93,20 @@ payments, `reward_points`, `shipping_history`, `voucher_redemptions`.
 |---|---|---|---|
 | POST | `/api/user/register` | Public | Register new user |
 | POST | `/api/user/login` | Public | Login — sets HttpOnly JWT cookie |
-| POST | `/api/user/logout` | Public | Clears auth cookie |
+| POST | `/api/user/logout` | Public | Clears auth cookie (this browser only — the token itself stays valid until expiry) |
+| POST | `/api/user/logout-all` | Cookie | Revokes every session of the caller, this one included, and clears the cookie. 201 `{ message }`; 503 if the session store is down; 5/min (SESSION-REVOKE-01) |
+| DELETE | `/api/user/me` | Cookie | Self-service account deletion, immediate and irreversible. Body `{ currentPassword }`. 200 `{ success: true, canceledOrderCount }` and clears the cookie. 400 empty body / already deleted; 401 `errorCode: INVALID_CURRENT_PASSWORD`; 403 admin; 502/503/408 when a purge leg fails (nothing scrubbed — retry). Auto-cancels PENDING..PROCESSING orders as buyer or seller; content and orders are kept and the author renders as `deleted_usr_…`; 5/min (ACCOUNT-DELETE-01) |
 | GET | `/api/user` | Role: admin | Paginated users (`?page=&limit=`) |
 | GET | `/api/user/me` | Cookie | Get current authenticated user. `role` is the DB role; `tokenRole` is the role in the presented JWT (what guards enforce) and `isRoleStale` is true when they differ — gate UI on `tokenRole` (ROLE-ADMIN-01) |
 | GET | `/api/user/:id` | Cookie | Get public user profile by ID (no email) |
 | PATCH | `/api/user/:id` | Cookie | Update user profile (own account only) |
-| PATCH | `/api/user/:id/role` | Role: admin | Change a user's role — `{ role: "user" \| "shop" \| "admin" \| "logistics_operator" \| "shipping_manager" }`. 400 on an unknown/inactive role or a self-change; takes effect on the target's next login, which `GET /api/user/me` now advertises via `isRoleStale` (ROLE-ADMIN-01) |
+| PATCH | `/api/user/:id/role` | Role: admin | Change a user's role — `{ role: "user" \| "shop" \| "admin" \| "logistics_operator" \| "shipping_manager" }`. 400 on an unknown/inactive role or a self-change; an actual change revokes the target's sessions, so their next request is a 401 and the re-login carries the new role (SESSION-REVOKE-01, ROLE-ADMIN-01) |
 
 ### Register DTO
 ```typescript
 { username: string; password: string; email: string; name?: string }
 ```
+`username` is trimmed and may not start with `deleted_` (case-insensitive, 400) — that prefix marks a deleted account (ACCOUNT-DELETE-01).
 
 ### Login DTO
 ```typescript
@@ -336,6 +339,12 @@ Comment/reply notification items include social metadata for deep links:
 for these social notifications. Order-related notifications use
 `orderId: "ord_..."`.
 
+Every item (list and the `/notifications` WS push) also carries
+`productId: "prod_..." | null` (WISHLIST-ALERT-01). It is set only on the two
+wishlist types — `wishlist_back_in_stock` and `wishlist_price_drop` — where
+`preview` is the product name and the deep link is the product page; it is
+`null` on every other type and on every row written before 2026-10-01.
+
 ---
 
 ## Social Endpoints (`/api/social/`)
@@ -524,7 +533,9 @@ All patterns defined in `api/libs/constant/`.
 ### User Patterns (`USER_MESSAGE_PATTERN`)
 ```
 GET_USER_INFO, GET_ALL_USERS, GET_USERS_BY_IDS, REGISTER_USER, LOGIN_USER,
-GET_ME (user.get_me), UPDATE_USER (user.update)
+GET_ME (user.get_me), UPDATE_USER (user.update),
+VERIFY_ACCOUNT_DELETION (user.verify_account_deletion),
+DELETE_ACCOUNT (user.delete_account)
 ```
 
 ### Product Patterns (`PRODUCT_MESSAGE_PATTERNS`)
@@ -535,7 +546,8 @@ product.search,
 brand.create, brand.findAll, brand.findById, brand.review,
 category.create, category.findAll, category.findById, category.review,
 sku.create, sku.findByProduct, sku.findById, sku.update, sku.delete,
-product.wishlist.add, product.wishlist.remove, product.wishlist.list
+product.wishlist.add, product.wishlist.remove, product.wishlist.list,
+product.purge_user_data
 ```
 
 ### Order Patterns (`ORDER_MESSAGE_PATTERN`)
@@ -545,7 +557,8 @@ cancel_order, get_order_invoice, handle_ghn_webhook,
 order.get_by_seller, order.confirm, order.ready_to_ship,
 order.calculate_shipping_fee,
 order.admin_ghn_orders, order.admin_ghn_order_detail,
-order.admin_ghn_sync, order.admin_ghn_history
+order.admin_ghn_sync, order.admin_ghn_history,
+order.cancel_open_orders_for_user
 ```
 
 ### Payment Patterns (`PAYMENT_MESSAGE_PATTERN`)
@@ -557,7 +570,7 @@ payment.zalopay_callback, payment.vnpay_callback
 
 ### Notification Patterns (`NOTIFICATION_MESSAGE_PATTERN`)
 ```
-get_user_notifications, mark_notification_read
+get_user_notifications, mark_notification_read, notification.purge_user_data
 ```
 
 ### Social Patterns (`SOCIAL_MESSAGE_PATTERN`)
@@ -568,7 +581,7 @@ social_delete_post, social_like_post, social_unlike_post,
 social_create_comment, social_get_comments, social_delete_comment,
 social_create_reply, social_get_replies,
 social_follow_user, social_unfollow_user, social_get_followers,
-social_get_following, social_get_following_feed
+social_get_following, social_get_following_feed, social_purge_user_data
 ```
 
 ### Chat Patterns (`CHAT_MESSAGE_PATTERN`)
@@ -604,6 +617,7 @@ All event constants in `api/libs/common/src/constants/event.ts`.
 | `order_canceled` | `EVENT.ORDER_CANCELED_EVENT` | Orders service | Inventory (release stock) |
 | `payment_completed` | `EVENT.PAYMENT_COMPLETED_EVENT` | Payments service | Orders (set PROCESSING + trigger GHN) |
 | `inventory.stock_changed` | `EVENT.INVENTORY_STOCK_CHANGED_EVENT` | Inventory service | Product service (sync stockQuantity) |
+| `product.wishlist_alert` | `EVENT.WISHLIST_ALERT_EVENT` | Product service (PRODUCT_EXCHANGE fanout) | Notification service (inventory's queue binds the exchange and acks it unhandled) |
 | `social.comment_created` | `EVENT.COMMENT_CREATED_EVENT` | Social service | Notification service |
 | `social.reply_created` | `EVENT.REPLY_CREATED_EVENT` | Social service | Notification service |
 

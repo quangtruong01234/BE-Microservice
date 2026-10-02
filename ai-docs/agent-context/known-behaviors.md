@@ -1187,18 +1187,33 @@ class-C hold is closed: the storefront dropped the hardcoded "10 phút" and now
 lets the email state the lifetime, so the copy cannot drift from the constant
 again (`../.agent-local/release-gate.md` → `RESET-TTL-01`).
 
-## `change-password` revokes nothing (CHG-PW-01, 2026-09-08)
-<!-- kb: id=CHG-PW-01; group=auth; files=apps/user/src/user.service.ts; sha=6eba61912fe4; verified=unrecorded:2026-09-08; keys=change-password,revoke,token blacklist,stolen session,logout everywhere,đổi mật khẩu; summary=change-password revokes nothing — an attacker’s stolen session survives it until its own expiry. -->
+## `change-password` logs out every OTHER session and re-issues the caller's (CHG-PW-01, 2026-09-08; revocation 2026-10-01)
+<!-- kb: id=CHG-PW-01; group=auth; files=apps/user/src/user.service.ts,apps/gateway/src/user/user.controller.ts; sha=cfe332946b12; verified=local:2026-10-01; keys=change-password,revoke,stolen session,logout everywhere,reissue cookie,re-issue,đổi mật khẩu,đăng xuất thiết bị khác; summary=change-password revokes every session of the user and re-issues the caller's own cookie with the same exp, so the caller stays logged in and every other device gets a 401. -->
 
-`POST /api/user/change-password` deliberately does NOT revoke or rotate
-anything. The JWT is stateless with no blacklist, so issuing a new cookie would
-only refresh THIS session while every other device keeps its old token until it
-expires (5h, or 7d with `rememberMe`) — a false sense of "logged out
-everywhere". Changing that needs a token version/denylist, which is a separate
-decision.
+Until 2026-10-01 `POST /api/user/change-password` revoked nothing — a stolen
+session outlived the password change. Since SESSION-REVOKE-01 a successful
+change bumps the user's `validAfter` (mechanism and its limits: that entry),
+and the gateway then **re-issues the caller's own token** so the caller is not
+logged out by their own action. Measured on `chgpw_test` (local, 2026-10-01):
+session A → 401 after the change made from session B; B's re-issued cookie →
+200; B's pre-change token replayed → 401.
 
-**State this plainly if asked:** after a password change, an attacker's stolen
-session is still live until its own expiry.
+What the re-issue keeps and what it does not:
+
+- **Same claims, same `exp`, fresh `iat`.** The remaining lifetime is carried
+  over (`expiresIn` = seconds left), so a password change never extends a
+  session. The cookie `maxAge` is the remaining time, capped at 7d if the token
+  was a remember-me one (original lifetime ≥ 7d) and at the default 5h
+  otherwise.
+- **The response body is unchanged** (`{ success: true }`); only a `Set-Cookie`
+  is added. A FE that ignores it keeps working, because the browser applies the
+  cookie by itself.
+- **A Bearer caller also gets a cookie**, and its bearer token is revoked like
+  every other one — a non-browser client has to read the new cookie or log in
+  again. No such client exists today.
+- **A Redis failure in the user service does not fail the change.** The new
+  password is already saved; the revocation write is logged and swallowed, so
+  that one change revokes nothing. The re-issue still happens.
 
 Also deliberate:
 - A wrong `currentPassword` is a **401** (same class as `login()`). Since
@@ -1206,6 +1221,57 @@ Also deliberate:
   `message`.
 - The change drops the pending `user:pwreset:code:*` / `attempts:*` Redis keys,
   so an already-emailed reset code cannot be replayed afterwards.
+
+## Sessions are revoked per user by a Redis `validAfter`, fail-open (SESSION-REVOKE-01, 2026-10-01)
+<!-- kb: id=SESSION-REVOKE-01; group=auth; files=apps/gateway/src/common/session/session-revocation.service.ts,apps/gateway/src/common/guards/jwt-auth.guard.ts,apps/gateway/src/common/guards/optional-jwt-auth.guard.ts; sha=72894a5868c1; verified=local:2026-10-01; keys=logout-all,logout all,log out all devices,session revoke,revocation,validAfter,valid-after,iat,token version,denylist,blacklist,stolen session,đăng xuất tất cả,đăng xuất mọi thiết bị,thu hồi phiên,phiên đăng nhập; summary=A JWT is rejected when its iat is older than the user's Redis validAfter, bumped by password change/reset, an actual role change and POST /api/user/logout-all; the check fails OPEN on a Redis error, a same-second token survives, and plain logout still revokes nothing. -->
+
+The JWT stays stateless. Revocation is one Redis key per user,
+`auth:session:valid-after:<userId>` = epoch seconds, TTL 30d
+(`libs/constant/session.constant.ts`). Every guard that verifies a token —
+`JwtAuthGuard`, `OptionalJwtAuthGuard`, and both WebSocket gateways — rejects a
+token whose `iat` is strictly older. There is no migration and no column, which
+is why this was chosen over a `users.token_version` claim.
+
+Who bumps it:
+
+| Trigger | Writer | On a Redis failure |
+|---|---|---|
+| change-password | user service | logged, swallowed — the change succeeds, nothing is revoked |
+| reset-password | user service | same |
+| `PATCH /api/user/:id/role` with a DIFFERENT role | user service | same; re-setting the same role revokes nothing |
+| `POST /api/user/logout-all` | gateway | **503**, the cookie is kept — the user must know it did not happen |
+
+Measured on local dev, 2026-10-01: the change-password legs (CHG-PW-01);
+logout-all → 201 with the cookie cleared and the old token replayed → 401; a
+role change → the target's live session 401, the admin's own 200; a same-role
+PATCH → the target stays 200; a revoked cookie on public `GET /api/products` →
+200 anonymous; a revoked token on `/notifications` and `/chat` → connected,
+then `io server disconnect`.
+
+Deliberate, and not bugs:
+
+- **Fail-open.** A Redis error or a read slower than 500 ms lets the token
+  through with a warn log. A Redis outage therefore means "no revocation", never
+  "everyone is logged out". The 30d TTL outlives the longest JWT (7d), and prod
+  Redis runs `appendonly yes`, so a restart does not forget a bump.
+- **Second granularity, strict `<`.** A token minted in the same second as the
+  bump survives it. That is what keeps the caller's re-issued change-password
+  cookie alive, and it is at most a one-second window.
+- **Revoked reads as anonymous on optional-auth routes**, not 401 — the same as
+  an expired token there.
+- **The 401 is the existing dead-session one** (`errorCode: UNAUTHENTICATED`),
+  so the FE's "session expired → login" path already handles it.
+- **An open WebSocket is checked once, at connect.** Revoking later does not
+  close an already-open socket; it fails on the next reconnect. The check runs
+  after the room join (async, `void`) so a slow Redis does not race the join.
+- **Plain `POST /api/user/logout` still revokes nothing** — it only clears this
+  browser's cookie. There is no per-token denylist; "log out everywhere" is the
+  explicit route.
+- **Two Redis GETs on a double-guarded route** (global guard plus an explicit
+  `@UseGuards(JwtAuthGuard)`). A single-key GET is cheap, so it was not
+  deduplicated.
+- **Email change revokes nothing** (EMAIL-REAUTH-01), and neither does an admin
+  deactivating a user — neither is a trigger today.
 
 ## Changing the email needs the current password (EMAIL-REAUTH-01, 2026-09-26)
 <!-- kb: id=EMAIL-REAUTH-01; group=auth; files=apps/user/src/user.service.ts; sha=0da41f63d852; verified=prod:2026-09-27; keys=email change,change email,currentPassword,re-auth,reauth,PATCH user,update profile,account takeover,đổi email,sửa hồ sơ,mật khẩu hiện tại; summary=PATCH /api/user/:id requires currentPassword only when email actually changes (missing is a 400, wrong is a 401 with INVALID_CURRENT_PASSWORD); an unchanged email is re-sendable without it and the route is throttled 10/min. -->
@@ -1228,7 +1294,8 @@ forgot-password. Behaviour, all deliberate:
 - **`PATCH /api/user/:id` is now `@RateLimit({ limit: 10, ttl: 60 })`** per user,
   for every edit (not only email changes) — otherwise it would be an unthrottled
   password-guessing oracle next to the 5/min change-password.
-- Nothing is revoked on an email change, same as CHG-PW-01.
+- Nothing is revoked on an email change — unlike a password change since
+  SESSION-REVOKE-01.
 
 ## `PATCH /api/products/:id` — `null` clears exactly six columns (PATCH-NULL-01)
 <!-- kb: id=PATCH-NULL-01; group=products; files=apps/gateway/src/product/dto/update-product.dto.ts,apps/product/src/product.service.ts; sha=d636457f1ed6; verified=unrecorded; keys=product PATCH null,clear column,sellerNotes,imageUrls,brandId,weight,product patch,xoá field sản phẩm; summary=null on a product PATCH clears exactly six nullable columns; anywhere else it is a 400 by design. -->
@@ -1277,6 +1344,55 @@ synchronously before the publish, so the events are notification-grade, and
 routing them through the outbox would risk duplicate notifications
 (`order.status_changed` has no idempotency key). **Do not re-open this as a
 silent-loss bug**; re-open only if one of those events becomes state-critical.
+
+## What reaches the dead-letter queue, and what replay does (RMQ-DLQ-01, 2026-10-01)
+<!-- kb: id=RMQ-DLQ-01; group=messaging; files=apps/gateway/src/dead-letter/dead-letter.service.ts,libs/common/src/rmq/ack-unhandled-server-rmq.ts; sha=7125f1d7a34b; verified=local:2026-10-01; keys=dead letter,dead-letter,DLQ,trybuy.dead_letter,replay,nack,requeue,poison message,AckUnhandledServerRMQ,getOptionsTopic,dead-letter policy,admin/dead-letters,hàng đợi lỗi,tin nhắn lỗi,message lỗi,message bị reject,phát lại,chạy lại message; summary=A consumer nack(requeue=false) lands in trybuy.dead_letter via a broker policy the gateway applies fail-open on startup, while fanout events a queue has no handler for are ACKED and never dead-letter; replay republishes to the rejecting queue only, bounded by the DLQ depth at call time. -->
+
+Ops setup (policy, management API, env, admin routes) is in `ops-runtime.md`
+→ RabbitMQ dead-letter queue. Verified on dev 2026-10-01: an unknown pattern on
+`order.fanout` was acked by INVENTORY/PAYMENTS/REWARDS with the DLQ staying 0;
+an `inventory.stock_changed` for a missing product was rejected by
+`inventory_events_queue` and landed in the DLQ; replaying it re-dead-lettered it
+once with `replayCount: 1` and stopped.
+
+- **Only `nack(requeue=false)` (and a broker-side expiry/overflow) dead-letters.**
+  A `nack(requeue=true)` loop — the transient-error branch of every consumer —
+  still spins forever on the source queue; the DLQ does not bound it.
+- **Unhandled fanout events are acked, not dead-lettered.** Every exchange is a
+  FANOUT, so every queue receives every event on it (`order_canceled` reaches
+  PAYMENTS_SERVICE and REWARDS_SERVICE). Stock `ServerRMQ` rejects those with
+  requeue=false, which under the policy would have buried real failures under
+  2–3 routine messages per order. `AckUnhandledServerRMQ`, wired through
+  `RmqService.getOptionsTopic`, acks them instead — the same drop as before.
+  A consumer registered through `getOptions()` (plain `Transport.RMQ`) or the
+  gateway's own push-queue options does NOT get it; route new fanout consumers
+  through `getOptionsTopic`. A typo'd `@EventPattern` therefore fails silently
+  (acked) rather than showing up in the DLQ.
+- **The policy is fail-open and overrides.** If the management API is
+  unreachable or refuses, the gateway boots without dead-lettering (a warn
+  line). At priority 0 on `^(?!trybuy\.dead_letter$)(?!amq\.).*` it replaces any
+  lower-priority operator policy on those queues — RabbitMQ applies ONE policy
+  per queue, so an operator policy must merge the DLX keys in, not sit beside.
+- **Peek is non-destructive but not invisible**: it gets and `nackAll(true)`s,
+  so every peeked message comes back flagged `redelivered`, in original order.
+- **Replay targets only the queue that rejected the message**, via the default
+  exchange (routing key = `x-death[0].queue`), never the original fanout — the
+  other consumers already handled it. It strips `x-death*` (so `deathCount`
+  restarts at 1) and bumps `x-replay-count`, which is what shows a loop.
+- **Replay is bounded by the DLQ depth at call time**, and `remaining` is that
+  same snapshot. A consumer that rejects the replayed copy at once puts it back
+  at the tail within the same call, so `remaining: 0` does not mean the DLQ is
+  empty. Found by the self-test: without the bound one poison message was
+  replayed 5 times by `count: 5`.
+- **A message whose source queue is gone, or with no `x-death`, is skipped** and
+  nacked back to the DLQ head, so it keeps its place — `skipped` counts them and
+  a repeated replay meets them again first.
+- **Replay acks only after the publisher confirm**, and closes the channel
+  before the connection: Connection.Close can overtake the last buffered ack and
+  requeue an already-republished original (a DLQ 3 → 4 duplicate in the
+  self-test). A crash between confirm and ack can still duplicate one message.
+- **The DLQ is capped at 10 000 with `drop-head`** — the oldest failure is lost
+  first. There is no purge route; purge with `rabbitmqctl`.
 
 ## SHAPE-01 residuals (2026-08-26; hậu kiểm 2026-08-27)
 <!-- kb: id=SHAPE-01; group=shape; verified=local:2026-08-27; keys=data shape,empty cart,IsOptionalNotNull sweep,DB order,missing relation,with-inventory/multiple,giỏ hàng rỗng,cart rỗng,mảng rỗng,trả về null,empty array; summary=Residuals of the data-shape rules — empty-cart key set, DB-order batch reads, null (not {}) for a missing relation, no decorator sweep. -->
@@ -1739,24 +1855,35 @@ Verified locally 2026-09-30 on every route: blank = unfiltered total, 101
 chars = 400, a real term narrows with every row matching, `limit=1` paging
 reports the searched total, `%` and `_` are literal.
 
-## A role change only reaches the JWT on the target's NEXT login (ROLE-ADMIN-01, 2026-09-15)
-<!-- kb: id=ROLE-ADMIN-01; group=auth; files=apps/gateway/src/user/user.service.ts; sha=2e9cd115eb95; verified=prod:2026-09-16; keys=role change,tokenRole,isRoleStale,JWT role,promote shop,CANNOT_CHANGE_OWN_ROLE,đổi role,đổi quyền,phân quyền,lên shop; summary=A role change reaches the JWT only on the target’s NEXT login; GET /api/user/me exposes the drift as a signal only. -->
+## A role change logs the target out; the re-login carries the new role (ROLE-ADMIN-01, 2026-09-15; revocation 2026-10-01)
+<!-- kb: id=ROLE-ADMIN-01; group=auth; files=apps/gateway/src/user/user.service.ts,apps/user/src/user.service.ts; sha=634665f69c3f; verified=local:2026-10-01; keys=role change,tokenRole,isRoleStale,JWT role,promote shop,CANNOT_CHANGE_OWN_ROLE,đổi role,đổi quyền,phân quyền,lên shop; summary=An actual role change revokes the target’s sessions, so their next request is a 401 and the re-login carries the new role; GET /api/user/me still reports tokenRole/isRoleStale for the fail-open window. -->
 
 `PATCH /api/user/:id/role` (admin only) is the first and only write path for
 `users.role_id` — before it, promoting a buyer to `shop` meant a hand-written
 `UPDATE` against Aiven MySQL. It writes the row and nothing else, which has one
 consequence that matters more than the endpoint itself:
 
-**The target keeps the OLD role until their token is replaced.** The JWT is
-stateless and carries `role` + `grants` baked in at login (`generateJwtToken`,
-`apps/gateway/src/user/user.service.ts`), and nothing here revokes it — the same
-contract as CHG-PW-01. Verified at runtime, not reasoned about: after demoting a
-`shop` account back to `user`, its still-live cookie answered **200** on
-`GET /api/products/shop/stats`. A promotion has the mirror-image delay — the new
-`shop` sees 403 on seller routes until they log out and back in.
+**The JWT carries `role` + `grants` baked in at login** (`generateJwtToken`,
+`apps/gateway/src/user/user.service.ts`), so a role change cannot reach a live
+token. Until 2026-10-01 the target simply kept the OLD role until their token
+expired: a demoted `shop` cookie still answered **200** on
+`GET /api/products/shop/stats` (prod-verified 2026-09-16), and a promoted
+account saw 403 on seller routes until it logged in again.
 
-**The drift is now observable — `GET /api/user/me` reports the role twice
-(2026-09-16).** The session's own role is invisible to the client (httpOnly
+**Since SESSION-REVOKE-01 an actual change revokes every session of the
+target.** Their next request is the ordinary dead-session 401
+(`UNAUTHENTICATED`), and the re-login mints a token with the new role. That is
+the release-class-B behaviour change: the FE must route that 401 to login,
+which it already does for an expired session. Measured on local dev,
+2026-10-01, with `roleprobe0915`: promotion → the target's live cookie 401,
+the admin's own session 200, re-login → `tokenRole:"shop"`; demotion → the
+`shop` cookie 401 on `/api/user/me`; re-setting the current role →
+the target stays 200. Revocation fails open on a Redis error and is
+second-granular (SESSION-REVOKE-01), so the drift below can still occur — it is
+just no longer the normal path.
+
+**The drift stays observable — `GET /api/user/me` reports the role twice
+(2026-09-16, prod-verified then; kept as the fallback signal).** The session's own role is invisible to the client (httpOnly
 cookie), so the boundary reports it instead of leaving the FE to guess:
 
 | Key | Source | Use |
@@ -1775,10 +1902,10 @@ the guard and `role.name` did not; after re-login ⇒ `tokenRole:"shop"`/
 
 Deliberate in that signal:
 
-- **It is a signal, not an enforcement.** Nothing is revoked — a client that
-  ignores `isRoleStale` behaves exactly as before, which is why this was class
-  **B**. Real revocation needs a token blacklist/version the project does not
-  have (same gap as CHG-PW-01); if that is ever wanted it is new work.
+- **It is a signal, not an enforcement.** The enforcement is the revocation
+  above; `isRoleStale: true` now only shows up when that revocation did not
+  happen (Redis down when the role was written, or a token minted in the same
+  second). A client that ignores it is still correct.
 - **An unreadable DB role reports `isRoleStale: false`**, not `true` — an
   unexpected payload shape must not log a user out.
 - **Only `GET /api/user/me` carries the pair.** The login response deliberately
@@ -1795,13 +1922,13 @@ Deliberate, and not oversights:
   — a name that is in `RoleName` but was never seeded is a 400, never a row
   pointing at a missing role. All five (`user`, `shop`, `admin`,
   `logistics_operator`, `shipping_manager`) resolve on dev and on the prod seed.
-- **No side effects.** No shop/seller row is created — `shop` is purely the role
+- **No side effects beyond the revocation.** No shop/seller row is created — `shop` is purely the role
   (a freshly promoted account answers `GET /api/products/shop/stats` with
   zeroes), nothing is emitted to RabbitMQ, and the target is not notified or
   emailed. If a "you are now a seller" notification is ever wanted, it is new
   work, not a bug here.
 - **Assigning the role a user already has is a 200, not a 409** — the write is
-  idempotent.
+  idempotent, and it revokes nothing.
 - `PATCH /api/user/:id` (profile) still ignores `role` entirely;
   `forbidNonWhitelisted` rejects the key there with a 400.
 
@@ -2155,6 +2282,97 @@ a drop-in if that is ever lifted.
   every kept `img[src]`.
 - Seed scripts write the column directly and bypass the sanitizer (trusted).
 
+## Reviews: a non-buyer is a 404, a seller is a 403, `isVerifiedPurchase` is read-time (REVIEW-VERIFIED-01, 2026-10-01)
+<!-- kb: id=REVIEW-VERIFIED-01; group=products; files=apps/gateway/src/product/product.service.ts,apps/product/src/product.service.ts,apps/orders/src/orders.service.ts; sha=209daf5ab5e8; verified=local:2026-10-01; keys=review,reviews,product review,createReview,isVerifiedPurchase,verified purchase,verified buyer,self-review,self review,review own product,CANNOT_REVIEW_OWN_PRODUCT,PRODUCT_NOT_PURCHASED,verify_product_purchased,find_verified_purchasers,đánh giá,danh gia,đánh giá sản phẩm,đã mua hàng,da mua hang,tự đánh giá,tu danh gia; summary=Reviewing without a COMPLETED order holding the product stays a 404 (not 403), a seller reviewing their own listing is a 403, and isVerifiedPurchase is resolved at read time — it flips to false after a refund/return and is null when the orders leg fails. -->
+
+**Three gates on `POST /api/products/:id/reviews`, in this order:**
+
+1. Gateway → orders `order.verify_product_purchased`: the caller must hold a
+   **COMPLETED** order containing the product, or it is a **404** `Product not
+   found in any completed order`. This predates F10 and was deliberately left
+   a 404, not moved to 403. The storefront maps that 404 to "Đơn hàng chưa được
+   xác nhận hoàn thành", and a 403 would fall through to the raw message.
+2. Product service: the product's seller (`products.user_id`) gets **403**
+   `You cannot review your own product`. It exists because a seller can buy and
+   complete their own listing (DEV had 62 `user_id = seller_id` orders). A
+   seller with no completed self-purchase never reaches it; they get gate 1's
+   404.
+3. Product service: a second review by the same user is a **409**.
+
+**`isVerifiedPurchase` is computed per read, never stored.**
+
+- `GET /api/products/:id/reviews` sends the page's distinct userIds to orders
+  in ONE call, `order.find_verified_purchasers` (one `IN` query). A row is
+  `true` when its author still holds a COMPLETED order with the product.
+- So a review written while verified reads `false` after a refund or return
+  request moves that order out of COMPLETED. That is intended, not drift. Do
+  not "fix" it by storing a flag at create time without deciding that product
+  question first.
+- **`null` means unknown, not false.** The orders leg is optional: a timeout
+  or an error logs a warn and every row on the page gets `null`, while the
+  reviews still render. The FE must not render `null` as "not verified".
+- An empty page skips the orders call. The create response always carries
+  `true` (it has just passed gate 1).
+- Verified locally 2026-10-01: a buyer's 201 `true`; the seller's 403 after
+  their COD self-order was completed; `testadmin`'s 404; GET → `true`. The
+  `false` and `null` legs are covered by unit tests only.
+
+## Wishlist alerts: simple products only, one per product per window, in-app only (WISHLIST-ALERT-01, 2026-10-01)
+<!-- kb: id=WISHLIST-ALERT-01; group=products; files=apps/product/src/product.service.ts,apps/notification/src/notification.service.ts,apps/notification/src/notification.controller.ts; sha=d7e1bb485c32; verified=local:2026-10-01; keys=wishlist,wishlist alert,back in stock,restock alert,price drop,price alert,wishlist_back_in_stock,wishlist_price_drop,product.wishlist_alert,WISHLIST_ALERT_EVENT,notifyWishlisters,saveWishlistAlerts,productPublicId,product_public_id,yêu thích,yeu thich,danh sách yêu thích,có hàng lại,co hang lai,giảm giá,giam gia,thông báo giảm giá; summary=A wishlisted SIMPLE product notifies its wishlisters (seller excluded, newest 1000) in-app when stock goes from <=0 to >0 or a PATCH lowers the price; one alert per product per 6h/24h window, claimed in Redis fail-closed, so a later wishlister or a second drop inside the window gets nothing; SKU products never alert. -->
+
+**Trigger → event → row.** Product detects, notification stores and pushes.
+Inventory is untouched: it already mirrors stock into `products.stock_quantity`
+via `inventory.stock_changed` (STOCK-SYNC-01), and product publishes
+`product.wishlist_alert` on `PRODUCT_EXCHANGE`. Inventory's queue also binds that
+exchange; its `AckUnhandledServerRMQ` acks the event, so it never dead-letters
+there (RMQ-DLQ-01).
+
+- **Back in stock** = the mirror write itself claims the transition with one
+  conditional `UPDATE … WHERE stock_quantity <= 0`, so two racing stock events
+  cannot both see "was 0". A NULL `stock_quantity` does NOT match, so the first
+  stock write of a never-stocked product is not a restock. Going TO 0 never
+  alerts.
+- **Price drop** = a `PATCH /api/products/:id` whose committed price is lower
+  than the pre-PATCH price. It is fired after commit and off the response path:
+  the PATCH 200 does not wait for it, and its failure is a warn, never a 4xx/5xx.
+  No other price writer (SKU price edits, seed scripts, SQL) triggers it.
+- **Never alerts:** a product with any active SKU (the mirror holds one
+  variant's stock and the base price is not what a variant sells at), an
+  inactive or approval-blocked product, a product only its own seller
+  wishlisted.
+- **Recipients:** the 1000 most recent wishlisters, minus the seller. One
+  notification row each, saved in one batch, then pushed over the
+  `/notifications` WS. **No email** — MAIL-BOUNCE-01.
+
+**The cooldown is per PRODUCT, not per user** — Redis `setNx`
+`wishlist-alert:<kind>:<productId>`, 6h for back_in_stock, 24h for price_drop:
+
+- A user who wishlists the product after the alert went out gets nothing until
+  the window ends. A second, deeper drop inside 24h is silent.
+- The key is claimed **fail-closed**. On a Redis error no alert goes out; it is
+  a nicety, and spamming every wishlister on a flapping stock level is worse.
+- It is claimed only when the fanout channel is live. It is NOT given back if
+  the consumer later drops the message. The DEV self-test hit exactly that: the
+  BIGINT `products.id` hydrated as a string, the consumer's guard rejected
+  `productId: "44"` into the DLQ, and the 24h key was already spent. The code
+  now passes the numeric id. If an alert ever dead-letters, `DEL` the key
+  before replaying.
+
+**Consumer.** A malformed payload is `nack(requeue=false)` → `trybuy.dead_letter`.
+A DB error is `nack(requeue=true)`.
+
+**Shape.** The new `notifications.product_public_id` column is exposed as
+`productId: "prod_…" | null` on every item. It is null on every other type and
+on every row written before the migration. `preview` holds the product name,
+truncated to 120 characters. The message prices are raw VND integers formatted
+`en-US` (`200,000 VND`); the FE may re-render them from the type plus the text.
+
+- **Verified locally 2026-10-01** on product 44 with a buyer wishlist:
+  - stock 0 → 105 produced one `wishlist_back_in_stock` row, and a second
+    cycle inside 6h produced none;
+  - PATCH price 35 → 30 produced one `wishlist_price_drop` row, while 30 → 28
+    inside 24h and the raise back to 39 produced none.
+
 ## One cart per user, one line per (product, SKU-or-none) — enforced by the DB (CART-UNIQ-01, 2026-09-25)
 <!-- kb: id=CART-UNIQ-01; group=orders; aka=AUD-0925-02,AUD-0925-03; files=apps/orders/src/cart.service.ts,database/migrations/nodeA/20260925-001-add-cart-unique-constraints.sql; sha=7c1f6d6fd781; verified=local:2026-09-25; keys=cart,carts,cart_items,add to cart,addItem,findOrCreateCart,duplicate cart,uq_carts_user_id,uq_cart_items_cart_product_sku,ER_DUP_ENTRY,skuId 0,double tap,quantity,MAX_CART_LINE_QUANTITY,999,số lượng,so luong,giỏ hàng,gio hang,thêm vào giỏ,them vao gio,trùng giỏ,trung gio; summary=carts.user_id and cart_items (cart_id, product_id, COALESCE(sku_id,0)) are UNIQUE, so a racing add re-reads the winning cart or atomically increments the winning line; a line holds an integer 1..999 (a summed add past 999 is a 400, racing adds can overshoot by one request); skuId 0 means no SKU, and a concurrent remove-last-item can still drop an add. -->
 
@@ -2250,3 +2468,199 @@ every returning user.
   siteverify: off → token accepted and ignored; enforce + always-pass secret →
   no token 400 `CAPTCHA_REQUIRED`, dummy token passes through to the user service;
   enforce + always-fail secret → 400; shadow + always-fail secret → passes.
+
+## Self-service account deletion anonymizes, keeps content and orders, and is not atomic (ACCOUNT-DELETE-01, 2026-10-01)
+<!-- kb: id=ACCOUNT-DELETE-01; group=auth; files=apps/gateway/src/user/user.service.ts,apps/user/src/user.service.ts,apps/orders/src/orders.service.ts,apps/product/src/product.service.ts,apps/social/src/social.service.ts,apps/notification/src/notification.service.ts,apps/gateway/src/user/dto/user.dto.ts; sha=c099d99ef629; verified=local:2026-10-01; keys=account deletion,delete account,deleteAccount,DELETE /api/user/me,anonymize,anonymise,deleted_usr,deleted_,deleted.invalid,purgeUserData,PURGE_USER_DATA,cancelOpenOrdersForUser,CANCEL_OPEN_ORDERS_FOR_USER,VERIFY_ACCOUNT_DELETION,ADMIN_CANNOT_SELF_DELETE,ACCOUNT_ALREADY_DELETED,right to erasure,Decree 13,xoá tài khoản,xóa tài khoản,xoa tai khoan,ẩn danh,an danh,huỷ đơn,huy don; summary=DELETE /api/user/me scrubs the user to deleted_<publicId> (name/avatar null, inactive, addresses gone, sessions revoked) but KEEPS posts, comments, reviews, chat and every order row; only PENDING..PROCESSING orders auto-cancel, the legs run in sequence and are not atomic, so a mid-way failure leaves canceled orders on a live account and the retry finishes the job; an admin cannot self-delete (403) and deleted_ is a reserved register prefix. -->
+
+**Contract.** `DELETE /api/user/me`, body `{ currentPassword }`, throttled 5/60s.
+200 `{ success: true, canceledOrderCount }` plus a cookie clear. Errors: 400 empty
+body or already deleted, 401 `INVALID_CURRENT_PASSWORD` (CHG-PW-02), 403 admin,
+503/502/408 from a failing leg. No grace period, no restore — user decision.
+
+**Leg order (gateway, sequential, fail-fast).** verify (password, admin, already
+deleted — no write) → orders cancel → cart clear → product purge → social purge →
+notification purge → user scrub. The irreversible scrub runs LAST, so any failure
+before it leaves a still-loginable account the user can retry with.
+
+- **Not atomic.** Orders cancel one at a time. A failure on order N leaves
+  orders 1..N-1 CANCELED on a live account. Retrying is safe: the next attempt
+  finds fewer open orders.
+- **The cancel leg reuses `finalizeCancellation`**, so it inherits its order:
+  status first, then the stock release with a hardcoded 5s timeout. On DEV
+  (Aiven round trip 270ms–1s, ~8 trips per release) the release committed
+  but answered after the timeout. The order was CANCELED, the deletion
+  answered 503 "Reservation compensation failed", and the retry went through
+  with `canceledOrderCount: 0`. Not observed on prod latency. A real release
+  failure leaks the reservation exactly as a buyer cancel would (BUG-D family).
+
+**What is scrubbed (user DB, one transaction).** username →
+`deleted_<publicId>`, email → `deleted+<publicId>@deleted.invalid` (MAIL-BOUNCE-01
+drops it before SMTP), `name`/`avatar` null, random password, `isActive: false`,
+every `user_addresses` row deleted, pending reset code deleted, old avatar
+destroyed in Cloudinary best-effort. The username and email are FREED — a
+re-register of both is a 201 (verified). Then `validAfter` is bumped
+(SESSION-REVOKE-01, fails open — but the scrubbed username and random password
+block a new login regardless).
+
+**What is purged elsewhere.** product: live listings → `isActive: false` (not
+deleted — order items still reference them), wishlist rows deleted, search cache
+busted if anything was deactivated. social: follow edges both directions.
+notification: every row addressed to the user. Cart: cleared.
+
+**What is deliberately KEPT** (user decision 1, Decree 13 accounting):
+
+- Posts, comments, reviews, likes and chat messages stay. Their author embed
+  renders the scrubbed user: `username: "deleted_usr_…"`, `name: null`. The
+  FE shows "Deleted user" off the `deleted_` prefix, which is why register
+  rejects that prefix (case-insensitive, gateway DTO — the user-service pipe
+  never runs, NAME-TRIM-01). An account registered with it before 2026-10-01
+  is not renamed.
+- Order rows keep `user_id`, `seller_id` and the shipping-address snapshot
+  (name, phone, street) — the accounting copy.
+- Node B (inventory, payments, rewards) is not touched by the deletion at all.
+
+**Residuals — not bugs:**
+
+- SHIPPED / DELIVERING / RETURN_REQUESTED orders are left to finish. The admin
+  console can still review a return of a deleted seller.
+- A paid order that is auto-canceled is NOT refunded automatically — same as a
+  buyer cancel today (payments does not consume `order_canceled`).
+- The detached GHN cancel can fail exactly as in BUG-D.
+- Events already in flight can write a fresh notification after the purge. It
+  is addressed to an account nobody can log into.
+- Others can still open a chat with, message, or follow a deleted user. Nothing
+  checks `isActive` on those paths.
+- Shop vouchers of a deleted seller are not deactivated. Their products are
+  inactive, so they cannot be applied to a real cart line.
+- Featured-seller / trending rails cache for 60s (RAIL-RANK-01).
+
+- **Verified locally 2026-10-01**, on a throwaway account holding a PENDING COD
+  order:
+  - wrong password → 401 `INVALID_CURRENT_PASSWORD`, nothing touched;
+  - first attempt → order CANCELED, then 503 on the DEV release timeout;
+  - retry → 200 with `canceledOrderCount: 0` and the cookie cleared;
+  - afterwards: the old token is a 401, login with the old credentials is a
+    401, the profile reads `deleted_usr_…` with `name`/`avatar` null and
+    `isActive: false`, the order is still readable as CANCELED with its
+    address snapshot, and a re-register of the same username and email is a
+    201;
+  - the admin's own delete → 403, and the admin session survived.
+
+## Buyer order timeline: transitions recorded from 2026-10-02 only, best-effort, GHN rows deduped (ORDER-TIMELINE-01, 2026-10-02)
+<!-- kb: id=ORDER-TIMELINE-01; group=orders; files=apps/orders/src/orders.service.ts,apps/gateway/src/order/order.service.ts,apps/orders/src/entity/order-status-history.entity.ts; sha=39e61d614990; verified=local:2026-10-02; keys=order timeline,order history,timeline,getOrderTimeline,GET_ORDER_TIMELINE,order_status_history,OrderStatusHistory,recordStatusTransition,status history,/history,lịch sử đơn,lich su don,lịch sử đơn hàng,hành trình đơn,hanh trinh don,theo dõi đơn,theo doi don; summary=GET /api/order/:id/history (owner or admin, a seller is a 403) merges placed, paid, local status changes and successful GHN webhook/sync rows oldest first; status changes exist only from 2026-10-02, are recorded best-effort after the write (a failed insert drops that event, never the transition), and consecutive identical GHN statuses collapse to one. -->
+
+**Contract.** `GET /api/order/:id/history`, `JwtAuthGuard`. Access goes through
+the gateway `fetchOwnedOrder`: the buyer and an admin get 200; anyone else,
+including the order's seller, gets 403. An unknown id gets 404. 200 body:
+`{ orderId: "ord_…", status, events: [{ kind, status, ghnStatus, at }] }`.
+`events` is never null and always holds at least `placed`. There are no
+internal ids.
+
+| kind | status | ghnStatus | source |
+|---|---|---|---|
+| `placed` | `pending` | null | `orders.created_at` |
+| `paid` | null | null | `orders.paid_at`, if set |
+| `status` | the NEW status | null | `order_status_history.created_at` |
+| `shipping` | null | raw GHN code | `shipping_history` rows: `success=1`, `ghn_status` set, type `WEBHOOK` or `MANUAL_SYNC` |
+
+Events are stable-sorted by `at`.
+
+- **No backfill.** Local status changes were never persisted before
+  `order_status_history` (migration `nodeA-20261002-001`). An older order
+  shows only placed / paid / GHN events. The route says so in Swagger.
+- **Best-effort recorder.** `recordStatusTransition` runs after the status write
+  has landed. A failed insert logs `status history … not recorded` and is
+  swallowed, so that one event is missing and the transition still succeeds.
+  If the migration is missing, every insert warns and the history ROUTE answers
+  500, because the read hits a missing table.
+- **Every status write in `orders.service.ts` records**: confirm, ready-to-ship,
+  the admin advance, the payment_completed claim, GHN webhook/sync mapping, the
+  GHN cancel action, the payment-init failure cancel, `finalizeCancellation`
+  (buyer cancel, stale sweep, account delete), the return request, the refund
+  and the reject restore. A write whose from and to statuses are equal is
+  skipped. A NEW status write that does not call the recorder is invisible here.
+- **GHN rows are filtered.** Waybill create, the admin cancel/return/COD and
+  receiver edits, and failed GHN calls are hidden. A run of identical
+  `ghnStatus` values (a re-sync re-reading the same state) collapses to the
+  first one. A `delivery_fail` → `delivering` → `delivery_fail` sequence shows
+  every step.
+- **`ghnStatus` is the raw GHN code**, including codes the FE may not have a
+  label for (DEV demo data contains `teleported`). The FE falls back to the raw
+  code.
+
+## Return-request photos: owner-prefixed, max 5, always an array, never re-checked after create (RETURN-PHOTO-01, 2026-10-02)
+<!-- kb: id=RETURN-PHOTO-01; group=orders; files=apps/gateway/src/order/order.service.ts,apps/gateway/src/order/dto/return-request.dto.ts,apps/orders/src/orders.service.ts,libs/common/src/cloudinary/cloudinary.constants.ts; sha=f4a9c75d8b49; verified=local:2026-10-02; keys=return photo,return image,return evidence,imageUrls,image_urls,trybuy/returns,getReturnUploadFolder,LOGICAL_RETURN_FOLDER,RETURN_REQUEST_MAX_IMAGES,return-request,return request,CANNOT_ATTACH_OTHERS_MEDIA,ảnh trả hàng,anh tra hang,hình trả hàng,hinh tra hang,ảnh hoàn hàng,bằng chứng trả hàng,bang chung tra hang; summary=A return request takes up to 5 unique jpg/png/webp URLs from the trybuy/returns Cloudinary folder whose leaf starts with the caller's id (403 otherwise, before any TCP call); orders stores none as NULL and every read emits imageUrls as an array ([] for legacy rows); the URLs are not checked to exist, are fixed once created, and are never deleted from Cloudinary. -->
+
+**Contract.** `POST /api/order/:id/return-request` takes an optional
+`imageUrls: string[]`. The checks, in order:
+
+- **Gateway DTO**, each failure a 400: an array, at most 5
+  (`RETURN_REQUEST_MAX_IMAGES`), unique, and each a
+  `res.cloudinary.com/<CLOUDINARY_CLOUD_NAME>/image/upload/…` URL under the
+  logical folder `trybuy/returns`. A video, a `trybuy/posts` URL or a foreign
+  host is a 400.
+- **Gateway service**: `assertCloudinaryUrlsOwnedBy` requires each leaf to start
+  with `<caller internal id>_`. Otherwise it is a 403 `CANNOT_ATTACH_OTHERS_MEDIA`
+  and orders is never called.
+
+Every return-request response (create, `return-requests/mine`, the
+seller/admin list, approve and reject) carries `imageUrls` as an array. NULL
+and rows from before 2026-10-02 give `[]` (SHAPE-01).
+
+- **Upload path.** Signed via `POST /api/upload/signature?folder=trybuy/returns`.
+  Images only (`jpg,png,webp`) with an advisory 10 MB cap; UPLOAD-SIZE-01 still
+  applies, since Cloudinary cannot enforce the size. The physical folder is
+  `trybuy-prod/returns` on prod and `trybuy/returns` elsewhere. The DTO maps
+  the logical name to the current env's physical folder
+  (`resolvePhysicalUploadFolder`), so a DEV URL is a 400 on prod.
+- **Existence is not checked.** A well-formed, owned URL that was never
+  uploaded is accepted and stored; the DEV self-test used exactly that. The FE
+  must only send URLs Cloudinary returned.
+- **Fixed after create.** There is no route to add or remove photos on an open
+  request. To change them, the buyer needs the request rejected and must
+  re-request. A rejected request does not block a new one (only
+  PENDING_REVIEW/APPROVED do, as a 409).
+- **No cleanup.** Unlike post media (MEDIA-ORPHAN-01), return photos are never
+  destroyed: not on reject, approve or account delete. An abandoned upload
+  stays in Cloudinary as an orphan.
+- **Seller visibility.** The seller of the order sees the photos through the
+  managed list. The URLs are public Cloudinary delivery URLs, as for every
+  other media in this project.
+
+## A checkout whose outcome is unknown holds its Idempotency-Key for 300s (IDEM-HOLD-01, 2026-10-02)
+<!-- kb: id=IDEM-HOLD-01; aka=SWEEP-1002-01; group=orders; files=apps/gateway/src/order/order.service.ts; sha=6621f282c00b; verified=local:2026-10-02; keys=Idempotency-Key,idempotency key,idem:order,DUPLICATE_REQUEST_IN_PROGRESS,settleFailedIdempotencyKey,IDEMPOTENCY_UNKNOWN_OUTCOME_TTL_SECONDS,duplicate order,double order,checkout retry,checkout timeout,đơn trùng,don trung,đặt hàng trùng,dat hang trung,thử lại thanh toán,thu lai thanh toan; summary=POST /api/order releases its Idempotency-Key only on a definite 4xx other than 408; a 408, a 5xx or a transport failure re-holds the key as in-progress for 300s, so a same-key retry inside that window is a 409 DUPLICATE_REQUEST_IN_PROGRESS even when no order was created, and the result is never replayed for an order that committed after the gateway gave up. -->
+
+**Why.** TCP has no cancel. When the gateway's `timeout(TCP_TIMEOUT_MS.WRITE)`
+fires (408) or the transport drops (502), the orders service can still commit
+the order afterwards. Before 2026-10-02 the gateway deleted the key on ANY
+error, so the FE's retry with the same key created a second order, a second
+reservation and a second payment URL (SWEEP-1002-01).
+
+**Contract** (`OrderService.settleFailedIdempotencyKey`, gateway):
+
+- **Definite rejection** — an `HttpException` with status 400..499 except 408
+  (insufficient stock, bad address, invalid voucher…): nothing was created, the
+  key is deleted, and the corrected retry with the same key goes through.
+- **Unknown outcome** — 408, any 5xx, or a non-`HttpException` error: the key
+  is re-set to `__in_progress__` for 300s
+  (`IDEMPOTENCY_UNKNOWN_OUTCOME_TTL_SECONDS`) and a warn
+  `Create order outcome unknown for key …` is logged. If extending the hold
+  fails (Redis down), the original 60s lock still holds the key until it
+  expires.
+- **Success** is unchanged: the response is cached 86400s and a same-key retry
+  replays it.
+
+**Residuals — do not "fix" these without re-reading the why:**
+
+- A same-key retry inside 300s after a 408/5xx is a **409 even if nothing was
+  created** (e.g. orders was simply down). The FE must treat that 409 as
+  "the order may have been placed — check My Orders", not retry blindly; after
+  300s, or with a new key, a retry goes through.
+- An order that commits after the gateway gave up is **never cached for
+  replay** — the gateway is no longer listening for the result. The buyer finds
+  it in their order list; after 300s a same-key retry WOULD create a second
+  order. 300s covers the slowest orders leg (2N serial 5s inventory calls,
+  SWEEP-1002-03), not an arbitrarily late commit.
+- Verified on DEV 2026-10-02: a 400 (quantity 999) retried with the same key
+  stayed a 400; a 201 replayed the same `ord_` id; with orders stopped, a 502
+  then a same-key 409, Redis TTL 299 on `idem:order:<userId>:<key>`.
