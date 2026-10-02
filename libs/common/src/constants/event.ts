@@ -13,6 +13,7 @@ export const EVENT = {
   POST_LIKED_EVENT: "social.post_liked",
   BRAND_REVIEWED_EVENT: "product.brand_reviewed",
   CATEGORY_REVIEWED_EVENT: "product.category_reviewed",
+  WISHLIST_ALERT_EVENT: "product.wishlist_alert",
   SKU_UPSERTED_EVENT: "sku.upserted",
   NOTIFY_USER_PUSH_EVENT: "notification.user_push",
 };

@@ -49,6 +49,9 @@ export const PRODUCT_MESSAGE_PATTERNS = {
   WISHLIST_ADD: "product.wishlist.add",
   WISHLIST_REMOVE: "product.wishlist.remove",
   WISHLIST_LIST: "product.wishlist.list",
+
+  // ACCOUNT-DELETE-01 — deactivate listings, drop wishlist rows.
+  PURGE_USER_DATA: "product.purge_user_data",
 } as const;
 
 export type ProductMessagePattern =

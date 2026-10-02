@@ -21,6 +21,7 @@ export const CLOUDINARY_AVATAR_FOLDER = "avatars";
 // Stable logical folder identifiers used by DTO validators and the frontend.
 export const LOGICAL_PRODUCT_FOLDER = "trybuy/products";
 export const LOGICAL_POST_FOLDER = "trybuy/posts";
+export const LOGICAL_RETURN_FOLDER = "trybuy/returns";
 export const LOGICAL_AVATAR_FOLDER = "avatars";
 
 function stripSlashes(value: string): string {
@@ -45,12 +46,18 @@ export function getPostUploadFolder(): string {
   return `${getCloudinaryFolderPrefix()}/posts`;
 }
 
+// RETURN-PHOTO-01 — return-request evidence photos.
+export function getReturnUploadFolder(): string {
+  return `${getCloudinaryFolderPrefix()}/returns`;
+}
+
 // The physical folders we sign uploads for / allow deletes from, in the current
 // environment.
 export function getAllowedUploadFolders(): Set<string> {
   return new Set([
     getProductUploadFolder(),
     getPostUploadFolder(),
+    getReturnUploadFolder(),
     getAvatarUploadFolder(),
   ]);
 }
@@ -66,6 +73,8 @@ export function resolvePhysicalUploadFolder(requested: string): string | null {
       return getProductUploadFolder();
     case LOGICAL_POST_FOLDER:
       return getPostUploadFolder();
+    case LOGICAL_RETURN_FOLDER:
+      return getReturnUploadFolder();
     case LOGICAL_AVATAR_FOLDER:
       return getAvatarUploadFolder();
     default:

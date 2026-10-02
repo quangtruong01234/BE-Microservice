@@ -22,6 +22,9 @@ export const AUTH_MESSAGE = {
   INSUFFICIENT_PERMISSIONS: "Insufficient permissions",
   NOT_AUTHENTICATED: "User not authenticated",
   LOGOUT_SUCCESS: "Logged out successfully",
+  LOGOUT_ALL_SUCCESS: "Logged out of all devices",
+  LOGOUT_ALL_UNAVAILABLE:
+    "Could not log out of all devices right now. Please try again.",
   UNKNOWN_ACTION: (action: string): string => `Unknown action: ${action}`,
   CAPTCHA_REQUIRED:
     "Captcha verification failed or is missing. Please complete the challenge and try again.",
@@ -58,6 +61,10 @@ export const USER_MESSAGE = {
     "You cannot change your own role — ask another admin to do it",
   ROLE_NOT_FOUND: (roleName: string): string =>
     `Role "${roleName}" does not exist or is not active`,
+  ADMIN_CANNOT_SELF_DELETE:
+    "An admin account cannot delete itself — ask another admin to change its role first",
+  ACCOUNT_ALREADY_DELETED: "This account has already been deleted",
+  ACCOUNT_DELETED: "Your account has been deleted",
 } as const;
 
 export const INVENTORY_MESSAGE = {
@@ -134,6 +141,7 @@ export const PRODUCT_MESSAGE = {
   ALREADY_REVIEWED: "Already reviewed this product",
   REVIEW_NOT_FOUND: "Review not found",
   NOT_YOUR_REVIEW: "Not your review",
+  CANNOT_REVIEW_OWN_PRODUCT: "You cannot review your own product",
   CANNOT_MODIFY_ANOTHER_USER: "You cannot modify another user's product",
   NOT_AVAILABLE: (productId: number | string): string =>
     `Product ${productId} is not available`,

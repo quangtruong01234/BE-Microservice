@@ -18,6 +18,9 @@ export const USER_MESSAGE_PATTERN = {
   FORGOT_PASSWORD: "user.forgot_password",
   RESET_PASSWORD: "user.reset_password",
   CHANGE_PASSWORD: "user.change_password",
+  // ACCOUNT-DELETE-01 — re-auth before the cleanup legs, scrub after them.
+  VERIFY_ACCOUNT_DELETION: "user.verify_account_deletion",
+  DELETE_ACCOUNT: "user.delete_account",
 };
 
 export const PRODUCT_MESSAGE_PATTERN = {
@@ -53,6 +56,7 @@ export const ORDER_MESSAGE_PATTERN = {
   GET_ORDER_INVOICE: "get_order_invoice",
   GHN_WEBHOOK: "handle_ghn_webhook",
   VERIFY_PRODUCT_PURCHASED: "order.verify_product_purchased",
+  FIND_VERIFIED_PURCHASERS: "order.find_verified_purchasers",
   GET_ORDERS_BY_SELLER: "order.get_by_seller",
   EXPORT_SELLER_ORDERS_CSV: "order.export_seller_csv",
   EXPORT_ADMIN_ORDERS_CSV: "order.export_admin_csv",
@@ -71,6 +75,7 @@ export const ORDER_MESSAGE_PATTERN = {
   ADMIN_GHN_ORDER_DETAIL: "order.admin_ghn_order_detail",
   ADMIN_GHN_SYNC: "order.admin_ghn_sync",
   ADMIN_GHN_HISTORY: "order.admin_ghn_history",
+  GET_ORDER_TIMELINE: "order.get_timeline",
   ADMIN_GHN_CANCEL: "order.admin_ghn_cancel",
   ADMIN_GHN_RETURN: "order.admin_ghn_return",
   ADMIN_GHN_UPDATE_COD: "order.admin_ghn_update_cod",
@@ -93,6 +98,8 @@ export const ORDER_MESSAGE_PATTERN = {
   // RAIL-RANK-01 — storefront right-rail rankings (units sold, rolling window).
   TOP_SELLING_SELLERS: "order.top_selling_sellers",
   TOP_SELLING_PRODUCTS: "order.top_selling_products",
+  // ACCOUNT-DELETE-01 — cancel every still-cancelable order (buyer or seller).
+  CANCEL_OPEN_ORDERS_FOR_USER: "order.cancel_open_orders_for_user",
 };
 
 export const PAYMENT_MESSAGE_PATTERN = {
@@ -109,6 +116,8 @@ export const NOTIFICATION_MESSAGE_PATTERN = {
   GET_USER_NOTIFICATIONS: "get_user_notifications",
   GET_UNREAD_COUNT: "get_notification_unread_count",
   MARK_NOTIFICATION_READ: "mark_notification_read",
+  // ACCOUNT-DELETE-01 — drop the deleted user's inbox.
+  PURGE_USER_DATA: "notification.purge_user_data",
 };
 
 export const SOCIAL_MESSAGE_PATTERN = {
@@ -138,6 +147,8 @@ export const SOCIAL_MESSAGE_PATTERN = {
   ADMIN_UNHIDE_POST: "social_admin_unhide_post",
   ADMIN_DISMISS_REPORTS: "social_admin_dismiss_reports",
   ADMIN_DELETE_POST: "social_admin_delete_post",
+  // ACCOUNT-DELETE-01 — drop the deleted user's follow edges.
+  PURGE_USER_DATA: "social_purge_user_data",
 };
 
 export const CHAT_MESSAGE_PATTERN = {
