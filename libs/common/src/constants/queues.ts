@@ -8,4 +8,7 @@ export const QUEUES = {
   NOTIFICATION_PRODUCT_SERVICE: "NOTIFICATION_PRODUCT_SERVICE",
   INVENTORY_PRODUCT_SERVICE: "INVENTORY_PRODUCT_SERVICE",
   NOTIFICATION_GATEWAY_PUSH_QUEUE: "NOTIFICATION_GATEWAY_PUSH",
+  // Every rejected (nack requeue=false) message lands here via the
+  // broker policy the gateway applies at boot (RMQ-DLQ-01).
+  DEAD_LETTER: "trybuy.dead_letter",
 };

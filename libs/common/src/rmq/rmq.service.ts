@@ -1,6 +1,12 @@
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { RmqContext, RmqOptions, Transport } from "@nestjs/microservices";
+import {
+  CustomStrategy,
+  RmqContext,
+  RmqOptions,
+  Transport,
+} from "@nestjs/microservices";
+import { AckUnhandledServerRMQ } from "./ack-unhandled-server-rmq";
 
 interface TopicExchangeOptions {
   name: string;
@@ -46,10 +52,10 @@ export class RmqService {
     queue: string,
     noAck = false,
     exchange?: TopicExchangeOptions,
-  ): RmqOptions {
+  ): CustomStrategy {
     const rabbitmqUri = this.getRabbitmqUri();
 
-    const options: RmqOptions["options"] = {
+    const options: Required<RmqOptions>["options"] = {
       urls: [rabbitmqUri],
       queue,
       noAck,
@@ -65,10 +71,9 @@ export class RmqService {
       options.wildcards = true;
     }
 
-    return {
-      transport: Transport.RMQ,
-      options,
-    };
+    // Acks, instead of rejecting, events this queue has no handler for, so
+    // fanout cross-traffic never lands in the dead-letter queue (RMQ-DLQ-01).
+    return { strategy: new AckUnhandledServerRMQ(options) };
   }
 
   ack(context: RmqContext): void {
