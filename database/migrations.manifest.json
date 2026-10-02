@@ -153,6 +153,46 @@
       "destructive": false,
       "manualOnly": false,
       "enabled": true
+    },
+    {
+      "id": "nodeA-20261001-001-add-notification-product-public-id",
+      "target": "nodeA",
+      "dialect": "mysql",
+      "file": "database/migrations/nodeA/20261001-001-add-notification-product-public-id.sql",
+      "category": "schema",
+      "destructive": false,
+      "manualOnly": false,
+      "enabled": true
+    },
+    {
+      "id": "nodeA-20261002-001-add-order-status-history",
+      "target": "nodeA",
+      "dialect": "mysql",
+      "file": "database/migrations/nodeA/20261002-001-add-order-status-history.sql",
+      "category": "schema",
+      "destructive": false,
+      "manualOnly": false,
+      "enabled": true
+    },
+    {
+      "id": "nodeA-20261002-002-add-return-request-image-urls",
+      "target": "nodeA",
+      "dialect": "mysql",
+      "file": "database/migrations/nodeA/20261002-002-add-return-request-image-urls.sql",
+      "category": "schema",
+      "destructive": false,
+      "manualOnly": false,
+      "enabled": true
+    },
+    {
+      "id": "nodeA-20261002-003-add-shipping-history-and-return-request-indexes",
+      "target": "nodeA",
+      "dialect": "mysql",
+      "file": "database/migrations/nodeA/20261002-003-add-shipping-history-and-return-request-indexes.sql",
+      "category": "schema",
+      "destructive": false,
+      "manualOnly": false,
+      "enabled": true
     }
   ]
 }
