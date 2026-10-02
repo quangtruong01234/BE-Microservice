@@ -1,7 +1,11 @@
 import { ClientProxy } from "@nestjs/microservices";
 import { of, throwError } from "rxjs";
 import { CachedService } from "@app/cached";
-import { USER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
+import {
+  ORDER_MESSAGE_PATTERN,
+  USER_MESSAGE_PATTERN,
+} from "libs/constant/message-pattern.constant";
+import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
 import { ProductService } from "./product.service";
 
 /**
@@ -376,5 +380,103 @@ describe("ProductService seller enrichment failure modes", () => {
       name: "shop1",
       avatar: null,
     });
+  });
+});
+
+/**
+ * REVIEW-VERIFIED-01 — every review read carries `isVerifiedPurchase`, resolved
+ * against orders in one batch per page; an orders failure degrades it to null.
+ */
+describe("ProductService review isVerifiedPurchase", () => {
+  const productClient = { send: jest.fn() };
+  const userClient = { send: jest.fn() };
+  const ordersClient = { send: jest.fn() };
+  const cached = { get: jest.fn(), set: jest.fn(), del: jest.fn() };
+  let service: ProductService;
+
+  const reviewPage = {
+    data: [
+      { id: 1, productId: 9, userId: 31, rating: 5, comment: null },
+      { id: 2, productId: 9, userId: 44, rating: 2, comment: "meh" },
+    ],
+    total: 2,
+    page: 1,
+    limit: 10,
+    totalPages: 1,
+    hasNext: false,
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    productClient.send.mockImplementation((pattern: string) => {
+      if (pattern === PRODUCT_MESSAGE_PATTERNS.REVIEW_FIND_BY_PRODUCT) {
+        return of(reviewPage);
+      }
+      return of([{ id: 9, publicId: "prd_aaaaaaaaaaaaaaaa" }]);
+    });
+    userClient.send.mockReturnValue(
+      of([
+        { id: 31, publicId: "usr_aaaaaaaaaaaaaaaa" },
+        { id: 44, publicId: "usr_bbbbbbbbbbbbbbbb" },
+      ]),
+    );
+    service = new ProductService(
+      productClient as unknown as ClientProxy,
+      { send: jest.fn() } as unknown as ClientProxy,
+      userClient as unknown as ClientProxy,
+      ordersClient as unknown as ClientProxy,
+      cached as unknown as CachedService,
+    );
+  });
+
+  it("marks only the reviewers holding a completed order", async () => {
+    ordersClient.send.mockReturnValue(of([31]));
+
+    const reviews = (await service.getProductReviews(
+      "prd_aaaaaaaaaaaaaaaa",
+      1,
+      10,
+    )) as { data: Record<string, unknown>[]; total: number };
+
+    expect(ordersClient.send).toHaveBeenCalledWith(
+      ORDER_MESSAGE_PATTERN.FIND_VERIFIED_PURCHASERS,
+      { productId: 9, userIds: [31, 44] },
+    );
+    expect(reviews.total).toBe(2);
+    expect(reviews.data.map((row) => row.isVerifiedPurchase)).toEqual([
+      true,
+      false,
+    ]);
+    expect(reviews.data[0].userId).toBe("usr_aaaaaaaaaaaaaaaa");
+  });
+
+  it("degrades isVerifiedPurchase to null when orders is down", async () => {
+    ordersClient.send.mockReturnValue(
+      throwError(() => new Error("orders down")),
+    );
+
+    const reviews = (await service.getProductReviews(
+      "prd_aaaaaaaaaaaaaaaa",
+      1,
+      10,
+    )) as { data: Record<string, unknown>[] };
+
+    expect(reviews.data.map((row) => row.isVerifiedPurchase)).toEqual([
+      null,
+      null,
+    ]);
+  });
+
+  it("does not ask orders about an empty page", async () => {
+    productClient.send.mockReturnValue(of({ ...reviewPage, data: [] }));
+
+    const reviews = (await service.getProductReviews(
+      "prd_aaaaaaaaaaaaaaaa",
+      1,
+      10,
+    )) as { data: unknown[] };
+
+    expect(reviews.data).toEqual([]);
+    expect(ordersClient.send).not.toHaveBeenCalled();
   });
 });

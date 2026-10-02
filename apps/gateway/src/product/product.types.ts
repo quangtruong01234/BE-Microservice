@@ -150,3 +150,14 @@ export interface TopSellingProduct {
 export interface TrendingProduct extends ProductWithInventory {
   soldCount: number;
 }
+
+/** A `product_reviews` row as the product service returns it over TCP. */
+export interface ReviewRow {
+  id: number;
+  productId: number | string;
+  userId: number | string;
+  rating: number;
+  comment: string | null;
+  createdAt: string;
+  updatedAt: string;
+}

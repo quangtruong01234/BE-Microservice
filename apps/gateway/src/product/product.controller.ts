@@ -453,7 +453,11 @@ export class ProductController {
 
   @Get(":id/reviews")
   @Public()
-  @ApiOperation({ summary: "Get reviews for a product (paginated)" })
+  @ApiOperation({
+    summary: "Get reviews for a product (paginated)",
+    description:
+      "Each review carries isVerifiedPurchase: true when the reviewer holds a COMPLETED order containing the product, false otherwise, null when the orders service could not be reached.",
+  })
   @ApiParam({ name: "id", description: "Product ID", type: Number })
   @ApiQuery({ name: "page", required: false, type: Number })
   @ApiQuery({ name: "limit", required: false, type: Number })
@@ -475,7 +479,11 @@ export class ProductController {
   @ApiResponse({ status: 201, description: "Review created successfully." })
   @ApiResponse({
     status: 403,
-    description: "Forbidden - product not in any completed order.",
+    description: "Forbidden - the caller is the product's seller.",
+  })
+  @ApiResponse({
+    status: 404,
+    description: "Product not found, or not in any completed order.",
   })
   @ApiResponse({ status: 409, description: "Conflict - already reviewed." })
   async createProductReview(

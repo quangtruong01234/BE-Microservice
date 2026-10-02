@@ -41,6 +41,7 @@ import {
   ProductRiskFeedbackResult,
   TopSellingProduct,
   TrendingProduct,
+  ReviewRow,
 } from "./product.types";
 import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 
@@ -1958,7 +1959,12 @@ export class ProductService {
       // REVIEW-ID-01: same exposure as the GET on this resource, so the created
       // row reports `userId: "usr_..."` rather than the internal numeric id.
       // `productId` is already the opaque id here and is left untouched.
-      return await this.exposeProductReferences({ ...review, productId });
+      // REVIEW-VERIFIED-01: it just passed the purchase gate above.
+      return await this.exposeProductReferences({
+        ...review,
+        productId,
+        isVerifiedPurchase: true,
+      });
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -1992,14 +1998,15 @@ export class ProductService {
     try {
       const reviews = await firstValueFrom(
         this.productClient
-          .send<unknown>(PRODUCT_MESSAGE_PATTERNS.REVIEW_FIND_BY_PRODUCT, {
-            productId,
-            page,
-            limit,
-          })
+          .send<
+            PaginatedResponse<ReviewRow>
+          >(PRODUCT_MESSAGE_PATTERNS.REVIEW_FIND_BY_PRODUCT, { productId, page, limit })
           .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
       );
-      return this.exposeProductReferences(reviews);
+      return this.exposeProductReferences({
+        ...reviews,
+        data: await this.markVerifiedPurchases(reviews.data),
+      });
     } catch (error) {
       MicroserviceErrorHandler.handleError(
         error,
@@ -2007,6 +2014,41 @@ export class ProductService {
         "Product Service",
       );
     }
+  }
+
+  /**
+   * REVIEW-VERIFIED-01 — `isVerifiedPurchase` is resolved at read time (the
+   * reviewer holds a COMPLETED order containing the product), so it follows
+   * the order: a refund or return request turns it false. An orders-leg
+   * failure degrades it to `null` ("unknown") instead of failing the read.
+   */
+  private async markVerifiedPurchases(
+    reviews: ReviewRow[],
+  ): Promise<(ReviewRow & { isVerifiedPurchase: boolean | null })[]> {
+    if (reviews.length === 0) {
+      return [];
+    }
+    let purchaserIds: Set<number> | null = null;
+    try {
+      const userIds = await firstValueFrom(
+        this.ordersClient
+          .send<number[]>(ORDER_MESSAGE_PATTERN.FIND_VERIFIED_PURCHASERS, {
+            productId: Number(reviews[0].productId),
+            userIds: [...new Set(reviews.map((row) => Number(row.userId)))],
+          })
+          .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
+      );
+      purchaserIds = new Set(userIds.map(Number));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Could not resolve verified purchases — ${message}`);
+    }
+    return reviews.map((row) => ({
+      ...row,
+      isVerifiedPurchase: purchaserIds
+        ? purchaserIds.has(Number(row.userId))
+        : null,
+    }));
   }
 
   // ============================================================================

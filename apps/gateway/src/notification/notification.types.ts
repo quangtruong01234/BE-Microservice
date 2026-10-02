@@ -20,6 +20,8 @@ export interface NotificationItem {
   actorId: string | null;
   actor: NotificationActor | null;
   preview: string | null;
+  // WISHLIST-ALERT-01: public product id, only on wishlist_* notifications.
+  productId: string | null;
   message: string;
   isRead: boolean;
   createdAt: string;
@@ -40,6 +42,8 @@ export interface NotificationPayload {
   postId: string | null;
   actorId: string | null;
   preview: string | null;
+  // WISHLIST-ALERT-01: public product id, only on wishlist_* notifications.
+  productId: string | null;
   message: string;
   isRead: boolean;
   createdAt: Date;
