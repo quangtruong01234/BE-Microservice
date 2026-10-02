@@ -189,3 +189,19 @@ export interface ExportJobDownload {
   fileName: string;
   contentBase64: string;
 }
+
+// ORDER-TIMELINE-01: `GET /api/order/:id/history`. `orderId` is the public id;
+// `at` is an ISO 8601 string once it has crossed TCP. `events` is oldest first
+// and never null — it always holds at least the `placed` event.
+export interface OrderTimelineEventResponse {
+  kind: "placed" | "paid" | "status" | "shipping";
+  status: string | null;
+  ghnStatus: string | null;
+  at: string;
+}
+
+export interface OrderTimelineResponse {
+  orderId: string | null;
+  status: string;
+  events: OrderTimelineEventResponse[];
+}

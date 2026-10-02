@@ -1,6 +1,6 @@
 import { ForbiddenException } from "@nestjs/common";
 import { ClientProxy } from "@nestjs/microservices";
-import { of, throwError } from "rxjs";
+import { of, throwError, TimeoutError } from "rxjs";
 import {
   ORDER_MESSAGE_PATTERN,
   PAYMENT_MESSAGE_PATTERN,
@@ -284,16 +284,75 @@ describe("OrderService access control", () => {
       expect(ordersClient.send).not.toHaveBeenCalled();
     });
 
-    it("releases the lock when the underlying create fails", async () => {
+    // SWEEP-1002-01: only a definite rejection may free the key — anything
+    // else may still commit on the orders side after the gateway answered.
+    const claimKeyAndStubProduct = (): void => {
       cached.setNx.mockResolvedValue(true);
       cached.del.mockResolvedValue(1);
+      cached.set.mockResolvedValue("OK");
       productClient.send.mockReturnValue(
         of({ id: 1, userId: 20, price: 100, isActive: true }),
       );
-      ordersClient.send.mockReturnValue(throwError(() => new Error("boom")));
+    };
 
-      await expect(service.createOrder(18, baseDto, "key-3")).rejects.toThrow();
+    it("releases the lock when the create is definitely rejected (4xx)", async () => {
+      claimKeyAndStubProduct();
+      ordersClient.send.mockReturnValue(
+        throwError(() => ({
+          statusCode: 400,
+          message: "Insufficient stock for product prod_1111111111111111",
+        })),
+      );
+
+      await expect(
+        service.createOrder(18, baseDto, "key-3"),
+      ).rejects.toMatchObject({ status: 400 });
       expect(cached.del).toHaveBeenCalledWith("idem:order:18:key-3");
+      expect(cached.set).not.toHaveBeenCalled();
+    });
+
+    it("keeps the key in-progress when the create times out", async () => {
+      claimKeyAndStubProduct();
+      ordersClient.send.mockReturnValue(throwError(() => new TimeoutError()));
+
+      await expect(
+        service.createOrder(18, baseDto, "key-4"),
+      ).rejects.toMatchObject({ status: 408 });
+      expect(cached.del).not.toHaveBeenCalled();
+      expect(cached.set).toHaveBeenCalledWith(
+        "idem:order:18:key-4",
+        "__in_progress__",
+        300,
+      );
+    });
+
+    it("keeps the key in-progress on a 5xx, even if extending the hold fails", async () => {
+      claimKeyAndStubProduct();
+      cached.set.mockRejectedValue(new Error("redis down"));
+      ordersClient.send.mockReturnValue(
+        throwError(() => ({ statusCode: 500, message: "db error" })),
+      );
+
+      await expect(
+        service.createOrder(18, baseDto, "key-5"),
+      ).rejects.toMatchObject({ status: 500 });
+      expect(cached.del).not.toHaveBeenCalled();
+    });
+
+    it("caches the response for replay when the create succeeds", async () => {
+      claimKeyAndStubProduct();
+      ordersClient.send.mockReturnValue(
+        of({ id: 9, publicId: "ord_abc", userId: 18, items: [] }),
+      );
+
+      await service.createOrder(18, baseDto, "key-6");
+
+      expect(cached.del).not.toHaveBeenCalled();
+      expect(cached.set).toHaveBeenCalledWith(
+        "idem:order:18:key-6",
+        expect.stringContaining("ord_abc"),
+        86400,
+      );
     });
   });
 

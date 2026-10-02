@@ -1,6 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { Transform, Type } from "class-transformer";
 import {
+  ArrayMaxSize,
+  ArrayUnique,
+  IsArray,
   IsIn,
   IsInt,
   IsNotEmpty,
@@ -10,6 +13,9 @@ import {
   MaxLength,
   Min,
 } from "class-validator";
+import { IsCloudinaryUrl } from "../../common/validators/is-cloudinary-url.validator";
+
+export const RETURN_REQUEST_MAX_IMAGES = 5;
 
 export class CreateReturnRequestDto {
   @ApiProperty({
@@ -20,6 +26,24 @@ export class CreateReturnRequestDto {
   @IsNotEmpty()
   @MaxLength(1000)
   declare reason: string;
+
+  @ApiPropertyOptional({
+    description:
+      "RETURN-PHOTO-01 — up to 5 evidence photos. Each must be a Cloudinary " +
+      "image URL uploaded by the caller into the `trybuy/returns` folder " +
+      "(signature: GET /api/upload/signature?folder=trybuy/returns).",
+    type: [String],
+    maxItems: RETURN_REQUEST_MAX_IMAGES,
+    example: [
+      "https://res.cloudinary.com/<cloud>/image/upload/v1/trybuy/returns/3_abc.jpg",
+    ],
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(RETURN_REQUEST_MAX_IMAGES)
+  @ArrayUnique()
+  @IsCloudinaryUrl({ folder: "trybuy/returns", media: "image" }, { each: true })
+  declare imageUrls?: string[];
 }
 
 export class RejectReturnRequestDto {

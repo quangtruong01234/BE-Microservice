@@ -3,6 +3,7 @@ import {
   getAvatarUploadFolder,
   getPostUploadFolder,
   getProductUploadFolder,
+  getReturnUploadFolder,
   resolvePhysicalUploadFolder,
 } from "@app/common/cloudinary/cloudinary.constants";
 
@@ -15,6 +16,7 @@ export function getAllowedUploadFormatsByFolder(): Record<string, string> {
   return {
     [getProductUploadFolder()]: "jpg,png,webp",
     [getPostUploadFolder()]: "jpg,png,webp,mp4",
+    [getReturnUploadFolder()]: "jpg,png,webp",
     [getAvatarUploadFolder()]: "jpg,png,webp",
   };
 }
@@ -47,6 +49,7 @@ export function getMaxUploadBytesByFolder(): Record<
       image: MAX_UPLOAD_IMAGE_BYTES,
       video: MAX_UPLOAD_VIDEO_BYTES,
     },
+    [getReturnUploadFolder()]: { image: MAX_UPLOAD_IMAGE_BYTES },
     [getAvatarUploadFolder()]: { image: MAX_UPLOAD_IMAGE_BYTES },
   };
 }

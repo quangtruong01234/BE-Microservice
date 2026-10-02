@@ -32,6 +32,25 @@ describe("UploadService", () => {
     expect(signature.allowed_formats).toBe("jpg,png,webp,mp4");
   });
 
+  it("signs the return-evidence folder as image-only (RETURN-PHOTO-01)", () => {
+    const signature = service.generateSignature("trybuy/returns", 20);
+
+    expect(signature.folder).toBe("trybuy/returns");
+    expect(signature.allowed_formats).toBe("jpg,png,webp");
+    expect(signature.maxBytes).toBe(10 * 1024 * 1024);
+    expect(signature.maxVideoBytes).toBeUndefined();
+  });
+
+  it("allows deletion of caller-owned return evidence", () => {
+    const signature = service.generateDeleteSignature(
+      "trybuy/returns/20_image",
+      20,
+      "user",
+    );
+
+    expect(signature.public_id).toBe("trybuy/returns/20_image");
+  });
+
   it("signs the upload format constraints", () => {
     const nowSpy = jest.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
     const signature = service.generateSignature(

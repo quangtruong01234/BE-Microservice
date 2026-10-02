@@ -2,6 +2,8 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
   Inject,
   Injectable,
   Logger,
@@ -24,6 +26,7 @@ import {
 } from "libs/constant/response-message.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
 import { retryOnTransportError } from "../common/exception/transport-error";
+import { assertCloudinaryUrlsOwnedBy } from "../common/media/cloudinary-ownership";
 import { isPublicId, PaginatedResponse, PaymentMethod } from "@app/common";
 import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 import { CreateOrderDto } from "./dto/create-order.dto";
@@ -51,6 +54,7 @@ import {
   OrderAnalyticsResponse,
   OrderItemDetail,
   OrderResponse,
+  OrderTimelineResponse,
   ProductDetailResponse,
   ProductPriceResponse,
   SellerOrderDetailRaw,
@@ -102,6 +106,12 @@ export class OrderService {
   private static readonly IDEMPOTENCY_LOCK_TTL_SECONDS = 60;
   /** Replay window: a retry with the same key returns the original response. */
   private static readonly IDEMPOTENCY_RESULT_TTL_SECONDS = 86400;
+  /**
+   * Hold on a key whose create may still commit (gateway timeout, transport or
+   * 5xx failure). TCP has no cancel, so the orders leg can finish well after
+   * the gateway gave up — up to 2N serial 5s inventory calls (SWEEP-1002-03).
+   */
+  private static readonly IDEMPOTENCY_UNKNOWN_OUTCOME_TTL_SECONDS = 300;
 
   /**
    * Idempotent entry point for order creation. When the client supplies an
@@ -173,10 +183,51 @@ export class OrderService {
       }
       return result;
     } catch (error) {
-      // Release the lock so a legitimately failed request can be retried
-      await this.cached.del(cacheKey).catch(() => undefined);
+      await this.settleFailedIdempotencyKey(cacheKey, key, userId, error);
       throw error;
     }
+  }
+
+  /**
+   * SWEEP-1002-01 — a definite rejection (a 4xx other than 408) means nothing
+   * was created, so the key is released and the corrected retry can go
+   * through. Any other failure is an UNKNOWN outcome: the orders service may
+   * still commit after the gateway answered, so releasing the key would let
+   * the client's retry create a second order. The key stays in-progress (a
+   * retry gets 409) for long enough to cover the orders leg finishing.
+   */
+  private async settleFailedIdempotencyKey(
+    cacheKey: string,
+    key: string,
+    userId: number,
+    error: unknown,
+  ): Promise<void> {
+    const status = error instanceof HttpException ? error.getStatus() : null;
+    const isDefiniteRejection =
+      status !== null &&
+      status >= 400 &&
+      status < 500 &&
+      status !== Number(HttpStatus.REQUEST_TIMEOUT);
+    if (isDefiniteRejection) {
+      await this.cached.del(cacheKey).catch(() => undefined);
+      return;
+    }
+
+    this.logger.warn(
+      `Create order outcome unknown for key ${key} (user ${userId}, status ${status ?? "none"}) — holding the key ${OrderService.IDEMPOTENCY_UNKNOWN_OUTCOME_TTL_SECONDS}s instead of releasing it`,
+    );
+    await this.cached
+      .set(
+        cacheKey,
+        OrderService.IDEMPOTENCY_IN_PROGRESS,
+        OrderService.IDEMPOTENCY_UNKNOWN_OUTCOME_TTL_SECONDS,
+      )
+      .catch((cacheErr: unknown) => {
+        // The original 60s lock still holds the key until it expires.
+        this.logger.warn(
+          `Failed to extend idempotency hold for key ${key}: ${String(cacheErr)}`,
+        );
+      });
   }
 
   /**
@@ -932,6 +983,11 @@ export class OrderService {
     // service can roll the order back when a return is rejected. It is not part
     // of the buyer- or seller-facing contract.
     delete exposed.previousOrderStatus;
+    // RETURN-PHOTO-01 / SHAPE-01: a collection is never null — rows without
+    // photos (and every row before 2026-10-02) store NULL.
+    exposed.imageUrls = Array.isArray(request.imageUrls)
+      ? request.imageUrls
+      : [];
     return exposed;
   }
 
@@ -1314,6 +1370,41 @@ export class OrderService {
       MicroserviceErrorHandler.handleError(
         error,
         "download export job",
+        "Orders Service",
+      );
+    }
+  }
+
+  /**
+   * ORDER-TIMELINE-01 — buyer-facing order history. Same access rule as
+   * GET /:id (owner or admin, 404 before 403), then the orders service builds
+   * the merged placed/paid/status/GHN timeline from the resolved PK.
+   */
+  async getOrderTimeline(
+    orderId: string,
+    callerId: number,
+    callerRole: string,
+  ): Promise<OrderTimelineResponse> {
+    const order = await this.fetchOwnedOrder(orderId, callerId, callerRole);
+    try {
+      return await firstValueFrom(
+        this.ordersClient
+          .send<OrderTimelineResponse>(
+            ORDER_MESSAGE_PATTERN.GET_ORDER_TIMELINE,
+            { orderId: order.id },
+          )
+          .pipe(
+            timeout(TCP_TIMEOUT_MS.READ),
+            retryOnTransportError(),
+            catchError((err: unknown) => {
+              throw err;
+            }),
+          ),
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "get order timeline",
         "Orders Service",
       );
     }
@@ -2248,7 +2339,10 @@ export class OrderService {
     orderId: string,
     userId: number,
     reason: string,
+    imageUrls?: string[],
   ): Promise<unknown> {
+    // RETURN-PHOTO-01 — a buyer may only attach photos they uploaded.
+    assertCloudinaryUrlsOwnedBy(imageUrls ?? [], userId);
     try {
       const request = (await firstValueFrom(
         this.ordersClient
@@ -2256,6 +2350,7 @@ export class OrderService {
             orderId,
             userId,
             reason,
+            imageUrls: imageUrls ?? [],
           })
           .pipe(
             timeout(TCP_TIMEOUT_MS.WRITE),

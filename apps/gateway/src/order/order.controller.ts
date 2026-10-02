@@ -16,7 +16,7 @@ import {
 } from "@nestjs/common";
 import { Request, Response } from "express";
 import { OrderService } from "./order.service";
-import { ExportJobView } from "./order.types";
+import { ExportJobView, OrderTimelineResponse } from "./order.types";
 import {
   ApiTags,
   ApiOperation,
@@ -1093,7 +1093,12 @@ export class OrderController {
     @Req() req: Request,
   ): Promise<unknown> {
     const userId = req.user?.id ?? 0;
-    return this.orderService.requestReturn(id, userId, body.reason);
+    return this.orderService.requestReturn(
+      id,
+      userId,
+      body.reason,
+      body.imageUrls,
+    );
   }
 
   @Get(":id/payment-url")
@@ -1108,6 +1113,26 @@ export class OrderController {
     const callerId = req.user?.id ?? 0;
     const callerRole = req.user?.role ?? "user";
     return await this.orderService.getPaymentUrl(id, callerId, callerRole);
+  }
+
+  @Get(":id/history")
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({
+    summary: "Order timeline (owner or admin)",
+    description:
+      "Oldest-first events: placed, paid, each recorded status change and each distinct GHN carrier status. Orders older than 2026-10-02 have no recorded status changes.",
+  })
+  @ApiResponse({ status: 200, description: "Order timeline." })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  @ApiResponse({ status: 403, description: "Forbidden — not the order owner." })
+  @ApiResponse({ status: 404, description: "Order not found." })
+  async getOrderTimeline(
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.ORDER)) id: string,
+    @Req() req: Request,
+  ): Promise<OrderTimelineResponse> {
+    const callerId = req.user?.id ?? 0;
+    const callerRole = req.user?.role ?? "user";
+    return this.orderService.getOrderTimeline(id, callerId, callerRole);
   }
 
   @Patch(":id/confirm")
