@@ -8,7 +8,7 @@ import { PaymentMethod } from "@app/common";
 import { HttpService } from "@nestjs/axios";
 import { ClientProxy } from "@nestjs/microservices";
 import { Channel } from "amqplib";
-import { of } from "rxjs";
+import { of, Subject } from "rxjs";
 import {
   Brackets,
   FindOperator,
@@ -28,6 +28,7 @@ import {
   ShippingHistory,
   ShippingHistoryType,
 } from "./entity/shipping-history.entity";
+import { OrderStatusHistory } from "./entity/order-status-history.entity";
 import { CachedService } from "@app/cached";
 import { GhnService } from "./ghn/ghn.service";
 import { OrdersService } from "./orders.service";
@@ -160,6 +161,7 @@ describe("OrdersService.handleGhnWebhook", () => {
       {} as Repository<VoucherRedemption>,
       {} as GhnService,
       {} as CachedService,
+      createRepositoryMock<OrderStatusHistory>().asRepository(),
     );
 
     return { service, publish, update, historySave, historyExist };
@@ -457,6 +459,7 @@ describe("OrdersService stock reservation", () => {
       {} as Repository<VoucherRedemption>,
       ghnService as unknown as GhnService,
       {} as CachedService,
+      createRepositoryMock<OrderStatusHistory>().asRepository(),
     );
 
     return {
@@ -506,6 +509,7 @@ describe("OrdersService stock reservation", () => {
       {} as Repository<VoucherRedemption>,
       ghnService as unknown as GhnService,
       {} as CachedService,
+      createRepositoryMock<OrderStatusHistory>().asRepository(),
     );
 
     return { service, inventorySend, transaction, update, outbox };
@@ -529,6 +533,86 @@ describe("OrdersService stock reservation", () => {
       throw new Error(`Unexpected pattern: ${pattern}`);
     });
   }
+
+  // SWEEP-1002-03 — the stock pre-check fans out instead of one round trip
+  // per item; reserve stays sequential.
+  type StockCheckReply = { available: boolean; availableStock: number };
+
+  function mockPendingStockChecks(inventorySend: jest.Mock): {
+    pendingChecks: Array<Subject<StockCheckReply>>;
+    reserveCalls: () => number;
+  } {
+    const pendingChecks: Array<Subject<StockCheckReply>> = [];
+    let reserveCount = 0;
+    inventorySend.mockImplementation((pattern: string) => {
+      if (pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_CHECK_STOCK) {
+        const reply = new Subject<StockCheckReply>();
+        pendingChecks.push(reply);
+        return reply;
+      }
+      if (pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK) {
+        reserveCount += 1;
+        return of(false);
+      }
+      throw new Error(`Unexpected pattern: ${pattern}`);
+    });
+    return { pendingChecks, reserveCalls: () => reserveCount };
+  }
+
+  function answer(
+    reply: Subject<StockCheckReply>,
+    availableStock: number,
+  ): void {
+    reply.next({ available: availableStock >= 1, availableStock });
+    reply.complete();
+  }
+
+  const flushMicrotasks = (): Promise<void> =>
+    new Promise((resolve) => setImmediate(resolve));
+
+  it("sends every single-seller stock check before any reply arrives", async () => {
+    const { service, inventorySend } = createService();
+    const { pendingChecks } = mockPendingStockChecks(inventorySend);
+
+    const placing = service.placeOrder(18, PaymentMethod.VNPAY, "address", [
+      item,
+      { ...item, productId: 2 },
+      { ...item, productId: 3 },
+    ]);
+    await flushMicrotasks();
+
+    expect(pendingChecks).toHaveLength(3);
+    pendingChecks.forEach((reply) => answer(reply, 10));
+    // Reserve is mocked to fail, which ends the checkout before the DB leg.
+    await expect(placing).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("reports the first short item in cart order, whichever reply lands first", async () => {
+    const { service, inventorySend } = createService();
+    const { pendingChecks, reserveCalls } =
+      mockPendingStockChecks(inventorySend);
+
+    const placing = service.placeMultiSellerOrder(
+      18,
+      PaymentMethod.VNPAY,
+      "address",
+      [
+        item,
+        { ...item, productId: 2, sellerId: 21 },
+        { ...item, productId: 3, sellerId: 21 },
+      ],
+    );
+    await flushMicrotasks();
+
+    expect(pendingChecks).toHaveLength(3);
+    answer(pendingChecks[2], 0);
+    answer(pendingChecks[1], 0);
+    answer(pendingChecks[0], 10);
+    await expect(placing).rejects.toThrow(
+      ORDER_MESSAGE.INSUFFICIENT_STOCK(2, 1, 0),
+    );
+    expect(reserveCalls()).toBe(0);
+  });
 
   it("does not start the DB transaction when reservation fails", async () => {
     const { service, inventorySend, transaction } = createService();
@@ -903,6 +987,7 @@ describe("OrdersService.sweepStaleReservations", () => {
       {} as Repository<VoucherRedemption>,
       { cancelShippingOrder } as unknown as GhnService,
       {} as CachedService,
+      createRepositoryMock<OrderStatusHistory>().asRepository(),
     );
 
     return {
@@ -1048,6 +1133,7 @@ describe("OrdersService.cancelOrder GHN detachment", () => {
       {} as Repository<VoucherRedemption>,
       { cancelShippingOrder } as unknown as GhnService,
       {} as CachedService,
+      createRepositoryMock<OrderStatusHistory>().asRepository(),
     );
 
     return { service, update, publish };
@@ -1151,6 +1237,7 @@ describe("OrdersService.advanceOrderStatus", () => {
       {} as Repository<VoucherRedemption>,
       {} as GhnService,
       {} as CachedService,
+      createRepositoryMock<OrderStatusHistory>().asRepository(),
     );
     return { service, update, inventorySend, publish };
   };
@@ -1272,6 +1359,7 @@ describe("OrdersService payment completion idempotency", () => {
       {} as Repository<VoucherRedemption>,
       { createShippingOrder } as unknown as GhnService,
       {} as CachedService,
+      createRepositoryMock<OrderStatusHistory>().asRepository(),
     );
 
     await Promise.all([
@@ -1321,6 +1409,7 @@ describe("OrdersService.readyToShip GHN waybill gating", () => {
       {} as Repository<VoucherRedemption>,
       { createShippingOrder } as unknown as GhnService,
       {} as CachedService,
+      createRepositoryMock<OrderStatusHistory>().asRepository(),
     );
     return { service, save, update };
   };
@@ -1432,6 +1521,7 @@ describe("OrdersService.syncAdminGhnOrder ETA refresh (GHN-ETA-01)", () => {
           .mockResolvedValue({ status: "delivery_fail", ...detail }),
       } as unknown as GhnService,
       {} as CachedService,
+      createRepositoryMock<OrderStatusHistory>().asRepository(),
     );
     return { service, update, order };
   };
@@ -1530,6 +1620,7 @@ describe("OrdersService admin GHN actions (cancel / return)", () => {
       {} as Repository<VoucherRedemption>,
       ghn as unknown as GhnService,
       {} as CachedService,
+      createRepositoryMock<OrderStatusHistory>().asRepository(),
     );
     return { service, update, save, publish, inventorySend };
   };
@@ -1783,6 +1874,7 @@ describe("OrdersService.getAdminGhnOrderDetail (demo-mode GHN status)", () => {
       {} as Repository<VoucherRedemption>,
       { getOrderDetail } as unknown as GhnService,
       {} as CachedService,
+      createRepositoryMock<OrderStatusHistory>().asRepository(),
     );
     return { service, getOrderDetail };
   };
@@ -1887,6 +1979,7 @@ describe("OrdersService ORD-GUARD-01 — unpaid online orders cannot be fulfille
       {} as Repository<VoucherRedemption>,
       { createShippingOrder } as unknown as GhnService,
       {} as CachedService,
+      createRepositoryMock<OrderStatusHistory>().asRepository(),
     );
     return { service, save, update, createShippingOrder };
   };
@@ -2065,6 +2158,7 @@ describe("OrdersService VOUCHER-CONC-01 — voucher quota gate", () => {
         claimFromSeededQuota: claim,
         releaseToSeededQuota: release,
       } as unknown as CachedService,
+      createRepositoryMock<OrderStatusHistory>().asRepository(),
     );
 
     inventorySend.mockImplementation((pattern: string) => {
@@ -2217,6 +2311,7 @@ describe("OrdersService VOUCHER-GUARD-01 — fixed value vs minimum order", () =
       {} as Repository<VoucherRedemption>,
       {} as GhnService,
       {} as CachedService,
+      createRepositoryMock<OrderStatusHistory>().asRepository(),
     );
     return { service, save };
   }
@@ -2351,6 +2446,7 @@ describe("OrdersService VOUCHER-EDIT-01 — editing an existing voucher", () => 
       {} as Repository<VoucherRedemption>,
       {} as GhnService,
       { del } as unknown as CachedService,
+      createRepositoryMock<OrderStatusHistory>().asRepository(),
     );
     return { service, save, del };
   }
@@ -2520,6 +2616,7 @@ describe("OrdersService VOUCHER-SHOP-01 — basket eligibility list", () => {
       } as unknown as Repository<VoucherRedemption>,
       {} as GhnService,
       {} as CachedService,
+      createRepositoryMock<OrderStatusHistory>().asRepository(),
     );
     return { service, find };
   }
@@ -2695,6 +2792,7 @@ describe("OrdersService LIST-SEARCH-01 — server-side list search", () => {
       {} as Repository<VoucherRedemption>,
       {} as GhnService,
       {} as CachedService,
+      createRepositoryMock<OrderStatusHistory>().asRepository(),
     );
   });
 
@@ -2768,5 +2866,63 @@ describe("OrdersService LIST-SEARCH-01 — server-side list search", () => {
     await service.getManagedReturnRequests(1, true, 1, 20, undefined, " ");
 
     expect(qb.andWhere).not.toHaveBeenCalled();
+  });
+});
+
+describe("OrdersService.findVerifiedPurchasers (REVIEW-VERIFIED-01)", () => {
+  const createService = (): {
+    service: OrdersService;
+    orderRepository: RepositoryMock<Order>;
+  } => {
+    const orderRepository = createRepositoryMock<Order>();
+    const service = new OrdersService(
+      { publish: jest.fn(), connection: {} } as unknown as Channel,
+      {} as HttpService,
+      {} as ClientProxy,
+      {} as ClientProxy,
+      {} as ClientProxy,
+      orderRepository.asRepository(),
+      {} as Repository<OrderItem>,
+      createOutboxRepository().repository,
+      {} as Repository<ShippingHistory>,
+      {} as Repository<OrderReturnRequest>,
+      {} as Repository<Voucher>,
+      {} as Repository<VoucherRedemption>,
+      {} as GhnService,
+      {} as CachedService,
+      createRepositoryMock<OrderStatusHistory>().asRepository(),
+    );
+    return { service, orderRepository };
+  };
+
+  it("returns the reviewers holding a COMPLETED order with the product", async () => {
+    const { service, orderRepository } = createService();
+    const builder = orderRepository.createQueryBuilder() as Record<
+      string,
+      jest.Mock
+    >;
+    builder.getRawMany.mockResolvedValue([{ userId: "31" }, { userId: 44 }]);
+
+    const userIds = await service.findVerifiedPurchasers(9, [31, 44, 50]);
+
+    expect(userIds).toEqual([31, 44]);
+    expect(builder.where).toHaveBeenCalledWith("order.status = :status", {
+      status: OrderStatus.COMPLETED,
+    });
+    expect(builder.andWhere).toHaveBeenCalledWith(
+      "item.productId = :productId",
+      { productId: 9 },
+    );
+    expect(builder.andWhere).toHaveBeenCalledWith(
+      "order.userId IN (:...userIds)",
+      { userIds: [31, 44, 50] },
+    );
+  });
+
+  it("skips the query for an empty review page", async () => {
+    const { service, orderRepository } = createService();
+
+    await expect(service.findVerifiedPurchasers(9, [])).resolves.toEqual([]);
+    expect(orderRepository.createQueryBuilder).not.toHaveBeenCalled();
   });
 });

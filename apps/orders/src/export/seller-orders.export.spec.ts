@@ -12,6 +12,8 @@ import { OrderReturnRequest } from "../entity/order-return-request.entity";
 import { Voucher } from "../entity/voucher.entity";
 import { VoucherRedemption } from "../entity/voucher-redemption.entity";
 import { ShippingHistory } from "../entity/shipping-history.entity";
+import { OrderStatusHistory } from "../entity/order-status-history.entity";
+import { createRepositoryMock } from "@app/testing";
 import { GhnService } from "../ghn/ghn.service";
 import { OrdersService } from "../orders.service";
 import { of, throwError } from "rxjs";
@@ -176,6 +178,7 @@ describe("OrdersService.exportSellerOrdersCsv (EXPORT-CSV-01)", () => {
       {} as Repository<VoucherRedemption>,
       {} as GhnService,
       {} as CachedService,
+      createRepositoryMock<OrderStatusHistory>().asRepository(),
     );
     return { service, getCount, getMany, where, andWhere, offset: qb.offset };
   }

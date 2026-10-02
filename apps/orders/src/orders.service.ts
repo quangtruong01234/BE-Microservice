@@ -18,12 +18,14 @@ import {
   IsNull,
   LessThan,
   Like,
+  Not,
   QueryFailedError,
   Repository,
   SelectQueryBuilder,
 } from "typeorm";
 import { Order, OrderStatus } from "./entity/order.entity";
 import { OrderOutbox } from "./entity/order-outbox.entity";
+import { OrderStatusHistory } from "./entity/order-status-history.entity";
 import {
   PaymentMethod,
   PaginatedResponse,
@@ -52,6 +54,7 @@ import { INVENTORY_MESSAGE_PATTERNS } from "libs/constant/message-pattern-invent
 import { USER_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
+import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 import {
   GHN_DELIVERY_FAIL_STATUS,
   isGhnStatusWithoutLocalStatus,
@@ -127,6 +130,8 @@ import {
   TopSellingQuery,
   TopSellingSeller,
   TopSellingProduct,
+  OrderTimeline,
+  OrderTimelineEvent,
 } from "./orders.types";
 import { apportionByWeight } from "./voucher/apportion-discount";
 
@@ -273,6 +278,8 @@ export class OrdersService {
     private readonly voucherRedemptionRepository: Repository<VoucherRedemption>,
     private readonly ghnService: GhnService,
     private readonly cachedService: CachedService,
+    @InjectRepository(OrderStatusHistory)
+    private readonly statusHistoryRepository: Repository<OrderStatusHistory>,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -332,32 +339,7 @@ export class OrdersService {
       throw new BadRequestException(ORDER_MESSAGE.ITEMS_MISSING_SELLER_ID);
     }
     // 1. Check stock in inventory for all items
-    for (const item of items) {
-      const result = await firstValueFrom(
-        this.inventoryClient
-          .send<{
-            available: boolean;
-            availableStock: number;
-          }>(INVENTORY_MESSAGE_PATTERNS.INVENTORY_CHECK_STOCK, {
-            productId: item.productId,
-            quantity: item.quantity,
-            skuId: item.skuId ?? undefined,
-          })
-          .pipe(
-            timeout(5000),
-            catchError((e: unknown) => throwError(() => e)),
-          ),
-      );
-      if (!result.available) {
-        throw new BadRequestException(
-          ORDER_MESSAGE.INSUFFICIENT_STOCK(
-            item.productId,
-            item.quantity,
-            result.availableStock,
-          ),
-        );
-      }
-    }
+    await this.assertStockAvailable(items);
     const itemsTotal = items.reduce(
       (sum, item) => sum + item.price * item.quantity,
       0,
@@ -1679,32 +1661,7 @@ export class OrdersService {
     ghnAddress?: GhnResolvedAddress,
   ): Promise<Order[]> {
     // Check stock in inventory for all items before creating any order
-    for (const item of items) {
-      const result = await firstValueFrom(
-        this.inventoryClient
-          .send<{
-            available: boolean;
-            availableStock: number;
-          }>(INVENTORY_MESSAGE_PATTERNS.INVENTORY_CHECK_STOCK, {
-            productId: item.productId,
-            quantity: item.quantity,
-            skuId: item.skuId ?? undefined,
-          })
-          .pipe(
-            timeout(5000),
-            catchError((e: unknown) => throwError(() => e)),
-          ),
-      );
-      if (!result.available) {
-        throw new BadRequestException(
-          ORDER_MESSAGE.INSUFFICIENT_STOCK(
-            item.productId,
-            item.quantity,
-            result.availableStock,
-          ),
-        );
-      }
-    }
+    await this.assertStockAvailable(items);
 
     type SellerItem = (typeof items)[number];
     const grouped = items.reduce<Map<number, SellerItem[]>>((acc, item) => {
@@ -1888,6 +1845,47 @@ export class OrdersService {
     }
 
     return createdOrders;
+  }
+
+  /**
+   * SWEEP-1002-03 — the stock pre-check runs every item in parallel. It is a
+   * read with no side effect, so ordering buys nothing; serially it cost one
+   * round trip per item (20 on a max-size cart) before the reserve pass even
+   * started. The first unavailable item IN CART ORDER is reported, so the
+   * error a caller sees does not depend on which reply lands first. Reserve
+   * stays sequential: its compensation walks the items reserved so far.
+   */
+  private async assertStockAvailable(
+    items: StockReservationItem[],
+  ): Promise<void> {
+    const stockChecks = await Promise.all(
+      items.map((item) =>
+        firstValueFrom(
+          this.inventoryClient
+            .send<{
+              available: boolean;
+              availableStock: number;
+            }>(INVENTORY_MESSAGE_PATTERNS.INVENTORY_CHECK_STOCK, {
+              productId: item.productId,
+              quantity: item.quantity,
+              skuId: item.skuId ?? undefined,
+            })
+            .pipe(timeout(TCP_TIMEOUT_MS.READ)),
+        ),
+      ),
+    );
+    const shortIndex = stockChecks.findIndex((check) => !check.available);
+    if (shortIndex === -1) {
+      return;
+    }
+    const shortItem = items[shortIndex];
+    throw new BadRequestException(
+      ORDER_MESSAGE.INSUFFICIENT_STOCK(
+        shortItem.productId,
+        shortItem.quantity,
+        stockChecks[shortIndex].availableStock,
+      ),
+    );
   }
 
   private async reserveOrderItems(
@@ -2112,10 +2110,16 @@ export class OrdersService {
   private async cancelOrderAfterPaymentInitializationFailure(
     order: Order,
   ): Promise<void> {
+    const fromStatus = order.status ?? null;
     await this.orderRepository.update(order.id, {
       status: OrderStatus.CANCELED,
     });
     order.status = OrderStatus.CANCELED;
+    await this.recordStatusTransition(
+      order.id,
+      fromStatus,
+      OrderStatus.CANCELED,
+    );
     await this.releaseReservedItems(
       order.items ?? [],
       order.reservationKey,
@@ -3049,6 +3053,11 @@ export class OrdersService {
     const changed = updateResult.affected === 1;
     if (changed) {
       order.status = OrderStatus.CANCELED;
+      await this.recordStatusTransition(
+        order.id,
+        previousStatus,
+        OrderStatus.CANCELED,
+      );
       await this.finalizeGhnCancellation(order);
     } else {
       this.logger.warn(
@@ -3313,6 +3322,99 @@ export class OrdersService {
     });
   }
 
+  /**
+   * ORDER-TIMELINE-01 — the buyer-facing history of one order, oldest first.
+   * Merges what is known about it: when it was placed and paid (order columns),
+   * every recorded local status change (order_status_history) and the carrier
+   * events GHN reported (shipping_history). Only successful webhook/sync rows
+   * that carry a GHN status are shown, and a consecutive repeat of the same GHN
+   * status (a re-sync) collapses into its first sighting. Admin actions, failed
+   * calls, actor ids and GHN payloads are never exposed. Ownership is checked
+   * by the gateway before this is called.
+   */
+  async getOrderTimeline(orderId: number): Promise<OrderTimeline> {
+    const order = await this.orderRepository.findOne({
+      where: { id: orderId },
+      select: {
+        id: true,
+        publicId: true,
+        status: true,
+        createdAt: true,
+        paidAt: true,
+      },
+    });
+    if (!order) {
+      throw new NotFoundException(ORDER_MESSAGE.NOT_FOUND(orderId));
+    }
+
+    const [transitions, shippingRows] = await Promise.all([
+      this.statusHistoryRepository.find({
+        where: { orderId },
+        order: { createdAt: "ASC", id: "ASC" },
+      }),
+      this.shippingHistoryRepository.find({
+        where: {
+          orderId,
+          success: true,
+          ghnStatus: Not(IsNull()),
+          type: In([
+            ShippingHistoryType.WEBHOOK,
+            ShippingHistoryType.MANUAL_SYNC,
+          ]),
+        },
+        select: { id: true, ghnStatus: true, createdAt: true },
+        order: { createdAt: "ASC", id: "ASC" },
+      }),
+    ]);
+
+    const events: OrderTimelineEvent[] = [
+      {
+        kind: "placed",
+        status: OrderStatus.PENDING,
+        ghnStatus: null,
+        at: order.createdAt,
+      },
+    ];
+    if (order.paidAt) {
+      events.push({
+        kind: "paid",
+        status: null,
+        ghnStatus: null,
+        at: order.paidAt,
+      });
+    }
+    for (const transition of transitions) {
+      events.push({
+        kind: "status",
+        status: transition.toStatus as OrderStatus,
+        ghnStatus: null,
+        at: transition.createdAt,
+      });
+    }
+    let previousGhnStatus: string | null = null;
+    for (const row of shippingRows) {
+      if (row.ghnStatus === previousGhnStatus) {
+        continue;
+      }
+      previousGhnStatus = row.ghnStatus;
+      events.push({
+        kind: "shipping",
+        status: null,
+        ghnStatus: row.ghnStatus,
+        at: row.createdAt,
+      });
+    }
+    // Array#sort is stable, so events stamped in the same instant keep the
+    // placed → paid → status → shipping order they were pushed in.
+    events.sort((left, right) => left.at.getTime() - right.at.getTime());
+
+    return {
+      orderId: order.publicId,
+      status: order.status ?? OrderStatus.PENDING,
+      events,
+    };
+  }
+
   private async findLatestShippingHistory(
     orderIds: number[],
   ): Promise<Map<number, ShippingHistory>> {
@@ -3516,9 +3618,41 @@ export class OrdersService {
     });
   }
 
-  async updateOrderStatus(orderId: number, status: OrderStatus): Promise<void> {
+  async updateOrderStatus(
+    orderId: number,
+    status: OrderStatus,
+    fromStatus: OrderStatus | null,
+  ): Promise<void> {
     await this.orderRepository.update({ id: orderId }, { status });
     this.logger.log(`[ORDERS] Order ${orderId} status updated to ${status}`);
+    await this.recordStatusTransition(orderId, fromStatus, status);
+  }
+
+  /**
+   * ORDER-TIMELINE-01 — persist one committed status change for the buyer
+   * timeline. Best-effort on purpose: the transition is already committed, so a
+   * failed insert is logged and swallowed — it must never fail the status
+   * change it describes. Called only after the status write has landed.
+   */
+  private async recordStatusTransition(
+    orderId: number,
+    fromStatus: OrderStatus | null,
+    toStatus: OrderStatus,
+  ): Promise<void> {
+    if (fromStatus === toStatus) {
+      return;
+    }
+    try {
+      await this.statusHistoryRepository.insert({
+        orderId,
+        fromStatus,
+        toStatus,
+      });
+    } catch (error: unknown) {
+      this.logger.warn(
+        `[ORDERS] Order ${orderId} status history ${fromStatus ?? "-"} -> ${toStatus} not recorded: ${this.toErrorMessage(error)}`,
+      );
+    }
   }
 
   /**
@@ -3588,6 +3722,11 @@ export class OrdersService {
       );
       return;
     }
+    await this.recordStatusTransition(
+      order.id,
+      currentStatus,
+      OrderStatus.PROCESSING,
+    );
 
     // ZaloPay/VNPay: create GHN shipping order (codAmount = null → 0 in GHN payload)
     try {
@@ -3629,6 +3768,40 @@ export class OrdersService {
   }
 
   /**
+   * ACCOUNT-DELETE-01: cancels every order the deleted account is party to —
+   * as buyer OR seller — that `cancelOrder` itself would accept. SHIPPED /
+   * DELIVERING / RETURN_REQUESTED are left to finish (the parcel is already
+   * moving; a return stays admin-reviewable). Sequential and fail-fast: an
+   * error aborts the deletion before the user row is scrubbed, and a retry
+   * only sees the orders that are still open.
+   */
+  async cancelOpenOrdersForUser(
+    userId: number,
+  ): Promise<{ canceledOrderCount: number }> {
+    const cancelableStatuses = In([
+      OrderStatus.PENDING,
+      OrderStatus.CONFIRMED,
+      OrderStatus.PROCESSING,
+    ]);
+    const openOrders = await this.orderRepository.find({
+      where: [
+        { userId, status: cancelableStatuses },
+        { sellerId: userId, status: cancelableStatuses },
+      ],
+      relations: ["items"],
+    });
+
+    for (const order of openOrders) {
+      await this.finalizeCancellation(order);
+    }
+
+    this.logger.log(
+      `[ORDERS] Account deletion of user ${userId} canceled ${openOrders.length} open order(s)`,
+    );
+    return { canceledOrderCount: openOrders.length };
+  }
+
+  /**
    * Cancellation side effects shared by the user-facing cancel endpoint and the
    * stale-reservation sweeper: flip the order to CANCELED, release reserved
    * stock (idempotent via reservationKey), cancel any GHN shipping order, and
@@ -3636,7 +3809,11 @@ export class OrdersService {
    * checks before invoking this.
    */
   private async finalizeCancellation(order: Order): Promise<void> {
-    await this.updateOrderStatus(order.id, OrderStatus.CANCELED);
+    await this.updateOrderStatus(
+      order.id,
+      OrderStatus.CANCELED,
+      order.status ?? null,
+    );
     order.status = OrderStatus.CANCELED;
     await this.releaseReservedItems(order.items, order.reservationKey, true);
     await this.releaseVoucherRedemption(order);
@@ -3939,6 +4116,7 @@ export class OrdersService {
     this.logger.log(
       `[GHN] Order ${order.id} status updated to ${mappedStatus}`,
     );
+    await this.recordStatusTransition(order.id, currentStatus, mappedStatus);
     if (mappedStatus === OrderStatus.COMPLETED) {
       await this.finalizeOrderCompletion(order);
     } else if (mappedStatus === OrderStatus.CANCELED) {
@@ -4063,6 +4241,29 @@ export class OrdersService {
     }
 
     return { valid: true, orderId: order.id };
+  }
+
+  /**
+   * REVIEW-VERIFIED-01 — which of `userIds` hold a COMPLETED order containing
+   * `productId`: the same rule `verifyUserPurchasedProduct` gates review
+   * creation on, resolved for a whole review page in one IN query.
+   */
+  async findVerifiedPurchasers(
+    productId: number,
+    userIds: number[],
+  ): Promise<number[]> {
+    if (userIds.length === 0) {
+      return [];
+    }
+    const rows = await this.orderRepository
+      .createQueryBuilder("order")
+      .innerJoin("order.items", "item")
+      .select("DISTINCT order.userId", "userId")
+      .where("order.status = :status", { status: OrderStatus.COMPLETED })
+      .andWhere("item.productId = :productId", { productId })
+      .andWhere("order.userId IN (:...userIds)", { userIds })
+      .getRawMany<{ userId: number | string }>();
+    return rows.map((row) => Number(row.userId));
   }
 
   async generateInvoice(
@@ -4535,6 +4736,11 @@ export class OrdersService {
 
     order.status = OrderStatus.CONFIRMED;
     const confirmed = await this.orderRepository.save(order);
+    await this.recordStatusTransition(
+      order.id,
+      OrderStatus.PENDING,
+      OrderStatus.CONFIRMED,
+    );
     this.publishOrderStatusChangedEvent(confirmed, OrderStatus.PENDING);
     return confirmed;
   }
@@ -4572,6 +4778,11 @@ export class OrdersService {
 
     order.status = OrderStatus.PROCESSING;
     const processing = await this.orderRepository.save(order);
+    await this.recordStatusTransition(
+      order.id,
+      OrderStatus.CONFIRMED,
+      OrderStatus.PROCESSING,
+    );
     this.publishOrderStatusChangedEvent(processing, OrderStatus.CONFIRMED);
     return processing;
   }
@@ -4669,6 +4880,7 @@ export class OrdersService {
       throw new ConflictException(ORDER_MESSAGE.CONCURRENT_UPDATE(orderId));
     }
     order.status = targetStatus;
+    await this.recordStatusTransition(order.id, currentStatus, targetStatus);
     this.logger.log(
       `[ORDERS] Order ${order.id} advanced to ${targetStatus} manually by admin ${sellerId}`,
     );
@@ -4696,6 +4908,7 @@ export class OrdersService {
     orderId: number,
     userId: number,
     reason: string,
+    imageUrls?: string[],
   ): Promise<ReturnRequestView> {
     const order = await this.orderRepository.findOne({
       where: { id: orderId },
@@ -4734,12 +4947,18 @@ export class OrdersService {
         userId,
         publicId: generatePublicId(PUBLIC_ID_PREFIXES.RETURN_REQUEST),
         reason,
+        // RETURN-PHOTO-01 — validated + ownership-checked at the gateway.
+        imageUrls: imageUrls && imageUrls.length > 0 ? imageUrls : null,
         status: ReturnRequestStatus.PENDING_REVIEW,
         previousOrderStatus: order.status ?? null,
       }),
     );
 
-    await this.updateOrderStatus(orderId, OrderStatus.RETURN_REQUESTED);
+    await this.updateOrderStatus(
+      orderId,
+      OrderStatus.RETURN_REQUESTED,
+      order.status ?? null,
+    );
     this.publishOrderReturnEvent(EVENT.ORDER_RETURN_REQUESTED_EVENT, orderId);
     this.logger.log(
       `[ORDERS] Return request ${saved.id} opened for order ${orderId} by user ${userId}`,
@@ -4833,7 +5052,11 @@ export class OrdersService {
         ? RefundStatus.MANUAL_PENDING
         : RefundStatus.REFUNDED;
 
-    await this.updateOrderStatus(order.id, OrderStatus.REFUNDED);
+    await this.updateOrderStatus(
+      order.id,
+      OrderStatus.REFUNDED,
+      order.status ?? null,
+    );
 
     request.status = ReturnRequestStatus.APPROVED;
     request.reviewedBy = reviewerId;
@@ -4861,7 +5084,7 @@ export class OrdersService {
     const restoreStatus =
       (request.previousOrderStatus as OrderStatus | null) ??
       OrderStatus.COMPLETED;
-    await this.updateOrderStatus(order.id, restoreStatus);
+    await this.updateOrderStatus(order.id, restoreStatus, order.status ?? null);
 
     request.status = ReturnRequestStatus.REJECTED;
     request.reviewedBy = reviewerId;

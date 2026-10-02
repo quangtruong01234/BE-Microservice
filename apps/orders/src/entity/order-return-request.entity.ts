@@ -1,5 +1,6 @@
 import {
   Entity,
+  Index,
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
@@ -26,6 +27,8 @@ export enum RefundStatus {
 }
 
 @Entity("order_return_requests")
+@Index("idx_order_return_requests_order", ["orderId"])
+@Index("idx_order_return_requests_user", ["userId"])
 export class OrderReturnRequest {
   @PrimaryGeneratedColumn("increment")
   id!: number;
@@ -48,6 +51,12 @@ export class OrderReturnRequest {
 
   @Column({ type: "varchar", length: 1000 })
   reason!: string;
+
+  // RETURN-PHOTO-01 — Cloudinary URLs of the buyer's evidence photos (max 5,
+  // validated and ownership-checked at the gateway). NULL when none were sent
+  // and on every row written before 2026-10-02; the gateway exposes it as [].
+  @Column({ name: "image_urls", type: "json", nullable: true, default: null })
+  imageUrls!: string[] | null;
 
   @Column({
     type: "enum",

@@ -2,6 +2,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   PrimaryGeneratedColumn,
 } from "typeorm";
 
@@ -17,6 +18,7 @@ export type ShippingPayloadSummary = Record<
 >;
 
 @Entity("shipping_history")
+@Index("idx_shipping_history_order", ["orderId", "createdAt"])
 export class ShippingHistory {
   @PrimaryGeneratedColumn("increment", { type: "bigint" })
   id!: number;

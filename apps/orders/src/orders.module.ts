@@ -21,6 +21,7 @@ import { OrderOutbox } from "./entity/order-outbox.entity";
 import { ExportJob } from "./entity/export-job.entity";
 import { OrderExportJobService } from "./export/order-export-job.service";
 import { ShippingHistory } from "./entity/shipping-history.entity";
+import { OrderStatusHistory } from "./entity/order-status-history.entity";
 import { OrderReturnRequest } from "./entity/order-return-request.entity";
 import { Voucher } from "./entity/voucher.entity";
 import { VoucherRedemption } from "./entity/voucher-redemption.entity";
@@ -93,6 +94,7 @@ import { GhnModule } from "./ghn/ghn.module";
         Voucher,
         VoucherRedemption,
         ExportJob,
+        OrderStatusHistory,
       ],
       synchronize: resolveTypeOrmSynchronize(),
       timezone: "Z",
@@ -111,6 +113,7 @@ import { GhnModule } from "./ghn/ghn.module";
       Voucher,
       VoucherRedemption,
       ExportJob,
+      OrderStatusHistory,
     ]),
   ],
   controllers: [OrdersController, CartController],

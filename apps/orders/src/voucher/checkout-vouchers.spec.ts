@@ -13,6 +13,8 @@ import { OrderItem } from "../entity/order_item.entity";
 import { OrderOutbox } from "../entity/order-outbox.entity";
 import { OrderReturnRequest } from "../entity/order-return-request.entity";
 import { ShippingHistory } from "../entity/shipping-history.entity";
+import { OrderStatusHistory } from "../entity/order-status-history.entity";
+import { createRepositoryMock } from "@app/testing";
 import { Voucher, VoucherDiscountType } from "../entity/voucher.entity";
 import { VoucherRedemption } from "../entity/voucher-redemption.entity";
 import { GhnService } from "../ghn/ghn.service";
@@ -138,6 +140,7 @@ function createService(): ServiceFixture {
       claimFromSeededQuota: claim,
       releaseToSeededQuota: release,
     } as unknown as CachedService,
+    createRepositoryMock<OrderStatusHistory>().asRepository(),
   );
   return {
     service,

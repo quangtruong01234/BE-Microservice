@@ -276,6 +276,14 @@ export class OrdersController {
     return this.ordersService.getAdminGhnHistory(orderId);
   }
 
+  @MessagePattern(ORDER_MESSAGE_PATTERN.GET_ORDER_TIMELINE)
+  async getOrderTimeline(
+    @Payload() payload: { orderId: number | string },
+  ): Promise<unknown> {
+    const orderId = await this.ordersService.resolveOrderId(payload.orderId);
+    return this.ordersService.getOrderTimeline(orderId);
+  }
+
   @MessagePattern(ORDER_MESSAGE_PATTERN.ADMIN_GHN_CANCEL)
   async cancelAdminGhnOrder(
     @Payload() payload: { orderId: number | string; actorId: number | null },
@@ -358,6 +366,14 @@ export class OrdersController {
       payload.callerId,
       payload.callerRole,
     );
+  }
+
+  // ACCOUNT-DELETE-01: `userId` is the deleting account's numeric JWT id.
+  @MessagePattern(ORDER_MESSAGE_PATTERN.CANCEL_OPEN_ORDERS_FOR_USER)
+  async cancelOpenOrdersForUser(
+    @Payload() payload: { userId: number },
+  ): Promise<{ canceledOrderCount: number }> {
+    return await this.ordersService.cancelOpenOrdersForUser(payload.userId);
   }
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.GET_ORDER_INVOICE)
@@ -483,6 +499,16 @@ export class OrdersController {
     );
   }
 
+  @MessagePattern(ORDER_MESSAGE_PATTERN.FIND_VERIFIED_PURCHASERS)
+  async findVerifiedPurchasers(
+    @Payload() data: { productId: number; userIds: number[] },
+  ): Promise<number[]> {
+    return this.ordersService.findVerifiedPurchasers(
+      data.productId,
+      data.userIds,
+    );
+  }
+
   @MessagePattern(ORDER_MESSAGE_PATTERN.GET_ORDERS_BY_SELLER)
   async handleGetOrdersBySeller(
     @Payload()
@@ -569,10 +595,16 @@ export class OrdersController {
       orderId: number | string;
       userId: number;
       reason: string;
+      imageUrls?: string[];
     },
   ): Promise<ReturnRequestView> {
     const orderId = await this.ordersService.resolveOrderId(data.orderId);
-    return this.ordersService.requestReturn(orderId, data.userId, data.reason);
+    return this.ordersService.requestReturn(
+      orderId,
+      data.userId,
+      data.reason,
+      data.imageUrls,
+    );
   }
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.RETURN_REQUEST_LIST_USER)

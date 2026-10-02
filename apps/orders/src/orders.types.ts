@@ -370,3 +370,23 @@ export interface ExportJobDownload {
   fileName: string;
   contentBase64: string;
 }
+
+// ORDER-TIMELINE-01: buyer-facing order timeline. No numeric id, actor or GHN
+// payload ever leaves the orders service on this path — `orderId` is the
+// public id and each event carries only what the buyer may see.
+export type OrderTimelineEventKind = "placed" | "paid" | "status" | "shipping";
+
+export interface OrderTimelineEvent {
+  kind: OrderTimelineEventKind;
+  // Set on `placed` (always PENDING) and `status`; null otherwise.
+  status: OrderStatus | null;
+  // Set on `shipping` only — the raw GHN status code.
+  ghnStatus: string | null;
+  at: Date;
+}
+
+export interface OrderTimeline {
+  orderId: string | null;
+  status: OrderStatus;
+  events: OrderTimelineEvent[];
+}
