@@ -9,6 +9,7 @@ import {
   isRmqPublisherLive,
   MailerService,
   PaginatedResponse,
+  WishlistAlertEvent,
 } from "@app/common";
 import { EXCHANGE } from "@app/common/constants/exchange";
 import { EVENT } from "@app/common/constants/event";
@@ -25,6 +26,8 @@ import {
   LIKE_NOTIFICATION_SINGLE_MESSAGE,
   LIKE_NOTIFICATION_TYPE,
   NOTIFICATION_TEXT_MAX_LENGTH,
+  WISHLIST_ALERT_NOTIFICATION_TYPES,
+  WISHLIST_ALERT_PRODUCT_NAME_MAX_LENGTH,
 } from "./notification.constants";
 import { NotificationMetadata, UserEmailInfo } from "./notification.types";
 
@@ -44,6 +47,23 @@ export function buildLikeNotificationMessage(likeCount: number): string {
 export function parseLikeNotificationCount(message: string): number {
   const match = LIKE_NOTIFICATION_COUNT_PATTERN.exec(message);
   return match ? Number(match[1]) : 1;
+}
+
+function formatPriceVnd(priceVnd: number): string {
+  return `${Math.round(priceVnd).toLocaleString("en-US")} VND`;
+}
+
+export function buildWishlistAlertMessage(event: WishlistAlertEvent): string {
+  const productName = event.productName.slice(
+    0,
+    WISHLIST_ALERT_PRODUCT_NAME_MAX_LENGTH,
+  );
+  if (event.kind === "back_in_stock") {
+    return `'${productName}' from your wishlist is back in stock.`;
+  }
+  return event.previousPrice !== null && event.price !== null
+    ? `'${productName}' from your wishlist dropped from ${formatPriceVnd(event.previousPrice)} to ${formatPriceVnd(event.price)}.`
+    : `'${productName}' from your wishlist dropped in price.`;
 }
 
 @Injectable()
@@ -122,6 +142,40 @@ export class NotificationService {
     this.logger.log(
       `[NOTIFICATION] Saved type=${type} orderId=${orderId} userId=${userId}`,
     );
+  }
+
+  /**
+   * WISHLIST-ALERT-01 — one row per wishlister, saved in ONE transaction so a
+   * requeued event can never leave half the batch behind (and then double it).
+   * Push is best-effort per row, after the commit.
+   */
+  async saveWishlistAlerts(event: WishlistAlertEvent): Promise<number> {
+    const type = WISHLIST_ALERT_NOTIFICATION_TYPES[event.kind];
+    const message = buildWishlistAlertMessage(event).slice(
+      0,
+      NOTIFICATION_TEXT_MAX_LENGTH,
+    );
+    const notifications = [...new Set(event.userIds)].map((userId) =>
+      this.notificationRepository.create({
+        publicId: generatePublicId(PUBLIC_ID_PREFIXES.NOTIFICATION),
+        userId,
+        type,
+        orderId: null,
+        message,
+        postId: null,
+        actorId: null,
+        preview: truncateNotificationText(event.productName),
+        productPublicId: event.productPublicId,
+      }),
+    );
+    const saved = await this.notificationRepository.save(notifications);
+    for (const notification of saved) {
+      this.pushNotification(notification.userId, notification, null);
+    }
+    this.logger.log(
+      `[NOTIFICATION] Saved ${saved.length} ${type} for product ${event.productId}`,
+    );
+    return saved.length;
   }
 
   /**
@@ -298,6 +352,18 @@ export class NotificationService {
     return { success: true };
   }
 
+  /**
+   * ACCOUNT-DELETE-01: drops the deleted account's inbox. A notification
+   * created after this (e.g. by the order_canceled consumer) survives as an
+   * orphan nobody can read — the account can no longer log in.
+   */
+  async purgeUserData(
+    userId: number,
+  ): Promise<{ deletedNotificationCount: number }> {
+    const deleted = await this.notificationRepository.delete({ userId });
+    return { deletedNotificationCount: deleted.affected ?? 0 };
+  }
+
   private exposeNotification(
     notification: Notification,
     orderPublicId: string | null,
@@ -306,8 +372,10 @@ export class NotificationService {
       ...notification,
       id: notification.publicId ?? String(notification.id),
       orderId: notification.orderId === null ? null : orderPublicId,
+      productId: notification.productPublicId ?? null,
     };
     delete exposed.publicId;
+    delete exposed.productPublicId;
     return exposed;
   }
 }

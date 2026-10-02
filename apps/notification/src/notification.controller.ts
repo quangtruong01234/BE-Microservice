@@ -20,6 +20,8 @@ import {
   HttpToRpcExceptionFilter,
   renderOrderNotificationEmail,
   RmqService,
+  WISHLIST_ALERT_KINDS,
+  WishlistAlertEvent,
 } from "@app/common";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import {
@@ -28,6 +30,20 @@ import {
 } from "libs/constant/message-pattern.constant";
 import { ORDER_MESSAGE } from "libs/constant/response-message.constant";
 import { OrderInfo } from "./notification.types";
+
+function isWishlistAlertEvent(value: unknown): value is WishlistAlertEvent {
+  if (typeof value !== "object" || value === null) return false;
+  const event = value as Partial<Record<keyof WishlistAlertEvent, unknown>>;
+  return (
+    WISHLIST_ALERT_KINDS.some((kind) => kind === event.kind) &&
+    typeof event.productId === "number" &&
+    typeof event.productPublicId === "string" &&
+    typeof event.productName === "string" &&
+    Array.isArray(event.userIds) &&
+    event.userIds.length > 0 &&
+    event.userIds.every((userId) => Number.isInteger(userId))
+  );
+}
 
 /** Who an order mail is addressed to — decides where its CTA points. */
 type OrderEmailAudience = "buyer" | "seller";
@@ -787,6 +803,32 @@ export class NotificationController {
     }
   }
 
+  @EventPattern(EVENT.WISHLIST_ALERT_EVENT)
+  async handleWishlistAlert(
+    @Payload() data: WishlistAlertEvent,
+    @Ctx() context: RmqContext,
+  ): Promise<void> {
+    const channel = context.getChannelRef() as {
+      nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
+    };
+    if (!isWishlistAlertEvent(data)) {
+      this.logger.warn(
+        "[NOTIFICATION] wishlist_alert dropped: malformed payload",
+      );
+      channel.nack(context.getMessage(), false, false); // unprocessable → DLQ
+      return;
+    }
+    try {
+      await this.notificationService.saveWishlistAlerts(data);
+      this.rmqService.ack(context);
+    } catch (err) {
+      this.logger.error(
+        `[NOTIFICATION] handleWishlistAlert failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      channel.nack(context.getMessage(), false, true); // requeue: DB error
+    }
+  }
+
   @MessagePattern(NOTIFICATION_MESSAGE_PATTERN.GET_USER_NOTIFICATIONS)
   async getUserNotifications(
     @Payload()
@@ -823,5 +865,13 @@ export class NotificationController {
       data.notificationId,
       data.userId,
     );
+  }
+
+  // ACCOUNT-DELETE-01: `userId` is the deleting account's numeric JWT id.
+  @MessagePattern(NOTIFICATION_MESSAGE_PATTERN.PURGE_USER_DATA)
+  async purgeUserData(
+    @Payload() data: { userId: number },
+  ): Promise<{ deletedNotificationCount: number }> {
+    return this.notificationService.purgeUserData(data.userId);
   }
 }

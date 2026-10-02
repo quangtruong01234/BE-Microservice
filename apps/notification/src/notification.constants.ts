@@ -11,3 +11,11 @@ export const LIKE_NOTIFICATION_SINGLE_MESSAGE = "Someone liked your post";
 export const LIKE_NOTIFICATION_COUNT_PATTERN = /^(\d+) people liked your post$/;
 /** Compare-and-swap retries when two likes race on the same unread row. */
 export const LIKE_NOTIFICATION_CAS_MAX_ATTEMPTS = 3;
+
+/** WISHLIST-ALERT-01 — the `type` each alert kind is stored and exposed as. */
+export const WISHLIST_ALERT_NOTIFICATION_TYPES = {
+  back_in_stock: "wishlist_back_in_stock",
+  price_drop: "wishlist_price_drop",
+} as const;
+/** Keeps the longest price-drop message inside NOTIFICATION_TEXT_MAX_LENGTH. */
+export const WISHLIST_ALERT_PRODUCT_NAME_MAX_LENGTH = 120;

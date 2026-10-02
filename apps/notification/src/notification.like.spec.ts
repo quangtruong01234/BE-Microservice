@@ -24,6 +24,7 @@ function unreadLikeRow(overrides: Partial<Notification> = {}): Notification {
     postId: 12,
     actorId: 3,
     preview: null,
+    productPublicId: null,
     message: "Someone liked your post",
     isRead: false,
     createdAt: new Date("2026-09-28T01:00:00Z"),

@@ -37,6 +37,16 @@ export class Notification {
   @Column({ type: "varchar", length: 255, nullable: true })
   preview!: string | null;
 
+  // WISHLIST-ALERT-01: snapshot of the product's opaque id, exposed as
+  // `productId`. NULL on every notification that is not about a product.
+  @Column({
+    name: "product_public_id",
+    type: "varchar",
+    length: 32,
+    nullable: true,
+  })
+  productPublicId!: string | null;
+
   @Column({ type: "varchar", length: 255, nullable: false })
   message!: string;
 
