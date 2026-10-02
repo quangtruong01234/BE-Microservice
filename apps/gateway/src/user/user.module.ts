@@ -31,6 +31,31 @@ import { UserController } from "./user.controller";
           port: PORT_TCP.ORDERS_TCP_PORT,
         },
       },
+      // ACCOUNT-DELETE-01: account deletion purges the user's data in these.
+      {
+        name: NAME_SERVICE_TCP.PRODUCT_SERVICE,
+        customClass: ResilientClientTCP,
+        options: {
+          host: TCP_HOST,
+          port: PORT_TCP.PRODUCT_TCP_PORT,
+        },
+      },
+      {
+        name: NAME_SERVICE_TCP.SOCIAL_SERVICE,
+        customClass: ResilientClientTCP,
+        options: {
+          host: TCP_HOST,
+          port: PORT_TCP.SOCIAL_TCP_PORT,
+        },
+      },
+      {
+        name: NAME_SERVICE_TCP.NOTIFICATION_SERVICE,
+        customClass: ResilientClientTCP,
+        options: {
+          host: TCP_HOST,
+          port: PORT_TCP.NOTIFICATION_TCP_PORT,
+        },
+      },
     ]),
   ],
   controllers: [UserController],

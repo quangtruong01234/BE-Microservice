@@ -3,6 +3,7 @@ import { JwtService } from "@nestjs/jwt";
 import { CachedService } from "@app/cached";
 import { of, throwError } from "rxjs";
 import { UserService } from "./user.service";
+import { SessionRevocationService } from "../common/session/session-revocation.service";
 
 /**
  * RAIL-RANK-01 — `GET /api/user/featured-sellers` forwards the orders
@@ -31,6 +32,10 @@ describe("UserService getFeaturedSellers (RAIL-RANK-01)", () => {
       {} as unknown as JwtService,
       ordersClient as unknown as ClientProxy,
       cached as unknown as CachedService,
+      {} as unknown as SessionRevocationService,
+      {} as unknown as ClientProxy,
+      {} as unknown as ClientProxy,
+      {} as unknown as ClientProxy,
     );
     userClient.send.mockReturnValue(of([seller(20), seller(23)]));
     cached.get.mockResolvedValue(null);

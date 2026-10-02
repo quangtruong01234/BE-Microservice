@@ -85,6 +85,23 @@ describe("RegisterUserDto username trimming (NAME-TRIM-01)", () => {
   it("still accepts an ordinary username", () => {
     expect(validateAs(RegisterUserDto, registration("john_doe"))).toEqual([]);
   });
+
+  // ACCOUNT-DELETE-01: the FE renders any `deleted_` username as "Deleted
+  // user", so a live account must not be able to take one.
+  it.each(["deleted_usr_abc", "Deleted_bob", "  DELETED_x  "])(
+    "refuses the reserved deleted-account prefix in %j",
+    (username) => {
+      expect(validateAs(RegisterUserDto, registration(username))).toEqual([
+        "username",
+      ]);
+    },
+  );
+
+  it("accepts a username that merely contains the word", () => {
+    expect(validateAs(RegisterUserDto, registration("undeleted_me"))).toEqual(
+      [],
+    );
+  });
 });
 
 describe("RegisterUserDto password floor", () => {

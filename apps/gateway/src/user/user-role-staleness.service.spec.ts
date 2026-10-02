@@ -3,6 +3,7 @@ import { JwtService } from "@nestjs/jwt";
 import { CachedService } from "@app/cached";
 import { of } from "rxjs";
 import { UserService } from "./user.service";
+import { SessionRevocationService } from "../common/session/session-revocation.service";
 
 /**
  * ROLE-ADMIN-01 — `GET /api/user/me` reports the role twice on purpose: `role`
@@ -43,6 +44,10 @@ describe("UserService getMe role staleness", () => {
       jwtService as unknown as JwtService,
       {} as unknown as ClientProxy,
       {} as unknown as CachedService,
+      {} as unknown as SessionRevocationService,
+      {} as unknown as ClientProxy,
+      {} as unknown as ClientProxy,
+      {} as unknown as ClientProxy,
     );
   });
 

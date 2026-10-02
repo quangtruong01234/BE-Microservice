@@ -12,7 +12,7 @@ import {
   UseGuards,
   ValidationPipe,
 } from "@nestjs/common";
-import { Response } from "express";
+import { Request as ExpressRequest, Response } from "express";
 import { UserService } from "./user.service";
 import {
   RegisterUserDto,
@@ -20,6 +20,7 @@ import {
   ForgotPasswordDto,
   ResetPasswordDto,
   ChangePasswordDto,
+  DeleteAccountDto,
   ListUsersQueryDto,
   FeaturedSellersQueryDto,
   SearchUsersQueryDto,
@@ -44,6 +45,7 @@ import { CaptchaGuard } from "../common/guards/captcha.guard";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
 import {
   AUTH_COOKIE_NAME,
+  extractAccessToken,
   getAuthCookieOptions,
   getClearAuthCookieOptions,
   REMEMBER_ME_AUTH_COOKIE_MAX_AGE_MS,
@@ -141,7 +143,11 @@ export class UserController {
       "Change the current user's password (knows the old one — no email code)",
   })
   @ApiBody({ type: ChangePasswordDto })
-  @ApiResponse({ status: 201, description: "Password updated." })
+  @ApiResponse({
+    status: 201,
+    description:
+      "Password updated. Every other session of the account is revoked; the caller gets a re-issued access_token cookie with the same expiry.",
+  })
   @ApiResponse({
     status: 400,
     description:
@@ -155,9 +161,25 @@ export class UserController {
   @ApiResponse({ status: 429, description: "Too many attempts." })
   async changePassword(
     @Body() dto: ChangePasswordDto,
-    @Request() req: { user: { id: number } },
+    @Request() req: ExpressRequest & { user: { id: number } },
+    @Res({ passthrough: true }) res: Response,
   ): Promise<unknown> {
-    return this.userService.changePassword(req.user.id, dto);
+    const changePasswordResponse = await this.userService.changePassword(
+      req.user.id,
+      dto,
+    );
+    // SESSION-REVOKE-01: the change just revoked the presented token too.
+    const reissued = this.userService.reissueSessionToken(
+      extractAccessToken(req),
+    );
+    if (reissued) {
+      res.cookie(
+        AUTH_COOKIE_NAME,
+        reissued.token,
+        getAuthCookieOptions(reissued.maxAgeMs),
+      );
+    }
+    return changePasswordResponse;
   }
 
   @Post("logout")
@@ -167,6 +189,71 @@ export class UserController {
   logout(@Res({ passthrough: true }) res: Response): { message: string } {
     res.clearCookie(AUTH_COOKIE_NAME, getClearAuthCookieOptions());
     return { message: AUTH_MESSAGE.LOGOUT_SUCCESS };
+  }
+
+  @Post("logout-all")
+  @UseGuards(JwtAuthGuard)
+  @RateLimit({ limit: 5, ttl: 60 })
+  @ApiOperation({
+    summary:
+      "Log out of all devices — revokes every token of the account, this one included, and clears the cookie",
+  })
+  @ApiResponse({ status: 201, description: "All sessions revoked." })
+  @ApiResponse({ status: 401, description: "No valid session." })
+  @ApiResponse({ status: 429, description: "Too many attempts." })
+  @ApiResponse({
+    status: 503,
+    description: "The session store is unavailable; nothing was revoked.",
+  })
+  async logoutAll(
+    @Request() req: { user: { id: number } },
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<{ message: string }> {
+    await this.userService.logoutAllSessions(req.user.id);
+    res.clearCookie(AUTH_COOKIE_NAME, getClearAuthCookieOptions());
+    return { message: AUTH_MESSAGE.LOGOUT_ALL_SUCCESS };
+  }
+
+  @Delete("me")
+  @UseGuards(JwtAuthGuard)
+  @RateLimit({ limit: 5, ttl: 60 })
+  @ApiOperation({
+    summary:
+      "Delete the current account — irreversible. Cancels open orders, anonymizes the profile, keeps orders and authored content, revokes every session and clears the cookie",
+  })
+  @ApiBody({ type: DeleteAccountDto })
+  @ApiResponse({
+    status: 200,
+    description:
+      "Account deleted: `{ success: true, canceledOrderCount }`. The cookie is cleared.",
+  })
+  @ApiResponse({ status: 400, description: "currentPassword is missing." })
+  @ApiResponse({
+    status: 401,
+    description:
+      "currentPassword is wrong (errorCode INVALID_CURRENT_PASSWORD) — nothing was changed and the cookie stays valid.",
+  })
+  @ApiResponse({
+    status: 403,
+    description: "An admin account cannot delete itself.",
+  })
+  @ApiResponse({ status: 429, description: "Too many attempts." })
+  @ApiResponse({
+    status: 502,
+    description:
+      "A downstream service failed; the account was NOT deleted and the call can be retried.",
+  })
+  async deleteAccount(
+    @Body() dto: DeleteAccountDto,
+    @Request() req: { user: { id: number } },
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<{ success: true; canceledOrderCount: number }> {
+    const deleteAccountResponse = await this.userService.deleteAccount(
+      req.user.id,
+      dto,
+    );
+    res.clearCookie(AUTH_COOKIE_NAME, getClearAuthCookieOptions());
+    return deleteAccountResponse;
   }
 
   @Get()

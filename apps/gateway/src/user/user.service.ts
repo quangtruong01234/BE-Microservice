@@ -1,4 +1,9 @@
-import { Injectable, Inject, Logger } from "@nestjs/common";
+import {
+  Injectable,
+  Inject,
+  Logger,
+  ServiceUnavailableException,
+} from "@nestjs/common";
 import { ClientProxy } from "@nestjs/microservices";
 import {
   RegisterUserDto,
@@ -6,6 +11,7 @@ import {
   ForgotPasswordDto,
   ResetPasswordDto,
   ChangePasswordDto,
+  DeleteAccountDto,
   UpdateUserGatewayDto,
 } from "./dto/user.dto";
 import {
@@ -15,9 +21,13 @@ import {
 import { firstValueFrom, timeout, catchError } from "rxjs";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import {
+  CART_MESSAGE_PATTERN,
+  NOTIFICATION_MESSAGE_PATTERN,
   ORDER_MESSAGE_PATTERN,
+  SOCIAL_MESSAGE_PATTERN,
   USER_MESSAGE_PATTERN,
 } from "libs/constant/message-pattern.constant";
+import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
 import { retryOnTransportError } from "../common/exception/transport-error";
 import { stripCaptchaToken } from "../common/guards/captcha.guard";
@@ -26,6 +36,13 @@ import { JwtService } from "@nestjs/jwt";
 import { TopSellingSeller, UserData, UserRole } from "./user.types";
 import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 import { CachedService } from "@app/cached";
+import { AUTH_MESSAGE } from "libs/constant/response-message.constant";
+import {
+  DEFAULT_AUTH_COOKIE_MAX_AGE_MS,
+  REMEMBER_ME_AUTH_COOKIE_MAX_AGE_MS,
+} from "../common/auth-cookie";
+import { JwtPayload } from "../common/guards/auth-guard.types";
+import { SessionRevocationService } from "../common/session/session-revocation.service";
 
 @Injectable()
 export class UserService {
@@ -45,6 +62,13 @@ export class UserService {
     @Inject(NAME_SERVICE_TCP.ORDERS_SERVICE)
     private readonly ordersClient: ClientProxy,
     private readonly cached: CachedService,
+    private readonly sessionRevocation: SessionRevocationService,
+    @Inject(NAME_SERVICE_TCP.PRODUCT_SERVICE)
+    private readonly productClient: ClientProxy,
+    @Inject(NAME_SERVICE_TCP.SOCIAL_SERVICE)
+    private readonly socialClient: ClientProxy,
+    @Inject(NAME_SERVICE_TCP.NOTIFICATION_SERVICE)
+    private readonly notificationClient: ClientProxy,
   ) {}
 
   /**
@@ -222,9 +246,9 @@ export class UserService {
 
   /**
    * CHG-PW-01: the logged-in password change. The account is identified by the
-   * JWT alone — no email/id in the body — and the issued cookie is deliberately
-   * left untouched: the JWT is stateless, so rotating it here would refresh
-   * this session without revoking any other one.
+   * JWT alone — no email/id in the body. On success the user service revokes
+   * every session of the account (SESSION-REVOKE-01), the caller's included;
+   * the controller keeps the caller signed in via `reissueSessionToken`.
    */
   async changePassword(
     userId: number,
@@ -253,6 +277,143 @@ export class UserService {
         error,
         "change password",
         "User Service",
+      );
+    }
+  }
+
+  /**
+   * SESSION-REVOKE-01: re-sign an already-verified token with the same claims
+   * and a fresh `iat`, keeping its remaining lifetime, so the caller survives
+   * the revocation its own password change just triggered. The cookie keeps
+   * the remember-me/default split: a token that lived < 7d is capped at the
+   * default cookie age. Returns null when nothing is left to re-issue.
+   */
+  reissueSessionToken(
+    presentedToken: string | null,
+  ): { token: string; maxAgeMs: number } | null {
+    if (!presentedToken) return null;
+    const claims = this.jwtService.decode<JwtPayload | null>(presentedToken);
+    if (!claims?.exp) return null;
+
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const remainingSeconds = claims.exp - nowSeconds;
+    if (remainingSeconds <= 0) return null;
+
+    const token = this.jwtService.sign(
+      {
+        userId: claims.userId,
+        email: claims.email,
+        role: claims.role,
+        grants: claims.grants,
+      },
+      { expiresIn: remainingSeconds },
+    );
+    const originalLifetimeMs = (claims.exp - (claims.iat ?? nowSeconds)) * 1000;
+    const cookieCapMs =
+      originalLifetimeMs >= REMEMBER_ME_AUTH_COOKIE_MAX_AGE_MS
+        ? REMEMBER_ME_AUTH_COOKIE_MAX_AGE_MS
+        : DEFAULT_AUTH_COOKIE_MAX_AGE_MS;
+    return {
+      token,
+      maxAgeMs: Math.min(remainingSeconds * 1000, cookieCapMs),
+    };
+  }
+
+  /** SESSION-REVOKE-01: "log out all devices". A Redis failure is a 503. */
+  async logoutAllSessions(userId: number): Promise<void> {
+    try {
+      await this.sessionRevocation.revokeAllSessions(userId);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      this.logger.error(`logout-all failed for userId=${userId}: ${message}`);
+      throw new ServiceUnavailableException(
+        AUTH_MESSAGE.LOGOUT_ALL_UNAVAILABLE,
+      );
+    }
+  }
+
+  /**
+   * ACCOUNT-DELETE-01: verify → cancel open orders → clear cart → purge
+   * product / social / notification → scrub the user row LAST. Every leg is
+   * idempotent and any failure aborts before the scrub, so the account stays
+   * loginable and the caller can simply retry. Orders are kept (accounting);
+   * posts, comments, reviews and chat stay, authored by the scrubbed user.
+   */
+  async deleteAccount(
+    userId: number,
+    dto: DeleteAccountDto,
+  ): Promise<{ success: true; canceledOrderCount: number }> {
+    const credentials = { userId, currentPassword: dto.currentPassword };
+    await this.sendAccountDeletionLeg(
+      this.userClient,
+      { cmd: USER_MESSAGE_PATTERN.VERIFY_ACCOUNT_DELETION },
+      credentials,
+      "User Service",
+    );
+    const { canceledOrderCount } = await this.sendAccountDeletionLeg<{
+      canceledOrderCount: number;
+    }>(
+      this.ordersClient,
+      ORDER_MESSAGE_PATTERN.CANCEL_OPEN_ORDERS_FOR_USER,
+      { userId },
+      "Orders Service",
+    );
+    await this.sendAccountDeletionLeg(
+      this.ordersClient,
+      CART_MESSAGE_PATTERN.CART_CLEAR,
+      { userId },
+      "Orders Service",
+    );
+    await this.sendAccountDeletionLeg(
+      this.productClient,
+      PRODUCT_MESSAGE_PATTERNS.PURGE_USER_DATA,
+      { userId },
+      "Product Service",
+    );
+    await this.sendAccountDeletionLeg(
+      this.socialClient,
+      SOCIAL_MESSAGE_PATTERN.PURGE_USER_DATA,
+      { userId },
+      "Social Service",
+    );
+    await this.sendAccountDeletionLeg(
+      this.notificationClient,
+      NOTIFICATION_MESSAGE_PATTERN.PURGE_USER_DATA,
+      { userId },
+      "Notification Service",
+    );
+    await this.sendAccountDeletionLeg(
+      this.userClient,
+      { cmd: USER_MESSAGE_PATTERN.DELETE_ACCOUNT },
+      credentials,
+      "User Service",
+    );
+    this.logger.log(
+      `deleteAccount: user ${userId} deleted, ${canceledOrderCount} open order(s) canceled`,
+    );
+    return { success: true, canceledOrderCount };
+  }
+
+  private async sendAccountDeletionLeg<TResult = unknown>(
+    client: ClientProxy,
+    pattern: string | { cmd: string },
+    payload: Record<string, unknown>,
+    serviceName: string,
+  ): Promise<TResult> {
+    try {
+      return await firstValueFrom(
+        client.send<TResult>(pattern, payload).pipe(
+          timeout(TCP_TIMEOUT_MS.WRITE),
+          catchError((err: unknown) => {
+            throw err;
+          }),
+        ),
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "delete account",
+        serviceName,
       );
     }
   }

@@ -32,6 +32,12 @@ export class RegisterUserDto {
     typeof value === "string" ? value.trim() : value,
   )
   @IsNotEmpty()
+  // ACCOUNT-DELETE-01: a deleted account is renamed `deleted_<publicId>` and
+  // the FE renders that prefix as "Deleted user", so a live account taking it
+  // would pass for a deleted one. Case-insensitive like the MySQL collation.
+  @Matches(/^(?!deleted_)/i, {
+    message: 'username must not start with "deleted_" (reserved)',
+  })
   declare username: string;
 
   @ApiProperty({ example: "john@example.com" })
@@ -115,6 +121,18 @@ export class ResetPasswordDto {
   @IsString()
   @MinLength(6)
   declare newPassword: string;
+}
+
+// ACCOUNT-DELETE-01: the password is re-entered so a stolen cookie alone
+// cannot delete the account.
+export class DeleteAccountDto {
+  @ApiProperty({
+    example: "currentPassword123",
+    description: "The password the account is logged in with",
+  })
+  @IsString()
+  @IsNotEmpty()
+  declare currentPassword: string;
 }
 
 export class ChangePasswordDto {
