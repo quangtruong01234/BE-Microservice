@@ -28,6 +28,7 @@ import { JwtAuthGuard } from "./common/guards/jwt-auth.guard";
 import { RoleAuthGuard } from "./common/guards/role-auth.guard";
 import { HealthModule } from "./health/health.module";
 import { MetricsModule } from "./metrics/metrics.module";
+import { DeadLetterModule } from "./dead-letter/dead-letter.module";
 import { SessionRevocationModule } from "./common/session/session-revocation.module";
 
 @Module({
@@ -124,6 +125,7 @@ import { SessionRevocationModule } from "./common/session/session-revocation.mod
     PaymentCallbackModule,
     HealthModule,
     MetricsModule,
+    DeadLetterModule,
   ],
   controllers: [GatewayController],
   providers: [
