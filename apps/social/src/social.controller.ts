@@ -303,4 +303,12 @@ export class SocialController {
       postId: await this.socialService.resolvePostId(payload.postId),
     });
   }
+
+  // ACCOUNT-DELETE-01: `userId` is the deleting account's numeric JWT id.
+  @MessagePattern(SOCIAL_MESSAGE_PATTERN.PURGE_USER_DATA)
+  async purgeUserData(
+    @Payload() payload: { userId: number },
+  ): Promise<{ deletedFollowCount: number }> {
+    return this.socialService.purgeUserData(payload);
+  }
 }

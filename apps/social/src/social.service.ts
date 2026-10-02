@@ -831,6 +831,26 @@ export class SocialService {
     return { followed: false, followingId: payload.followingId };
   }
 
+  /**
+   * ACCOUNT-DELETE-01: removes the deleted account from every follow graph
+   * edge, both directions. Posts, comments, likes and reviews are kept — the
+   * author embed resolves to the scrubbed `deleted_usr_...` user.
+   */
+  async purgeUserData(payload: {
+    userId: number;
+  }): Promise<{ deletedFollowCount: number }> {
+    const asFollower = await this.followRepository.delete({
+      followerId: payload.userId,
+    });
+    const asFollowing = await this.followRepository.delete({
+      followingId: payload.userId,
+    });
+    return {
+      deletedFollowCount:
+        (asFollower.affected ?? 0) + (asFollowing.affected ?? 0),
+    };
+  }
+
   async getFollowers(payload: {
     userId: number;
     page: number;
