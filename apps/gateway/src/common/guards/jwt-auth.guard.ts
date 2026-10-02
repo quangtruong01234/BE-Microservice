@@ -9,7 +9,9 @@ import { JwtService } from "@nestjs/jwt";
 import { Request } from "express";
 import { ERROR_CODE } from "libs/constant/error-code.constant";
 import { AUTH_MESSAGE } from "libs/constant/response-message.constant";
+import { extractAccessToken } from "../auth-cookie";
 import { IS_PUBLIC_KEY } from "../decorators/public.decorator";
+import { SessionRevocationService } from "../session/session-revocation.service";
 import { JwtPayload } from "./auth-guard.types";
 
 @Injectable()
@@ -17,6 +19,7 @@ export class JwtAuthGuard implements CanActivate {
   constructor(
     private jwtService: JwtService,
     private reflector: Reflector,
+    private sessionRevocation: SessionRevocationService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -34,7 +37,7 @@ export class JwtAuthGuard implements CanActivate {
     }
 
     const request = context.switchToHttp().getRequest<Request>();
-    const token = this.extractToken(request);
+    const token = extractAccessToken(request);
 
     // Both branches carry the same code on purpose: "no usable session" is one
     // thing to the client, and in production the two messages are flattened to
@@ -48,32 +51,31 @@ export class JwtAuthGuard implements CanActivate {
       });
     }
 
+    let payload: JwtPayload | null;
     try {
-      const payload = await this.jwtService.verifyAsync<JwtPayload>(token);
-      request.user = {
-        id: payload.userId ?? 0,
-        email: payload.email ?? "",
-        role: payload.role ?? "user",
-        grants: payload.grants ?? [],
-      };
-      return true;
+      payload = await this.jwtService.verifyAsync<JwtPayload>(token);
     } catch {
+      payload = null;
+    }
+
+    // A revoked session (SESSION-REVOKE-01) is the same dead session to the
+    // client as a bad signature, so it gets the identical 401.
+    if (
+      !payload ||
+      (await this.sessionRevocation.isRevoked(payload.userId, payload.iat))
+    ) {
       throw new UnauthorizedException({
         message: AUTH_MESSAGE.UNAUTHORIZED,
         errorCode: ERROR_CODE.UNAUTHENTICATED,
       });
     }
-  }
 
-  private extractToken(request: Request): string | null {
-    const cookieToken = (
-      request.cookies as unknown as Record<string, string | undefined>
-    )["access_token"];
-    if (cookieToken) return cookieToken;
-
-    const authHeader = request.headers.authorization;
-    if (!authHeader) return null;
-    const [type, token] = authHeader.split(" ");
-    return type === "Bearer" ? (token ?? null) : null;
+    request.user = {
+      id: payload.userId ?? 0,
+      email: payload.email ?? "",
+      role: payload.role ?? "user",
+      grants: payload.grants ?? [],
+    };
+    return true;
   }
 }

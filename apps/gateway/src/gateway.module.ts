@@ -28,6 +28,7 @@ import { JwtAuthGuard } from "./common/guards/jwt-auth.guard";
 import { RoleAuthGuard } from "./common/guards/role-auth.guard";
 import { HealthModule } from "./health/health.module";
 import { MetricsModule } from "./metrics/metrics.module";
+import { SessionRevocationModule } from "./common/session/session-revocation.module";
 
 @Module({
   imports: [
@@ -111,6 +112,7 @@ import { MetricsModule } from "./metrics/metrics.module";
     OrderModule,
     ProductModule,
     CachedModule,
+    SessionRevocationModule,
     GhnWebhookModule,
     PaymentOptionsModule,
     NotificationGatewayModule,

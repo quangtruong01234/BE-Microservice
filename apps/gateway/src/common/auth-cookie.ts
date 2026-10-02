@@ -1,4 +1,4 @@
-import { CookieOptions } from "express";
+import { CookieOptions, Request } from "express";
 import { isProduction, parseBooleanEnv } from "./security";
 
 export const AUTH_COOKIE_NAME = "access_token";
@@ -44,4 +44,17 @@ export function getClearAuthCookieOptions(): CookieOptions {
     sameSite: options.sameSite,
     path: options.path,
   };
+}
+
+/** The session token: the `access_token` cookie first, then a Bearer header. */
+export function extractAccessToken(request: Request): string | null {
+  const cookieToken = (
+    request.cookies as unknown as Record<string, string | undefined>
+  )[AUTH_COOKIE_NAME];
+  if (cookieToken) return cookieToken;
+
+  const authHeader = request.headers.authorization;
+  if (!authHeader) return null;
+  const [type, token] = authHeader.split(" ");
+  return type === "Bearer" ? (token ?? null) : null;
 }

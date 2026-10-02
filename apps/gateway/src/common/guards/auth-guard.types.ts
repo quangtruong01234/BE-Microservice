@@ -10,6 +10,9 @@ export interface JwtPayload {
   email?: string;
   role?: string;
   grants?: RoleGrant[];
+  /** Issued-at / expiry, epoch seconds — set by `jwtService.sign`. */
+  iat?: number;
+  exp?: number;
 }
 
 export interface RequestUser {

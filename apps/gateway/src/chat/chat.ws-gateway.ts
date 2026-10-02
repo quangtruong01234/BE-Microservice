@@ -13,6 +13,7 @@ import { Server, Socket } from "socket.io";
 import { CHAT_MESSAGE_PATTERN } from "libs/constant/message-pattern.constant";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { gatewayCorsOptions } from "../common/cors";
+import { SessionRevocationService } from "../common/session/session-revocation.service";
 import { chatMessageRooms, ChatMessageTcp } from "./chat.types";
 import { ChatGatewayService } from "./chat.service";
 import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
@@ -33,6 +34,7 @@ export class ChatWsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @Inject(NAME_SERVICE_TCP.CHAT_SERVICE)
     private readonly chatClient: ClientProxy,
     private readonly chatService: ChatGatewayService,
+    private readonly sessionRevocation: SessionRevocationService,
   ) {}
 
   private parseTokenFromCookie(
@@ -58,11 +60,34 @@ export class ChatWsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
 
     try {
-      const payload = this.jwtService.verify<{ userId: number }>(token);
+      const payload = this.jwtService.verify<{
+        userId: number;
+        iat?: number;
+      }>(token);
       (client.data as Record<string, unknown>).userId = payload.userId;
       void client.join(`user:${payload.userId}`);
       this.logger.log(`[ChatWS] Connected userId=${payload.userId}`);
+      void this.disconnectIfRevoked(client, payload);
     } catch {
+      client.disconnect();
+    }
+  }
+
+  /**
+   * SESSION-REVOKE-01: the revocation lookup is async, so it runs AFTER the
+   * synchronous join — awaiting it first would let a client's first event race
+   * ahead of `client.data.userId`. A revoked socket lives for at most one
+   * Redis round-trip. An already-open socket is not closed by a later
+   * revocation; it dies on its next reconnect.
+   */
+  private async disconnectIfRevoked(
+    client: Socket,
+    payload: { userId: number; iat?: number },
+  ): Promise<void> {
+    if (await this.sessionRevocation.isRevoked(payload.userId, payload.iat)) {
+      this.logger.warn(
+        `[ChatWS] Revoked session, disconnecting userId=${payload.userId}`,
+      );
       client.disconnect();
     }
   }
