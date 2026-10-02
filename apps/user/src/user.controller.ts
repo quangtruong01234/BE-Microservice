@@ -146,6 +146,29 @@ export class UserController {
     );
   }
 
+  // ACCOUNT-DELETE-01: `userId` is the caller's numeric JWT id — an account can
+  // only ever delete itself. The gateway calls verify first, purges the other
+  // services, then delete (which re-verifies before scrubbing).
+  @MessagePattern({ cmd: USER_MESSAGE_PATTERN.VERIFY_ACCOUNT_DELETION })
+  async verifyAccountDeletion(
+    @Payload() payload: { userId: number; currentPassword: string },
+  ): Promise<{ success: true }> {
+    return await this.userService.verifyAccountDeletion(
+      payload.userId,
+      payload.currentPassword,
+    );
+  }
+
+  @MessagePattern({ cmd: USER_MESSAGE_PATTERN.DELETE_ACCOUNT })
+  async deleteAccount(
+    @Payload() payload: { userId: number; currentPassword: string },
+  ): Promise<{ success: true }> {
+    return await this.userService.deleteAccount(
+      payload.userId,
+      payload.currentPassword,
+    );
+  }
+
   @MessagePattern({ cmd: USER_MESSAGE_PATTERN.GET_ME })
   async getMe(@Payload() data: { userId: number }): Promise<SafeUser> {
     return this.userService.getMe(data.userId);

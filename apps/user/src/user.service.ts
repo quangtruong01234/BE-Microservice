@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -39,9 +40,13 @@ import {
 } from "@app/common";
 import { ERROR_CODE } from "libs/constant/error-code.constant";
 import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
+import {
+  SESSION_VALID_AFTER_KEY_PREFIX,
+  SESSION_VALID_AFTER_TTL_SECONDS,
+} from "libs/constant/session.constant";
 import { CachedService } from "@app/cached";
 import * as bcrypt from "bcryptjs";
-import { randomInt } from "crypto";
+import { randomBytes, randomInt } from "crypto";
 import { USER_MESSAGE } from "libs/constant/response-message.constant";
 import {
   SafeUser,
@@ -49,6 +54,10 @@ import {
   UserProfileWithProvince,
   UserProvince,
 } from "./user.types";
+
+// ACCOUNT-DELETE-01: a scrubbed account keeps its row; this prefix plus
+// isActive=false is how it is recognised (FE renders it as "Deleted user").
+const DELETED_USERNAME_PREFIX = "deleted_";
 
 @Injectable()
 export class UserService {
@@ -369,6 +378,7 @@ export class UserService {
     await this.cachedService.del(codeKey);
     await this.cachedService.del(attemptsKey);
     await this.cachedService.del(`user:pwreset:cooldown:${user.id}`);
+    await this.revokeAllSessions(user.id, "resetPassword");
     this.logger.log(`resetPassword: password updated for user ${user.id}`);
     return { success: true };
   }
@@ -378,9 +388,9 @@ export class UserService {
    * password — no emailed code, no `PATCH /user/:id` (that path whitelists
    * profile fields and would store the value unhashed).
    *
-   * A wrong `currentPassword` is a 401 like `login()`, NOT an expired session;
-   * the gateway's cookie is left alone, so the caller stays logged in whether
-   * the change succeeds or fails.
+   * A wrong `currentPassword` is a 401 like `login()`, NOT an expired session.
+   * A successful change revokes every session (SESSION-REVOKE-01); the gateway
+   * re-issues the caller's own cookie so the caller stays logged in.
    */
   async changePassword(
     userId: number,
@@ -416,8 +426,95 @@ export class UserService {
     await this.cachedService.del(`user:pwreset:code:${user.id}`);
     await this.cachedService.del(`user:pwreset:attempts:${user.id}`);
     await this.cachedService.del(`user:pwreset:exhausted:${user.id}`);
+    await this.revokeAllSessions(user.id, "changePassword");
     this.logger.log(`changePassword: password updated for user ${userId}`);
     return { success: true };
+  }
+
+  /**
+   * ACCOUNT-DELETE-01: the gate the gateway calls BEFORE it cancels orders and
+   * purges the other services, so a stolen cookie without the password cannot
+   * trigger any of it. Same 401 + errorCode as changePassword (CHG-PW-02).
+   */
+  async verifyAccountDeletion(
+    userId: number,
+    currentPassword: string,
+  ): Promise<{ success: true }> {
+    await this.loadDeletableUser(userId, currentPassword);
+    return { success: true };
+  }
+
+  /**
+   * ACCOUNT-DELETE-01: scrubs the row in place — the id stays because orders,
+   * reviews, posts and messages still reference it. The old username and email
+   * are released, the `.invalid` address can never be mailed (MAIL-BOUNCE-01)
+   * and the random password can never be typed, so nobody logs in again even
+   * if the session revocation fails open. Re-verifies the password: this is
+   * the irreversible step.
+   */
+  async deleteAccount(
+    userId: number,
+    currentPassword: string,
+  ): Promise<{ success: true }> {
+    const user = await this.loadDeletableUser(userId, currentPassword);
+    const previousAvatar = user.avatar;
+    const anonymousTag = user.publicId ?? `id${user.id}`;
+    const unusablePassword = await bcrypt.hash(
+      randomBytes(32).toString("hex"),
+      10,
+    );
+
+    await this.dataSource.transaction(async (manager) => {
+      await manager.update(User, user.id, {
+        username: `${DELETED_USERNAME_PREFIX}${anonymousTag}`,
+        email: `deleted+${anonymousTag}@deleted.invalid`,
+        name: null,
+        avatar: null,
+        password: unusablePassword,
+        isActive: false,
+      });
+      await manager.delete(UserAddress, { userId: user.id });
+    });
+
+    await this.cachedService.del(`user:pwreset:code:${user.id}`);
+    await this.cachedService.del(`user:pwreset:attempts:${user.id}`);
+    await this.cachedService.del(`user:pwreset:exhausted:${user.id}`);
+    await this.revokeAllSessions(user.id, "deleteAccount");
+    if (previousAvatar) {
+      void this.cloudinaryService.destroyAssets([previousAvatar]);
+    }
+    this.logger.log(`deleteAccount: user ${userId} anonymized`);
+    return { success: true };
+  }
+
+  private async loadDeletableUser(
+    userId: number,
+    currentPassword: string,
+  ): Promise<User> {
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException(USER_MESSAGE.NOT_FOUND);
+    }
+    if (!user.isActive) {
+      throw new BadRequestException(USER_MESSAGE.ACCOUNT_ALREADY_DELETED);
+    }
+    const isCurrentPasswordValid = await bcrypt.compare(
+      currentPassword,
+      user.password,
+    );
+    if (!isCurrentPasswordValid) {
+      this.logger.warn(
+        `deleteAccount: wrong current password for user ${userId}`,
+      );
+      throw new UnauthorizedException({
+        message: USER_MESSAGE.CURRENT_PASSWORD_INCORRECT,
+        errorCode: ERROR_CODE.INVALID_CURRENT_PASSWORD,
+      });
+    }
+    if (user.role?.rol_name === RoleName.ADMIN) {
+      throw new ForbiddenException(USER_MESSAGE.ADMIN_CANNOT_SELF_DELETE);
+    }
+    return user;
   }
 
   async getInfo(
@@ -694,9 +791,10 @@ export class UserService {
    * name that exists in code but was never seeded (or was blocked) must be a
    * 400, not a row pointing at a missing role.
    *
-   * The JWT is stateless and carries `role` + `grants` from login time, so the
-   * new role only takes effect on the target's NEXT login. Nothing is revoked
-   * here (same contract as CHG-PW-01).
+   * The JWT carries `role` + `grants` from login time, so an actual change
+   * revokes the target's sessions (SESSION-REVOKE-01) — the next request is a
+   * 401 and the re-login picks up the new role. Re-setting the same role
+   * revokes nothing.
    */
   async updateUserRole(userId: number, roleName: string): Promise<SafeUser> {
     this.logger.log(`updateUserRole called with userId: ${userId}`);
@@ -718,10 +816,38 @@ export class UserService {
     if (!role) {
       throw new BadRequestException(USER_MESSAGE.ROLE_NOT_FOUND(roleName));
     }
+    const isRoleChanged = user.role?.rol_id !== role.rol_id;
     user.role = role;
     const saved = await this.userRepository.save(user);
+    if (isRoleChanged) {
+      await this.revokeAllSessions(user.id, "updateUserRole");
+    }
     this.logger.log(`User ${userId} role set to ${knownRoleName}`);
     return this.toSafeUser(saved);
+  }
+
+  /**
+   * SESSION-REVOKE-01: every JWT of the user issued before now stops working
+   * at the gateway. Best-effort: the caller's write is already committed, so a
+   * Redis failure is logged and swallowed rather than turned into an error for
+   * a change that did happen.
+   */
+  private async revokeAllSessions(
+    userId: number,
+    operation: string,
+  ): Promise<void> {
+    try {
+      await this.cachedService.set(
+        `${SESSION_VALID_AFTER_KEY_PREFIX}${userId}`,
+        String(Math.floor(Date.now() / 1000)),
+        SESSION_VALID_AFTER_TTL_SECONDS,
+      );
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      this.logger.error(
+        `${operation}: session revocation failed for user ${userId}: ${message}`,
+      );
+    }
   }
 
   async listAddresses(userId: number): Promise<UserAddress[]> {
