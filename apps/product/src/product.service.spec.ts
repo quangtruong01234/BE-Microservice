@@ -1,5 +1,5 @@
 import { defer, of, throwError } from "rxjs";
-import { ConflictException } from "@nestjs/common";
+import { ConflictException, ForbiddenException } from "@nestjs/common";
 import { ClientProxy } from "@nestjs/microservices";
 import { DataSource, EntityManager, Repository } from "typeorm";
 import { CachedService } from "@app/cached";
@@ -680,5 +680,61 @@ describe("ProductService description sanitizing (XSS-DESC-01)", () => {
     });
 
     expect(updated.description).toBe("<p>old</p>");
+  });
+});
+
+describe("ProductService.createReview self-review block (REVIEW-VERIFIED-01)", () => {
+  const productRepository = { findOne: jest.fn(), update: jest.fn() };
+  const reviewRepository = {
+    create: jest.fn((row: Partial<ProductReview>) => row),
+    save: jest.fn((row: Partial<ProductReview>) =>
+      Promise.resolve({ id: 1, ...row }),
+    ),
+    createQueryBuilder: jest.fn(() => ({
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      getRawOne: jest.fn().mockResolvedValue({ avg: "5", count: "1" }),
+    })),
+  };
+  let service: ProductService;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = new ProductService(
+      productRepository as unknown as Repository<Product>,
+      {} as unknown as Repository<Brand>,
+      {} as unknown as Repository<Category>,
+      reviewRepository as unknown as Repository<ProductReview>,
+      {} as unknown as Repository<ProductSku>,
+      {} as unknown as Repository<WishlistItem>,
+      {} as unknown as DataSource,
+      {} as unknown as CachedService,
+      {} as unknown as CloudinaryService,
+      {} as unknown as ProductImageHashService,
+      null,
+      { send: jest.fn(), connect: jest.fn() } as unknown as ClientProxy,
+    );
+  });
+
+  it("rejects the product's own seller with a 403 and writes nothing", async () => {
+    productRepository.findOne.mockResolvedValue({ id: 9, userId: 31 });
+
+    await expect(
+      service.createReview({ userId: 31, productId: 9, rating: 5 }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(reviewRepository.save).not.toHaveBeenCalled();
+  });
+
+  it("still lets any other buyer review", async () => {
+    productRepository.findOne.mockResolvedValue({ id: 9, userId: 31 });
+
+    await expect(
+      service.createReview({ userId: 44, productId: 9, rating: 4 }),
+    ).resolves.toMatchObject({ productId: 9, userId: 44, rating: 4 });
+    expect(productRepository.update).toHaveBeenCalledWith(9, {
+      rating: 5,
+      ratingCount: 1,
+    });
   });
 });

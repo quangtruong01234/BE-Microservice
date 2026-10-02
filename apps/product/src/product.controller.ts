@@ -362,6 +362,15 @@ export class ProductController {
     );
   }
 
+  // ACCOUNT-DELETE-01: `userId` is the deleting account's numeric JWT id.
+  @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PURGE_USER_DATA)
+  async purgeUserData(@Payload() data: { userId: number }): Promise<{
+    deactivatedProductCount: number;
+    deletedWishlistItemCount: number;
+  }> {
+    return this.productService.purgeUserData(data.userId);
+  }
+
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.WISHLIST_LIST)
   async findWishlistByUser(
     @Payload()

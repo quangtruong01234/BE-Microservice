@@ -31,6 +31,8 @@ import {
   escapeRichTextSearchTerm,
   sanitizeRichTextHtml,
   toContainsLikePattern,
+  WishlistAlertEvent,
+  WishlistAlertKind,
 } from "@app/common";
 import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 import { EXCHANGE } from "@app/common/constants/exchange";
@@ -58,6 +60,8 @@ import {
   CATALOG_LOOKUP_CACHE_TTL,
   CATALOG_LOOKUP_STATUSES,
   CATALOG_UNIQUE_STATUSES,
+  WISHLIST_ALERT_COOLDOWN_SECONDS,
+  WISHLIST_ALERT_MAX_RECIPIENTS,
 } from "./product.constants";
 import {
   CatalogLookupStatus,
@@ -220,6 +224,25 @@ export class ProductService {
     productId: number,
     availableStock: number,
   ): Promise<void> {
+    // WISHLIST-ALERT-01: the out-of-stock → in-stock flip is claimed by a
+    // conditional UPDATE, so two racing stock events cannot both see it. NULL
+    // (never synced) does not count as out of stock.
+    if (availableStock > 0) {
+      const restocked = await this.productRepository
+        .createQueryBuilder()
+        .update(Product)
+        .set({ stockQuantity: availableStock })
+        .where("id = :productId", { productId })
+        .andWhere("stock_quantity <= 0")
+        .execute();
+      if (restocked.affected) {
+        this.logger.log(
+          `[PRODUCT] Product ${productId} back in stock (${availableStock})`,
+        );
+        await this.notifyWishlisters(productId, "back_in_stock");
+        return;
+      }
+    }
     const result = await this.productRepository.update(
       { id: productId },
       { stockQuantity: availableStock },
@@ -233,6 +256,93 @@ export class ProductService {
     this.logger.log(
       `[PRODUCT] Updated stockQuantity for product ${productId} to ${availableStock}`,
     );
+  }
+
+  /**
+   * WISHLIST-ALERT-01 — tell everyone who wishlisted a simple, listed product
+   * that it is back in stock or cheaper. Best-effort end to end: it never
+   * throws, so neither the stock sync nor the PATCH that triggered it can fail
+   * on it, and a lost alert is not retried.
+   */
+  private async notifyWishlisters(
+    productId: number,
+    kind: WishlistAlertKind,
+    prices: { previousPrice: number; price: number } | null = null,
+  ): Promise<void> {
+    try {
+      const product = await this.productRepository.findOne({
+        where: { id: productId },
+        select: [
+          "id",
+          "publicId",
+          "name",
+          "userId",
+          "isActive",
+          "approvalBlocked",
+        ],
+      });
+      if (!product?.publicId || !product.isActive || product.approvalBlocked) {
+        return;
+      }
+      // STOCK-SYNC-01: a SKU product's stock mirror holds one variant's stock
+      // and its base price is not what a variant sells at — neither is a
+      // signal the buyer can trust, so SKU products never alert.
+      const activeSkuCount = await this.skuRepository.count({
+        where: { productId, isActive: true },
+      });
+      if (activeSkuCount > 0) return;
+
+      const wishlistItems = await this.wishlistRepository.find({
+        where: { productId },
+        select: ["userId"],
+        order: { createdAt: "DESC" },
+        take: WISHLIST_ALERT_MAX_RECIPIENTS,
+      });
+      const userIds = wishlistItems
+        .map((item) => item.userId)
+        .filter((userId) => userId !== product.userId);
+      if (userIds.length === 0) return;
+
+      if (!this.fanoutChannel || !isRmqPublisherLive(this.fanoutChannel)) {
+        this.logger.warn(
+          `[PRODUCT] fanoutChannel unavailable — wishlist ${kind} alert skipped`,
+        );
+        return;
+      }
+      // Claimed only once a publish is possible, so a dead channel does not
+      // burn the window. A Redis error lands in the catch: skipping a nicety
+      // beats spamming every wishlister on a flapping stock level.
+      const isFirstInWindow = await this.cachedService.setNx(
+        `wishlist-alert:${kind}:${productId}`,
+        "1",
+        WISHLIST_ALERT_COOLDOWN_SECONDS[kind],
+      );
+      if (!isFirstInWindow) return;
+
+      const event: WishlistAlertEvent = {
+        kind,
+        productId,
+        productPublicId: product.publicId,
+        productName: product.name,
+        userIds,
+        previousPrice: prices?.previousPrice ?? null,
+        price: prices?.price ?? null,
+      };
+      this.fanoutChannel.publish(
+        EXCHANGE.PRODUCT_EXCHANGE,
+        EVENT.WISHLIST_ALERT_EVENT,
+        Buffer.from(
+          JSON.stringify({ pattern: EVENT.WISHLIST_ALERT_EVENT, data: event }),
+        ),
+      );
+      this.logger.log(
+        `[PRODUCT] wishlist ${kind} alert for product ${productId} → ${userIds.length} user(s)`,
+      );
+    } catch (err: unknown) {
+      this.logger.warn(
+        `[PRODUCT] wishlist ${kind} alert for product ${productId} skipped: ${String(err)}`,
+      );
+    }
   }
 
   async getPriceSuggestion(
@@ -1614,6 +1724,7 @@ export class ProductService {
     updated: Product;
     previousImageUrls: string[];
     previousDescription: string | null;
+    previousPrice: number | null;
   }> {
     return this.dataSource.transaction(async (manager) => {
       const lockedRow = await manager
@@ -1636,6 +1747,7 @@ export class ProductService {
       // Capture before Object.assign overwrites these on the same instance.
       const previousImageUrls = product.imageUrls ?? [];
       const previousDescription = product.description ?? null;
+      const previousPrice = product.price;
 
       if (
         updateProductDto.version !== undefined &&
@@ -1736,7 +1848,7 @@ export class ProductService {
       }
 
       const updated = await manager.save(product);
-      return { updated, previousImageUrls, previousDescription };
+      return { updated, previousImageUrls, previousDescription, previousPrice };
     });
   }
 
@@ -1745,7 +1857,7 @@ export class ProductService {
     updateProductDto: UpdateProductDto,
   ): Promise<Product> {
     const { skuList } = updateProductDto;
-    const { updated, previousImageUrls, previousDescription } =
+    const { updated, previousImageUrls, previousDescription, previousPrice } =
       await this.runProductUpdate(() =>
         this.applyProductUpdate(id, updateProductDto),
       ).catch((error: unknown) => {
@@ -1775,6 +1887,19 @@ export class ProductService {
     // The risk state itself was already reset inside the update transaction.
     if (this.needsRiskRescore(updateProductDto)) {
       this.scheduleRiskRescore();
+    }
+    // WISHLIST-ALERT-01: after commit, off the response path — the alert's own
+    // lookups must not slow the PATCH down, and it never throws. `id`, not
+    // `updated.id`: the BIGINT key hydrates as a string.
+    if (
+      previousPrice !== null &&
+      updated.price !== null &&
+      Number(updated.price) < Number(previousPrice)
+    ) {
+      void this.notifyWishlisters(id, "price_drop", {
+        previousPrice: Number(previousPrice),
+        price: Number(updated.price),
+      });
     }
     return updated;
   }
@@ -1826,7 +1951,12 @@ export class ProductService {
     rating: number;
     comment?: string;
   }): Promise<ProductReview> {
-    await this.findProductById(dto.productId);
+    const product = await this.findProductById(dto.productId);
+    // REVIEW-VERIFIED-01: a seller can buy (and complete) an order for their
+    // own listing, which would otherwise pass the gateway's purchase gate.
+    if (Number(product.userId) === dto.userId) {
+      throw new ForbiddenException(PRODUCT_MESSAGE.CANNOT_REVIEW_OWN_PRODUCT);
+    }
 
     let review: ProductReview;
     try {
@@ -2192,6 +2322,30 @@ export class ProductService {
   async removeWishlistItem(userId: number, productId: number): Promise<null> {
     await this.wishlistRepository.delete({ userId, productId });
     return null;
+  }
+
+  /**
+   * ACCOUNT-DELETE-01: a deleted account's listings are deactivated, not
+   * removed — order items and reviews still point at them — and its wishlist
+   * is dropped. Idempotent, so a retried deletion is safe.
+   */
+  async purgeUserData(userId: number): Promise<{
+    deactivatedProductCount: number;
+    deletedWishlistItemCount: number;
+  }> {
+    const deactivated = await this.productRepository.update(
+      { userId, isActive: true },
+      { isActive: false },
+    );
+    const deletedWishlist = await this.wishlistRepository.delete({ userId });
+    const deactivatedProductCount = deactivated.affected ?? 0;
+    if (deactivatedProductCount > 0) {
+      await this.invalidateSearchCache();
+    }
+    return {
+      deactivatedProductCount,
+      deletedWishlistItemCount: deletedWishlist.affected ?? 0,
+    };
   }
 
   async findWishlistByUser(
