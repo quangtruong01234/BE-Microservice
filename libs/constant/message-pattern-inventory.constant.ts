@@ -14,6 +14,10 @@ export const INVENTORY_MESSAGE_PATTERNS = {
   INVENTORY_RESERVE_STOCK_MANY: "inventory.reserve_stock_many",
   INVENTORY_RELEASE_STOCK: "inventory.release_stock",
   INVENTORY_CONSUME_RESERVED_STOCK: "inventory.consume_reserved_stock",
+  // SWEEP-1005-02: every line of one order's reservation in a single PG transaction
+  INVENTORY_RELEASE_STOCK_MANY: "inventory.release_stock_many",
+  INVENTORY_CONSUME_RESERVED_STOCK_MANY:
+    "inventory.consume_reserved_stock_many",
   INVENTORY_RESTOCK_RETURNED: "inventory.restock_returned",
   INVENTORY_GET_LOW_STOCK: "inventory.get_low_stock",
 } as const;
