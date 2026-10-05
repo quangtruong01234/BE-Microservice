@@ -33,6 +33,16 @@ export interface ReserveStockManyResult {
   failedProductId: number | null;
 }
 
+/**
+ * Answer of INVENTORY_RELEASE_STOCK_MANY / INVENTORY_CONSUME_RESERVED_STOCK_MANY.
+ * NOT all-or-nothing: every line not named in `failedProductIds` reached the
+ * target state (or already was in it), and a retry of the same batch is a
+ * no-op for those lines.
+ */
+export interface TransitionStockManyResult {
+  failedProductIds: number[];
+}
+
 export interface StockCheckResult {
   productId: number;
   sku: string;

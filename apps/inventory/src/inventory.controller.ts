@@ -16,9 +16,11 @@ import {
   CreateInventoryDto,
   ReserveStockLine,
   ReserveStockManyResult,
+  TransitionStockManyResult,
   UpdateInventoryDto,
   StockCheckResult,
 } from "./inventory.types";
+import { InventoryReservationStatus } from "./inventory-reservation.entity";
 import { EVENT } from "@app/common/constants/event";
 import { HttpToRpcExceptionFilter, RmqService } from "@app/common";
 import { Inventory } from "./inventory.entity";
@@ -148,6 +150,38 @@ export class InventoryController {
     );
   }
 
+  @MessagePattern(INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK_MANY)
+  async releaseStockMany(data: {
+    items: ReserveStockLine[];
+    reservationKey: string;
+  }): Promise<TransitionStockManyResult> {
+    this.logger.log(
+      `[INVENTORY-TCP] Release stock for ${data.items.length} line(s) under one key`,
+    );
+    return this.inventoryService.transitionReservationMany(
+      data.items,
+      data.reservationKey,
+      InventoryReservationStatus.RELEASED,
+    );
+  }
+
+  @MessagePattern(
+    INVENTORY_MESSAGE_PATTERNS.INVENTORY_CONSUME_RESERVED_STOCK_MANY,
+  )
+  async consumeReservedStockMany(data: {
+    items: ReserveStockLine[];
+    reservationKey: string;
+  }): Promise<TransitionStockManyResult> {
+    this.logger.log(
+      `[INVENTORY-TCP] Consume reserved stock for ${data.items.length} line(s) under one key`,
+    );
+    return this.inventoryService.transitionReservationMany(
+      data.items,
+      data.reservationKey,
+      InventoryReservationStatus.CONSUMED,
+    );
+  }
+
   @MessagePattern(INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESTOCK_RETURNED)
   async restockReturnedStock(data: {
     productId: number;
@@ -208,24 +242,30 @@ export class InventoryController {
     );
 
     try {
-      if (Array.isArray(order.items)) {
-        for (const item of order.items) {
-          const released = await this.inventoryService.releaseStock(
-            item.productId,
-            item.quantity,
-            item.skuId ?? undefined,
-            order.reservationKey,
-          );
-          if (released) {
-            this.logger.log(
-              `[INVENTORY] Released ${item.quantity} units of product ${item.productId} for canceled order ${order.orderId}`,
-            );
-          } else {
-            throw new Error(
-              `Reservation ${order.reservationKey} could not release product ${item.productId} (qty: ${item.quantity})`,
-            );
-          }
-        }
+      // Orders releases synchronously before publishing, so this is the retry
+      // for the lines that call could not finish (SWEEP-1005-01): a line it
+      // already released answers as done.
+      const { failedProductIds } =
+        Array.isArray(order.items) && order.reservationKey
+          ? await this.inventoryService.transitionReservationMany(
+              order.items,
+              order.reservationKey,
+              InventoryReservationStatus.RELEASED,
+            )
+          : { failedProductIds: [] };
+      if (failedProductIds.length > 0) {
+        // A line that cannot release (no matching RESERVED row: a quantity
+        // mismatch, already CONSUMED/RETURNED, an inactive stock row) will never
+        // succeed on a retry — dead-letter it instead of requeueing forever.
+        // Thrown errors (PG down, lock timeout) still requeue below.
+        this.logger.error(
+          `[INVENTORY] Reservation ${order.reservationKey} could not release product(s) ${failedProductIds.join(", ")} for canceled order ${order.orderId} — dead-lettering`,
+        );
+        const channel = context.getChannelRef() as {
+          nack: (msg: unknown, allUpTo: boolean, requeue: boolean) => void;
+        };
+        channel.nack(context.getMessage(), false, false);
+        return;
       }
       this.rmqService.ack(context);
       this.logger.log(

@@ -496,3 +496,174 @@ describe("InventoryService batch reserve (SWEEP-1002-05)", () => {
     expect(transaction).not.toHaveBeenCalled();
   });
 });
+
+describe("InventoryService batch release/consume (SWEEP-1005-02)", () => {
+  const reservationKey = "00000000-0000-4000-8000-000000000006";
+
+  const stockRow = (
+    id: number,
+    productId: number,
+    availableStock: number,
+    reservedStock: number,
+  ): Inventory =>
+    ({
+      id: String(id),
+      productId: String(productId),
+      productSkuId: null,
+      availableStock,
+      reservedStock,
+      isActive: true,
+    }) as unknown as Inventory;
+
+  const hold = (
+    id: number,
+    inventoryId: number,
+    quantity: number,
+    status = InventoryReservationStatus.RESERVED,
+  ): Partial<InventoryReservation> => ({
+    id: String(id) as unknown as number,
+    inventoryId: String(inventoryId) as unknown as number,
+    quantity,
+    status,
+  });
+
+  const buildService = (
+    rows: Inventory[],
+    reservations: Partial<InventoryReservation>[],
+  ): {
+    service: InventoryService;
+    query: jest.Mock;
+    update: jest.Mock;
+    getMany: jest.Mock;
+  } => {
+    const getMany = jest.fn().mockResolvedValue(rows);
+    const queryBuilder = {
+      setLock: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getMany,
+    };
+    const update = jest.fn().mockResolvedValue({});
+    const reservationRepository = {
+      find: jest.fn().mockResolvedValue(reservations),
+      update,
+    };
+    const query = jest.fn().mockResolvedValue([]);
+    const manager = {
+      getRepository: jest.fn((entity: unknown) =>
+        entity === Inventory
+          ? { createQueryBuilder: jest.fn().mockReturnValue(queryBuilder) }
+          : reservationRepository,
+      ),
+      query,
+    };
+    const transaction = jest.fn(
+      (callback: (value: typeof manager) => Promise<unknown>) =>
+        callback(manager),
+    );
+    const repository = {
+      manager: { transaction },
+    } as unknown as Repository<Inventory>;
+    return {
+      service: new InventoryService(repository, null),
+      query,
+      update,
+      getMany,
+    };
+  };
+
+  it("releases every line with one locking read, one stock UPDATE and one ledger UPDATE", async () => {
+    const { service, query, update, getMany } = buildService(
+      [stockRow(1, 10, 3, 2), stockRow(2, 20, 0, 4)],
+      [hold(11, 1, 2), hold(12, 2, 4)],
+    );
+
+    await expect(
+      service.transitionReservationMany(
+        [
+          { productId: 10, quantity: 2 },
+          { productId: 20, quantity: 4 },
+        ],
+        reservationKey,
+        InventoryReservationStatus.RELEASED,
+      ),
+    ).resolves.toEqual({ failedProductIds: [] });
+
+    expect(getMany).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenCalledTimes(1);
+    const [[, params]] = query.mock.calls as Array<[string, number[]]>;
+    // (id, available, reserved) per touched row
+    expect(params).toEqual([1, 5, 0, 2, 4, 0]);
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith(expect.anything(), {
+      status: InventoryReservationStatus.RELEASED,
+    });
+  });
+
+  it("consumes without crediting availability", async () => {
+    const { service, query } = buildService(
+      [stockRow(1, 10, 3, 2)],
+      [hold(11, 1, 2)],
+    );
+
+    await service.transitionReservationMany(
+      [{ productId: 10, quantity: 2 }],
+      reservationKey,
+      InventoryReservationStatus.CONSUMED,
+    );
+
+    const [[, params]] = query.mock.calls as Array<[string, number[]]>;
+    expect(params).toEqual([1, 3, 0]);
+  });
+
+  it("commits the good lines and names the ones that cannot transition", async () => {
+    const { service, query } = buildService(
+      [stockRow(1, 10, 3, 2), stockRow(2, 20, 0, 4)],
+      [hold(11, 1, 2), hold(12, 2, 4, InventoryReservationStatus.CONSUMED)],
+    );
+
+    await expect(
+      service.transitionReservationMany(
+        [
+          { productId: 10, quantity: 2 },
+          { productId: 20, quantity: 4 },
+          { productId: 30, quantity: 1 },
+        ],
+        reservationKey,
+        InventoryReservationStatus.RELEASED,
+      ),
+    ).resolves.toEqual({ failedProductIds: [20, 30] });
+    const [[, params]] = query.mock.calls as Array<[string, number[]]>;
+    expect(params).toEqual([1, 5, 0]);
+  });
+
+  it("treats a line already in the target state as done and writes nothing", async () => {
+    const { service, query, update } = buildService(
+      [stockRow(1, 10, 5, 0)],
+      [hold(11, 1, 2, InventoryReservationStatus.RELEASED)],
+    );
+
+    await expect(
+      service.transitionReservationMany(
+        [{ productId: 10, quantity: 2 }],
+        reservationKey,
+        InventoryReservationStatus.RELEASED,
+      ),
+    ).resolves.toEqual({ failedProductIds: [] });
+    expect(query).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("fails a line whose quantity does not match the hold", async () => {
+    const { service } = buildService([stockRow(1, 10, 3, 2)], [hold(11, 1, 2)]);
+
+    await expect(
+      service.transitionReservationMany(
+        [{ productId: 10, quantity: 3 }],
+        reservationKey,
+        InventoryReservationStatus.RELEASED,
+      ),
+    ).resolves.toEqual({ failedProductIds: [10] });
+  });
+});

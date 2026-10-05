@@ -23,6 +23,7 @@ import {
   ReserveStockLine,
   ReserveStockManyResult,
   StockCheckResult,
+  TransitionStockManyResult,
   UpdateInventoryDto,
 } from "./inventory.types";
 
@@ -680,6 +681,153 @@ export class InventoryService {
       this.emitStockChanged(productId, availableStock);
     }
     return { isReserved: true, failedProductId: null };
+  }
+
+  /**
+   * SWEEP-1005-02: release or consume every line of one order's reservation in
+   * ONE transaction — the per-line {@link transitionReservation} is ~5 serial
+   * PG round trips, so a 20-line cancel outran the 10s WRITE budget the same
+   * way the reserve pass did (SWEEP-1002-05).
+   *
+   * Deliberately NOT all-or-nothing, unlike {@link reserveStockMany}: this is
+   * compensation and bookkeeping, where every unit handed back beats none.
+   * Each line follows the per-line rules exactly — already in the target state
+   * counts as done, anything but a matching RESERVED row is a failure — and a
+   * failed line is named in `failedProductIds` while the rest commit. Every
+   * line is idempotent by (reservationKey, inventoryId), so retrying the whole
+   * batch re-applies nothing.
+   */
+  async transitionReservationMany(
+    lines: ReserveStockLine[],
+    reservationKey: string,
+    targetStatus:
+      | InventoryReservationStatus.RELEASED
+      | InventoryReservationStatus.CONSUMED,
+  ): Promise<TransitionStockManyResult> {
+    if (lines.length === 0) return { failedProductIds: [] };
+    const lineKey = (productId: number, skuId?: number | null): string =>
+      `${productId}:${skuId ?? ""}`;
+
+    const failedProductIds: number[] = [];
+    const stockChanges: { productId: number; availableStock: number }[] = [];
+    await this.inventoryRepository.manager.transaction(async (manager) => {
+      // Same id-ordered lock as reserveStockMany, so a cancel and a checkout
+      // sharing products queue instead of deadlocking.
+      const rows = await manager
+        .getRepository(Inventory)
+        .createQueryBuilder("inventory")
+        .setLock("pessimistic_write")
+        .where("inventory.isActive = true")
+        .andWhere(
+          new Brackets((qb) => {
+            lines.forEach((line, index) => {
+              const skuId = line.skuId ?? null;
+              qb.orWhere(
+                skuId === null
+                  ? `(inventory.productId = :productId${index} AND inventory.productSkuId IS NULL)`
+                  : `(inventory.productId = :productId${index} AND inventory.productSkuId = :skuId${index})`,
+                {
+                  [`productId${index}`]: line.productId,
+                  [`skuId${index}`]: skuId,
+                },
+              );
+            });
+          }),
+        )
+        .orderBy("inventory.id", "ASC")
+        .getMany();
+      const inventoryByLineKey = new Map(
+        rows.map((row) => [lineKey(row.productId, row.productSkuId), row]),
+      );
+
+      const reservationRepository = manager.getRepository(InventoryReservation);
+      const reservations = rows.length
+        ? await reservationRepository.find({
+            where: {
+              reservationKey,
+              inventoryId: In(rows.map((row) => row.id)),
+            },
+          })
+        : [];
+      const reservationByInventoryId = new Map(
+        reservations.map((reservation) => [
+          Number(reservation.inventoryId),
+          reservation,
+        ]),
+      );
+
+      // Applied in memory line by line, so a duplicated line sees the state the
+      // previous one left — exactly what N separate calls would have seen.
+      const touchedInventoryById = new Map<number, Inventory>();
+      const touchedReservationIds: number[] = [];
+      for (const line of lines) {
+        const inventory = inventoryByLineKey.get(
+          lineKey(line.productId, line.skuId),
+        );
+        const reservation = inventory
+          ? reservationByInventoryId.get(Number(inventory.id))
+          : undefined;
+        if (
+          !inventory ||
+          !reservation ||
+          reservation.quantity !== line.quantity
+        ) {
+          failedProductIds.push(line.productId);
+          continue;
+        }
+        if (reservation.status === targetStatus) continue;
+        if (
+          reservation.status !== InventoryReservationStatus.RESERVED ||
+          inventory.reservedStock < line.quantity
+        ) {
+          failedProductIds.push(line.productId);
+          continue;
+        }
+
+        inventory.reservedStock -= line.quantity;
+        if (targetStatus === InventoryReservationStatus.RELEASED) {
+          inventory.availableStock += line.quantity;
+        }
+        reservation.status = targetStatus;
+        touchedInventoryById.set(Number(inventory.id), inventory);
+        touchedReservationIds.push(Number(reservation.id));
+      }
+      if (touchedInventoryById.size === 0) return;
+
+      const params: number[] = [];
+      const valueRows = [...touchedInventoryById.values()].map((inventory) => {
+        params.push(
+          Number(inventory.id),
+          inventory.availableStock,
+          inventory.reservedStock,
+        );
+        return `($${params.length - 2}::bigint, $${params.length - 1}::int, $${params.length}::int)`;
+      });
+      await manager.query(
+        `UPDATE inventory_v2 AS inv
+            SET available_stock = next.available_stock,
+                reserved_stock = next.reserved_stock,
+                updated_at = now()
+           FROM (VALUES ${valueRows.join(", ")}) AS next(id, available_stock, reserved_stock)
+          WHERE inv.id = next.id`,
+        params,
+      );
+      await reservationRepository.update(
+        { id: In(touchedReservationIds) },
+        { status: targetStatus },
+      );
+      for (const inventory of touchedInventoryById.values()) {
+        stockChanges.push({
+          productId: Number(inventory.productId),
+          availableStock: inventory.availableStock,
+        });
+      }
+    });
+
+    for (const { productId, availableStock } of stockChanges) {
+      this.emitStockChanged(productId, availableStock);
+    }
+    return { failedProductIds };
   }
 
   private async transitionReservation(
