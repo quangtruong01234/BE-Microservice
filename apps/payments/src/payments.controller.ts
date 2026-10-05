@@ -42,9 +42,6 @@ export class PaymentsController {
     private readonly rmqService: RmqService,
   ) {}
 
-  @EventPattern(EVENT.PAYMENT_COMPLETED_EVENT)
-  handlePaymentCompleted(): void {}
-
   @EventPattern(EVENT.ORDER_CREATED_EVENT)
   async handleOrderCreated(
     @Payload()

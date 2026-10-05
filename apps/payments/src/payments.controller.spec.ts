@@ -4,6 +4,12 @@ import { PaymentsService } from "./payments.service";
 import { VNPayStrategy } from "./vnpay/vnpay.service";
 import { PaymentMethod, RmqService } from "@app/common";
 import { RmqContext } from "@nestjs/microservices";
+import {
+  PATTERN_HANDLER_METADATA,
+  PATTERN_METADATA,
+} from "@nestjs/microservices/constants";
+import { PatternHandler } from "@nestjs/microservices/enums/pattern-handler.enum";
+import { EVENT } from "@app/common/constants/event";
 
 describe("PaymentsController", () => {
   let paymentsController: PaymentsController;
@@ -45,6 +51,33 @@ describe("PaymentsController", () => {
     it("should be defined", () => {
       expect(paymentsController).toBeDefined();
     });
+  });
+
+  it("subscribes to order_created only", () => {
+    // SWEEP-1005-03: PAYMENTS_SERVICE binds only order.fanout. An event handler
+    // for anything else never fires today, and would leave every message
+    // unacked the day the binding widens (the trap SWEEP-1002-04 removed from
+    // rewards).
+    const prototype = PaymentsController.prototype as unknown as Record<
+      string,
+      unknown
+    >;
+    const eventPatterns = Object.getOwnPropertyNames(prototype)
+      .map((methodName) => prototype[methodName])
+      .filter(
+        (method) =>
+          typeof method === "function" &&
+          Reflect.getMetadata(PATTERN_HANDLER_METADATA, method) ===
+            PatternHandler.EVENT,
+      )
+      .flatMap(
+        (method) =>
+          (Reflect.getMetadata(PATTERN_METADATA, method as object) as
+            | unknown[]
+            | undefined) ?? [],
+      );
+
+    expect(eventPatterns).toEqual([EVENT.ORDER_CREATED_EVENT]);
   });
 
   it("does not create child payments for multi-seller checkout events", async () => {
