@@ -7,7 +7,7 @@ import {
 } from "@nestjs/common";
 import { generatePublicId, PaginatedResponse } from "@app/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { In, Repository } from "typeorm";
+import { In, LessThan, Repository } from "typeorm";
 import { Cron } from "@nestjs/schedule";
 import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 import { Conversation } from "./entity/conversation.entity";
@@ -34,11 +34,15 @@ export class ChatService {
   /**
    * Accepts the internal numeric id or the opaque public id (`conv_...`) and
    * returns the numeric PK, or null when a public id matches no row.
+   * SWEEP-1002-06: anything else (a WS payload without the field) is null —
+   * `findOne({ where: { publicId: undefined } })` drops the condition and
+   * would return the FIRST conversation.
    */
   private async lookupConversationId(
     conversationId: number | string,
   ): Promise<number | null> {
     if (typeof conversationId === "number") return conversationId;
+    if (typeof conversationId !== "string") return null;
     const conversation = await this.conversationRepo.findOne({
       where: { publicId: conversationId },
       select: { id: true },
@@ -272,7 +276,18 @@ export class ChatService {
     }
     let parentMessageId: number | null = null;
     let parentMessagePublicId: string | null = null;
-    if (payload.parentMessageId !== undefined) {
+    // SWEEP-1002-06: null means "no parent"; any other non-id shape is
+    // rejected before findOne, whose undefined/null condition matches row 1.
+    if (
+      payload.parentMessageId !== undefined &&
+      payload.parentMessageId !== null
+    ) {
+      if (
+        typeof payload.parentMessageId !== "number" &&
+        typeof payload.parentMessageId !== "string"
+      ) {
+        throw new BadRequestException(CHAT_MESSAGE.INVALID_PARENT_MESSAGE);
+      }
       const parent = await this.messageRepo.findOne({
         where:
           typeof payload.parentMessageId === "number"
@@ -304,17 +319,66 @@ export class ChatService {
     };
   }
 
+  /**
+   * CHAT-E2E-CLEANUP-01 — the sender hard-deletes one of their own messages.
+   * Replies quoting it are detached (parent → NULL) in the same transaction, so
+   * the delete never depends on the parent FK's ON DELETE rule, which is
+   * SET NULL on DEV but NO ACTION in the prod baseline.
+   */
+  async deleteMessage(
+    userId: number,
+    messageRef: number | string,
+  ): Promise<null> {
+    const message = await this.messageRepo.findOne({
+      where:
+        typeof messageRef === "number"
+          ? { id: messageRef }
+          : { publicId: messageRef },
+      select: { id: true, senderId: true },
+    });
+    if (!message) {
+      throw new NotFoundException(CHAT_MESSAGE.MESSAGE_NOT_FOUND);
+    }
+    if (Number(message.senderId) !== userId) {
+      throw new ForbiddenException(CHAT_MESSAGE.NOT_MESSAGE_SENDER);
+    }
+    const messageId = Number(message.id);
+    await this.messageRepo.manager.transaction(async (manager) => {
+      await manager.update(
+        Message,
+        { parentMessageId: messageId },
+        { parentMessageId: null },
+      );
+      await manager.delete(Message, { id: messageId });
+    });
+    return null;
+  }
+
   @Cron("0 2 * * *")
   async cleanupOldMessages(): Promise<void> {
+    const cutoff = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000);
     try {
-      const result = await this.messageRepo
-        .createQueryBuilder()
-        .delete()
-        .where("created_at < :cutoff", {
-          cutoff: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
-        })
-        .execute();
-      this.logger.log(`Cleaned up ${result.affected} messages`);
+      // SWEEP-1002-07 — detach every reply to an expiring message first, as
+      // deleteMessage does: the prod baseline's parent FK is NO ACTION (DEV is
+      // SET NULL), so an expiring parent with a reply 1451s the whole DELETE.
+      // A JOIN, not `IN (SELECT …)`, because MySQL rejects a subquery on the
+      // UPDATE target (1093).
+      const affected = await this.messageRepo.manager.transaction(
+        async (manager) => {
+          await manager.query(
+            `UPDATE messages child
+               INNER JOIN messages parent ON child.parent_message_id = parent.id
+               SET child.parent_message_id = NULL
+             WHERE parent.created_at < ?`,
+            [cutoff],
+          );
+          const result = await manager.delete(Message, {
+            createdAt: LessThan(cutoff),
+          });
+          return result.affected;
+        },
+      );
+      this.logger.log(`Cleaned up ${affected} messages`);
     } catch (error) {
       this.logger.error("Message cleanup failed", error);
     }

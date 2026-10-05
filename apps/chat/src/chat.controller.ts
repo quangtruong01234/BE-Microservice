@@ -80,4 +80,11 @@ export class ChatController {
   ): Promise<null> {
     return this.chatService.markRead(data.userId, data.conversationId);
   }
+
+  @MessagePattern(CHAT_MESSAGE_PATTERN.CHAT_DELETE_MESSAGE)
+  async deleteMessage(
+    @Payload() data: { userId: number; messageId: number | string },
+  ): Promise<null> {
+    return this.chatService.deleteMessage(data.userId, data.messageId);
+  }
 }

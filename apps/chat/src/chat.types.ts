@@ -38,5 +38,5 @@ export interface SentMessageWithParticipants extends MessageWithParentMeta {
 export interface SendMessagePayload {
   conversationId: number | string;
   content: string;
-  parentMessageId?: number | string;
+  parentMessageId?: number | string | null;
 }
