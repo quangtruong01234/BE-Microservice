@@ -2534,7 +2534,7 @@ every returning user.
   enforce + always-fail secret → 400; shadow + always-fail secret → passes.
 
 ## Self-service account deletion anonymizes, keeps content and orders, and is not atomic (ACCOUNT-DELETE-01, 2026-10-01)
-<!-- kb: id=ACCOUNT-DELETE-01; group=auth; files=apps/gateway/src/user/user.service.ts,apps/user/src/user.service.ts,apps/orders/src/orders.service.ts,apps/product/src/product.service.ts,apps/social/src/social.service.ts,apps/notification/src/notification.service.ts,apps/gateway/src/user/dto/user.dto.ts; sha=c099d99ef629; verified=local:2026-10-01; keys=account deletion,delete account,deleteAccount,DELETE /api/user/me,anonymize,anonymise,deleted_usr,deleted_,deleted.invalid,purgeUserData,PURGE_USER_DATA,cancelOpenOrdersForUser,CANCEL_OPEN_ORDERS_FOR_USER,VERIFY_ACCOUNT_DELETION,ADMIN_CANNOT_SELF_DELETE,ACCOUNT_ALREADY_DELETED,right to erasure,Decree 13,xoá tài khoản,xóa tài khoản,xoa tai khoan,ẩn danh,an danh,huỷ đơn,huy don; summary=DELETE /api/user/me scrubs the user to deleted_<publicId> (name/avatar null, inactive, addresses gone, sessions revoked) but KEEPS posts, comments, reviews, chat and every order row; only PENDING..PROCESSING orders auto-cancel, the legs run in sequence and are not atomic, so a mid-way failure leaves canceled orders on a live account and the retry finishes the job; an admin cannot self-delete (403) and deleted_ is a reserved register prefix. -->
+<!-- kb: id=ACCOUNT-DELETE-01; group=auth; files=apps/gateway/src/user/user.service.ts,apps/user/src/user.service.ts,apps/orders/src/orders.service.ts,apps/product/src/product.service.ts,apps/social/src/social.service.ts,apps/notification/src/notification.service.ts,apps/gateway/src/user/dto/user.dto.ts; sha=45480c0b8f96; verified=local:2026-10-01; keys=account deletion,delete account,deleteAccount,DELETE /api/user/me,anonymize,anonymise,deleted_usr,deleted_,deleted.invalid,purgeUserData,PURGE_USER_DATA,cancelOpenOrdersForUser,CANCEL_OPEN_ORDERS_FOR_USER,VERIFY_ACCOUNT_DELETION,ADMIN_CANNOT_SELF_DELETE,ACCOUNT_ALREADY_DELETED,right to erasure,Decree 13,xoá tài khoản,xóa tài khoản,xoa tai khoan,ẩn danh,an danh,huỷ đơn,huy don; summary=DELETE /api/user/me scrubs the user to deleted_<publicId> (name/avatar null, inactive, addresses gone, sessions revoked) but KEEPS posts, comments, reviews, chat and every order row; only PENDING..PROCESSING orders auto-cancel, the legs run in sequence and are not atomic, so a mid-way failure leaves canceled orders on a live account and the retry finishes the job; an admin cannot self-delete (403) and deleted_ is a reserved register prefix. -->
 
 **Contract.** `DELETE /api/user/me`, body `{ currentPassword }`, throttled 5/60s.
 200 `{ success: true, canceledOrderCount }` plus a cookie clear. Errors: 400 empty
@@ -2550,12 +2550,13 @@ before it leaves a still-loginable account the user can retry with.
   orders 1..N-1 CANCELED on a live account. Retrying is safe: the next attempt
   finds fewer open orders.
 - **The cancel leg reuses `finalizeCancellation`**, so it inherits its order:
-  status first, then the stock release with a hardcoded 5s timeout. On DEV
-  (Aiven round trip 270ms–1s, ~8 trips per release) the release committed
-  but answered after the timeout. The order was CANCELED, the deletion
-  answered 503 "Reservation compensation failed", and the retry went through
-  with `canceledOrderCount: 0`. Not observed on prod latency. A real release
-  failure leaks the reservation exactly as a buyer cancel would (BUG-D family).
+  status first, then the stock release. Until 2026-10-05 a failed release
+  threw a 503 "Reservation compensation failed" here: on DEV the per-line
+  release (5s literal timeout, ~8 trips per line) committed after the timeout
+  and the retry finished with `canceledOrderCount: 0`. Since SWEEP-1005-01/-02
+  the release is one batch call that only logs on failure, so the deletion no
+  longer 503s on it; the `order_canceled` consumer retries the release
+  (CANCEL-RELEASE-01).
 
 **What is scrubbed (user DB, one transaction).** username →
 `deleted_<publicId>`, email → `deleted+<publicId>@deleted.invalid` (MAIL-BOUNCE-01
@@ -2786,3 +2787,70 @@ reservation and a second payment URL (SWEEP-1002-01).
   29 after one PATCH read; foreign DELETE 404, own DELETE 204 then 404,
   malformed 400; read-all `{updatedCount:28}`, badge 0, the other user's
   badge unchanged at 13, repeat read-all 0.
+
+## A cancel never stops on a failed stock release; the order_canceled consumer is the retry (CANCEL-RELEASE-01, 2026-10-05)
+<!-- kb: id=CANCEL-RELEASE-01; group=orders; aka=SWEEP-1005-01,SWEEP-1005-02; files=apps/orders/src/orders.service.ts,apps/inventory/src/inventory.controller.ts,apps/inventory/src/inventory.service.ts; sha=974f798a084d; verified=local:2026-10-05; keys=finalizeCancellation,finalizeGhnCancellation,releaseReservedItems,transitionReservationMany,release_stock_many,consume_reserved_stock_many,INVENTORY_RELEASE_STOCK_MANY,INVENTORY_CONSUME_RESERVED_STOCK_MANY,Reservation compensation failed,stock release,release failed,order_canceled consumer,hoàn kho,hoan kho,nhả kho,nha kho,giải phóng tồn kho,giai phong ton kho,hủy đơn,huy don; summary=Cancel, GHN cancel, the sweeper and account delete release every line in ONE inventory call (10s WRITE timeout) and only LOG a failure, then still run the voucher give-back, the GHN waybill cancel and order_canceled; the inventory order_canceled consumer re-releases idempotently, requeues on a thrown error and dead-letters a line that can never release, while completion consumes in one call too and still only logs. -->
+
+**What changed (SWEEP-1005-01/-02).** Before 2026-10-05 the cancel paths
+flipped the order to CANCELED, then released stock one line per TCP call
+(literal 5s timeout each) and threw a 503 on any failed line. That throw
+skipped the voucher give-back, the GHN cancel and `order_canceled`, and a
+retry was a 400 CANNOT_CANCEL, so nothing ever finished the job.
+
+**Contract now:**
+
+- `releaseReservedItems` / completion send one
+  `INVENTORY_RELEASE_STOCK_MANY` / `INVENTORY_CONSUME_RESERVED_STOCK_MANY` per
+  reservationKey, behind `TCP_TIMEOUT_MS.WRITE`. Inventory runs it in one PG
+  transaction with id-ordered row locks and answers `{ failedProductIds }`.
+  It is **partial-tolerant**: a line already in the target status counts as
+  done, and a line with no matching RESERVED row (quantity mismatch, already
+  CONSUMED/RETURNED, inactive stock row) is reported, not thrown.
+- A transport failure or timeout counts EVERY line as failed — the commit may
+  still have landed; the per-line ledger makes the consumer retry safe.
+- The checkout-compensation path (`cancelOrderAfterPaymentInitializationFailure`)
+  still throws the 503, but now releases the voucher first.
+
+**Residuals — do not "fix" these without re-reading the why:**
+
+- **The inventory consumer is the only retry.** It is the same
+  `order_canceled` event the notification service consumes, so it only fires
+  if the publish succeeded (best-effort, OUTBOX-SCOPE-01). A lost publish
+  leaves the reservation held until an operator acts.
+- **A line that can never release dead-letters** (`nack(requeue=false)` →
+  `trybuy.dead_letter`, RMQ-DLQ-01) with an error log naming the product ids.
+  A thrown error (PG down, lock timeout) still requeues. Do not route `false`
+  back to requeue: it would loop forever.
+- **Completion does not retry.** A failed consume is logged and the order
+  still goes COMPLETED; the reserved units stay counted in `reserved_stock`.
+  No event re-drives it (there is no `order_completed` consumer in inventory).
+- **The return restock is still one call per line**, but fanned out in
+  parallel with the WRITE timeout (`restockReturnedItem`); it keeps its own
+  `inventory.restock_returned` pattern (RETURN-STOCK-01).
+- **The single-line handlers** (`INVENTORY_RELEASE_STOCK`,
+  `INVENTORY_CONSUME_RESERVED_STOCK`, plus `INVENTORY_RESERVE_STOCK` from
+  SWEEP-1002-05) have no caller and are kept one release for rollback;
+  `check:conventions` flags them as orphans until they are deleted.
+- **nodeA and nodeB deploy together**: a new orders against an old inventory
+  sends patterns nobody handles, every line counts as failed, and only the
+  consumer (old, per-line) releases.
+- Verified on DEV 2026-10-05: a 2-unit COD order moved stock 105/15 → 103/17,
+  cancel answered 200 and restored 105/15, the consumer re-release was a no-op
+  (still 105/15 six seconds later, DLQ depth 0); a completed 1-unit order went
+  105/15 → 104/16 → 104/15. The failure leg (release fails, the event and GHN
+  cancel still run) is covered by unit tests only.
+
+## The conversation list is capped at the 100 most recently active (CHAT-LIST-CAP-01, 2026-10-05)
+<!-- kb: id=CHAT-LIST-CAP-01; group=social; aka=SWEEP-1005-04; files=apps/chat/src/chat.service.ts; sha=428c0e642827; verified=local:2026-10-05; keys=getConversations,chat/conversations,CONVERSATION_LIST_LIMIT,conversation list,conversation cap,last_at,danh sách hội thoại,danh sach hoi thoai,cuộc trò chuyện,cuoc tro chuyen; summary=GET /api/chat/conversations returns a plain array of at most the 100 conversations with the latest activity (newest message, or creation time when none survives the 5-day retention), with no pagination and no total, so a 101st older conversation silently disappears until it gets a new message. -->
+
+- The cap and order are applied in SQL: a derived table of `MAX(created_at)`
+  per conversation, ordered by `COALESCE(last_at, c.created_at) DESC, c.id
+  DESC`, `LIMIT 100`. The lastMessage / unread queries then run over those
+  100 only.
+- The response shape is unchanged (array), which is why this is class B and
+  not a `PaginatedResponse` (class C). Paging, if ever needed, has to be
+  opt-in `?page/limit` with the array kept as the default.
+- Ordering by activity uses the message rows, so a conversation whose messages
+  were all removed by the 5-day cleanup falls back to its creation time.
+- Verified on DEV 2026-10-05: two new conversations, a message in the older
+  one, the list answered 200 with that one first.

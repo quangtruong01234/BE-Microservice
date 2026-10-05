@@ -71,15 +71,14 @@ Order picked by the user: F8 → F9 first, then F10..F12.
 
 - [x] **F15 NOTIF-INBOX-01** → **DONE 2026-10-05** (local), see CHANGELOG.
   `PATCH /api/notifications/read-all`, `DELETE /api/notifications/:id`,
-  `?unreadOnly=true`. 1 index-only migration (applied on DEV). Class B, FE
-  handoff written. Not pushed.
+  `?unreadOnly=true`. 1 index-only migration. Class B, FE handoff written.
+  Deployed 2026-10-05; read-all and `?unreadOnly` answered 200 on prod.
 
 ### Prod-owed
 
-- `nodeA-20261005-001-add-notifications-user-index` (NOTIF-INBOX-01) — index
-  only, online DDL, so deploy order does not matter; the CD migrate step applies
-  it. Until it lands, read-all is a full-table UPDATE on prod. Not pushed yet.
-- The six nodeA migrations from 2026-09-28..2026-10-02 (export
+- Nothing owed. `nodeA-20261005-001-add-notifications-user-index` was applied
+  by the CD migrate step on 2026-10-05 (Deploy run 37301536206). The six nodeA
+  migrations from 2026-09-28..2026-10-02 (export
   jobs, checkout voucher columns, notification product_public_id, order status
   history, return-request image_urls, shipping/return indexes) were applied by
   the CD migrate step on 2026-10-02 (Deploy run 36980317347); every route that
@@ -141,14 +140,15 @@ The one standing instruction:
 
 ### Audit backlog (SWEEP-1002, `/sweep audit` 2026-10-02 — recorded, not fixed)
 
-All seven items are closed. The one leftover is under -05: delete the single
-`INVENTORY_RESERVE_STOCK` handler once -05 is on prod.
+All seven items are closed and on prod (Deploy 37301536206, 2026-10-05). The
+one leftover (deleting the single `INVENTORY_RESERVE_STOCK` handler) is now
+tracked under SWEEP-1005 below.
 
 - ~~SWEEP-1002-01 — a timed-out checkout released its Idempotency-Key~~ →
   **DONE 2026-10-02** (local), see CHANGELOG. Deployed 2026-10-02. Class B.
   Follow-up IDEM-HOLD-CODE-01 (FE ask): that 409 now carries
   `errorCode: ORDER_REQUEST_IN_PROGRESS` → **DONE 2026-10-03** (local), see
-  CHANGELOG. Class B. Not pushed.
+  CHANGELOG. Class B. Deployed 2026-10-05.
 - ~~SWEEP-1002-02 — `shipping_history` / `order_return_requests` had no
   order/user index~~ → **DONE 2026-10-02** (local), see CHANGELOG. Deployed 2026-10-02.
   Class A; 1 index-only migration, applied.
@@ -159,20 +159,40 @@ All seven items are closed. The one leftover is under -05: delete the single
   2026-10-02** (local), see CHANGELOG. Deployed 2026-10-02. Class A.
 - ~~SWEEP-1002-05 — the reserve pass was N serial inventory calls~~ →
   **DONE 2026-10-03** (local), see CHANGELOG. Class A, no migration, nodeA
-  and nodeB both change, so deploy them together. Prod RTT measured at
+  and nodeB both change (deployed together 2026-10-05). Prod RTT measured at
   ~100 ms, so a 20-line cart outran the 10s budget. It is now one
-  all-or-nothing `INVENTORY_RESERVE_STOCK_MANY` per seller. Owed after
-  deploy: delete the single `INVENTORY_RESERVE_STOCK` handler, which was
+  all-or-nothing `INVENTORY_RESERVE_STOCK_MANY` per seller. Owed now that it
+  is deployed: delete the single `INVENTORY_RESERVE_STOCK` handler, which was
   kept one release for rollback and is flagged by `check:conventions` as an
-  orphan. Not pushed.
+  orphan.
 - ~~SWEEP-1002-06 — a WS `send_message`/`join` without `conversationId`
   landed in the FIRST conversation~~ → **DONE 2026-10-02** (local), see
-  CHANGELOG. Class A. Not pushed.
+  CHANGELOG. Class A. Deployed 2026-10-05.
 - ~~SWEEP-1002-07 — the nightly chat cleanup 1451'd under the prod NO ACTION
   parent FK~~ → **DONE 2026-10-03** (local), see CHANGELOG. Class A, no
   migration: the cron detaches replies before the DELETE. The FK drift
   itself (DEV CASCADE/SET NULL vs prod NO ACTION) is left as-is, because the
-  code no longer depends on the rule. Not pushed.
+  code no longer depends on the rule. Deployed 2026-10-05.
+
+### Audit backlog (SWEEP-1005, `/sweep audit` 2026-10-05 — recorded, not fixed)
+
+All four fixed 2026-10-05 (local), see CHANGELOG; not pushed. -01/-02 touch
+nodeA AND nodeB, so they deploy together. Owed after that deploy: delete the
+orphaned single `INVENTORY_RESERVE_STOCK`, `INVENTORY_RELEASE_STOCK` and
+`INVENTORY_CONSUME_RESERVED_STOCK` handlers (`check:conventions` flags all
+three); this supersedes the SWEEP-1002-05 leftover.
+
+- ~~SWEEP-1005-01 — a failed release on cancel skipped the voucher, GHN and
+  `order_canceled` legs~~ → **DONE 2026-10-05**, see CHANGELOG. Class A.
+  The consumer is the retry and dead-letters a never-releasable line
+  (CANCEL-RELEASE-01).
+- ~~SWEEP-1005-02 — release/consume were N serial inventory calls~~ → **DONE
+  2026-10-05**, see CHANGELOG. Class A, no migration.
+- ~~SWEEP-1005-03 — empty never-acking payments `payment_completed`
+  handler~~ → **DONE 2026-10-05**, see CHANGELOG. Class A.
+- ~~SWEEP-1005-04 — unbounded `GET /api/chat/conversations`~~ → **DONE
+  2026-10-05**, see CHANGELOG. Class B: silent cap of 100 by last activity,
+  array shape kept (CHAT-LIST-CAP-01); FE handoff written.
 
 ### Planned but not started
 
@@ -189,7 +209,14 @@ pick one up. Do not re-derive them:
 
 - **OQ-2:** can GHN webhook `?token=` query auth be REMOVED entirely (header
   `x-ghn-webhook-token` is preferred and a deprecation warn already logs on
-  query use)? Depends on what the GHN dashboard supports.
+  query use)? **Answered 2026-10-06 (docs only, not seen in the live
+  account): yes.** GHN Developer Portal → Webhook configuration takes custom
+  headers, configured separately on `developer.ghn.dev` (sandbox) and
+  `developer.ghn.vn`. GHN drops a 4xx callback with no retry, so the order is
+  fixed: (1) add the header and keep `?token=`; (2) confirm the deprecation
+  warn stops in gateway logs; (3) drop `?token=` from the URL; (4) only then
+  delete the query branch. Blocked on step 1, which needs the user's GHN login.
+  Full answer: `backend-handoff.md` § Open → `OQ-2 · answer`.
 - **OQ-6:** target rate-limit numbers for login/register/upload/checkout
   (product decision) — also informs nginx `limit_req` tuning if FE fan-out
   trips 429.
@@ -219,6 +246,7 @@ pick one up. Do not re-derive them:
 - ORDER-TIMELINE-01 — GET /api/order/:id/history (owner or admin, a seller is a 403) merges placed, paid, local status changes and successful GHN webhook/sync rows oldest first; status changes exist only from 2026-10-02, are recorded best-effort after the write (a failed insert drops that event, never the transition), and consecutive identical GHN statuses collapse to one.
 - RETURN-PHOTO-01 — A return request takes up to 5 unique jpg/png/webp URLs from the trybuy/returns Cloudinary folder whose leaf starts with the caller's id (403 MEDIA_NOT_OWNED otherwise, before any TCP call), and a 400 carries errorCode RETURN_PHOTO_INVALID only when imageUrls is the sole failing field; orders stores none as NULL and every read emits imageUrls as an array ([] for legacy rows); the URLs are not checked to exist, are fixed once created, and are never deleted from Cloudinary.
 - IDEM-HOLD-01 — POST /api/order releases its Idempotency-Key only on a definite 4xx other than 408; a 408, a 5xx or a transport failure re-holds the key as in-progress for 300s, so a same-key retry inside that window is a 409 with errorCode ORDER_REQUEST_IN_PROGRESS even when no order was created, and the result is never replayed for an order that committed after the gateway gave up.
+- CANCEL-RELEASE-01 — Cancel, GHN cancel, the sweeper and account delete release every line in ONE inventory call (10s WRITE timeout) and only LOG a failure, then still run the voucher give-back, the GHN waybill cancel and order_canceled; the inventory order_canceled consumer re-releases idempotently, requeues on a thrown error and dead-letters a line that can never release, while completion consumes in one call too and still only logs.
 
 **GHN**
 - GHN-ADDR-01 — Free-text address resolution is best-effort and can match a wrong-but-valid location; sending both ids skips it.
@@ -266,6 +294,7 @@ pick one up. Do not re-derive them:
 - CHAT-E2E-CLEANUP-01 — DELETE /api/chat/messages/:id hard-deletes the caller's own message (204; 403 for anyone else, 404 unknown or already gone, 400 bad msg_ id); replies keep their content but lose parentMessageId, and no socket event or tombstone tells the other side.
 - SOCIAL-LIKE-NTF-01 — Likes fold into one unread `like` row per (owner, post) whose count lives in the message text; a read row starts a new one, self-likes and unlikes notify nothing, and the count can overshoot.
 - NOTIF-INBOX-01 — PATCH /api/notifications/read-all flips only the caller's unread rows and answers {updatedCount}, DELETE /api/notifications/:id hard-deletes the caller's own row (204; an unknown, already-deleted or foreign id is the same 404, a malformed id is a 400) with no socket event, and ?unreadOnly= accepts only the literal true/false (anything else is a 400) and drives total/totalPages.
+- CHAT-LIST-CAP-01 — GET /api/chat/conversations returns a plain array of at most the 100 conversations with the latest activity (newest message, or creation time when none survives the 5-day retention), with no pagination and no total, so a 101st older conversation silently disappears until it gets a new message.
 
 **Search**
 - SEARCH-01 — Accent-insensitivity comes from the MySQL collation, not code; % and _ are not escaped and a blank q is a 400.

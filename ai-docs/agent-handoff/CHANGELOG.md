@@ -6,6 +6,70 @@
 
 ## Completed Milestones
 
+- **SWEEP-1005-01..04 — cancel completeness, batched release/consume, dead
+  payments handler, capped conversation list (2026-10-05, `/sweep` fix mode,
+  "do them all" after `/sweep audit` 2026-10-05). Release class A for -01/-02/-03,
+  B for -04. nodeA and nodeB must deploy together.** Not pushed.
+  - **-01 Problem.** `finalizeCancellation` / `finalizeGhnCancellation`
+    flipped the order to CANCELED, then called `releaseReservedItems(…, true)`,
+    which threw a 503 on any failed line and skipped the voucher give-back, the
+    GHN waybill cancel and `publishOrderCanceledEvent`. A retry was a 400
+    CANNOT_CANCEL and the sweeper skips CANCELED orders, so nothing finished it.
+    **Fix:** both cancel paths now release without throwing (failure is
+    logged) and always run the voucher, GHN and event legs. The inventory
+    `order_canceled` consumer becomes the retry: it re-releases idempotently by
+    reservationKey, requeues on a thrown error, and on a line that can never
+    release it now nacks with requeue=false (DLQ) instead of looping forever
+    (the landmine noted in the audit). `cancelOrderAfterPaymentInitializationFailure`
+    still throws, but releases the voucher first.
+  - **-02 Problem.** release, consume and return-restock were one PG
+    transaction per line, each behind a literal `timeout(5000)`; at ~100 ms prod
+    RTT a 20-line cancel outran the gateway's WRITE budget. **Fix:** new
+    `INVENTORY_RELEASE_STOCK_MANY` / `INVENTORY_CONSUME_RESERVED_STOCK_MANY`
+    (`libs/constant/message-pattern-inventory.constant.ts`) backed by
+    `InventoryService.transitionReservationMany`: one transaction, id-ordered
+    pessimistic locks, one `UPDATE inventory_v2 … FROM (VALUES …)` plus one
+    ledger UPDATE, partial-tolerant (`{ failedProductIds }`, an already-moved
+    line counts as done), `stock_changed` emitted after commit. Orders calls it
+    through `transitionReservedItems` with `TCP_TIMEOUT_MS.WRITE`; a transport
+    failure counts every line as failed. Return-restock keeps its per-line
+    pattern but fans out in parallel with the WRITE timeout. The single-line
+    RELEASE/CONSUME handlers stay one release for rollback.
+  - **-03.** Deleted `PaymentsController.handlePaymentCompleted(): void {}`
+    (no `@Ctx`, never acked). Dormant today, but binding payments to
+    `payment.fanout` would have left every message unacked.
+  - **-04.** `ChatService.getConversations` now orders by last activity in SQL
+    (derived `MAX(created_at)` per conversation, `COALESCE(last_at,
+    c.created_at) DESC, c.id DESC`) and `LIMIT 100`
+    (`CONVERSATION_LIST_LIMIT`); the lastMessage/unread queries run over those
+    100 only. The array shape is kept (class B, not a `PaginatedResponse`).
+  - **Files.** `apps/orders/src/orders.service.ts`, `orders.types.ts`,
+    `orders.service.spec.ts`; `apps/inventory/src/inventory.service.ts`,
+    `inventory.controller.ts`, `inventory.types.ts`, `inventory.service.spec.ts`;
+    `apps/payments/src/payments.controller.ts`, `payments.controller.spec.ts`;
+    `apps/chat/src/chat.service.ts`, `chat.service.spec.ts`;
+    `libs/constant/message-pattern-inventory.constant.ts`.
+  - **Tests** (each seen red, then green): orders `it.each` "still publishes
+    order_canceled and cancels GHN when %s" + batch-pattern updates (120 in the
+    file); inventory "batch release/consume (SWEEP-1005-02)" — 5 cases (one
+    stock UPDATE with exact params, consume does not credit availability,
+    partial failure ids, already-RELEASED writes nothing, quantity mismatch);
+    payments "subscribes to order_created only"; chat `limit(100)` + activity
+    ordering. Full jest 83 suites / 849 tests green; `tsc --noEmit`, `lint:check`
+    clean; `check:conventions` OK with three expected orphan warnings.
+  - **Self-test (DEV, all services in watch mode).** Cancel: COD order
+    `ord_qdskC43hbYJraqY8` qty 2 moved stock 105/15 → 103/17, cancel 200 →
+    105/15, still 105/15 six seconds later (consumer re-release a no-op), DLQ
+    depth 0. Completion: `ord_FMHNUTejZWGkAnSn` qty 1, 105/15 → 104/16, seller
+    confirm/ready-to-ship and admin ship/deliver/complete all 200 → 104/15.
+    Chat: two new conversations plus a message in the older one → list 200,
+    array of 2, the messaged one first with unread 1. Not runtime-exercised:
+    the -01 failure leg (unit test only).
+  - **Owed after deploy.** Delete the orphaned single `INVENTORY_RESERVE_STOCK`,
+    `INVENTORY_RELEASE_STOCK` and `INVENTORY_CONSUME_RESERVED_STOCK` handlers.
+  - **KB.** New CANCEL-RELEASE-01 and CHAT-LIST-CAP-01; ACCOUNT-DELETE-01's
+    503 bullet rewritten. FE handoff written for -04.
+
 - **F15 NOTIF-INBOX-01 — notification inbox management: mark all read,
   delete one, unread-only filter (2026-10-05, `/sweep` fix mode, picked from
   `/sweep propose` 2026-10-05). Release class B: two new routes and one
