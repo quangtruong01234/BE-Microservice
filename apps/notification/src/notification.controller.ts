@@ -836,6 +836,7 @@ export class NotificationController {
       userId: number;
       page: number;
       limit: number;
+      isUnreadOnly?: boolean;
     },
   ): Promise<{
     data: unknown[];
@@ -847,6 +848,7 @@ export class NotificationController {
       data.userId,
       data.page,
       data.limit,
+      data.isUnreadOnly === true,
     );
   }
 
@@ -862,6 +864,23 @@ export class NotificationController {
     @Payload() data: { notificationId: number | string; userId: number },
   ): Promise<{ success: boolean }> {
     return this.notificationService.markNotificationRead(
+      data.notificationId,
+      data.userId,
+    );
+  }
+
+  @MessagePattern(NOTIFICATION_MESSAGE_PATTERN.MARK_ALL_NOTIFICATIONS_READ)
+  async markAllNotificationsRead(
+    @Payload() data: { userId: number },
+  ): Promise<{ updatedCount: number }> {
+    return this.notificationService.markAllNotificationsRead(data.userId);
+  }
+
+  @MessagePattern(NOTIFICATION_MESSAGE_PATTERN.DELETE_NOTIFICATION)
+  async deleteNotification(
+    @Payload() data: { notificationId: string; userId: number },
+  ): Promise<null> {
+    return this.notificationService.deleteNotification(
       data.notificationId,
       data.userId,
     );

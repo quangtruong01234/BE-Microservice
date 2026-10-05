@@ -2,10 +2,13 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   PrimaryGeneratedColumn,
 } from "typeorm";
 
 @Entity("notifications")
+// NOTIF-INBOX-01 — every inbox read, the unread count and mark-all-read.
+@Index("idx_notifications_user_read_created", ["userId", "isRead", "createdAt"])
 export class Notification {
   @PrimaryGeneratedColumn("increment")
   id!: number;

@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from "@nestjs/common";
+import { Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Channel } from "amqplib";
@@ -19,6 +19,7 @@ import {
   USER_MESSAGE_PATTERN,
 } from "libs/constant/message-pattern.constant";
 import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
+import { NOTIFICATION_MESSAGE } from "libs/constant/response-message.constant";
 import { Notification } from "./entities/notification.entity";
 import {
   LIKE_NOTIFICATION_CAS_MAX_ATTEMPTS,
@@ -289,9 +290,12 @@ export class NotificationService {
     userId: number,
     page: number,
     limit: number,
+    isUnreadOnly = false,
   ): Promise<PaginatedResponse<Record<string, unknown>>> {
     const [data, total] = await this.notificationRepository.findAndCount({
-      where: { userId },
+      // NOTIF-INBOX-01: `total` follows the filter, so an unread-only page
+      // paginates over unread rows only.
+      where: isUnreadOnly ? { userId, isRead: false } : { userId },
       order: { createdAt: "DESC" },
       skip: (page - 1) * limit,
       take: limit,
@@ -350,6 +354,39 @@ export class NotificationService {
       { isRead: true },
     );
     return { success: true };
+  }
+
+  /**
+   * NOTIF-INBOX-01: flips every unread row of the user in one UPDATE. A like
+   * aggregated after this opens a new unread row — the CAS in
+   * `upsertLikeNotification` only folds into an unread one.
+   */
+  async markAllNotificationsRead(
+    userId: number,
+  ): Promise<{ updatedCount: number }> {
+    const updated = await this.notificationRepository.update(
+      { userId, isRead: false },
+      { isRead: true },
+    );
+    return { updatedCount: updated.affected ?? 0 };
+  }
+
+  /**
+   * NOTIF-INBOX-01: hard delete scoped to the owner. Unknown, already deleted
+   * and someone else's id are the same 404, so existence never leaks.
+   */
+  async deleteNotification(
+    notificationId: string,
+    userId: number,
+  ): Promise<null> {
+    const deleted = await this.notificationRepository.delete({
+      publicId: notificationId,
+      userId,
+    });
+    if (!deleted.affected) {
+      throw new NotFoundException(NOTIFICATION_MESSAGE.NOT_FOUND);
+    }
+    return null;
   }
 
   /**
