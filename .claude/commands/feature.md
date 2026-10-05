@@ -23,6 +23,13 @@ Example: `/feature add product reviews`
      Resolve its risk flags, set `status=approved` in `design.md`, then work
      `tasks.md` phase by phase.
    - **Anything smaller** → no spec; use the inline checklist below.
+   - **Either size, and the frontend builds against it in parallel**
+     (two-session mode, or the user asked for contract-first) → before any
+     code, copy `ai-docs/specs/_templates/contract.md` to
+     `ai-docs/specs/<KEY>/contract.md` at `status=draft`. Implement only once it
+     is `agreed`; set `implemented` after the gate and a self-test that matches
+     its examples. A field the contract lacks → stop and re-agree
+     (`ai-docs/specs/README.md`, `docs/AGENT-WORKFLOW.md` §7).
 4. Implement without asking user for info that can be found in code
 
 ---

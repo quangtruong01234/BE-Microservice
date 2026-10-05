@@ -52,6 +52,7 @@ the Read tool. Do NOT ask the user, and do NOT `@`-import these.
 | pre-implementation research spanning > 1 service | `research.md` |
 | known issue, residual behavior, 409, skuList, SKU, paymentUrl, return URL, compensation, GHN, waybill, delivery_fail, ETA, ward, district, voucher, reset, change-password, errorCode, role, search, accent, cron, outbox, notification, inventory, restock, stock, seller, embed, author, username, trim, envelope, upload, media, chat, mail, SMTP, /ready, SHAPE-01, batch, overfetch, moderation, storefront, isActive, PATCH, optimistic lock, paidAt, shipping status, query param, 502 | `known-behaviors.md` — **two-stage, see below** |
 | planned, roadmap, next feature, AI feature, Gemini, visual search, voucher stacking, phase 2 | `planned-work.md` |
+| contract, contract-first, two-session, cross-session, FE session, CONTRACT_READY, BE_DONE, CONTRACT_MISMATCH | not under `agent-context/`: `docs/AGENT-WORKFLOW.md` §7 and `ai-docs/specs/README.md` § When a contract is required |
 
 - No keyword match → only the always-loaded files; do not load extras.
 - Multiple keywords match → load all matching files.

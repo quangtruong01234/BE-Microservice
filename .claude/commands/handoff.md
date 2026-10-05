@@ -53,6 +53,19 @@ code):
 - **Backend ref:** <commit / file:line or CHANGELOG entry>
 ```
 
+**The change has `ai-docs/specs/<KEY>/contract.md`** (contract-first or
+two-session mode, `docs/AGENT-WORKFLOW.md` §7) → do not restate its shape;
+the contract is the single source. Write a pointer entry instead:
+
+```
+### <FE-item-id or NEW> · <short title> — <YYYY-MM-DD>
+- **What changed:** <one line>
+- **Contract:** `api/ai-docs/specs/<KEY>/contract.md` — `status=implemented`
+- **Branch:** `feat/<KEY>-be` (not pushed / pushed)
+- **FE action needed:** <integrate against the contract / swap mocks for the real call>
+- **Backend ref:** <commit or CHANGELOG entry>
+```
+
 Contract rules to respect in the entry:
 - Converted domains expose ONLY public ids (`ord_`, `usr_`, `prod_`, `conv_`,
   `msg_`, `addr_`, `ntf_`, `rr_`, `post_`, `cmt_` + 16 base62) — document id

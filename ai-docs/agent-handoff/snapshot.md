@@ -40,59 +40,55 @@ What is genuinely open:
 
 Order picked by the user: F8 → F9 first, then F10..F12.
 
-- [x] **F8 RMQ-DLQ-01** → **DONE 2026-10-01** (local), see CHANGELOG. Not
-  pushed. After the push, confirm the gateway logs `Dead-letter policy applied`
+- [x] **F8 RMQ-DLQ-01** → **DONE 2026-10-01** (local), see CHANGELOG. Deployed
+  2026-10-02. Still owed: confirm the gateway logs `Dead-letter policy applied`
   on prod — the prod RabbitMQ user needs the `policymaker` tag, or it fails
   open with no dead-lettering (`ops-runtime.md` §RabbitMQ dead-letter queue).
 - [x] **F9 SESSION-REVOKE-01** → **DONE 2026-10-01** (local), see CHANGELOG.
-  Not pushed. Redis-only `validAfter`, no migration. Class B — a role change
+  Deployed 2026-10-02. Redis-only `validAfter`, no migration. Class B — a role change
   now logs the target out (FE handoff written).
 - [x] **F10 REVIEW-VERIFIED-01** → **DONE 2026-10-01** (local), see CHANGELOG.
-  Not pushed. The purchase gate already existed (404), so the work was the
+  Deployed 2026-10-02. The purchase gate already existed (404), so the work was the
   seller self-review 403 and a read-time `isVerifiedPurchase`; class B, not C.
 - [x] **F11 WISHLIST-ALERT-01** → **DONE 2026-10-01** (local), see CHANGELOG.
-  Not pushed. product → notification over PRODUCT_EXCHANGE (inventory was
+  Deployed 2026-10-02. product → notification over PRODUCT_EXCHANGE (inventory was
   untouched: it already mirrors stock into product). Class B, FE handoff written.
 - [x] **F12 ACCOUNT-DELETE-01** → **DONE 2026-10-01** (local), see CHANGELOG.
-  Not pushed. `DELETE /api/user/me` anonymizes in place, keeps content and
+  Deployed 2026-10-02. `DELETE /api/user/me` anonymizes in place, keeps content and
   orders; no migration after all. Class B, FE handoff written.
 
 `/sweep 3` 2026-10-02 (user pick, both from the FE roadmap):
 
 - [x] **F13 ORDER-TIMELINE-01** → **DONE 2026-10-02** (local), see CHANGELOG.
-  Not pushed. New `order_status_history` table (1 additive migration, owed
-  below); transitions before the deploy are not backfilled. Class B, FE
+  Deployed 2026-10-02. New `order_status_history` table (1 additive migration, applied); transitions before the deploy are not backfilled. Class B, FE
   handoff written.
 - [x] **F14 RETURN-PHOTO-01** → **DONE 2026-10-02** (local), see CHANGELOG.
-  Not pushed. Up to 5 owner-prefixed `trybuy/returns` images on a return
-  request, `imageUrls` always an array (1 additive migration, owed below).
+  Deployed 2026-10-02. Up to 5 owner-prefixed `trybuy/returns` images on a return
+  request, `imageUrls` always an array (1 additive migration, applied).
   Class B, FE handoff written.
+
+`/sweep propose` 2026-10-05 (user pick):
+
+- [x] **F15 NOTIF-INBOX-01** → **DONE 2026-10-05** (local), see CHANGELOG.
+  `PATCH /api/notifications/read-all`, `DELETE /api/notifications/:id`,
+  `?unreadOnly=true`. 1 index-only migration (applied on DEV). Class B, FE
+  handoff written. Not pushed.
 
 ### Prod-owed
 
-- **`nodeA-20260928-001-add-export-jobs`** (EXPORT-CSV-01 T5),
-  **`nodeA-20260928-002-add-order-checkout-voucher-columns`** (VOUCHER-SHOP-01
-  phase 2), **`nodeA-20261001-001-add-notification-product-public-id`**
-  (WISHLIST-ALERT-01), **`nodeA-20261002-001-add-order-status-history`**
-  (ORDER-TIMELINE-01), **`nodeA-20261002-002-add-return-request-image-urls`**
-  (RETURN-PHOTO-01) and **`nodeA-20261002-003-add-shipping-history-and-return-request-indexes`**
-  (SWEEP-1002-02, index-only, safe in any order) are owed — applied on DEV, not pushed yet. The CD migrate step
-  applies them before the restart. Without -001 the five `export/jobs` routes
-  500; without -002 EVERY order read/write fails (the entity selects the new
-  columns); without 20261001-001 EVERY notification read/write fails the same
-  way; without 20261002-001 every status change only logs a warn and
-  `GET /api/order/:id/history` 500s; without 20261002-002 EVERY return-request
-  read/write fails (the entity selects `image_urls`) — details in `ops-runtime.md` §Database migrations. The previous
-  one (CART-UNIQ-01) was applied 2026-09-27.
+- `nodeA-20261005-001-add-notifications-user-index` (NOTIF-INBOX-01) — index
+  only, online DDL, so deploy order does not matter; the CD migrate step applies
+  it. Until it lands, read-all is a full-table UPDATE on prod. Not pushed yet.
+- The six nodeA migrations from 2026-09-28..2026-10-02 (export
+  jobs, checkout voucher columns, notification product_public_id, order status
+  history, return-request image_urls, shipping/return indexes) were applied by
+  the CD migrate step on 2026-10-02 (Deploy run 36980317347); every route that
+  depends on them answered 200 on prod right after.
 
 DEPLOY-PG-01 was resolved 2026-09-16; both migration failure modes now live in
-`ops-runtime.md` (§CI/CD and §Database migrations). Two config gaps remain:
+`ops-runtime.md` (§CI/CD and §Database migrations). One config gap remains
+(MONITOR-01 closed 2026-10-03, see CHANGELOG):
 
-- **MONITOR-01 — the token is live on prod** (verified 2026-10-01: `GET
-  /metrics` is 401 without the header, 200 with it) and the Grafana Cloud
-  Metrics Endpoint scrape job exists (setup, dashboard, series budget in
-  `ops-runtime.md` §Metrics scrape). Owed: import
-  `grafana/gateway-dashboard.json` and confirm its panels fill.
 - **`TURNSTILE_SECRET_KEY` is UNSET on prod**, so CAPTCHA-01 is off there. It
   is blocked on the user creating the Turnstile keys. Set the secret first
   (shadow mode), and flip `CAPTCHA_ENFORCE=true` only after the storefront
@@ -111,8 +107,8 @@ DEPLOY-PG-01 was resolved 2026-09-16; both migration failure modes now live in
 - **GHN Web console (`../web-flow-GHN`)** — backend is ready; the remaining work
   is all FE. Only backend contract still blocking it: analytics charts. Steps
   and deps in `planned-work.md`.
-- **CTX-PROV-02 — 40 of 68 `known-behaviors.md` anchors carry
-  `verified=unrecorded`** (9 prod, 19 local; SEARCH-01, AUTHOR-NAME-01 and
+- **CTX-PROV-02 — 39 of 74 `known-behaviors.md` anchors carry
+  `verified=unrecorded`** (9 prod, 26 local; SEARCH-01, AUTHOR-NAME-01 and
   NAME-TRIM-01 were upgraded to `prod:2026-09-16` by actually exercising them on
   prod after the release; ROLE-ADMIN-01 moved to `local:2026-10-01` when
   SESSION-REVOKE-01 changed its behaviour). Upgrading a tag means actually EXERCISING the
@@ -145,31 +141,38 @@ The one standing instruction:
 
 ### Audit backlog (SWEEP-1002, `/sweep audit` 2026-10-02 — recorded, not fixed)
 
-**TOP FIX (next): SWEEP-1002-05** — blocked on the prod measurement below.
+All seven items are closed. The one leftover is under -05: delete the single
+`INVENTORY_RESERVE_STOCK` handler once -05 is on prod.
 
 - ~~SWEEP-1002-01 — a timed-out checkout released its Idempotency-Key~~ →
-  **DONE 2026-10-02** (local), see CHANGELOG. Not pushed. Class B.
+  **DONE 2026-10-02** (local), see CHANGELOG. Deployed 2026-10-02. Class B.
+  Follow-up IDEM-HOLD-CODE-01 (FE ask): that 409 now carries
+  `errorCode: ORDER_REQUEST_IN_PROGRESS` → **DONE 2026-10-03** (local), see
+  CHANGELOG. Class B. Not pushed.
 - ~~SWEEP-1002-02 — `shipping_history` / `order_return_requests` had no
-  order/user index~~ → **DONE 2026-10-02** (local), see CHANGELOG. Not pushed.
-  Class A; 1 index-only migration, owed above.
+  order/user index~~ → **DONE 2026-10-02** (local), see CHANGELOG. Deployed 2026-10-02.
+  Class A; 1 index-only migration, applied.
 - ~~SWEEP-1002-03 — checkout made 2N serial orders→inventory round trips~~
-  → **DONE 2026-10-02** (local), see CHANGELOG. Not pushed. Class A. The
+  → **DONE 2026-10-02** (local), see CHANGELOG. Deployed 2026-10-02. Class A. The
   stock pre-check now fans out; the reserve pass is still serial (-05).
 - ~~SWEEP-1002-04 — dead `payment_completed` handler in rewards~~ → **DONE
-  2026-10-02** (local), see CHANGELOG. Not pushed. Class A.
-- 🟡 **SWEEP-1002-05 — the reserve pass is still N serial inventory calls.**
-  Found while self-testing -03 on DEV: `reserveOrderItems` took ~1.5s per
-  item, on top of ~4s for the GHN fee. A 3-item COD checkout 408'd at the
-  gateway's 10s WRITE budget and committed ~1s later (IDEM-HOLD-01 held the
-  key, and the retry got a 409). Measure on prod (EC2 → Aiven) before acting.
-  Fix if it holds there: a batch `RESERVE_STOCK_MANY` in inventory that
-  reserves all lines in one PG transaction (all-or-nothing, so the
-  per-item compensation goes away). Both orders and inventory change, no
-  migration. Each reserve is one PG transaction of ~7 serial round trips
-  (`reserveStockWithLedger`), so its cost scales with the app→Aiven RTT: if
-  prod sits in Aiven's region it may not reproduce. The measurement is blocked
-  (2026-10-02 `/sweep 2`): there is no prod SSH key locally, and measuring
-  means either a real COD checkout on prod or the user reading the timings.
+  2026-10-02** (local), see CHANGELOG. Deployed 2026-10-02. Class A.
+- ~~SWEEP-1002-05 — the reserve pass was N serial inventory calls~~ →
+  **DONE 2026-10-03** (local), see CHANGELOG. Class A, no migration, nodeA
+  and nodeB both change, so deploy them together. Prod RTT measured at
+  ~100 ms, so a 20-line cart outran the 10s budget. It is now one
+  all-or-nothing `INVENTORY_RESERVE_STOCK_MANY` per seller. Owed after
+  deploy: delete the single `INVENTORY_RESERVE_STOCK` handler, which was
+  kept one release for rollback and is flagged by `check:conventions` as an
+  orphan. Not pushed.
+- ~~SWEEP-1002-06 — a WS `send_message`/`join` without `conversationId`
+  landed in the FIRST conversation~~ → **DONE 2026-10-02** (local), see
+  CHANGELOG. Class A. Not pushed.
+- ~~SWEEP-1002-07 — the nightly chat cleanup 1451'd under the prod NO ACTION
+  parent FK~~ → **DONE 2026-10-03** (local), see CHANGELOG. Class A, no
+  migration: the cron detaches replies before the DELETE. The FK drift
+  itself (DEV CASCADE/SET NULL vs prod NO ACTION) is left as-is, because the
+  code no longer depends on the rule. Not pushed.
 
 ### Planned but not started
 
@@ -214,8 +217,8 @@ pick one up. Do not re-derive them:
 - EXPORT-TZ-01 — Order timestamps and every from/to day window are Vietnam wall-clock computed in code, because the server TZ is UTC on prod and UTC+7 on dev — do NOT "fix" a zone bug by setting TZ or the connection timezone.
 - CART-UNIQ-01 — carts.user_id and cart_items (cart_id, product_id, COALESCE(sku_id,0)) are UNIQUE, so a racing add re-reads the winning cart or atomically increments the winning line; a line holds an integer 1..999 (a summed add past 999 is a 400, racing adds can overshoot by one request); skuId 0 means no SKU, and a concurrent remove-last-item can still drop an add.
 - ORDER-TIMELINE-01 — GET /api/order/:id/history (owner or admin, a seller is a 403) merges placed, paid, local status changes and successful GHN webhook/sync rows oldest first; status changes exist only from 2026-10-02, are recorded best-effort after the write (a failed insert drops that event, never the transition), and consecutive identical GHN statuses collapse to one.
-- RETURN-PHOTO-01 — A return request takes up to 5 unique jpg/png/webp URLs from the trybuy/returns Cloudinary folder whose leaf starts with the caller's id (403 otherwise, before any TCP call); orders stores none as NULL and every read emits imageUrls as an array ([] for legacy rows); the URLs are not checked to exist, are fixed once created, and are never deleted from Cloudinary.
-- IDEM-HOLD-01 — POST /api/order releases its Idempotency-Key only on a definite 4xx other than 408; a 408, a 5xx or a transport failure re-holds the key as in-progress for 300s, so a same-key retry inside that window is a 409 DUPLICATE_REQUEST_IN_PROGRESS even when no order was created, and the result is never replayed for an order that committed after the gateway gave up.
+- RETURN-PHOTO-01 — A return request takes up to 5 unique jpg/png/webp URLs from the trybuy/returns Cloudinary folder whose leaf starts with the caller's id (403 MEDIA_NOT_OWNED otherwise, before any TCP call), and a 400 carries errorCode RETURN_PHOTO_INVALID only when imageUrls is the sole failing field; orders stores none as NULL and every read emits imageUrls as an array ([] for legacy rows); the URLs are not checked to exist, are fixed once created, and are never deleted from Cloudinary.
+- IDEM-HOLD-01 — POST /api/order releases its Idempotency-Key only on a definite 4xx other than 408; a 408, a 5xx or a transport failure re-holds the key as in-progress for 300s, so a same-key retry inside that window is a 409 with errorCode ORDER_REQUEST_IN_PROGRESS even when no order was created, and the result is never replayed for an order that committed after the gateway gave up.
 
 **GHN**
 - GHN-ADDR-01 — Free-text address resolution is best-effort and can match a wrong-but-valid location; sending both ids skips it.
@@ -260,7 +263,9 @@ pick one up. Do not re-derive them:
 - UPLOAD-SIZE-01 — Upload size caps are an advisory contract, NOT a security boundary — Cloudinary cannot sign a size on this account.
 - REPORT-TOTAL-01 — Reports outlive their deleted post as an audit trail, so the queue total can read lower than the raw table count.
 - CHAT-ROOM-01 — new_message targets a union of user: and conv: rooms, so a recipient no longer needs to join.
+- CHAT-E2E-CLEANUP-01 — DELETE /api/chat/messages/:id hard-deletes the caller's own message (204; 403 for anyone else, 404 unknown or already gone, 400 bad msg_ id); replies keep their content but lose parentMessageId, and no socket event or tombstone tells the other side.
 - SOCIAL-LIKE-NTF-01 — Likes fold into one unread `like` row per (owner, post) whose count lives in the message text; a read row starts a new one, self-likes and unlikes notify nothing, and the count can overshoot.
+- NOTIF-INBOX-01 — PATCH /api/notifications/read-all flips only the caller's unread rows and answers {updatedCount}, DELETE /api/notifications/:id hard-deletes the caller's own row (204; an unknown, already-deleted or foreign id is the same 404, a malformed id is a 400) with no socket event, and ?unreadOnly= accepts only the literal true/false (anything else is a 400) and drives total/totalPages.
 
 **Search**
 - SEARCH-01 — Accent-insensitivity comes from the MySQL collation, not code; % and _ are not escaped and a blank q is a 400.
@@ -271,7 +276,7 @@ pick one up. Do not re-derive them:
 - VOUCHER-NULL-01 — null is a 400 on a voucher edit but still a 201 on create — the asymmetry is deliberate.
 - VOUCHER-CANCEL-01 — Cancelling gives the redemption back, so cancel-farming a limited code is possible by design; a platform voucher shared by a multi-shop checkout moves to a live sibling instead until the last sub-order is canceled.
 - VOUCHER-EDIT-01 — On a redeemed voucher only loosening is allowed, so a mistaken widening cannot be walked back.
-- VOUCHER-SHOP-01 — Shop-voucher residuals — at most one shop voucher per seller plus one platform voucher per checkout, the platform discount is priced after shop vouchers and split pro rata by largest remainder; sellerId is only checked to exist, available caps at 50, and sellerId:null is a platform voucher.
+- VOUCHER-SHOP-01 — Shop-voucher residuals — at most one shop voucher per seller plus one platform voucher per checkout, the platform discount is priced after shop vouchers and split pro rata by largest remainder; the available list rates each row next to the applied voucherCodes (platform rows on the post-shop base, a shop row that would drop the applied platform code below its minimum is BREAKS_PLATFORM_VOUCHER); sellerId is only checked to exist, available caps at 50, and sellerId:null is a platform voucher.
 
 **Auth / mail**
 - MAIL-UI-01 — The reset-code mail has no copy button by design (clients strip script) and repeats the code in the subject.

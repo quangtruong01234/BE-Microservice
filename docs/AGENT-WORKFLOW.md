@@ -260,7 +260,9 @@ Read the matching backlog first and reuse its waiting-item id, then append a
 contract-first entry (route, method, request and response shape, status codes)
 under **Open** using that file's template. Never cross-file an item; if a change
 truly affects both consumers, write a tailored entry in each. No frontend
-impact ⇒ skip the step entirely.
+impact ⇒ skip the step entirely. A change with an `ai-docs/specs/<KEY>/contract.md`
+gets a short entry that points at the contract (path, status, branch, FE action)
+instead of restating its shape — a second copy is the one that drifts.
 
 **Release gate.** Classify every finished change:
 
@@ -299,7 +301,9 @@ shape so the gap between the two deploys is harmless.
 | A bug or crash | Debug directly; do not route through `researcher` |
 
 Paste the researcher's output into the next prompt. Never let the next agent
-re-research what has already been found.
+re-research what has already been found. That covers *code facts* (file:line,
+patterns, entities) only — the ticket, the spec and the contract are always
+handed over as a **path**, never as your summary of them (E1 below).
 
 Agent definitions live in `.codex/agents/` (Codex) and `.claude/agents/`
 (Claude Code): `researcher` (read-only research), `planner` (cross-service
@@ -309,3 +313,121 @@ Claude Code only — under Codex follow its file as a procedure) and
 `code-reviewer` (read-only post-implementation review). Shared test mocks live
 in `test/utils/`, imported as `@app/testing`. Spawn them only when the work
 actually calls for it.
+
+### Keeping a chain from compounding errors
+
+A chain of *n* steps that each trust the previous step's output succeeds with
+probability *p*ⁿ (0.9⁵ ≈ 59 %). The risk is not the number of agents; it is a
+step consuming an earlier step's claim **without a check**. Each rule removes a
+dependency or inserts a check:
+
+| # | Rule | Removes |
+|---|---|---|
+| E1 | Every agent reads the ticket, spec and contract **files** itself. A brief carries their paths, never a paraphrase | telephone-game loss at each hand-off |
+| E2 | At most **three** agents run back-to-back without a gate between them. Independent work (gateway DTO vs service handler vs tests) runs as **parallel** agents on one brief each, then is integrated and gated once | *p*ⁿ growth |
+| E3 | A deterministic gate runs between dependent steps: the spec at `status=approved` (a contract at `status=agreed`), `npx tsc --noEmit`, scoped `npx jest`, the §3 self-test. A "done" without gate output is not done | trusting an unverified claim |
+| E4 | The agent that wrote the code never reviews it — `code-reviewer` runs as a separate agent on the diff | correlated blind spots |
+| E5 | A brief is concrete: file paths, function and DTO names, the spec/contract path, and the stop condition. Never "handle the order flow" | requirements invented to fill a vague brief |
+| E6 | After a sub-agent reports success, the orchestrator **re-runs the gate itself** and reads the output; it does not forward the report | report/actual drift, compaction loss |
+| E7 | Messages between sessions carry paths and commands, never API descriptions (§7) | a lossy second copy of the contract |
+| E8 | An agent result that contradicts the spec or contract **stops the chain** and goes to the user. No agent patches around it — fix the contract or the code, never the report | silent error propagation |
+
+The longest row of the table above (`researcher` → `planner` → implement →
+`test-guard` → `code-reviewer`) satisfies E2 because each arrow is gated: the
+spec is approved before implementing, and `tsc` + scoped jest are re-run by the
+orchestrator before and after `test-guard`.
+
+---
+
+## 7. Two-session mode — one Claude Code session per repository
+
+For a small full-stack feature built in parallel: one session in `MCR/api`, one
+in `MCR/frontend`. Claude Code only — it relies on `ListAgents` and
+`SendMessage`. Under Codex, or with no second session, the user relays the same
+messages by hand and the rest of this section still applies.
+
+**Fit.** One new endpoint, or one new field on an existing one, plus one screen
+change. Not for anything that needs a migration or touches more than two
+services — run that in one backend session with the planner, then hand off.
+
+**Roles.**
+
+| | Backend session (`MCR/api`) | Frontend session (`MCR/frontend`) |
+|---|---|---|
+| Owns | `ai-docs/specs/<KEY>/contract.md` and the implementation | the screen, API client, types and mocks |
+| Inside the session | normal sub-agents under §6 | the frontend repo's own workflow |
+| Never | push, merge, edit `.claude/settings*.json`, move a ticket | the same, plus patching around a backend deviation |
+
+The user creates both branches (`feat/<KEY>-be`, `feat/<KEY>-fe`), opens both
+sessions in the **same permission mode** (otherwise messages are held for
+approval and the flow stalls), merges both, and runs the end-to-end check.
+Committing the contract and the implementation on the feature branch is part of
+the task; pushing is not — it follows the release gate in
+`ai-docs/agent-context/git-workflow.md`.
+
+**Flow.**
+
+1. Backend writes the contract from `ai-docs/specs/_templates/contract.md` at
+   `status=draft`, commits it (`docs(<KEY>): api contract draft`), sends
+   `CONTRACT_READY`, and keeps researching while it waits.
+2. Frontend reads the **file**, checks every displayed field exists in a
+   response and every input maps to a request field, and replies
+   `CONTRACT_REVIEW` with `APPROVE` or numbered field-level objections (field,
+   type, why — no style opinions).
+3. Objections → one revision, `CONTRACT_UPDATED`. Still objected → stop, print
+   the disagreement for the user. Approved → `status=agreed`, commit.
+4. Both build against the agreed version: backend per §3–§5, frontend against a
+   mock copied from the contract's examples. A needed contract change mid-build
+   is E8: stop, edit, re-agree.
+5. Backend runs its gate (`npx tsc --noEmit`, `npm run lint`, scoped jest,
+   `npm run build`, the §3 self-test), sets `status=implemented`, commits, sends
+   `BE_DONE`, and stops.
+6. Frontend switches the mock to the real endpoint. A difference →
+   `CONTRACT_MISMATCH` **and** an entry in `../.agent-local/backend-handoff.md`
+   (messages do not survive the session), then stop. None → `FE_DONE`.
+
+**Message kinds.** Each kind is sent at most once. A clean run is four messages
+(READY, REVIEW, BE_DONE, FE_DONE); one revision round makes six. If a kind
+would be sent a second time, the session stops and prints the situation for
+the user instead.
+
+| Kind | From → To | Receiver's next action |
+|---|---|---|
+| `CONTRACT_READY` | BE → FE | read the file, reply `CONTRACT_REVIEW` |
+| `CONTRACT_REVIEW` | FE → BE | `APPROVE` → mark agreed; objections → one revision |
+| `CONTRACT_UPDATED` | BE → FE | re-read the file, reply `APPROVE` or stop for the user |
+| `BE_DONE` | BE → FE | switch mock → real, verify |
+| `CONTRACT_MISMATCH` | FE → BE | stop; the user decides |
+| `FE_DONE` | FE → BE | nothing; the user merges |
+
+**Template** — one message per hand-off, conclusion on the first line:
+
+```
+<KIND>: <one-line conclusion>
+feature: <KEY>
+repo: api | frontend   branch: feat/<KEY>-be | feat/<KEY>-fe
+contract: <absolute path to ai-docs/specs/<KEY>/contract.md> (status: <x>)
+changed files: <list>
+gates passed: <commands that ran in THIS session>
+ask: <exactly what the receiver does next>
+stop when: <condition after which the receiver must not message back>
+```
+
+**Rules on top of §6.**
+
+- A message never describes the API. A question about the contract is answered
+  by editing the file and replying with its path (E7).
+- "Done" in a message means the gate passed in the sending session, and the
+  message lists the commands.
+- A session never asks the other to do what its own permissions blocked.
+- `BE_DONE` also writes the pointer entry in `../.agent-local/frontend-handoff.md`
+  (§5), so the hand-off survives once both sessions are closed.
+- Step 1 opens the `<KEY>` entry under **Holding** in
+  `../.agent-local/release-gate.md` with its class and the cells `api: ⏳`,
+  `frontend: ⏳`, `web-flow-GHN: n/a`. Step 5 flips `api` to `✅ ready`; each
+  session flips only its own cell, and the user pushes, backend first.
+
+**Judging the trial.** Keep the mode only if the contract removed design chat
+(zero API descriptions in messages) and the user intervened at most once.
+Otherwise fall back to one session per repository with the user as the bridge.
+The run checklist lives in `../.agent-local/two-repo-session-handoff-prompt.md`.

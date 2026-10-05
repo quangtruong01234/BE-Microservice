@@ -44,6 +44,7 @@ otherwise a new `AREA-NAME-01` style id. Then create:
 | `ai-docs/specs/<KEY>/design.md` | `design.md` | the anchor as line 1 (`status=draft`), the existing-behaviour inventory with `file:line`, transport, data, response shape, failure modes |
 | `ai-docs/specs/<KEY>/tasks.md` | `tasks.md` | Phase 0 (migration, or deleted), one phase per service with `Covers: [AC-n]`, the closing checklist |
 | `ai-docs/specs/<KEY>/tests.md` | `tests.md` | one or more `[TC-n]` per `[AC-n]`, unit + runtime, and legs not covered |
+| `ai-docs/specs/<KEY>/contract.md` — only when the frontend builds against it in parallel (`ai-docs/specs/README.md` § When a contract is required) | `contract.md` | the anchor as line 1 (`status=draft`), every route, field (type, nullable), status code and `errorCode`, with examples; `design.md` then points here instead of restating the response shape |
 
 Rules:
 - Every phase is one service and independently verifiable

@@ -6,6 +6,419 @@
 
 ## Completed Milestones
 
+- **F15 NOTIF-INBOX-01 — notification inbox management: mark all read,
+  delete one, unread-only filter (2026-10-05, `/sweep` fix mode, picked from
+  `/sweep propose` 2026-10-05). Release class B: two new routes and one
+  optional query param; nothing existing changes shape.** Not pushed.
+  - **Problem.** The inbox could only be read and marked read one row at a
+    time: no bulk "mark all read", no way to remove a notification, and no
+    unread-only view. Clearing a 30-item badge took 30 PATCH calls.
+  - **Routes** (gateway `NotificationController`, JWT):
+    - `PATCH /api/notifications/read-all` → 200 `{ updatedCount }`, the
+      caller's rows that flipped (0 when nothing was unread). It is declared
+      before `PATCH :id/read`, although the two never collide (different
+      segment count).
+    - `DELETE /api/notifications/:id` → 204 with no body. The id goes through
+      `ParsePublicIdPipe(ntf)`, so a malformed id is a 400. An unknown id, an
+      already-deleted one, or another user's id is the SAME 404
+      (`NOTIFICATION_MESSAGE.NOT_FOUND`), so ids cannot be probed. It is one
+      `DELETE ... WHERE public_id AND user_id`; ownership needs no prior read.
+    - `GET /api/notifications?unreadOnly=true`. Only the literal
+      `true`/`false` are accepted (local `toStrictBoolean` + `@IsBoolean`);
+      `?unreadOnly=yes` is a 400 instead of silently reading as false. The
+      filter changes `total`/`totalPages`/`hasNext`.
+  - **TCP.** New patterns `notification.mark_all_read` and
+    `notification.delete` (`NOTIFICATION_MESSAGE_PATTERN`), bare-string on
+    both sides. Both are WRITE timeout, no retry. `GET_USER_NOTIFICATIONS`
+    gained an optional `isUnreadOnly`; an old gateway that omits it gets the
+    old behaviour.
+  - **Migration** `nodeA-20261005-001-add-notifications-user-index`: adds
+    `idx_notifications_user_read_created (user_id, is_read, created_at)`,
+    guarded and online (`INPLACE`/`LOCK=NONE`). The prod baseline gives
+    `notifications` only the PK (+ `uq_notifications_public_id`), so every
+    inbox read, the badge count and the account-delete purge were full scans.
+    Without the index, read-all's UPDATE would also row-lock the whole table.
+    The entity mirrors it with `@Index`. On DEV, EXPLAIN of the unread page
+    picks the index (range, backward index scan, no filesort). DEV also has
+    hand-made `idx_notifications_user_id` / `idx_notifications_order_id`
+    that are not in any migration (DEV drift, left alone; the first is now a
+    redundant prefix there).
+  - **Tests.** `apps/notification/src/notification.inbox.spec.ts` (6 cases:
+    default/unread where-clause, mark-all scoping + count, delete ownership +
+    404), red first on TS2339. `apps/gateway/src/notification/dto/get-notifications-query.dto.spec.ts`
+    (6 cases), seen red by making the transform lenient (3 failed). Scoped
+    jest: 5 suites / 24 tests green. tsc 0, `lint:check` clean,
+    `check:conventions` OK (only the known `INVENTORY_RESERVE_STOCK` orphan
+    warning).
+  - **Self-test (DEV)**, testadmin (30 unread) + testuser_403 (13 unread):
+    `?unreadOnly=true` → 200 total 29, all `isRead:false`, the row just
+    marked read absent; `=false` → total 30; `=yes` → 400 `unreadOnly must be
+    a boolean value`. testuser_403 `DELETE` of an admin id → 404; the admin's
+    delete → 204, 0 bytes; again → 404; `not-an-id` → 400; anonymous → 401.
+    `read-all` → 200 `{updatedCount: 28}` (30 − 1 read − 1 deleted), badge
+    → 0, testuser_403's badge still 13, a second `read-all` → 0, the
+    unread-only page → `{total:0, data:[], totalPages:1, hasNext:false}`,
+    anonymous → 401. Migration applied on DEV, then the guarded SQL re-run
+    directly as a no-op.
+  - **Docs.** New known-behaviors entry NOTIF-INBOX-01; FE handoff written;
+    the migration is listed under snapshot Prod-owed.
+
+- **CTX-CONTRACT-01 — contract-first two-session protocol in the AI context
+  (2026-10-05). Documentation only, class A, no runtime steps.** Not pushed.
+  Closes the FE inbox item PAIR-CONTRACT-01. Its path is accepted; its
+  proposed `spec:` anchor is not, and the contract anchor below is used instead.
+  - **Why.** A BE session and a FE session building one feature in parallel
+    had no shared, versioned contract, and a sub-agent chain could compound a
+    wrong summary into code (the E1–E8 failure modes).
+  - **What.**
+    - New template `ai-docs/specs/_templates/contract.md`. The contract has its
+      own anchor, `<!-- contract: id=<KEY>; status=draft|agreed|implemented -->`,
+      separate from the spec anchor's `draft|approved|done`.
+      `ai-docs/specs/README.md` says when a contract is required.
+    - `docs/AGENT-WORKFLOW.md`:
+      - §6 gains the E1–E8 chain rules. Briefs carry paths, not summaries.
+      - New §7 holds the two-session protocol: six message kinds, each sent
+        at most once, on `feat/<KEY>-be` / `feat/<KEY>-fe`.
+      - Release-gate cells are flipped per session.
+      - §5 handoff entries point at the contract instead of restating it.
+    - Agent definitions:
+      - `researcher` (`.claude` and `.codex`) reports a Contract conflict and
+        does not resolve it.
+      - `code-reviewer` (both) treats a contract deviation as a Blocker.
+      - `test-guard` asserts the contract (E8).
+      - `planner` writes `contract.md` when FE builds in parallel.
+      - `/feature`, `/handoff` and the CLAUDE.md auto-context row point at
+        §7.
+      - `/sweep` gets a contract check after picking an item. An item the
+        FE builds in parallel is reported as needing two-session mode,
+        not implemented. An existing `contract.md` is passed by path to
+        every brief. `/sweep propose` now rates contract-first yes/no.
+    - Outside this repo, these were reconciled to the same anchor
+      vocabulary:
+      - the local two-session prompt
+      - the FE `/pair` workflow
+      - the FE reviewer role
+  - **Known gap, not fixed.** `.codex/agents/researcher.toml` still says
+    "7 services", maps the DBs wrongly, and keeps a frontend section, which
+    predates this change.
+
+- **RETURN-PHOTO-ERRCODE-01 — return-photo rejections carry a stable
+  `errorCode` (2026-10-04, `/sweep` fix mode, from the FE inbox). Release
+  class B: additive `errorCode` keys only, messages and statuses unchanged.
+  No migration. nodeA only (gateway).** Not pushed.
+  - **Problem.** On `POST /api/order/:id/return-request` a bad `imageUrls`
+    was a bare class-validator 400, indistinguishable from the "order not
+    eligible" 400, and another account's upload was a 403 with no code. The
+    FE told them apart with a `/imageUrls/i` regex on `message`.
+  - **Fix.**
+    - Two codes in `libs/constant/error-code.constant.ts`:
+      `RETURN_PHOTO_INVALID` and `MEDIA_NOT_OWNED`.
+    - The global `ValidationPipe`'s `exceptionFactory` moved out of
+      `apps/gateway/src/main.ts` into
+      `apps/gateway/src/common/pipes/validation-exception.factory.ts`
+      (`createValidationException`; the message flattening is unchanged).
+      It reads class-validator's `context: { errorCode }` off every failing
+      constraint, and emits `errorCode` **only when every failing constraint
+      carries the same code**. A photo failure together with a missing
+      `reason` or an unknown property gets no code, so a code never hides a
+      second problem. A DTO without any `context` produces the exact old
+      body.
+    - `CreateReturnRequestDto.imageUrls` tags its four rules (`IsArray`,
+      `ArrayMaxSize`, `ArrayUnique`, `IsCloudinaryUrl`) with
+      `RETURN_PHOTO_INVALID`. Landmine: `@ArrayUnique(undefined, { context })`
+      silently drops the options — class-validator only reads the second
+      argument when the first is a function — so it must be
+      `@ArrayUnique({ context })`.
+    - `assertCloudinaryUrlsOwnedBy` now throws
+      `ForbiddenException({ message, errorCode: MEDIA_NOT_OWNED })`. The
+      helper is shared, so the code also appears on product create/update/
+      image, post create/update and the avatar PATCH — same 403, same
+      message, one extra key.
+  - **Tests.** New `validation-exception.factory.spec.ts` (8: four tagged
+    rejections, three mixed/untagged cases with no code, one accept) and
+    `cloudinary-ownership.spec.ts` (2). Seen red with the DTO/helper change
+    stashed (5 failing), then green; `npx jest apps/gateway` 35 suites /
+    304 tests pass. tsc, eslint and `check:conventions` clean (only the
+    known `INVENTORY_RESERVE_STOCK` orphan warning from SWEEP-1002-05).
+  - **Runtime (DEV, gateway watch build).** On a canceled order: 6 photos,
+    a duplicate and a `trybuy/posts` URL → 400 `RETURN_PHOTO_INVALID`;
+    another user's upload → 403 `MEDIA_NOT_OWNED`; a valid photo → 400 "not
+    eligible" with no code; an empty reason → 400 with no code. The avatar
+    PATCH with another user's upload → 403 `MEDIA_NOT_OWNED`.
+
+- **VOUCHER-AVAIL-STACK-01 — the basket voucher list is rated next to the
+  codes already applied (2026-10-04, `/sweep` fix mode, from the FE inbox).
+  Release class B: one optional request field and one new
+  `ineligibleReason` value. No migration. nodeA only (gateway + orders).** Not
+  pushed.
+  - **Problem.** `POST /api/order/vouchers/available` could not see the
+    applied codes, so it priced platform rows against the bare basket. But
+    since VOUCHER-SHOP-01 phase 2, validate and order create price the
+    platform voucher AFTER the shop discounts. The list could therefore call
+    a platform code eligible that then 400'd at apply. The FE was re-pricing
+    it client-side (`repriceAfterShopVouchers()`).
+  - **Fix.**
+    - Optional `voucherCodes: string[]` on the request, with the same
+      validation as on validate: at most 20 codes, each at most 64 chars.
+      The gateway forwards it as `codes`. An older gateway sends none, and
+      orders treats that as `[]`.
+    - `OrdersService.listAvailableVouchers` resolves the applied set the way
+      checkout does: the first shop code per seller and the first platform
+      code. It looks applied codes up among the candidates first, and only
+      the missing ones cost one extra query.
+    - Platform rows are evaluated on the post-shop base. The new module
+      helper `buildRemainingBySellerId` builds that base, and
+      `resolveCheckoutVouchers` now uses the same helper, so the list and
+      checkout cannot drift.
+    - An eligible shop row is re-rated as replacing its seller's applied
+      code. If that swap breaks an applied platform code that currently
+      applies, the row becomes `BREAKS_PLATFORM_VOUCHER`, with
+      `amountToAdd` set to the platform code's shortfall.
+    - Unknown or ineligible applied codes count as zero and never throw.
+  - **Shape chosen for the FE.** The FE offered a new reason or a
+    `platformDiscountAfter` field. A reason was picked: it slots into the
+    existing `isEligible`/`ineligibleReason`/`amountToAdd` rendering, with
+    no second number to explain.
+  - **Tests.** 6 new unit tests in `orders.service.spec.ts`. With the applied
+    codes ignored, 4 were red. All 161 tests across the orders and gateway
+    order suites are green.
+  - **Runtime check.** Run locally with nodeA in watch mode. The basket was
+    149k from one seller. Three throwaway vouchers (ids 47–49) were created
+    as `testadmin` and deactivated afterwards: AVSTSHOP30 fixed 30k,
+    AVSTSHOP10 fixed 10k, and AVSTPLAT130 platform fixed 20k with a 130k
+    minimum.
+    - With no codes, all three are eligible on 149k.
+    - With `[avstshop30]`, the platform row is `MIN_ORDER_NOT_MET` on a
+      119k base, 11k short.
+    - With `[AVSTSHOP10, AVSTPLAT130]`, the platform row is eligible on a
+      139k base, and AVSTSHOP30 is `BREAKS_PLATFORM_VOUCHER` with
+      `amountToAdd` 11000.
+    - `voucher/validate` agrees: `[AVSTSHOP30, AVSTPLAT130]` is a 400
+      ("must be at least 130000"), and `[AVSTSHOP10, AVSTPLAT130]` is a 201
+      with a 30k discount.
+    - An unknown applied code gives a 201, and a non-array `voucherCodes`
+      gives a 400.
+  - Residuals are in `known-behaviors.md` → VOUCHER-SHOP-01 (that entry also
+    had the route's method wrong: it is POST, not GET). FE handoff written.
+
+- **MONITOR-01 closed — Grafana Cloud dashboard verified on prod
+  (2026-10-03, docs/ops only, no code).** The `TryBuy Gateway` dashboard
+  (uid `trybuy-gateway`) is imported; all 17 panel queries were run over 24h
+  through the Grafana API — 15 return data, the 5xx-by-route and 429/s panels
+  are empty only because prod has served neither status. The scrape has been
+  `up` for the whole ~61h of retained data, 435 active series (free tier: 10k).
+  A Viewer service-account token now lets agents query Grafana directly
+  (`ops-runtime.md` §Metrics scrape).
+
+- **SWEEP-1002-05 — checkout reserves every line of a seller's cart in one
+  inventory call and one PG transaction (2026-10-03, `/sweep` fix mode, from
+  the SWEEP-1002 audit). Release class A: no route, no response field, no
+  migration. Both nodeA (orders) and nodeB (inventory) change.** Not pushed.
+  - **Problem.** `OrdersService.reserveOrderItems` sent one
+    `INVENTORY_RESERVE_STOCK` per line, serially. Each one is its own PG
+    transaction of about 7 round trips (`reserveStockWithLedger`).
+    - Prod measurement, 2026-10-03: the metrics histogram was empty after
+      the 07:00 UTC restart, so public reads were timed instead. One app→Aiven
+      PG round trip came out at about 90–110 ms.
+    - That puts one line at about 0.7 s, so a 20-line cart is about 14 s.
+      That is over the gateway's 10 s WRITE budget, which gives a 408 and
+      then a late commit under a held key (IDEM-HOLD-01).
+    - On DEV a 3-item COD checkout had already 408'd at 10.7 s.
+  - **Fix.**
+    - New pattern `INVENTORY_RESERVE_STOCK_MANY` and
+      `InventoryService.reserveStockMany(lines, reservationKey)`. It runs one
+      transaction with a fixed number of statements, however many lines:
+      - one `pessimistic_write` SELECT of every line's row, ordered by
+        `inventory.id` so two carts lock in the same order and cannot
+        deadlock;
+      - one ledger read by (key, `In(inventoryIds)`);
+      - one `UPDATE … FROM (VALUES …)` for all the stock deltas;
+      - one bulk ledger INSERT.
+    - It is **all-or-nothing**. A missing row, a short line, or an existing
+      hold under the key with a different quantity or a status other than
+      RESERVED throws inside the transaction, so it rolls back. The reply is
+      `{ isReserved: false, failedProductId }`, naming the first failing
+      line in request order.
+    - A same-key retry of an identical batch is idempotent and holds nothing
+      twice. `stock_changed` is emitted after commit.
+    - Orders sends the whole cart in one call. A rejected batch needs no
+      compensation. A lost reply (timeout or transport) releases every line
+      under the key, because the batch may still have committed.
+    - Multi-seller checkout makes one batch per seller, serially, and keeps
+      its existing rollback of earlier sellers.
+  - **Behaviour edge.** Two lines that resolve to the same stock row (same
+    product, same or absent SKU) now fail the batch before any transaction,
+    with that product as `failedProductId`. Before this, an equal-quantity
+    duplicate silently held only once. The storefront cart is unique per
+    (product, SKU) (CART-UNIQ-01), so no FE flow sends one.
+  - **Kept for one release.** The single `INVENTORY_RESERVE_STOCK` handler
+    stays, so an orders-only rollback still works.
+    - `check:conventions` now warns `[orphan-handler]` on it.
+    - Delete it, and its pattern, once this release is on prod.
+  - **Tests.**
+    - Inventory: 6 cases in `inventory.service.spec.ts`:
+      - one locking read, one UPDATE and one INSERT;
+      - a short line reserves nothing;
+      - a missing row;
+      - a same-key retry;
+      - a RELEASED hold;
+      - duplicate lines.
+    - Orders: the specs moved to the MANY pattern (13 failed first).
+    - The serial "release earlier lines" test was replaced by two:
+      - one call that names the failed line and releases nothing;
+      - a lost reply that releases every line under the key.
+    - `npx jest apps/orders apps/inventory`: 11 suites / 213 tests green.
+      tsc 0, eslint clean, and `check:conventions` OK apart from the
+      orphan-handler warning above.
+  - **Runtime (DEV, user 17, seller 23's products 38/39/40/42/43).**
+    - **Checkout.** A 5-line COD `POST /api/order` returned 201 in 7.3 s, GHN
+      fee included.
+      - PG showed 5 RESERVED ledger rows under the order's key, and each
+        row's available went down by 1 and reserved up by 1.
+      - `PATCH /:id/cancel` returned 200. All 5 rows became RELEASED and the
+        stock was byte-identical to before.
+    - **Batch vs serial.** Direct TCP to inventory, 5 lines:
+      - batch: 1.26 s warm;
+      - 5 serial `reserve_stock` calls: 7.33 s.
+    - **Shortfall.** `[38×1, 37×999]` replied
+      `{isReserved:false, failedProductId:37}`. It wrote no ledger row and
+      left product 38's stock unchanged.
+    - **Same-key retry.** It replied `isReserved:true` twice and left only 2
+      rows. Released afterwards.
+    - **Duplicate line.** It replied `failedProductId:38`.
+    - DEV stock was confirmed back at baseline afterwards.
+
+- **SWEEP-1002-07 — the nightly chat cleanup no longer depends on the parent
+  FK's ON DELETE rule (2026-10-03, `/sweep` fix mode, from the SWEEP-1002
+  audit). Release class A: no route, no response, no migration.** Not pushed.
+  - **Problem.** `ChatService.cleanupOldMessages` (cron 02:00) ran a single
+    `DELETE FROM messages WHERE created_at < now-5d`. The prod baseline
+    declares the `parent_message_id` self-FK `NO ACTION` (DEV has
+    `SET NULL`), so a single expiring message with any reply failed the
+    whole statement with 1451. The catch only logged it, so nothing was
+    cleaned on any night that had such a pair.
+  - **Fix.** In one transaction, the cron detaches every reply to an
+    expiring message (a multi-table `UPDATE … JOIN`, because MySQL 1093
+    forbids a subquery on the target), then runs the DELETE through
+    `manager.delete(Message, { createdAt: LessThan(cutoff) })`. This is the
+    same detach-first rule `deleteMessage` already used. A guarded FK
+    migration was rejected: the code fix works under both rule sets, and a
+    migration would still leave DEV and prod different.
+  - **Tests.** Two new cases in `apps/chat/src/chat.service.spec.ts`: detach
+    before delete with the exact cutoff (red first), and the cron never
+    throws. Chat suite 8/8 green, tsc 0, eslint clean, `check:conventions`
+    OK.
+  - **Runtime (DEV MySQL).** A scratch table with a NO ACTION self-FK was
+    seeded with old parent + fresh reply, an old orphan, and old parent + old
+    reply.
+    - The OLD statement failed with `ER_ROW_IS_REFERENCED_2` (1451) and
+      cleaned 0 of 5 rows.
+    - The NEW pair detached 2 rows and deleted 4; only the fresh reply
+      remains, with its parent cleared.
+    - The scratch table was dropped afterwards.
+    - The new SQL also ran against the real `messages` table inside a
+      rolled-back transaction. DEV's FKs were read back as CASCADE / SET NULL.
+  - **Docs.** CHAT-E2E-CLEANUP-01 in `known-behaviors.md` gained the cron
+    bullet.
+
+- **IDEM-HOLD-CODE-01 — the held-key checkout 409 carries an errorCode
+  (2026-10-03, `/sweep` fix mode, FE ask following IDEM-HOLD-01). Release
+  class B: one additive envelope field on one existing 409.** Not pushed.
+  - **Problem.** `POST /api/order` answers 409 both for "this Idempotency-Key
+    is still held, the order may already exist" and for definite rejections
+    (stock, voucher). The FE told them apart by regex-matching the message
+    `A duplicate order request is already being processed` in
+    `isOrderOutcomeUnknown()` — wording is not a contract.
+  - **Fix.** New closed-set code `ERROR_CODE.ORDER_REQUEST_IN_PROGRESS`
+    (`libs/constant/error-code.constant.ts`). The gateway's held-key branch
+    in `OrderService.createOrder` now throws
+    `ConflictException({ message, errorCode })`; `HttpExceptionFilter`
+    already emits `errorCode` from an object response. The message is
+    unchanged, so the FE regex keeps working until it switches. No other 409
+    gained a code.
+  - **Tests.** The existing double-submit case in
+    `apps/gateway/src/order/order.service.spec.ts` now asserts the code
+    (red first: TS2339). Order suites: 3 suites / 28 tests green. tsc 0,
+    eslint clean, `check:conventions` OK.
+  - **Self-test (DEV).** Seeded `idem:order:18:<key>` = `__in_progress__`,
+    then `POST /api/order` with that key as testuser_403 → 409,
+    `errorCode: "ORDER_REQUEST_IN_PROGRESS"`, message unchanged, key still
+    held afterwards (no TCP call made). Key deleted after the test.
+  - **Docs.** IDEM-HOLD-01 in `known-behaviors.md` gained the code
+    (rebaselined, `verified=local:2026-10-03`); FE handoff written.
+
+- **SWEEP-1002-06 — a WS chat payload without a conversation id no longer
+  lands in the first conversation (2026-10-02, `/sweep` fix mode, from the
+  SWEEP-1002 audit). Release class A: no route, no migration, and the storefront
+  already sends only `conv_` / `msg_` ids.** Not pushed.
+  - **Problem.** The `/chat` socket handlers passed `payload.conversationId`
+    to TCP unvalidated, because the REST `ParsePublicIdPipe` does not run on
+    socket payloads. In the chat service, `lookupConversationId(undefined)` ran
+    `findOne({ where: { publicId: undefined } })`. TypeORM drops an undefined
+    condition, so it returned conversation row 1, and a member of that
+    conversation wrote into it. A numeric id was taken as an internal PK,
+    bypassing the PUBID contract (membership was still checked, so this was
+    not an escalation). `parentMessageId: null` had the same row-1 shape.
+  - **Fix.** Gateway `ChatWsGateway`: `join` and `send_message` now accept
+    only an `isPublicId(conv)` conversation id and an optional
+    `isPublicId(msg)` parent (`null` = no parent). Anything else is emitted
+    as `error` (`Invalid conversation id` / `Invalid parent message id`)
+    before any TCP call. Chat service, as defense in depth:
+    `lookupConversationId` returns null for a non-string, non-number ref, and
+    `sendMessage` treats a null parent as absent and 400s any other non-id
+    shape before `findOne`.
+  - **Tests.** New `apps/gateway/src/chat/chat.ws-gateway.spec.ts` (10 cases;
+    9 red against HEAD) and 3 new cases in `apps/chat/src/chat.service.spec.ts`
+    (red first). Chat suites: 3 suites / 20 tests green. tsc 0, eslint clean,
+    `check:conventions` OK.
+  - **Self-test (DEV, socket.io client, two test accounts).** `join {}`,
+    `join` with a numeric id, `send_message` without an id or with a numeric
+    id → `Invalid conversation id`. A bad parent → `Invalid parent message
+    id`. A valid `conv_` join raised no error. A valid send with
+    `parentMessageId: null` reached the other member, who had not joined
+    (`parentMessageId: null`), and was then removed with
+    `DELETE /api/chat/messages/:id` → 204. Message totals were identical
+    before and after in all four of the caller's conversations.
+  - **Docs.** CHAT-ROOM-01 gained the WS-id bullet and moved to
+    `verified=local:2026-10-02` (the non-joined recipient received the
+    message). Both chat anchors were rebaselined.
+
+- **CHAT-E2E-CLEANUP-01 — a sender can delete their own chat message
+  (2026-10-02, `/sweep` fix mode, from the FE→BE inbox). Release class B:
+  one additive route, no migration.** Not pushed.
+  - **Problem.** The storefront's chat e2e suite had no way to remove the
+    messages it sends, so every run left rows behind in a real conversation,
+    and users had no "delete message" at all.
+  - **Fix.** `DELETE /api/chat/messages/:id` (`msg_` public id,
+    `ParsePublicIdPipe`) → new TCP `chat.delete_message` →
+    `ChatService.deleteMessage`. It loads the row, 404s when it is missing and
+    403s when the caller is not the sender, then in one transaction sets
+    `parent_message_id = NULL` on the replies and deletes the row. The detach
+    is explicit because the self-FK is SET NULL on DEV but NO ACTION in the
+    prod baseline. The gateway answers 204 with an empty body; there is no
+    socket event and no tombstone. Contract residuals: known-behaviors
+    CHAT-E2E-CLEANUP-01.
+  - **Files.** `libs/constant/message-pattern.constant.ts`,
+    `libs/constant/response-message.constant.ts`,
+    `apps/chat/src/chat.{controller,service}.ts`,
+    `apps/gateway/src/chat/chat.{controller,service}.ts`.
+  - **Test.** New `apps/chat/src/chat.service.spec.ts` (3 tests: detach + delete,
+    404, 403 with no write). It was seen red (the method did not exist), then
+    green; `npx jest apps/chat apps/gateway/src/chat` gives 2 suites / 7 tests
+    passing. tsc and eslint are clean.
+  - **Runtime** (DEV, two accounts sharing a conversation):
+    - no cookie → 401
+    - the other member → 403 "Only the sender can delete this message"
+    - `conv_abc` → 400
+    - an unknown `msg_` → 404 "Message not found"
+    - the sender deleting a replied-to message → 204, empty body
+    - the thread lost it, and the reply was kept with `parentMessageId: null`
+    - a repeat delete → 404
+    - the conversation's `lastMessage` moved off the deleted row
+  - **Found on the way, recorded, not fixed.** SWEEP-1002-06: a WS
+    `send_message` without `conversationId` lands in the first conversation.
+    SWEEP-1002-07: chat FK drift between DEV and prod.
+
 - **SWEEP-1002-04 — the dead `payment_completed` handler in rewards is
   gone (2026-10-02, `/sweep` fix mode). Release class A: no contract change,
   no migration.** Not pushed.

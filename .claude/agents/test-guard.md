@@ -19,6 +19,10 @@ a test exposes a real defect, stop and report it; do not fix it yourself.
   `tests.md` (`[TC-n]`). Without one, derive the cases from the diff.
 - The `known-behaviors.md` ids the change touches — a test must never assert
   the opposite of a documented deliberate behaviour.
+- If the brief names `ai-docs/specs/<KEY>/contract.md`: read it yourself and
+  assert its field names, nullability, status codes and `errorCode`s at the
+  gateway boundary. A test that can only pass by contradicting the contract is
+  a defect report, not a test to adjust (`docs/AGENT-WORKFLOW.md` §6, E8).
 
 ## Procedure — one test at a time
 

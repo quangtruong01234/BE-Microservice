@@ -42,6 +42,18 @@ without re-explaining the workflow each time.
    pick a new item — resume that item at the recorded step. Verify the working
    tree first (`git status` + `tsc --noEmit`) to see how far the interrupted
    session actually got before continuing.
+
+   **Contract check:** this runs after picking and before the marker.
+   - If the item adds or changes a frontend-facing route that the FE will
+     build **in parallel** (the user said so, or the handoff entry asks for
+     contract-first), do NOT implement it here. Leave no marker. Report:
+     `<item id> needs two-session mode`. Point at `docs/AGENT-WORKFLOW.md` §7:
+     the BE prompt in `../.agent-local/two-repo-session-handoff-prompt.md`
+     plus `/pair` on the FE side.
+   - In batch mode, move on to the next independent item.
+   - If `ai-docs/specs/<KEY>/contract.md` already exists for the item, it is
+     the source of truth. Pass its path (never a summary) to every agent
+     brief. A response that differs from it is a defect, not a contract edit.
 3. **Write the progress marker.** Immediately after picking the item, append
    one line under **Active Tasks** in `snapshot.md`:
    `> ⏳ IN-PROGRESS (sweep): <item id> — step: <researching|implementing|validating|self-testing|closing>`
@@ -103,7 +115,9 @@ without re-explaining the workflow each time.
 1. Read `snapshot.md` (roadmap + known issues) and `CHANGELOG.md` recent entries
    to understand what already shipped.
 2. Propose 3–5 net-new features ranked by value/effort, each with: one-line
-   scope, affected services, migration yes/no, FE impact yes/no.
+   scope, affected services, migration yes/no, FE impact yes/no, and
+   contract-first yes/no (yes = the FE builds it in parallel, which means
+   two-session mode, `docs/AGENT-WORKFLOW.md` §7, not `/sweep`).
 3. Do not implement. After the user picks, append the chosen items as `F<n>`
    entries to the Feature Roadmap section in `snapshot.md`.
 

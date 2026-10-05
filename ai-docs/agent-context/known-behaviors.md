@@ -987,7 +987,7 @@ needing an FE hold — for zero reported benefit. Create is forgiving, update is
 strict, and that is the intended state.
 
 ## Chat `new_message` targets a room UNION (CHAT-ROOM-01, 2026-08-15)
-<!-- kb: id=CHAT-ROOM-01; group=social; files=apps/gateway/src/chat/chat.ws-gateway.ts; sha=297094342cda; verified=unrecorded:2026-08-15; keys=new_message,chat room,chatMessageRooms,participantIds,socket.io namespace,websocket,tin nhắn,phòng chat; summary=new_message targets a union of user: and conv: rooms, so a recipient no longer needs to join. -->
+<!-- kb: id=CHAT-ROOM-01; group=social; files=apps/gateway/src/chat/chat.ws-gateway.ts; sha=6a1800161f48; verified=local:2026-10-02; keys=new_message,chat room,chatMessageRooms,participantIds,socket.io namespace,websocket,Invalid conversation id,Invalid parent message id,tin nhắn,phòng chat; summary=new_message targets a union of user: and conv: rooms, so a recipient no longer needs to join. -->
 
 `ChatWsGateway.handleSendMessage` emits to `chatMessageRooms(...)` =
 `["user:<a>", "user:<b>", "conv:<publicId>"]`, not to the conversation room
@@ -1010,9 +1010,49 @@ alone.
 - `/chat` and `/notifications` are separate Socket.IO namespaces that both use a
   `user:<id>` room name. The registries are per-namespace, so there is no
   cross-talk between chat messages and notifications.
+- **WS ids are public ids only (SWEEP-1002-06, 2026-10-02).** `join` and
+  `send_message` take a well-formed `conv_` id and an optional `msg_`
+  `parentMessageId` (`null` = no parent). Anything else, including a numeric
+  id that used to work as an internal PK, gets `error` = `Invalid conversation
+  id` / `Invalid parent message id` before any TCP call. The REST
+  `ParsePublicIdPipe` does not run on socket payloads, so this check is the WS
+  equivalent. Before it, a send without `conversationId` landed in the FIRST
+  conversation, because TypeORM drops an `undefined` where condition.
+
+## A chat message is hard-deleted by its sender only (CHAT-E2E-CLEANUP-01, 2026-10-02)
+<!-- kb: id=CHAT-E2E-CLEANUP-01; group=social; files=apps/chat/src/chat.service.ts,apps/gateway/src/chat/chat.controller.ts; sha=c75d0ec83343; verified=local:2026-10-02; keys=delete message,DELETE /chat/messages,deleteMessage,chat.delete_message,unsend,recall message,message_deleted,xóa tin nhắn,thu hồi tin nhắn,gỡ tin nhắn; summary=DELETE /api/chat/messages/:id hard-deletes the caller's own message (204; 403 for anyone else, 404 unknown or already gone, 400 bad msg_ id); replies keep their content but lose parentMessageId, and no socket event or tombstone tells the other side. -->
+
+`ChatService.deleteMessage` loads the row by `msg_` public id, checks
+`senderId`, then in ONE transaction sets `parent_message_id = NULL` on every
+reply and deletes the row.
+
+- **Sender only, no admin override.** The other member of the conversation gets
+  a 403 even though they can read the message. There is no moderation path.
+- **Hard delete, no tombstone.** The row is gone: a repeat delete is a 404, the
+  thread simply loses the message, and `GET /conversations` falls back to the
+  previous message as `lastMessage` (or `null`). There is no "message was
+  deleted" placeholder to render.
+- **Replies are detached, not deleted.** A reply keeps its content and arrives
+  with `parentMessageId: null`. The explicit detach is deliberate: the
+  self-FK is `ON DELETE SET NULL` on DEV but `NO ACTION` in the prod baseline,
+  so relying on the FK would 1451 on prod. Do not "simplify" it away.
+- **The nightly retention cron detaches the same way** (SWEEP-1002-07,
+  2026-10-03). `cleanupOldMessages` (02:00, deletes messages older than 5
+  days) first runs `UPDATE messages child JOIN messages parent … SET
+  child.parent_message_id = NULL WHERE parent.created_at < cutoff`, then the
+  bulk DELETE, in one transaction. Before that fix, one expiring message with a
+  reply 1451'd the whole DELETE under NO ACTION, so the cron logged an error
+  and cleaned nothing. A reply younger than 5 days to an expired message
+  survives with `parentMessageId: null`. The SQL is a JOIN on purpose: MySQL
+  rejects `IN (SELECT …)` on the UPDATE target (1093).
+- **No socket event.** Nothing is emitted on `/chat`; the other side still shows
+  the message until it refetches. Adding a `message_deleted` event is a
+  separate, additive change.
+- **Unread counts move.** Unread is counted from live rows, so deleting an
+  unread message lowers the recipient's `unreadCount` on the next fetch.
 
 ## Likes fold into ONE unread notification per post, counted in the message text (SOCIAL-LIKE-NTF-01, 2026-09-28)
-<!-- kb: id=SOCIAL-LIKE-NTF-01; group=social; files=apps/notification/src/notification.service.ts,apps/social/src/social.service.ts; sha=c76c9587d30b; verified=local:2026-09-28; keys=like notification,post liked,social.post_liked,liked your post,people liked your post,aggregate,thích bài viết,lượt thích,thông báo like,người khác đã thích; summary=Likes fold into one unread `like` row per (owner, post) whose count lives in the message text; a read row starts a new one, self-likes and unlikes notify nothing, and the count can overshoot. -->
+<!-- kb: id=SOCIAL-LIKE-NTF-01; group=social; files=apps/notification/src/notification.service.ts,apps/social/src/social.service.ts; sha=20be68930092; verified=local:2026-09-28; keys=like notification,post liked,social.post_liked,liked your post,people liked your post,aggregate,thích bài viết,lượt thích,thông báo like,người khác đã thích; summary=Likes fold into one unread `like` row per (owner, post) whose count lives in the message text; a read row starts a new one, self-likes and unlikes notify nothing, and the count can overshoot. -->
 
 `likePost` emits `social.post_liked` (`{postId, postOwnerId, likerId}`) after the
 like commits; notification's `upsertLikeNotification` folds it into the owner's
@@ -1078,7 +1118,7 @@ that the body's line endings are now normalised to CRLF, which they always
 should have been; Gmail tolerated the bare LFs, a stricter MTA may not.
 
 ## `errorCode` is optional, closed-set, and survives the 401 sanitizer (CHG-PW-02, 2026-09-08)
-<!-- kb: id=CHG-PW-02; group=auth; files=libs/constant/error-code.constant.ts; sha=81dbce868dc3; verified=unrecorded:2026-09-08; keys=errorCode,401 sanitizer,UNAUTHENTICATED,INVALID_CURRENT_PASSWORD,error-code.constant; summary=errorCode is optional, closed-set, and deliberately survives the prod 401 sanitizer; only the user service forwards it. -->
+<!-- kb: id=CHG-PW-02; group=auth; files=libs/constant/error-code.constant.ts; sha=71d00f983c0d; verified=unrecorded:2026-09-08; keys=errorCode,401 sanitizer,UNAUTHENTICATED,INVALID_CURRENT_PASSWORD,error-code.constant; summary=errorCode is optional, closed-set, and deliberately survives the prod 401 sanitizer; only the user service forwards it. -->
 
 An error envelope may carry an `errorCode` from
 `libs/constant/error-code.constant.ts`. Four properties define it — none of
@@ -1133,7 +1173,7 @@ out of the sentence into its own row. Do not fork it per event.
   the in-app notification and the WS push are already saved by then.
 
 ## Only ONE of the five reset-password rejections is told apart (RESET-EXHAUST-01, 2026-09-08)
-<!-- kb: id=RESET-EXHAUST-01; group=auth; files=apps/user/src/user.service.ts,libs/constant/error-code.constant.ts; sha=e0b80cfd4193; verified=unrecorded:2026-09-08; keys=reset password,RESET_CODE_EXHAUSTED,attempt limit,exhausted marker,account-existence oracle,quên mật khẩu,nhập sai mã; summary=Five reset rejections share one 400; only the attempt-limit one carries an errorCode, via a separate marker key. -->
+<!-- kb: id=RESET-EXHAUST-01; group=auth; files=apps/user/src/user.service.ts,libs/constant/error-code.constant.ts; sha=dafa7cb7bdef; verified=unrecorded:2026-09-08; keys=reset password,RESET_CODE_EXHAUSTED,attempt limit,exhausted marker,account-existence oracle,quên mật khẩu,nhập sai mã; summary=Five reset rejections share one 400; only the attempt-limit one carries an errorCode, via a separate marker key. -->
 
 `POST /api/user/reset-password` answers `400 "Invalid or expired verification
 code"` for five different causes: wrong digits, expired after the code TTL,
@@ -1623,12 +1663,12 @@ drops the VOUCHER-CONC-01 Redis quota key so the next claim re-seeds instead of
 enforcing the old cap for up to 300s.
 
 ## Shop-voucher residuals (VOUCHER-SHOP-01, deliberate)
-<!-- kb: id=VOUCHER-SHOP-01; group=vouchers; files=apps/orders/src/orders.service.ts,apps/orders/src/voucher/apportion-discount.ts; sha=a59d1ffff6c4; verified=local:2026-09-28; keys=shop voucher,sellerId,platform voucher,vouchers/available,voucher 403,voucher stacking,stack voucher,voucherCodes,multi-shop voucher,platformVoucherCode,checkoutId,apportion,ghep ma,nhieu ma giam gia,voucher,mã giảm giá của shop; summary=Shop-voucher residuals — at most one shop voucher per seller plus one platform voucher per checkout, the platform discount is priced after shop vouchers and split pro rata by largest remainder; sellerId is only checked to exist, available caps at 50, and sellerId:null is a platform voucher. -->
+<!-- kb: id=VOUCHER-SHOP-01; group=vouchers; files=apps/orders/src/orders.service.ts,apps/orders/src/voucher/apportion-discount.ts; sha=8fba511ef055; verified=local:2026-10-04; keys=shop voucher,sellerId,platform voucher,vouchers/available,BREAKS_PLATFORM_VOUCHER,applied codes,voucher 403,voucher stacking,stack voucher,voucherCodes,multi-shop voucher,platformVoucherCode,checkoutId,apportion,ghep ma,nhieu ma giam gia,voucher,mã giảm giá của shop; summary=Shop-voucher residuals — at most one shop voucher per seller plus one platform voucher per checkout, the platform discount is priced after shop vouchers and split pro rata by largest remainder; the available list rates each row next to the applied voucherCodes (platform rows on the post-shop base, a shop row that would drop the applied platform code below its minimum is BREAKS_PLATFORM_VOUCHER); sellerId is only checked to exist, available caps at 50, and sellerId:null is a platform voucher. -->
 
 - The admin `sellerId` on `POST /api/order/admin/vouchers` is only checked to be
   an EXISTING user (404 otherwise), **not** a `shop`-role one — assigning it to
   a buyer just yields a voucher no basket ever matches.
-- `GET /api/order/vouchers/available` caps at 50 vouchers and is uncached (it
+- `POST /api/order/vouchers/available` caps at 50 vouchers and is uncached (it
   prices against the live basket).
 - A shop's 403 on another shop's voucher carries NO code in the message, on
   purpose — otherwise walking numeric voucher ids harvests other shops' codes.
@@ -1665,6 +1705,30 @@ is merged into it):
   ordering), so every failure after that point — a GHN refusal included —
   must hand them back. The multi-shop GHN leg missed this in the first cut and
   leaked one slot per refused checkout; caught by the 2026-09-28 self-test.
+
+The basket list next to applied codes (VOUCHER-AVAIL-STACK-01, 2026-10-04 —
+optional `voucherCodes` on `POST /api/order/vouchers/available`; verified
+locally 2026-10-04 against `voucher/validate` on the same basket):
+
+- **Platform rows are priced on the post-shop base**, the same base validate
+  uses: `applicableSubtotal` and `amountToAdd` are against what is left after
+  the applied shop discounts. The top-level `itemsTotal` stays the raw basket.
+- **A shop row is rated as REPLACING that seller's applied code**, never as
+  stacking on it. If the swap would make an applied platform code that applies
+  right now stop applying, the row is `isEligible: false`,
+  `ineligibleReason: BREAKS_PLATFORM_VOUCHER`, `discountAmount: 0`, and
+  `amountToAdd` is the platform code's shortfall on the swapped base (0 when
+  the swap breaks it some other way than its minimum). The code itself is fine
+  on its own — validate would 400 the platform code, not the shop one.
+- **An applied platform code that already fails is not "broken" by anything**,
+  so no shop row is flagged in that state.
+- **An applied code is a hint input, never an error:** an unknown, inactive or
+  ineligible applied code counts as a zero discount; validate owns its 400/404.
+  An applied code outside the 50 candidates is fetched (one extra query, only
+  when some are missing) and still counts, but is not listed.
+- **Without `voucherCodes` the list is unchanged** except that the platform
+  base is now the sum of per-seller `Math.round`ed subtotals, matching
+  validate (it differs from the raw sum only on a fractional price).
 
 ## 12 of 19 Quận 8 wards cannot be ordered to (GHN-MSG-01, prod, 2026-08-26)
 <!-- kb: id=GHN-MSG-01; group=ghn; aka=GHN-WARD-01; files=apps/orders/src/ghn/ghn.service.ts; sha=d9c9852a1dd2; verified=prod:2026-08-26; keys=unshippable ward,DESTINATION_NOT_SERVICEABLE,shipping-order/fee,retired ward,district 1450; summary=12 of 19 Quan 8 wards cannot be ordered to; do NOT "fix" it by quoting from /shipping-order/fee. -->
@@ -2589,7 +2653,7 @@ Events are stable-sorted by `at`.
   code.
 
 ## Return-request photos: owner-prefixed, max 5, always an array, never re-checked after create (RETURN-PHOTO-01, 2026-10-02)
-<!-- kb: id=RETURN-PHOTO-01; group=orders; files=apps/gateway/src/order/order.service.ts,apps/gateway/src/order/dto/return-request.dto.ts,apps/orders/src/orders.service.ts,libs/common/src/cloudinary/cloudinary.constants.ts; sha=f4a9c75d8b49; verified=local:2026-10-02; keys=return photo,return image,return evidence,imageUrls,image_urls,trybuy/returns,getReturnUploadFolder,LOGICAL_RETURN_FOLDER,RETURN_REQUEST_MAX_IMAGES,return-request,return request,CANNOT_ATTACH_OTHERS_MEDIA,ảnh trả hàng,anh tra hang,hình trả hàng,hinh tra hang,ảnh hoàn hàng,bằng chứng trả hàng,bang chung tra hang; summary=A return request takes up to 5 unique jpg/png/webp URLs from the trybuy/returns Cloudinary folder whose leaf starts with the caller's id (403 otherwise, before any TCP call); orders stores none as NULL and every read emits imageUrls as an array ([] for legacy rows); the URLs are not checked to exist, are fixed once created, and are never deleted from Cloudinary. -->
+<!-- kb: id=RETURN-PHOTO-01; aka=RETURN-PHOTO-ERRCODE-01; group=orders; files=apps/gateway/src/order/order.service.ts,apps/gateway/src/order/dto/return-request.dto.ts,apps/orders/src/orders.service.ts,libs/common/src/cloudinary/cloudinary.constants.ts,apps/gateway/src/common/pipes/validation-exception.factory.ts,apps/gateway/src/common/media/cloudinary-ownership.ts; sha=3e78930c35c1; verified=local:2026-10-04; keys=return photo,return image,return evidence,imageUrls,image_urls,trybuy/returns,getReturnUploadFolder,LOGICAL_RETURN_FOLDER,RETURN_REQUEST_MAX_IMAGES,return-request,return request,CANNOT_ATTACH_OTHERS_MEDIA,RETURN_PHOTO_INVALID,MEDIA_NOT_OWNED,createValidationException,ảnh trả hàng,anh tra hang,hình trả hàng,hinh tra hang,ảnh hoàn hàng,bằng chứng trả hàng,bang chung tra hang; summary=A return request takes up to 5 unique jpg/png/webp URLs from the trybuy/returns Cloudinary folder whose leaf starts with the caller's id (403 MEDIA_NOT_OWNED otherwise, before any TCP call), and a 400 carries errorCode RETURN_PHOTO_INVALID only when imageUrls is the sole failing field; orders stores none as NULL and every read emits imageUrls as an array ([] for legacy rows); the URLs are not checked to exist, are fixed once created, and are never deleted from Cloudinary. -->
 
 **Contract.** `POST /api/order/:id/return-request` takes an optional
 `imageUrls: string[]`. The checks, in order:
@@ -2602,6 +2666,14 @@ Events are stable-sorted by `at`.
 - **Gateway service**: `assertCloudinaryUrlsOwnedBy` requires each leaf to start
   with `<caller internal id>_`. Otherwise it is a 403 `CANNOT_ATTACH_OTHERS_MEDIA`
   and orders is never called.
+- **errorCode (RETURN-PHOTO-ERRCODE-01, 2026-10-04).** The four DTO rules
+  carry class-validator `context: { errorCode: RETURN_PHOTO_INVALID }`, and the
+  gateway `createValidationException` emits that code only when EVERY failing
+  constraint agrees. A photo failure together with an empty `reason` or an
+  unknown property is a 400 with no `errorCode` — by design, so the code never
+  hides a second problem. The 403 carries `MEDIA_NOT_OWNED`, and because
+  `assertCloudinaryUrlsOwnedBy` is shared, so does every product, post and
+  avatar route that attaches media. The "order not eligible" 400 has no code.
 
 Every return-request response (create, `return-requests/mine`, the
 seller/admin list, approve and reject) carries `imageUrls` as an array. NULL
@@ -2628,7 +2700,7 @@ and rows from before 2026-10-02 give `[]` (SHAPE-01).
   other media in this project.
 
 ## A checkout whose outcome is unknown holds its Idempotency-Key for 300s (IDEM-HOLD-01, 2026-10-02)
-<!-- kb: id=IDEM-HOLD-01; aka=SWEEP-1002-01; group=orders; files=apps/gateway/src/order/order.service.ts; sha=6621f282c00b; verified=local:2026-10-02; keys=Idempotency-Key,idempotency key,idem:order,DUPLICATE_REQUEST_IN_PROGRESS,settleFailedIdempotencyKey,IDEMPOTENCY_UNKNOWN_OUTCOME_TTL_SECONDS,duplicate order,double order,checkout retry,checkout timeout,đơn trùng,don trung,đặt hàng trùng,dat hang trung,thử lại thanh toán,thu lai thanh toan; summary=POST /api/order releases its Idempotency-Key only on a definite 4xx other than 408; a 408, a 5xx or a transport failure re-holds the key as in-progress for 300s, so a same-key retry inside that window is a 409 DUPLICATE_REQUEST_IN_PROGRESS even when no order was created, and the result is never replayed for an order that committed after the gateway gave up. -->
+<!-- kb: id=IDEM-HOLD-01; aka=SWEEP-1002-01,IDEM-HOLD-CODE-01; group=orders; files=apps/gateway/src/order/order.service.ts; sha=9edaa34676e0; verified=local:2026-10-03; keys=Idempotency-Key,idempotency key,idem:order,DUPLICATE_REQUEST_IN_PROGRESS,ORDER_REQUEST_IN_PROGRESS,settleFailedIdempotencyKey,IDEMPOTENCY_UNKNOWN_OUTCOME_TTL_SECONDS,duplicate order,double order,checkout retry,checkout timeout,đơn trùng,don trung,đặt hàng trùng,dat hang trung,thử lại thanh toán,thu lai thanh toan; summary=POST /api/order releases its Idempotency-Key only on a definite 4xx other than 408; a 408, a 5xx or a transport failure re-holds the key as in-progress for 300s, so a same-key retry inside that window is a 409 with errorCode ORDER_REQUEST_IN_PROGRESS even when no order was created, and the result is never replayed for an order that committed after the gateway gave up. -->
 
 **Why.** TCP has no cancel. When the gateway's `timeout(TCP_TIMEOUT_MS.WRITE)`
 fires (408) or the transport drops (502), the orders service can still commit
@@ -2656,11 +2728,61 @@ reservation and a second payment URL (SWEEP-1002-01).
   created** (e.g. orders was simply down). The FE must treat that 409 as
   "the order may have been placed — check My Orders", not retry blindly; after
   300s, or with a new key, a retry goes through.
+- **That 409 carries `errorCode: "ORDER_REQUEST_IN_PROGRESS"`** (IDEM-HOLD-CODE-01,
+  2026-10-03), and it is the ONLY 409 on this route that does: a stock or
+  voucher 409 is a definite rejection with no code. Branch on the code, never
+  on the message text. The same code is returned while the first request is
+  still genuinely in flight — the two cases are indistinguishable and lead to
+  the same action.
 - An order that commits after the gateway gave up is **never cached for
   replay** — the gateway is no longer listening for the result. The buyer finds
   it in their order list; after 300s a same-key retry WOULD create a second
   order. 300s covers the slowest orders leg (2N serial 5s inventory calls,
   SWEEP-1002-03), not an arbitrarily late commit.
+- Verified on DEV 2026-10-03: a key seeded to `__in_progress__` answered 409
+  with the code and the message unchanged, and the key stayed held.
 - Verified on DEV 2026-10-02: a 400 (quantity 999) retried with the same key
   stayed a 400; a 201 replayed the same `ord_` id; with orders stopped, a 502
   then a same-key 409, Redis TTL 299 on `idem:order:<userId>:<key>`.
+
+## Notification inbox: read-all, owner-only hard delete, strict unreadOnly (NOTIF-INBOX-01, 2026-10-05)
+<!-- kb: id=NOTIF-INBOX-01; group=social; files=apps/notification/src/notification.service.ts,apps/gateway/src/notification/notification.controller.ts,apps/gateway/src/notification/dto/get-notifications-query.dto.ts; sha=a965a57633b9; verified=local:2026-10-05; keys=read-all,mark all read,markAllNotificationsRead,deleteNotification,delete notification,unreadOnly,unread only,notification inbox,notifications/read-all,idx_notifications_user_read_created,đọc tất cả,doc tat ca,đánh dấu đã đọc,danh dau da doc,xóa thông báo,xoa thong bao,chưa đọc,chua doc,hộp thư thông báo; summary=PATCH /api/notifications/read-all flips only the caller's unread rows and answers {updatedCount}, DELETE /api/notifications/:id hard-deletes the caller's own row (204; an unknown, already-deleted or foreign id is the same 404, a malformed id is a 400) with no socket event, and ?unreadOnly= accepts only the literal true/false (anything else is a 400) and drives total/totalPages. -->
+
+**Contract** (gateway `NotificationController` → notification service):
+
+- **`PATCH /api/notifications/read-all`** → 200 `{ updatedCount }`. One
+  `UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0`.
+  `updatedCount` is what flipped, so a second call is `0`, not an error.
+- **`DELETE /api/notifications/:id`** → 204, empty body. One
+  `DELETE ... WHERE public_id = ? AND user_id = ?`. Unknown, already deleted
+  and another user's id all answer the SAME 404 (`Notification not found`),
+  so the route cannot be used to probe whether an id exists. It is a hard
+  delete: there is no undo, tombstone or trash.
+- **`GET /api/notifications?unreadOnly=true`**. `total`, `totalPages` and
+  `hasNext` follow the filter. Only the literal strings `true` / `false` are
+  booleans. `yes`, `1` and `TRUE` are a 400 (`unreadOnly must be a boolean
+  value`), not a silent `false`. That is unlike the lenient
+  `toOptionalBoolean` in the admin GHN query DTO, deliberately (SHAPE-01
+  rule 3).
+
+**Residuals — do not "fix" these without re-reading the why:**
+
+- **No WS event for either write.** Another open tab keeps its badge and its
+  list until it refetches `GET /unread-count` / the list. The FE refetches
+  after its own call; cross-tab sync was not built.
+- **`PATCH /:id/read` is still lenient**: an unknown or foreign id answers
+  200 `{success:true}` and changes nothing. Only the new DELETE answers 404;
+  the old route was left as-is (tightening a passing 200 is class C).
+- **Interaction with like folding (SOCIAL-LIKE-NTF-01).** read-all marks the
+  folded `like` row read, so the next like opens a fresh row at count 1.
+  Deleting an unread `like` row does the same. A like folding concurrently with
+  the delete loses its CAS (`affected 0`) and the retry opens a new row, so
+  the like is never lost — it just restarts the count.
+- **Index.** All three paths, the badge count and the ACCOUNT-DELETE-01
+  purge ride on `idx_notifications_user_read_created (user_id, is_read,
+  created_at)` (migration `nodeA-20261005-001`). Before it existed on prod,
+  read-all was a full-table UPDATE, which locked every row it scanned.
+- Verified on DEV 2026-10-05: testadmin 30 unread → `?unreadOnly=true` total
+  29 after one PATCH read; foreign DELETE 404, own DELETE 204 then 404,
+  malformed 400; read-all `{updatedCount:28}`, badge 0, the other user's
+  badge unchanged at 13, repeat read-all 0.

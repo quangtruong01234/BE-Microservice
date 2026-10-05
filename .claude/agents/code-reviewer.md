@@ -33,6 +33,12 @@ You are a code review agent for the TryBuy project. Your job is to read recently
 - Wrong endpoint called (method, path, or body shape does not match DTO)
 - Relative import deeper than 2 levels (`../../`) — must use path alias (`@app/constant`, `@app/common`, `@app/cached`)
 - Path alias used but not declared in tsconfig — report, do not assume
+- The brief names an `ai-docs/specs/<KEY>/contract.md` and the code deviates
+  from it — a route, DTO field name, type, nullability, status code or
+  `errorCode` that the contract does not say. Read the contract file yourself;
+  do not trust the brief's summary of it. A deviation is never "fixed" by
+  editing the contract to match the code — that needs re-agreement
+  (`ai-docs/specs/README.md § The anchor`)
 
 ### 🟡 Important — should fix
 
@@ -66,6 +72,8 @@ the developer can check it without trusting the reviewer. Valid sources:
   `check:conventions` invariant (`scripts/check-conventions.mjs`)
 - a `known-behaviors.md` id when the change contradicts a documented shipped
   behaviour (e.g. `known-behaviors.md › PATCH-NULL-01`)
+- an agreed contract, by path and section (e.g.
+  `ai-docs/specs/<KEY>/contract.md § 3. Field table`)
 - `defect` — a real bug (wrong result, crash, data loss) that needs no written
   rule; the `Detail:` must then state the concrete failing input
 

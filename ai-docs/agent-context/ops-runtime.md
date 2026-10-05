@@ -119,7 +119,20 @@
   - Dashboard: `grafana/gateway-dashboard.json` (Dashboards → New → Import;
     pick the Grafana Cloud Prometheus data source). Every query was evaluated
     against a real Prometheus scraping the local gateway, and the JSON imported
-    cleanly into Grafana, on 2026-09-28.
+    cleanly into Grafana, on 2026-09-28. Imported on prod as uid
+    `trybuy-gateway`; on 2026-10-03 all 17 panel queries were run over 24h
+    against Grafana Cloud — 15 return data, the two EMPTY ones (5xx-by-route,
+    429/s) are empty because neither status has ever been served.
+  - **Reading it as an agent**: a *Viewer* service-account token
+    (`GRAFANA_URL` + `GRAFANA_SA_TOKEN`) is in
+    `../.agent-local/prod-endpoints.md`. PromQL goes through the data source
+    proxy: `GET $GRAFANA_URL/api/datasources/proxy/uid/grafanacloud-prom/api/v1/query`
+    (or `query_range`) with `Authorization: Bearer $GRAFANA_SA_TOKEN`;
+    dashboards via `/api/dashboards/uid/trybuy-gateway`. Have the script read
+    the token from that file — a token inlined in a shell command is blocked by
+    the permission classifier. With traffic this sparse, `increase()` drops
+    each series' first sample and undercounts badly; for "how many since
+    boot" use `max_over_time(http_requests_total[…])` per series instead.
   - Budget: the free tier allows 10k active series. Each (method, route,
     status) combination the gateway has actually served costs 14 series (11
     histogram buckets + sum + count + the counter), plus ~100 process series,

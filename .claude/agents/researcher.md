@@ -40,6 +40,14 @@ Return all of the following (if found):
 - **Relations**: FK relations and `onDelete` behavior
 - **Migration file**: related SQL file in `api/database/migrations/nodeA|nodeB/` + its entry in `api/database/migrations.manifest.json` (if any; baseline is frozen in `api/database/prod-baseline-20260717/`)
 
+## When the brief names a spec or contract path
+
+Read the file itself (`ai-docs/specs/<KEY>/contract.md`, `design.md`) — never
+work from a summary of it pasted into the brief. Report every place where the
+code you find contradicts it under a **Contract conflict** heading (contract
+says / code says, with file:line). Do not resolve the conflict and do not pick
+a side; that is the caller's decision (`docs/AGENT-WORKFLOW.md` §6, E1).
+
 ## When not found
 
 State clearly "Not found: [name of thing sought]" — do not guess, do not suggest unconfirmed alternatives.
