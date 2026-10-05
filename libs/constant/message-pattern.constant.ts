@@ -116,6 +116,9 @@ export const NOTIFICATION_MESSAGE_PATTERN = {
   GET_USER_NOTIFICATIONS: "get_user_notifications",
   GET_UNREAD_COUNT: "get_notification_unread_count",
   MARK_NOTIFICATION_READ: "mark_notification_read",
+  // NOTIF-INBOX-01 — inbox management.
+  MARK_ALL_NOTIFICATIONS_READ: "notification.mark_all_read",
+  DELETE_NOTIFICATION: "notification.delete",
   // ACCOUNT-DELETE-01 — drop the deleted user's inbox.
   PURGE_USER_DATA: "notification.purge_user_data",
 };
@@ -158,6 +161,7 @@ export const CHAT_MESSAGE_PATTERN = {
   CHAT_SEND_MESSAGE: "chat.send_message",
   CHAT_CHECK_MEMBERSHIP: "chat.check_membership",
   CHAT_MARK_READ: "chat.mark_read",
+  CHAT_DELETE_MESSAGE: "chat.delete_message",
 };
 
 export const CART_MESSAGE_PATTERN = {

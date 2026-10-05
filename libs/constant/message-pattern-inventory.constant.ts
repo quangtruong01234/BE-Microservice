@@ -10,6 +10,8 @@ export const INVENTORY_MESSAGE_PATTERNS = {
   // Stock operations
   INVENTORY_CHECK_STOCK: "inventory.check_stock",
   INVENTORY_RESERVE_STOCK: "inventory.reserve_stock",
+  // SWEEP-1002-05: every line of one checkout in a single all-or-nothing PG transaction
+  INVENTORY_RESERVE_STOCK_MANY: "inventory.reserve_stock_many",
   INVENTORY_RELEASE_STOCK: "inventory.release_stock",
   INVENTORY_CONSUME_RESERVED_STOCK: "inventory.consume_reserved_stock",
   INVENTORY_RESTOCK_RETURNED: "inventory.restock_returned",

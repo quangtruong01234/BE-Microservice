@@ -352,6 +352,10 @@ export const VOUCHER_INELIGIBLE_REASON = {
   FULLY_REDEEMED: "FULLY_REDEEMED",
   USER_LIMIT_REACHED: "USER_LIMIT_REACHED",
   NO_DISCOUNT: "NO_DISCOUNT",
+  // VOUCHER-AVAIL-STACK-01: a shop voucher that applies on its own, but
+  // swapping it in would drop the APPLIED platform voucher's post-shop base
+  // below what that platform voucher needs.
+  BREAKS_PLATFORM_VOUCHER: "BREAKS_PLATFORM_VOUCHER",
 } as const;
 
 export type VoucherIneligibleReason =
@@ -416,4 +420,10 @@ export const CHAT_MESSAGE = {
   CANNOT_CHAT_WITH_SELF: "Cannot chat with yourself",
   ACCESS_DENIED: "Access denied",
   INVALID_PARENT_MESSAGE: "Parent message not found in this conversation",
+  MESSAGE_NOT_FOUND: "Message not found",
+  NOT_MESSAGE_SENDER: "Only the sender can delete this message",
+} as const;
+
+export const NOTIFICATION_MESSAGE = {
+  NOT_FOUND: "Notification not found",
 } as const;

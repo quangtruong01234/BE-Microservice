@@ -56,6 +56,30 @@ export const ERROR_CODE = {
    * they lead to the same action.
    */
   CAPTCHA_REQUIRED: "CAPTCHA_REQUIRED",
+  /**
+   * `POST /api/order` with an `Idempotency-Key` that is still held in-progress
+   * (IDEM-HOLD-01): either the first request is in flight, or it failed with an
+   * UNKNOWN outcome (408 / 5xx / transport) and may still commit. The order may
+   * already exist, so the client must send the user to "My orders" instead of
+   * retrying. Every other 409 on this route (stock, voucher) is a definite
+   * rejection and carries no code.
+   */
+  ORDER_REQUEST_IN_PROGRESS: "ORDER_REQUEST_IN_PROGRESS",
+  /**
+   * `POST /api/order/:id/return-request` (RETURN-PHOTO-ERRCODE-01): a 400
+   * whose every failing rule is on `imageUrls` — not an array, more than 5,
+   * a duplicate, or a URL that is not a Cloudinary image in `trybuy/returns`.
+   * The client should send the user back to the photo picker. A 400 that also
+   * fails another field (or is the "order not returnable" 400) has no code.
+   */
+  RETURN_PHOTO_INVALID: "RETURN_PHOTO_INVALID",
+  /**
+   * Every route that attaches uploaded media (return photos, product images,
+   * post media, avatar): a 403 because a URL's leaf is not prefixed with the
+   * caller's id, i.e. another account uploaded it. The client should drop
+   * that URL and upload the file again as the current user.
+   */
+  MEDIA_NOT_OWNED: "MEDIA_NOT_OWNED",
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODE)[keyof typeof ERROR_CODE];
