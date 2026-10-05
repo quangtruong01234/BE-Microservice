@@ -92,6 +92,9 @@ function createService(): ServiceFixture {
     if (pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_CHECK_STOCK) {
       return of({ available: true, availableStock: 10 });
     }
+    if (pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK_MANY) {
+      return of({ isReserved: true, failedProductId: null });
+    }
     return of(true);
   });
   const transaction = jest.fn();
@@ -362,8 +365,8 @@ describe("OrdersService voucher stacking — multi-seller checkout", () => {
       if (pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_CHECK_STOCK) {
         return of({ available: true, availableStock: 10 });
       }
-      if (pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK) {
-        return of(false);
+      if (pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK_MANY) {
+        return of({ isReserved: false, failedProductId: 1 });
       }
       return of(true);
     });
@@ -394,7 +397,7 @@ describe("OrdersService voucher stacking — multi-seller checkout", () => {
     // The slot was claimed before the GHN round trip, so it must come back.
     expect(release).toHaveBeenCalledTimes(1);
     expect(inventorySend).not.toHaveBeenCalledWith(
-      INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK,
+      INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK_MANY,
       expect.anything(),
     );
     expect(transaction).not.toHaveBeenCalled();

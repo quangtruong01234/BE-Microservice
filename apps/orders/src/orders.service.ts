@@ -100,6 +100,7 @@ import {
   VoucherIneligibleReason,
 } from "libs/constant/response-message.constant";
 import {
+  ReserveStockManyResult,
   StockReservationItem,
   AdminGhnOrderListQuery,
   AdminGhnOrderListItem,
@@ -142,6 +143,27 @@ function sumMapValues(valueByKey: Map<number, number>): number {
     total += amount;
   }
   return total;
+}
+
+/**
+ * What each seller still charges for goods once its shop voucher is off — the
+ * base a platform voucher is priced against and the weight its discount is
+ * split by (VOUCHER-SHOP-01 phase 2). Shared by checkout and the basket list
+ * so the list can never price a platform row against a different base.
+ */
+function buildRemainingBySellerId(
+  subtotalBySellerId: Map<number, number>,
+  shopDiscountBySellerId: Map<number, number>,
+): Map<number, number> {
+  const remainingBySellerId = new Map<number, number>();
+  for (const [sellerId, subtotal] of subtotalBySellerId) {
+    const shopDiscount = shopDiscountBySellerId.get(sellerId) ?? 0;
+    remainingBySellerId.set(
+      sellerId,
+      Math.max(Math.round(subtotal) - shopDiscount, 0),
+    );
+  }
+  return remainingBySellerId;
 }
 
 /**
@@ -698,10 +720,19 @@ export class OrdersService {
    * applies right now and why not. Visible is NOT applicable — an ineligible
    * code still fails at `voucher/validate` and at order create; this list is a
    * hint the frontend greys out, never the authority.
+   *
+   * `appliedCodes` (VOUCHER-AVAIL-STACK-01) are the codes already on the
+   * checkout. Each row is rated as the code checkout would see it next to
+   * them: a platform row is priced after the applied shop discounts, and a
+   * shop row — rated as replacing that seller's applied code — turns
+   * `BREAKS_PLATFORM_VOUCHER` when the swap would make the applied platform
+   * code stop applying. An applied code that is unknown or ineligible counts
+   * as no discount; `voucher/validate` is where it gets its 400.
    */
   async listAvailableVouchers(
     userId: number,
     items: Array<{ price: number; quantity: number; sellerId: number }>,
+    appliedCodes: string[] = [],
   ): Promise<{ itemsTotal: number; vouchers: AvailableVoucher[] }> {
     const itemsTotal = items.reduce(
       (sum, item) => sum + item.price * item.quantity,
@@ -726,18 +757,102 @@ export class OrdersService {
       return { itemsTotal, vouchers: [] };
     }
 
-    const redemptionCountByVoucherId = await this.countRedemptionsByVoucher(
-      userId,
+    const appliedVouchers = await this.findAppliedVouchers(
+      appliedCodes,
       candidates,
     );
+    const redemptionCountByVoucherId = await this.countRedemptionsByVoucher(
+      userId,
+      [
+        ...new Map(
+          [...candidates, ...appliedVouchers].map((voucher) => [
+            voucher.id,
+            voucher,
+          ]),
+        ).values(),
+      ],
+    );
     const now = new Date();
-    const vouchers = candidates.map((voucher): AvailableVoucher => {
-      const evaluation = this.evaluateVoucher(voucher, {
-        itemsTotal,
-        subtotalBySellerId,
+    const evaluate = (
+      voucher: Voucher,
+      baseTotal: number,
+      baseBySellerId: Map<number, number>,
+    ): VoucherEvaluation =>
+      this.evaluateVoucher(voucher, {
+        itemsTotal: baseTotal,
+        subtotalBySellerId: baseBySellerId,
         userRedemptionCount: redemptionCountByVoucherId.get(voucher.id) ?? 0,
         now,
       });
+
+    // The applied set as checkout would resolve it: the first shop code per
+    // seller and the first platform code (a second one is validate's 400).
+    const appliedShopDiscountBySellerId = new Map<number, number>();
+    let appliedPlatformVoucher: Voucher | null = null;
+    for (const voucher of appliedVouchers) {
+      const ownerSellerId = voucher.sellerId ?? null;
+      if (ownerSellerId === null) {
+        appliedPlatformVoucher ??= voucher;
+      } else if (!appliedShopDiscountBySellerId.has(ownerSellerId)) {
+        appliedShopDiscountBySellerId.set(
+          ownerSellerId,
+          evaluate(voucher, itemsTotal, subtotalBySellerId).discountAmount,
+        );
+      }
+    }
+    const platformBaseBySellerId = buildRemainingBySellerId(
+      subtotalBySellerId,
+      appliedShopDiscountBySellerId,
+    );
+    const platformBaseTotal = sumMapValues(platformBaseBySellerId);
+    // Only a platform code that applies right now can be broken by a swap.
+    const breakablePlatformVoucher =
+      appliedPlatformVoucher !== null &&
+      evaluate(
+        appliedPlatformVoucher,
+        platformBaseTotal,
+        platformBaseBySellerId,
+      ).isEligible
+        ? appliedPlatformVoucher
+        : null;
+
+    const evaluateRow = (voucher: Voucher): VoucherEvaluation => {
+      const ownerSellerId = voucher.sellerId ?? null;
+      if (ownerSellerId === null) {
+        return evaluate(voucher, platformBaseTotal, platformBaseBySellerId);
+      }
+      const evaluation = evaluate(voucher, itemsTotal, subtotalBySellerId);
+      if (!evaluation.isEligible || breakablePlatformVoucher === null) {
+        return evaluation;
+      }
+      const swappedBaseBySellerId = buildRemainingBySellerId(
+        subtotalBySellerId,
+        new Map(appliedShopDiscountBySellerId).set(
+          ownerSellerId,
+          evaluation.discountAmount,
+        ),
+      );
+      const platformAfterSwap = evaluate(
+        breakablePlatformVoucher,
+        sumMapValues(swappedBaseBySellerId),
+        swappedBaseBySellerId,
+      );
+      if (platformAfterSwap.isEligible) {
+        return evaluation;
+      }
+      return {
+        isEligible: false,
+        ineligibleReason: VOUCHER_INELIGIBLE_REASON.BREAKS_PLATFORM_VOUCHER,
+        discountAmount: 0,
+        applicableSubtotal: evaluation.applicableSubtotal,
+        // The platform code's shortfall on its post-shop base, 0 when it is
+        // a zero discount rather than a missed minimum that breaks it.
+        amountToAdd: platformAfterSwap.amountToAdd,
+      };
+    };
+
+    const vouchers = candidates.map((voucher): AvailableVoucher => {
+      const evaluation = evaluateRow(voucher);
       return {
         code: voucher.code,
         description: voucher.description,
@@ -785,6 +900,44 @@ export class OrdersService {
       subtotalBySellerId.set(sellerId, current + item.price * item.quantity);
     }
     return subtotalBySellerId;
+  }
+
+  /**
+   * The vouchers behind the codes already on the checkout, in the order they
+   * were sent. Codes already among the candidates cost nothing; only the rest
+   * are fetched, in one query. An unknown code is dropped — the list is a
+   * hint, and `voucher/validate` owns the 404.
+   */
+  private async findAppliedVouchers(
+    rawCodes: string[],
+    candidates: Voucher[],
+  ): Promise<Voucher[]> {
+    const codes = [
+      ...new Set(
+        rawCodes
+          .map((code) => this.normalizeVoucherCode(code))
+          .filter((code) => code.length > 0),
+      ),
+    ];
+    if (!codes.length) {
+      return [];
+    }
+    const voucherByCode = new Map(
+      candidates.map((voucher) => [voucher.code, voucher]),
+    );
+    const missingCodes = codes.filter((code) => !voucherByCode.has(code));
+    if (missingCodes.length) {
+      const fetchedVouchers = await this.voucherRepository.find({
+        where: { code: In(missingCodes) },
+      });
+      for (const voucher of fetchedVouchers) {
+        voucherByCode.set(voucher.code, voucher);
+      }
+    }
+    return codes.flatMap((code) => {
+      const voucher = voucherByCode.get(code);
+      return voucher ? [voucher] : [];
+    });
   }
 
   /**
@@ -1051,17 +1204,15 @@ export class OrdersService {
     }
 
     if (platformCode !== null) {
-      // What each seller still charges for goods once its shop voucher is off:
-      // the platform voucher's base, and the weight its discount is split by.
-      const remainingBySellerId = new Map<number, number>();
-      for (const [sellerId, subtotal] of subtotalBySellerId) {
-        const shopDiscount =
-          plan.shopVoucherBySellerId.get(sellerId)?.discountAmount ?? 0;
-        remainingBySellerId.set(
-          sellerId,
-          Math.max(Math.round(subtotal) - shopDiscount, 0),
-        );
-      }
+      const remainingBySellerId = buildRemainingBySellerId(
+        subtotalBySellerId,
+        new Map(
+          [...plan.shopVoucherBySellerId].map(([sellerId, shopVoucher]) => [
+            sellerId,
+            shopVoucher.discountAmount,
+          ]),
+        ),
+      );
       const platformVoucher = await this.validateVoucherForCheckout(
         userId,
         platformCode,
@@ -1888,36 +2039,46 @@ export class OrdersService {
     );
   }
 
+  /**
+   * SWEEP-1002-05: one all-or-nothing call for the whole seller cart. It used
+   * to be one reserve per line (~0.7s each at the prod app→Aiven RTT), and a
+   * 20-line cart outran the gateway's 10s WRITE budget.
+   *
+   * A rejected batch held nothing, so it needs no compensation. A LOST reply
+   * (timeout, transport) might have committed, so every line is released under
+   * the key — a release of a hold that never landed is a harmless false.
+   */
   private async reserveOrderItems(
     items: StockReservationItem[],
     reservationKey: string,
   ): Promise<void> {
-    const reservedItems: StockReservationItem[] = [];
+    let reply: ReserveStockManyResult;
     try {
-      for (const item of items) {
-        const reserved = await firstValueFrom(
-          this.inventoryClient
-            .send<boolean>(INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK, {
-              productId: item.productId,
-              quantity: item.quantity,
-              skuId: item.skuId ?? undefined,
+      reply = await firstValueFrom(
+        this.inventoryClient
+          .send<ReserveStockManyResult>(
+            INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK_MANY,
+            {
+              items: items.map((item) => ({
+                productId: item.productId,
+                quantity: item.quantity,
+                skuId: item.skuId ?? undefined,
+              })),
               reservationKey,
-            })
-            .pipe(
-              timeout(5000),
-              catchError((e: unknown) => throwError(() => e)),
-            ),
-        );
-        if (!reserved) {
-          throw new BadRequestException(
-            ORDER_MESSAGE.RESERVE_STOCK_FAILED(item.productId),
-          );
-        }
-        reservedItems.push(item);
-      }
+            },
+          )
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
+      );
     } catch (error) {
-      await this.releaseReservedItems(reservedItems, reservationKey);
+      await this.releaseReservedItems(items, reservationKey);
       throw error;
+    }
+    if (!reply.isReserved) {
+      throw new BadRequestException(
+        ORDER_MESSAGE.RESERVE_STOCK_FAILED(
+          reply.failedProductId ?? items[0].productId,
+        ),
+      );
     }
   }
 

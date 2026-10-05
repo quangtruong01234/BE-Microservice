@@ -12,6 +12,12 @@ export type StockReservationItem = {
   skuId?: number | null;
 };
 
+/** Reply of inventory's INVENTORY_RESERVE_STOCK_MANY (all-or-nothing). */
+export interface ReserveStockManyResult {
+  isReserved: boolean;
+  failedProductId: number | null;
+}
+
 export interface AdminGhnOrderListQuery {
   page: number;
   limit: number;

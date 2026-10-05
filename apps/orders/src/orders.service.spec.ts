@@ -8,7 +8,7 @@ import { PaymentMethod } from "@app/common";
 import { HttpService } from "@nestjs/axios";
 import { ClientProxy } from "@nestjs/microservices";
 import { Channel } from "amqplib";
-import { of, Subject } from "rxjs";
+import { of, Subject, throwError } from "rxjs";
 import {
   Brackets,
   FindOperator,
@@ -515,27 +515,39 @@ describe("OrdersService stock reservation", () => {
     return { service, inventorySend, transaction, update, outbox };
   }
 
+  // One entry per INVENTORY_RESERVE_STOCK_MANY call — one per seller since
+  // SWEEP-1002-05. A failed batch names its first line, as inventory does.
   function mockStock(
     inventorySend: jest.Mock,
     reserveResults: boolean[],
   ): void {
     let reserveIndex = 0;
-    inventorySend.mockImplementation((pattern: string) => {
-      if (pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_CHECK_STOCK) {
-        return of({ available: true, availableStock: 10 });
-      }
-      if (pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK) {
-        return of(reserveResults[reserveIndex++] ?? false);
-      }
-      if (pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK) {
-        return of(true);
-      }
-      throw new Error(`Unexpected pattern: ${pattern}`);
-    });
+    inventorySend.mockImplementation(
+      (pattern: string, payload: { items?: Array<{ productId: number }> }) => {
+        if (pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_CHECK_STOCK) {
+          return of({ available: true, availableStock: 10 });
+        }
+        if (
+          pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK_MANY
+        ) {
+          const isReserved = reserveResults[reserveIndex++] ?? false;
+          return of({
+            isReserved,
+            failedProductId: isReserved
+              ? null
+              : (payload.items?.[0]?.productId ?? null),
+          });
+        }
+        if (pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK) {
+          return of(true);
+        }
+        throw new Error(`Unexpected pattern: ${pattern}`);
+      },
+    );
   }
 
   // SWEEP-1002-03 — the stock pre-check fans out instead of one round trip
-  // per item; reserve stays sequential.
+  // per item; reserve is one batch call per seller (SWEEP-1002-05).
   type StockCheckReply = { available: boolean; availableStock: number };
 
   function mockPendingStockChecks(inventorySend: jest.Mock): {
@@ -550,9 +562,9 @@ describe("OrdersService stock reservation", () => {
         pendingChecks.push(reply);
         return reply;
       }
-      if (pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK) {
+      if (pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK_MANY) {
         reserveCount += 1;
-        return of(false);
+        return of({ isReserved: false, failedProductId: 1 });
       }
       throw new Error(`Unexpected pattern: ${pattern}`);
     });
@@ -624,33 +636,87 @@ describe("OrdersService stock reservation", () => {
     expect(transaction).not.toHaveBeenCalled();
   });
 
-  it("releases earlier reservations when a later item fails", async () => {
+  // SWEEP-1002-05: one all-or-nothing call per seller. A rejected batch held
+  // nothing, so there is nothing to compensate — only a LOST reply is.
+  it("reserves the whole cart in one call and names the line that failed", async () => {
     const { service, inventorySend, transaction } = createService();
-    mockStock(inventorySend, [true, false]);
+    inventorySend.mockImplementation((pattern: string) => {
+      if (pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_CHECK_STOCK) {
+        return of({ available: true, availableStock: 10 });
+      }
+      if (pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK_MANY) {
+        return of({ isReserved: false, failedProductId: 2 });
+      }
+      throw new Error(`Unexpected pattern: ${pattern}`);
+    });
 
     await expect(
       service.placeOrder(18, PaymentMethod.VNPAY, "address", [
         item,
         { ...item, productId: 2 },
       ]),
-    ).rejects.toBeInstanceOf(BadRequestException);
-    expect(inventorySend).toHaveBeenCalledWith(
-      INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK,
-      expect.objectContaining({
-        productId: 1,
-        quantity: 1,
-        skuId: undefined,
-      }),
-    );
-    const releasePayload = (
+    ).rejects.toThrow(ORDER_MESSAGE.RESERVE_STOCK_FAILED(2));
+
+    const reserveCalls = (
       inventorySend.mock.calls as unknown as Array<
-        [string, { reservationKey?: unknown }]
+        [string, { items: unknown[]; reservationKey: unknown }]
       >
-    ).find(
+    ).filter(
+      ([pattern]) =>
+        pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK_MANY,
+    );
+    expect(reserveCalls).toHaveLength(1);
+    expect(reserveCalls[0][1].items).toEqual([
+      { productId: 1, quantity: 1, skuId: undefined },
+      { productId: 2, quantity: 1, skuId: undefined },
+    ]);
+    expect(typeof reserveCalls[0][1].reservationKey).toBe("string");
+    expect(inventorySend).not.toHaveBeenCalledWith(
+      INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK,
+      expect.anything(),
+    );
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  it("releases every line under the key when the batch reply is lost", async () => {
+    const { service, inventorySend, transaction } = createService();
+    inventorySend.mockImplementation((pattern: string) => {
+      if (pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_CHECK_STOCK) {
+        return of({ available: true, availableStock: 10 });
+      }
+      if (pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK_MANY) {
+        return throwError(() => new Error("Timeout has occurred"));
+      }
+      if (pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK) {
+        return of(false);
+      }
+      throw new Error(`Unexpected pattern: ${pattern}`);
+    });
+
+    await expect(
+      service.placeOrder(18, PaymentMethod.VNPAY, "address", [
+        item,
+        { ...item, productId: 2 },
+      ]),
+    ).rejects.toThrow("Timeout has occurred");
+
+    const calls = inventorySend.mock.calls as unknown as Array<
+      [string, { productId?: number; reservationKey?: string }]
+    >;
+    const reserveKey = calls.find(
+      ([pattern]) =>
+        pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK_MANY,
+    )?.[1].reservationKey;
+    const releases = calls.filter(
       ([pattern]) =>
         pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK,
-    )?.[1];
-    expect(typeof releasePayload?.reservationKey).toBe("string");
+    );
+    expect(releases.map(([, payload]) => payload.productId).sort()).toEqual([
+      1, 2,
+    ]);
+    releases.forEach(([, payload]) =>
+      expect(payload.reservationKey).toBe(reserveKey),
+    );
     expect(transaction).not.toHaveBeenCalled();
   });
 
@@ -837,7 +903,7 @@ describe("OrdersService stock reservation", () => {
     ).rejects.toBeInstanceOf(BadRequestException);
 
     expect(inventorySend).not.toHaveBeenCalledWith(
-      INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK,
+      INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK_MANY,
       expect.anything(),
     );
     expect(transaction).not.toHaveBeenCalled();
@@ -883,7 +949,7 @@ describe("OrdersService stock reservation", () => {
     ).rejects.toBeInstanceOf(BadRequestException);
 
     expect(inventorySend).not.toHaveBeenCalledWith(
-      INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK,
+      INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK_MANY,
       expect.anything(),
     );
     expect(transaction).not.toHaveBeenCalled();
@@ -2165,6 +2231,9 @@ describe("OrdersService VOUCHER-CONC-01 — voucher quota gate", () => {
       if (pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_CHECK_STOCK) {
         return of({ available: true, availableStock: 10 });
       }
+      if (pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK_MANY) {
+        return of({ isReserved: true, failedProductId: null });
+      }
       return of(true);
     });
 
@@ -2196,7 +2265,7 @@ describe("OrdersService VOUCHER-CONC-01 — voucher quota gate", () => {
     expect(ghnPreview).not.toHaveBeenCalled();
     expect(transaction).not.toHaveBeenCalled();
     expect(inventorySend).not.toHaveBeenCalledWith(
-      INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK,
+      INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK_MANY,
       expect.anything(),
     );
   });
@@ -2743,6 +2812,186 @@ describe("OrdersService VOUCHER-SHOP-01 — basket eligibility list", () => {
     await service.listAvailableVouchers(7, basket);
 
     expect(createQueryBuilder).not.toHaveBeenCalled();
+  });
+
+  describe("VOUCHER-AVAIL-STACK-01 — rated next to the applied codes", () => {
+    // 30k off shop 20's 40k slice → platform base 10k + 100k = 110k.
+    const shopFixed30k = voucherRow({
+      id: 10,
+      code: "SHOP20",
+      sellerId: 20,
+      discountType: VoucherDiscountType.FIXED,
+      discountValue: "30000.00",
+    });
+    const platformMin120k = voucherRow({
+      id: 11,
+      code: "PLAT120",
+      discountType: VoucherDiscountType.FIXED,
+      discountValue: "20000.00",
+      minOrderAmount: "120000.00",
+    });
+
+    it("prices a platform row after the applied shop discount", async () => {
+      const { service } = createService([
+        shopFixed30k,
+        platformMin120k,
+        voucherRow({ id: 12, code: "PLAT10" }),
+      ]);
+
+      const result = await service.listAvailableVouchers(7, basket, [
+        " shop20 ",
+      ]);
+
+      const byCode = new Map(result.vouchers.map((row) => [row.code, row]));
+      // Eligible on the bare 140k basket, not on the 110k left after SHOP20.
+      expect(byCode.get("PLAT120")).toMatchObject({
+        isEligible: false,
+        ineligibleReason: "MIN_ORDER_NOT_MET",
+        applicableSubtotal: 110000,
+        amountToAdd: 10000,
+        discountAmount: 0,
+      });
+      // A percent platform code is priced on the reduced base too.
+      expect(byCode.get("PLAT10")).toMatchObject({
+        isEligible: true,
+        applicableSubtotal: 110000,
+        discountAmount: 11000,
+      });
+      // The top-level total stays the raw basket.
+      expect(result.itemsTotal).toBe(140000);
+    });
+
+    it("flags a shop row that would push the applied platform code under its minimum", async () => {
+      const { service } = createService([
+        voucherRow({
+          id: 13,
+          code: "SHOP20SMALL",
+          sellerId: 20,
+          discountType: VoucherDiscountType.FIXED,
+          discountValue: "10000.00",
+        }),
+        voucherRow({
+          id: 14,
+          code: "SHOP20BIG",
+          sellerId: 20,
+          discountType: VoucherDiscountType.FIXED,
+          discountValue: "25000.00",
+        }),
+        voucherRow({
+          id: 15,
+          code: "SHOP30",
+          sellerId: 30,
+          discountType: VoucherDiscountType.FIXED,
+          discountValue: "5000.00",
+        }),
+        platformMin120k,
+      ]);
+
+      // Applied: SHOP20SMALL (10k) + PLAT120 → base 30k + 100k = 130k.
+      const result = await service.listAvailableVouchers(7, basket, [
+        "SHOP20SMALL",
+        "PLAT120",
+      ]);
+
+      const byCode = new Map(result.vouchers.map((row) => [row.code, row]));
+      // Replacing SHOP20SMALL: 15k + 100k = 115k < 120k → 5k short. Stacking
+      // both shop-20 codes instead would read 15k short.
+      expect(byCode.get("SHOP20BIG")).toMatchObject({
+        isEligible: false,
+        ineligibleReason: "BREAKS_PLATFORM_VOUCHER",
+        discountAmount: 0,
+        applicableSubtotal: 40000,
+        amountToAdd: 5000,
+      });
+      // 30k + 95k = 125k still clears the minimum.
+      expect(byCode.get("SHOP30")).toMatchObject({
+        isEligible: true,
+        discountAmount: 5000,
+      });
+      // The applied shop code itself is no swap at all.
+      expect(byCode.get("SHOP20SMALL")).toMatchObject({ isEligible: true });
+      expect(byCode.get("PLAT120")).toMatchObject({
+        isEligible: true,
+        applicableSubtotal: 130000,
+        discountAmount: 20000,
+      });
+    });
+
+    it("does not flag shop rows when the applied platform code already fails", async () => {
+      const { service } = createService([
+        shopFixed30k,
+        voucherRow({
+          id: 16,
+          code: "SHOP20OTHER",
+          sellerId: 20,
+          discountType: VoucherDiscountType.FIXED,
+          discountValue: "35000.00",
+        }),
+        platformMin120k,
+      ]);
+
+      // Applied SHOP20 drops the base to 110k, so PLAT120 does not apply
+      // already — there is nothing left for a shop row to break.
+      const result = await service.listAvailableVouchers(7, basket, [
+        "PLAT120",
+        "SHOP20",
+      ]);
+
+      const byCode = new Map(result.vouchers.map((row) => [row.code, row]));
+      expect(byCode.get("PLAT120")).toMatchObject({
+        isEligible: false,
+        ineligibleReason: "MIN_ORDER_NOT_MET",
+      });
+      expect(byCode.get("SHOP20OTHER")).toMatchObject({
+        isEligible: true,
+        discountAmount: 35000,
+      });
+    });
+
+    it("fetches an applied code that is not among the candidates, in one query", async () => {
+      const { service, find } = createService([platformMin120k]);
+      find
+        .mockResolvedValueOnce([platformMin120k])
+        .mockResolvedValueOnce([shopFixed30k]);
+
+      const result = await service.listAvailableVouchers(7, basket, [
+        "SHOP20",
+        "PLAT120",
+      ]);
+
+      expect(find).toHaveBeenCalledTimes(2);
+      const [lookupOptions] = find.mock.calls[1] as [
+        { where: { code: FindOperator<string[]> } },
+      ];
+      // Only the code the candidate list did not already carry.
+      expect(lookupOptions.where.code.value).toEqual(["SHOP20"]);
+      // It is applied, but it is not listed — the list stays the candidates.
+      expect(result.vouchers.map((row) => row.code)).toEqual(["PLAT120"]);
+      expect(result.vouchers[0]).toMatchObject({
+        isEligible: false,
+        applicableSubtotal: 110000,
+      });
+    });
+
+    it("treats an unknown applied code as no discount, without throwing", async () => {
+      const { service, find } = createService([platformMin120k]);
+      find.mockResolvedValueOnce([platformMin120k]).mockResolvedValueOnce([]);
+
+      const result = await service.listAvailableVouchers(7, basket, ["NOPE"]);
+
+      expect(result.vouchers[0]).toMatchObject({
+        isEligible: true,
+        applicableSubtotal: 140000,
+      });
+    });
+
+    it("makes no extra query when no code is applied", async () => {
+      const { service, find } = createService([platformMin120k]);
+
+      await service.listAvailableVouchers(7, basket);
+
+      expect(find).toHaveBeenCalledTimes(1);
+    });
   });
 });
 

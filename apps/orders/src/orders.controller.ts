@@ -689,9 +689,15 @@ export class OrdersController {
     data: {
       userId: number;
       items: Array<{ price: number; quantity: number; sellerId: number }>;
+      // VOUCHER-AVAIL-STACK-01 — absent from a gateway older than this field.
+      codes?: string[];
     },
   ): Promise<{ itemsTotal: number; vouchers: AvailableVoucher[] }> {
-    return this.ordersService.listAvailableVouchers(data.userId, data.items);
+    return this.ordersService.listAvailableVouchers(
+      data.userId,
+      data.items,
+      data.codes ?? [],
+    );
   }
 
   @MessagePattern(ORDER_MESSAGE_PATTERN.VOUCHER_CREATE)
