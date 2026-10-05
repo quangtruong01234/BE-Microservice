@@ -102,6 +102,7 @@ import {
 import {
   ReserveStockManyResult,
   StockReservationItem,
+  TransitionStockManyResult,
   AdminGhnOrderListQuery,
   AdminGhnOrderListItem,
   AdminGhnOrderDetail,
@@ -2281,15 +2282,16 @@ export class OrdersService {
       fromStatus,
       OrderStatus.CANCELED,
     );
+    // The order and its redemption were already committed before the payment
+    // leg failed, so the slot has to be handed back here — the pre-commit
+    // release in createOrder never runs for this path. It runs BEFORE the stock
+    // release, whose throw would otherwise skip it (SWEEP-1005-01).
+    await this.releaseVoucherRedemption(order);
     await this.releaseReservedItems(
       order.items ?? [],
       order.reservationKey,
       true,
     );
-    // The order and its redemption were already committed before the payment
-    // leg failed, so the slot has to be handed back here — the pre-commit
-    // release in createOrder never runs for this path.
-    await this.releaseVoucherRedemption(order);
   }
 
   /**
@@ -2304,31 +2306,43 @@ export class OrdersService {
     items: StockReservationItem[],
     reservationKey: string,
   ): Promise<void> {
-    for (const item of items ?? []) {
-      try {
-        const restocked = await firstValueFrom(
-          this.inventoryClient
-            .send<boolean>(
-              INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESTOCK_RETURNED,
-              {
-                productId: item.productId,
-                quantity: item.quantity,
-                skuId: item.skuId ?? undefined,
-                reservationKey,
-              },
-            )
-            .pipe(timeout(5000)),
-        );
-        if (!restocked) {
-          this.logger.error(
-            `[ORDERS] Return restock rejected for product ${item.productId} (qty ${item.quantity}, reservation ${reservationKey})`,
-          );
-        }
-      } catch (error) {
+    // Fanned out (SWEEP-1005-02): one PG transaction per line, so serially a
+    // 20-line return outran the caller's budget at the prod RTT. Lines lock
+    // their own stock row, and a repeated row just serializes on its lock.
+    await Promise.all(
+      (items ?? []).map((item) =>
+        this.restockReturnedItem(item, reservationKey),
+      ),
+    );
+  }
+
+  private async restockReturnedItem(
+    item: StockReservationItem,
+    reservationKey: string,
+  ): Promise<void> {
+    try {
+      const restocked = await firstValueFrom(
+        this.inventoryClient
+          .send<boolean>(
+            INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESTOCK_RETURNED,
+            {
+              productId: item.productId,
+              quantity: item.quantity,
+              skuId: item.skuId ?? undefined,
+              reservationKey,
+            },
+          )
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
+      );
+      if (!restocked) {
         this.logger.error(
-          `[ORDERS] Return restock failed for product ${item.productId}: ${String(error)}`,
+          `[ORDERS] Return restock rejected for product ${item.productId} (qty ${item.quantity}, reservation ${reservationKey})`,
         );
       }
+    } catch (error) {
+      this.logger.error(
+        `[ORDERS] Return restock failed for product ${item.productId}: ${String(error)}`,
+      );
     }
   }
 
@@ -2337,31 +2351,15 @@ export class OrdersService {
     reservationKey: string,
     throwOnFailure = false,
   ): Promise<void> {
-    const failedProductIds: number[] = [];
-    for (const item of [...items].reverse()) {
-      try {
-        const released = await firstValueFrom(
-          this.inventoryClient
-            .send<boolean>(INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK, {
-              productId: item.productId,
-              quantity: item.quantity,
-              skuId: item.skuId ?? undefined,
-              reservationKey,
-            })
-            .pipe(timeout(5000)),
-        );
-        if (!released) {
-          failedProductIds.push(item.productId);
-          this.logger.error(
-            `[ORDERS] Failed to compensate reservation for product ${item.productId}`,
-          );
-        }
-      } catch (error) {
-        failedProductIds.push(item.productId);
-        this.logger.error(
-          `[ORDERS] Reservation compensation failed for product ${item.productId}: ${String(error)}`,
-        );
-      }
+    const failedProductIds = await this.transitionReservedItems(
+      INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK_MANY,
+      items,
+      reservationKey,
+    );
+    if (failedProductIds.length > 0) {
+      this.logger.error(
+        `[ORDERS] Failed to compensate reservation ${reservationKey} for product(s) ${failedProductIds.join(", ")}`,
+      );
     }
     if (throwOnFailure && failedProductIds.length > 0) {
       throw new ServiceUnavailableException(
@@ -2369,6 +2367,43 @@ export class OrdersService {
           failedProductIds.join(", "),
         ),
       );
+    }
+  }
+
+  /**
+   * Release or consume every line of one reservation in a single inventory
+   * call (SWEEP-1005-02) — N serial calls outran the WRITE budget at the prod
+   * RTT. Answers the product ids that did NOT reach the target state; a
+   * transport failure or timeout counts every line as failed, because the
+   * per-line ledger makes a later retry of the whole batch safe.
+   */
+  private async transitionReservedItems(
+    pattern:
+      | typeof INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK_MANY
+      | typeof INVENTORY_MESSAGE_PATTERNS.INVENTORY_CONSUME_RESERVED_STOCK_MANY,
+    items: StockReservationItem[],
+    reservationKey: string,
+  ): Promise<number[]> {
+    if (!items?.length) return [];
+    try {
+      const reply = await firstValueFrom(
+        this.inventoryClient
+          .send<TransitionStockManyResult>(pattern, {
+            items: items.map((item) => ({
+              productId: item.productId,
+              quantity: item.quantity,
+              skuId: item.skuId ?? null,
+            })),
+            reservationKey,
+          })
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
+      );
+      return reply?.failedProductIds ?? [];
+    } catch (error) {
+      this.logger.error(
+        `[ORDERS] ${pattern} failed for reservation ${reservationKey}: ${String(error)}`,
+      );
+      return items.map((item) => item.productId);
     }
   }
 
@@ -3976,7 +4011,12 @@ export class OrdersService {
       order.status ?? null,
     );
     order.status = OrderStatus.CANCELED;
-    await this.releaseReservedItems(order.items, order.reservationKey, true);
+    // Not throwing (SWEEP-1005-01): the order is already CANCELED, so a throw
+    // here would skip the voucher give-back, the GHN cancel and order_canceled
+    // for good — a retry is a 400 and the sweeper never re-selects a CANCELED
+    // order. The inventory order_canceled consumer re-releases idempotently by
+    // reservationKey, so it is the retry for a line that failed here.
+    await this.releaseReservedItems(order.items, order.reservationKey);
     await this.releaseVoucherRedemption(order);
 
     // Push the cancel to GHN so the shipping order stops too. Detached on
@@ -4028,7 +4068,8 @@ export class OrdersService {
    * it must NOT push the cancel back to GHN — GHN is the originator here.
    */
   private async finalizeGhnCancellation(order: Order): Promise<void> {
-    await this.releaseReservedItems(order.items, order.reservationKey, true);
+    // Non-throwing for the same reason as finalizeCancellation (SWEEP-1005-01).
+    await this.releaseReservedItems(order.items, order.reservationKey);
     await this.releaseVoucherRedemption(order);
     this.publishOrderCanceledEvent(order);
   }
@@ -4330,27 +4371,15 @@ export class OrdersService {
    * transition was driven by the GHN delivery webhook or a seller action.
    */
   private async finalizeOrderCompletion(order: Order): Promise<void> {
-    for (const item of order.items) {
-      await firstValueFrom(
-        this.inventoryClient
-          .send<boolean>(
-            INVENTORY_MESSAGE_PATTERNS.INVENTORY_CONSUME_RESERVED_STOCK,
-            {
-              productId: item.productId,
-              quantity: item.quantity,
-              skuId: item.skuId ?? undefined,
-              reservationKey: order.reservationKey,
-            },
-          )
-          .pipe(
-            timeout(5000),
-            catchError((e: unknown) => throwError(() => e)),
-          ),
-      ).catch((err: unknown) => {
-        this.logger.warn(
-          `[ORDERS] Consume reserved stock for product ${item.productId}${item.skuId ? ` (SKU ${item.skuId})` : ""} failed: ${String(err)}`,
-        );
-      });
+    const unconsumedProductIds = await this.transitionReservedItems(
+      INVENTORY_MESSAGE_PATTERNS.INVENTORY_CONSUME_RESERVED_STOCK_MANY,
+      order.items,
+      order.reservationKey,
+    );
+    if (unconsumedProductIds.length > 0) {
+      this.logger.warn(
+        `[ORDERS] Consume reserved stock failed for order ${order.id}, product(s) ${unconsumedProductIds.join(", ")}`,
+      );
     }
 
     if (order.paymentMethod === PaymentMethod.COD) {

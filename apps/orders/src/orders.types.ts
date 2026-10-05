@@ -18,6 +18,15 @@ export interface ReserveStockManyResult {
   failedProductId: number | null;
 }
 
+/**
+ * Reply of inventory's INVENTORY_RELEASE_STOCK_MANY /
+ * INVENTORY_CONSUME_RESERVED_STOCK_MANY. Per line, NOT all-or-nothing: every
+ * line not named here reached the target state.
+ */
+export interface TransitionStockManyResult {
+  failedProductIds: number[];
+}
+
 export interface AdminGhnOrderListQuery {
   page: number;
   limit: number;

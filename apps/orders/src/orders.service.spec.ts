@@ -538,8 +538,10 @@ describe("OrdersService stock reservation", () => {
               : (payload.items?.[0]?.productId ?? null),
           });
         }
-        if (pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK) {
-          return of(true);
+        if (
+          pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK_MANY
+        ) {
+          return of({ failedProductIds: [] });
         }
         throw new Error(`Unexpected pattern: ${pattern}`);
       },
@@ -672,7 +674,7 @@ describe("OrdersService stock reservation", () => {
     ]);
     expect(typeof reserveCalls[0][1].reservationKey).toBe("string");
     expect(inventorySend).not.toHaveBeenCalledWith(
-      INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK,
+      INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK_MANY,
       expect.anything(),
     );
     expect(transaction).not.toHaveBeenCalled();
@@ -687,8 +689,8 @@ describe("OrdersService stock reservation", () => {
       if (pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK_MANY) {
         return throwError(() => new Error("Timeout has occurred"));
       }
-      if (pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK) {
-        return of(false);
+      if (pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK_MANY) {
+        return of({ failedProductIds: [1, 2] });
       }
       throw new Error(`Unexpected pattern: ${pattern}`);
     });
@@ -701,22 +703,22 @@ describe("OrdersService stock reservation", () => {
     ).rejects.toThrow("Timeout has occurred");
 
     const calls = inventorySend.mock.calls as unknown as Array<
-      [string, { productId?: number; reservationKey?: string }]
+      [string, { items: Array<{ productId: number }>; reservationKey: string }]
     >;
     const reserveKey = calls.find(
       ([pattern]) =>
         pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK_MANY,
     )?.[1].reservationKey;
+    // SWEEP-1005-02: one batch release, not one call per line.
     const releases = calls.filter(
       ([pattern]) =>
-        pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK,
+        pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK_MANY,
     );
-    expect(releases.map(([, payload]) => payload.productId).sort()).toEqual([
+    expect(releases).toHaveLength(1);
+    expect(releases[0][1].items.map((line) => line.productId).sort()).toEqual([
       1, 2,
     ]);
-    releases.forEach(([, payload]) =>
-      expect(payload.reservationKey).toBe(reserveKey),
-    );
+    expect(releases[0][1].reservationKey).toBe(reserveKey);
     expect(transaction).not.toHaveBeenCalled();
   });
 
@@ -729,22 +731,12 @@ describe("OrdersService stock reservation", () => {
       service.placeOrder(18, PaymentMethod.VNPAY, "address", [item]),
     ).rejects.toThrow("DB unavailable");
     expect(inventorySend).toHaveBeenCalledWith(
-      INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK,
-      expect.objectContaining({
-        productId: 1,
-        quantity: 1,
-        skuId: undefined,
-      }),
+      INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK_MANY,
+      {
+        items: [{ productId: 1, quantity: 1, skuId: null }],
+        reservationKey: expect.any(String) as unknown,
+      },
     );
-    const releasePayload = (
-      inventorySend.mock.calls as unknown as Array<
-        [string, { reservationKey?: unknown }]
-      >
-    ).find(
-      ([pattern]) =>
-        pattern === INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK,
-    )?.[1];
-    expect(typeof releasePayload?.reservationKey).toBe("string");
   });
 
   it("reserves stock before starting the DB transaction", async () => {
@@ -787,12 +779,11 @@ describe("OrdersService stock reservation", () => {
       status: OrderStatus.CANCELED,
     });
     expect(inventorySend).toHaveBeenCalledWith(
-      INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK,
-      expect.objectContaining({
-        productId: 1,
-        quantity: 1,
+      INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK_MANY,
+      {
+        items: [expect.objectContaining({ productId: 1, quantity: 1 })],
         reservationKey: "reservation-1",
-      }),
+      },
     );
     // RESIL-02: the order is gone, so the owed event must go with it — the
     // poller must never resurrect `order_created` for a canceled order.
@@ -1078,15 +1069,41 @@ describe("OrdersService.sweepStaleReservations", () => {
       { status: OrderStatus.CANCELED },
     );
     expect(inventorySend).toHaveBeenCalledWith(
-      INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK,
-      expect.objectContaining({
-        productId: 1,
-        quantity: 2,
+      INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK_MANY,
+      {
+        items: [expect.objectContaining({ productId: 1, quantity: 2 })],
         reservationKey: "reservation-1",
-      }),
+      },
     );
     expect(publish).toHaveBeenCalledTimes(1);
   });
+
+  // SWEEP-1005-01: the order is already CANCELED when the release runs, so a
+  // throw there used to skip order_canceled (and the voucher/GHN legs) for good.
+  it.each([
+    [
+      "the release reply names failed lines",
+      (): unknown => of({ failedProductIds: [1] }),
+    ],
+    [
+      "the release call times out",
+      (): unknown => throwError(() => new Error("Timeout has occurred")),
+    ],
+  ])(
+    "still publishes order_canceled and cancels GHN when %s",
+    async (_label, releaseReply) => {
+      const { service, inventorySend, publish, cancelShippingOrder } =
+        createService([staleOrder({ ghnOrderCode: "GHN-1" })]);
+      inventorySend.mockImplementation(releaseReply);
+
+      await service.sweepStaleReservations();
+
+      expect(publishedEventNames(publish)).toContain(
+        EVENT.ORDER_CANCELED_EVENT,
+      );
+      expect(cancelShippingOrder).toHaveBeenCalledWith("GHN-1");
+    },
+  );
 
   it("only queries orders with no GHN code, a non-terminal status, and an old createdAt", async () => {
     const { service, find } = createService([]);
@@ -1372,8 +1389,10 @@ describe("OrdersService.advanceOrderStatus", () => {
     await service.advanceOrderStatus(7, 0, true, OrderStatus.COMPLETED);
 
     expect(inventorySend).toHaveBeenCalledWith(
-      INVENTORY_MESSAGE_PATTERNS.INVENTORY_CONSUME_RESERVED_STOCK,
-      expect.objectContaining({ productId: 1, quantity: 2 }),
+      INVENTORY_MESSAGE_PATTERNS.INVENTORY_CONSUME_RESERVED_STOCK_MANY,
+      expect.objectContaining({
+        items: [expect.objectContaining({ productId: 1, quantity: 2 })],
+      }),
     );
     expect(publishedEventNames(publish)).toEqual([
       EVENT.PAYMENT_COMPLETED_EVENT,
