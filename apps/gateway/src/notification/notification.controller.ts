@@ -1,6 +1,9 @@
 import {
   Controller,
+  Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   Patch,
   Query,
@@ -43,6 +46,7 @@ export class NotificationController {
       userId,
       query.page ?? 1,
       query.limit ?? 20,
+      query.unreadOnly === true,
     );
   }
 
@@ -57,6 +61,22 @@ export class NotificationController {
     return this.notificationService.getUnreadCount(userId);
   }
 
+  @Patch("read-all")
+  @ApiOperation({
+    summary: "Mark every unread notification of the current user as read",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "{ updatedCount } — rows flipped; 0 when nothing was unread.",
+  })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  async markAllNotificationsRead(
+    @Req() req: Request,
+  ): Promise<{ updatedCount: number }> {
+    const userId = req.user?.id ?? 0;
+    return this.notificationService.markAllNotificationsRead(userId);
+  }
+
   @Patch(":id/read")
   @ApiOperation({ summary: "Mark a notification as read" })
   @ApiResponse({ status: 200, description: "Notification marked as read." })
@@ -68,5 +88,24 @@ export class NotificationController {
   ): Promise<{ success: boolean }> {
     const userId = req.user?.id ?? 0;
     return this.notificationService.markNotificationRead(id, userId);
+  }
+
+  @Delete(":id")
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: "Delete one of the current user's notifications" })
+  @ApiResponse({ status: 204, description: "Notification deleted." })
+  @ApiResponse({ status: 400, description: "Malformed notification id." })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  @ApiResponse({
+    status: 404,
+    description: "Unknown, already deleted, or another user's notification.",
+  })
+  async deleteNotification(
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.NOTIFICATION))
+    id: string,
+    @Req() req: Request,
+  ): Promise<void> {
+    const userId = req.user?.id ?? 0;
+    await this.notificationService.deleteNotification(id, userId);
   }
 }

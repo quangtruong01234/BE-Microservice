@@ -133,6 +133,7 @@ export class NotificationGatewayService {
     userId: number,
     page: number,
     limit: number,
+    isUnreadOnly = false,
   ): Promise<PaginatedNotifications> {
     try {
       const notifications = await firstValueFrom(
@@ -141,6 +142,7 @@ export class NotificationGatewayService {
             userId,
             page,
             limit,
+            isUnreadOnly,
           })
           .pipe(
             timeout(TCP_TIMEOUT_MS.READ),
@@ -199,6 +201,50 @@ export class NotificationGatewayService {
       MicroserviceErrorHandler.handleError(
         error,
         "mark notification read",
+        "Notification Service",
+      );
+    }
+  }
+
+  async markAllNotificationsRead(
+    userId: number,
+  ): Promise<{ updatedCount: number }> {
+    try {
+      return await firstValueFrom(
+        this.notificationClient
+          .send(NOTIFICATION_MESSAGE_PATTERN.MARK_ALL_NOTIFICATIONS_READ, {
+            userId,
+          })
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)) as Observable<{
+          updatedCount: number;
+        }>,
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "mark all notifications read",
+        "Notification Service",
+      );
+    }
+  }
+
+  async deleteNotification(
+    notificationId: string,
+    userId: number,
+  ): Promise<void> {
+    try {
+      await firstValueFrom(
+        this.notificationClient
+          .send(NOTIFICATION_MESSAGE_PATTERN.DELETE_NOTIFICATION, {
+            notificationId,
+            userId,
+          })
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)) as Observable<null>,
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "delete notification",
         "Notification Service",
       );
     }
