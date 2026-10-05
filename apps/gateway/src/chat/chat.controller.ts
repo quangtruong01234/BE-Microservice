@@ -1,7 +1,10 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   Post,
   Query,
@@ -65,5 +68,21 @@ export class ChatController {
   ): Promise<unknown> {
     const userId = req.user?.id ?? 0;
     return this.chatService.markRead(userId, conversationId);
+  }
+
+  /**
+   * CHAT-E2E-CLEANUP-01 — the sender hard-deletes their own message: 404 for
+   * an unknown or already-deleted id, 403 for anyone but the sender. Replies
+   * quoting it keep their content but lose `parentMessageId`. No socket event.
+   */
+  @Delete("messages/:id")
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async deleteMessage(
+    @Req() req: Request,
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.MESSAGE))
+    messageId: string,
+  ): Promise<void> {
+    const userId = req.user?.id ?? 0;
+    return this.chatService.deleteMessage(userId, messageId);
   }
 }

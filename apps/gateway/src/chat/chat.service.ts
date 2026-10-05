@@ -187,4 +187,23 @@ export class ChatGatewayService {
       );
     }
   }
+
+  async deleteMessage(userId: number, messageId: string): Promise<void> {
+    try {
+      await firstValueFrom(
+        this.chatClient
+          .send(CHAT_MESSAGE_PATTERN.CHAT_DELETE_MESSAGE, {
+            userId,
+            messageId,
+          })
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)) as Observable<null>,
+      );
+    } catch (error) {
+      MicroserviceErrorHandler.handleError(
+        error,
+        "delete message",
+        "Chat Service",
+      );
+    }
+  }
 }

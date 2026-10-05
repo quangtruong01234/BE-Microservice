@@ -17,6 +17,8 @@ import { SessionRevocationService } from "../common/session/session-revocation.s
 import { chatMessageRooms, ChatMessageTcp } from "./chat.types";
 import { ChatGatewayService } from "./chat.service";
 import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
+import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
+import { isPublicId } from "@app/common";
 
 @Injectable()
 @WebSocketGateway({
@@ -96,10 +98,27 @@ export class ChatWsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.logger.log(`[ChatWS] Disconnected id=${client.id}`);
   }
 
+  /**
+   * SWEEP-1002-06 — the WS payload bypasses the REST ParsePublicIdPipe, so a
+   * missing id reached the chat service as `undefined` (matching the FIRST
+   * conversation) and a numeric one was used as an internal PK. Only a
+   * well-formed `conv_` id goes over TCP.
+   */
+  private isConversationRef(
+    client: Socket,
+    conversationId: unknown,
+  ): conversationId is string {
+    if (isPublicId(PUBLIC_ID_PREFIXES.CONVERSATION, conversationId)) {
+      return true;
+    }
+    client.emit("error", "Invalid conversation id");
+    return false;
+  }
+
   @SubscribeMessage("join")
   async handleJoin(
     client: Socket,
-    payload: { conversationId: string },
+    payload: { conversationId: string } | undefined,
   ): Promise<void> {
     const userId = (client.data as Record<string, unknown>).userId as
       | number
@@ -108,12 +127,14 @@ export class ChatWsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       client.emit("error", "Unauthorized");
       return;
     }
+    const conversationId = payload?.conversationId;
+    if (!this.isConversationRef(client, conversationId)) return;
     try {
       const isMember = await firstValueFrom(
         this.chatClient
           .send<boolean>(CHAT_MESSAGE_PATTERN.CHAT_CHECK_MEMBERSHIP, {
             userId,
-            conversationId: payload.conversationId,
+            conversationId,
           })
           .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
       );
@@ -121,7 +142,7 @@ export class ChatWsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         client.emit("error", "Access denied");
         return;
       }
-      void client.join(`conv:${payload.conversationId}`);
+      void client.join(`conv:${conversationId}`);
     } catch {
       client.emit("error", "Failed to join conversation");
     }
@@ -130,11 +151,13 @@ export class ChatWsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @SubscribeMessage("send_message")
   async handleSendMessage(
     client: Socket,
-    payload: {
-      conversationId: string;
-      content: string;
-      parentMessageId?: string;
-    },
+    payload:
+      | {
+          conversationId: string;
+          content: string;
+          parentMessageId?: string | null;
+        }
+      | undefined,
   ): Promise<void> {
     const userId = (client.data as Record<string, unknown>).userId as
       | number
@@ -143,15 +166,25 @@ export class ChatWsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       client.emit("error", "Unauthorized");
       return;
     }
+    const conversationId = payload?.conversationId;
+    if (!this.isConversationRef(client, conversationId)) return;
+    const parentMessageId = payload?.parentMessageId ?? undefined;
+    if (
+      parentMessageId !== undefined &&
+      !isPublicId(PUBLIC_ID_PREFIXES.MESSAGE, parentMessageId)
+    ) {
+      client.emit("error", "Invalid parent message id");
+      return;
+    }
     try {
       const saved = await firstValueFrom(
         this.chatClient
           .send<ChatMessageTcp>(CHAT_MESSAGE_PATTERN.CHAT_SEND_MESSAGE, {
             userId,
             dto: {
-              conversationId: payload.conversationId,
-              content: payload.content,
-              parentMessageId: payload.parentMessageId,
+              conversationId,
+              content: payload?.content,
+              parentMessageId,
             },
           })
           .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
@@ -161,15 +194,10 @@ export class ChatWsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // participant rooms are keyed by internal user id, never emitted).
       const exposed = await this.chatService.exposeMessage(
         saved,
-        String(payload.conversationId),
+        conversationId,
       );
       this.server
-        .to(
-          chatMessageRooms(
-            saved.participantIds,
-            String(payload.conversationId),
-          ),
-        )
+        .to(chatMessageRooms(saved.participantIds, conversationId))
         .emit("new_message", exposed);
     } catch (error) {
       client.emit("error", "Failed to send message");
