@@ -1,4 +1,5 @@
 import { ForbiddenException } from "@nestjs/common";
+import { ERROR_CODE } from "libs/constant/error-code.constant";
 import { UPLOAD_MESSAGE } from "libs/constant/response-message.constant";
 
 /**
@@ -20,7 +21,10 @@ export function assertCloudinaryUrlsOwnedBy(
   for (const url of urls) {
     if (!url) continue;
     if (!isCloudinaryUrlOwnedBy(url, userId)) {
-      throw new ForbiddenException(UPLOAD_MESSAGE.CANNOT_ATTACH_OTHERS_MEDIA);
+      throw new ForbiddenException({
+        message: UPLOAD_MESSAGE.CANNOT_ATTACH_OTHERS_MEDIA,
+        errorCode: ERROR_CODE.MEDIA_NOT_OWNED,
+      });
     }
   }
 }

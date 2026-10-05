@@ -6,16 +6,11 @@ import * as cookieParser from "cookie-parser";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import { HttpExceptionFilter } from "./common/filters/http-exception.filter";
 import { ResponseInterceptor } from "./common/interceptor/response.interceptor";
-import {
-  BadRequestException,
-  Logger,
-  RequestMethod,
-  ValidationPipe,
-} from "@nestjs/common";
+import { Logger, RequestMethod, ValidationPipe } from "@nestjs/common";
 import { EXCHANGE } from "@app/common/constants/exchange";
 import { QUEUES } from "@app/common/constants/queues";
 import { gatewayCorsOptions } from "./common/cors";
-import { ValidationError } from "class-validator";
+import { createValidationException } from "./common/pipes/validation-exception.factory";
 import { json, urlencoded } from "express";
 import {
   isSwaggerEnabled,
@@ -27,18 +22,6 @@ import {
   backpressureMiddleware,
   isBackpressureEnabled,
 } from "./common/backpressure";
-
-function collectValidationMessages(errors: ValidationError[]): string[] {
-  const messages = errors.flatMap((error) => {
-    const constraintMessages = Object.values(error.constraints ?? {});
-    const childMessages = error.children?.length
-      ? collectValidationMessages(error.children)
-      : [];
-    return [...constraintMessages, ...childMessages];
-  });
-
-  return messages.length > 0 ? messages : ["Validation failed"];
-}
 
 async function bootstrap(): Promise<void> {
   const logger = new Logger("GatewayBootstrap");
@@ -87,11 +70,7 @@ async function bootstrap(): Promise<void> {
         target: false,
         value: false,
       },
-      exceptionFactory: (errors: ValidationError[]) =>
-        new BadRequestException({
-          message: collectValidationMessages(errors),
-          error: "Bad Request",
-        }),
+      exceptionFactory: createValidationException,
     }),
   );
   app.useGlobalFilters(new HttpExceptionFilter());

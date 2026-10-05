@@ -13,9 +13,15 @@ import {
   MaxLength,
   Min,
 } from "class-validator";
+import { ERROR_CODE } from "libs/constant/error-code.constant";
 import { IsCloudinaryUrl } from "../../common/validators/is-cloudinary-url.validator";
 
 export const RETURN_REQUEST_MAX_IMAGES = 5;
+
+/** RETURN-PHOTO-ERRCODE-01 — tags every imageUrls rule for the 400 errorCode. */
+const RETURN_PHOTO_ERROR_CONTEXT = {
+  errorCode: ERROR_CODE.RETURN_PHOTO_INVALID,
+};
 
 export class CreateReturnRequestDto {
   @ApiProperty({
@@ -31,7 +37,9 @@ export class CreateReturnRequestDto {
     description:
       "RETURN-PHOTO-01 — up to 5 evidence photos. Each must be a Cloudinary " +
       "image URL uploaded by the caller into the `trybuy/returns` folder " +
-      "(signature: GET /api/upload/signature?folder=trybuy/returns).",
+      "(signature: GET /api/upload/signature?folder=trybuy/returns). " +
+      "A 400 that only this field fails carries `errorCode: RETURN_PHOTO_INVALID`; " +
+      "another account's upload is a 403 with `errorCode: MEDIA_NOT_OWNED`.",
     type: [String],
     maxItems: RETURN_REQUEST_MAX_IMAGES,
     example: [
@@ -39,10 +47,15 @@ export class CreateReturnRequestDto {
     ],
   })
   @IsOptional()
-  @IsArray()
-  @ArrayMaxSize(RETURN_REQUEST_MAX_IMAGES)
-  @ArrayUnique()
-  @IsCloudinaryUrl({ folder: "trybuy/returns", media: "image" }, { each: true })
+  @IsArray({ context: RETURN_PHOTO_ERROR_CONTEXT })
+  @ArrayMaxSize(RETURN_REQUEST_MAX_IMAGES, {
+    context: RETURN_PHOTO_ERROR_CONTEXT,
+  })
+  @ArrayUnique({ context: RETURN_PHOTO_ERROR_CONTEXT })
+  @IsCloudinaryUrl(
+    { folder: "trybuy/returns", media: "image" },
+    { each: true, context: RETURN_PHOTO_ERROR_CONTEXT },
+  )
   declare imageUrls?: string[];
 }
 

@@ -75,6 +75,19 @@ export class AvailableVouchersDto {
   @ValidateNested({ each: true })
   @Type(() => OrderItemDto)
   declare items: OrderItemDto[];
+
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      "Codes already applied to this checkout. Platform rows are then priced after the applied shop discounts, and a shop row that would push the applied platform code out of its minimum is ineligible with BREAKS_PLATFORM_VOUCHER. Unknown or ineligible codes count as no discount.",
+    example: ["SHOPSALE", "FREESHIP50"],
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  @MaxLength(64, { each: true })
+  voucherCodes?: string[];
 }
 
 export class CreateVoucherDto {

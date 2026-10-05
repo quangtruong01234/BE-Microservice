@@ -62,6 +62,7 @@ import {
   UserSummary,
 } from "./order.types";
 import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
+import { ERROR_CODE } from "libs/constant/error-code.constant";
 import { OrderStatusValue } from "libs/constant/order-status.constant";
 import { READ_ONLY_SHIPPING_ACTIONS } from "libs/constant/shipping.constant";
 
@@ -149,9 +150,10 @@ export class OrderService {
           );
           return this.exposeUserReferences(JSON.parse(existing) as unknown);
         }
-        throw new ConflictException(
-          ORDER_MESSAGE.DUPLICATE_REQUEST_IN_PROGRESS,
-        );
+        throw new ConflictException({
+          message: ORDER_MESSAGE.DUPLICATE_REQUEST_IN_PROGRESS,
+          errorCode: ERROR_CODE.ORDER_REQUEST_IN_PROGRESS,
+        });
       }
     } catch (err) {
       if (err instanceof ConflictException) {
@@ -544,6 +546,7 @@ export class OrderService {
             quantity: item.quantity,
             sellerId: item.sellerId,
           })),
+          codes: dto.voucherCodes ?? [],
         },
         "list available vouchers",
       ),

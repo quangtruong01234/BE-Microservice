@@ -9,6 +9,7 @@ import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.
 import { PaymentMethod } from "@app/common";
 import { CachedService } from "@app/cached";
 import { ConflictException } from "@nestjs/common";
+import { ERROR_CODE } from "libs/constant/error-code.constant";
 import { OrderService } from "./order.service";
 
 describe("OrderService access control", () => {
@@ -278,9 +279,16 @@ describe("OrderService access control", () => {
       cached.setNx.mockResolvedValue(false);
       cached.get.mockResolvedValue("__in_progress__");
 
-      await expect(
-        service.createOrder(18, baseDto, "key-2"),
-      ).rejects.toBeInstanceOf(ConflictException);
+      const rejection: unknown = await service
+        .createOrder(18, baseDto, "key-2")
+        .catch((err: unknown) => err);
+      expect(rejection).toBeInstanceOf(ConflictException);
+      // IDEM-HOLD-CODE-01: the FE tells "outcome unknown" apart from the
+      // definite 409s (stock, voucher) by this code, never by the message.
+      expect((rejection as ConflictException).getResponse()).toMatchObject({
+        message: "A duplicate order request is already being processed",
+        errorCode: ERROR_CODE.ORDER_REQUEST_IN_PROGRESS,
+      });
       expect(ordersClient.send).not.toHaveBeenCalled();
     });
 
