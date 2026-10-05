@@ -6,7 +6,7 @@ import {
   ConflictException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository, QueryFailedError, IsNull } from "typeorm";
+import { Brackets, In, IsNull, QueryFailedError, Repository } from "typeorm";
 import { Channel } from "amqplib";
 import { Inventory } from "./inventory.entity";
 import {
@@ -20,9 +20,18 @@ import { INVENTORY_MESSAGE } from "libs/constant/response-message.constant";
 import { LOW_STOCK_MAX_RESULTS } from "./inventory.constants";
 import {
   CreateInventoryDto,
+  ReserveStockLine,
+  ReserveStockManyResult,
   StockCheckResult,
   UpdateInventoryDto,
 } from "./inventory.types";
+
+/** Rolls the batch reserve transaction back and names the line that failed. */
+class ReserveShortfallError extends Error {
+  constructor(readonly productId: number) {
+    super(`Cannot reserve stock for product ${productId}`);
+  }
+}
 
 @Injectable()
 export class InventoryService {
@@ -525,6 +534,152 @@ export class InventoryService {
       this.emitStockChanged(productId, availableStock);
     }
     return reserved;
+  }
+
+  /**
+   * SWEEP-1002-05: reserve every line of one checkout in ONE transaction,
+   * all-or-nothing. The per-line {@link reserveStockWithLedger} costs ~7 serial
+   * round trips to PG, and at the prod app→Aiven RTT (~100ms) a 20-line cart
+   * outran the gateway's 10s WRITE budget. This path is a fixed handful of
+   * statements whatever the line count: one locking SELECT, one ledger read,
+   * one UPDATE and one INSERT.
+   *
+   * The ledger semantics are the per-line ones: a line already held under this
+   * key with the same quantity counts as reserved (a retried request is a
+   * no-op), any other existing row for the key fails the batch. Two lines for
+   * the same stock row fail it too — the ledger keys a hold by
+   * (reservationKey, inventoryId), so the second line could never be released.
+   */
+  async reserveStockMany(
+    lines: ReserveStockLine[],
+    reservationKey: string,
+  ): Promise<ReserveStockManyResult> {
+    const lineKey = (productId: number, skuId?: number | null): string =>
+      `${productId}:${skuId ?? ""}`;
+    const seenLineKeys = new Set<string>();
+    for (const line of lines) {
+      const key = lineKey(line.productId, line.skuId);
+      if (seenLineKeys.has(key)) {
+        return { isReserved: false, failedProductId: line.productId };
+      }
+      seenLineKeys.add(key);
+    }
+    if (lines.length === 0) {
+      return { isReserved: true, failedProductId: null };
+    }
+
+    const stockChanges: { productId: number; availableStock: number }[] = [];
+    try {
+      await this.inventoryRepository.manager.transaction(async (manager) => {
+        // Lock in id order so two concurrent checkouts sharing products queue
+        // instead of deadlocking.
+        const rows = await manager
+          .getRepository(Inventory)
+          .createQueryBuilder("inventory")
+          .setLock("pessimistic_write")
+          .where("inventory.isActive = true")
+          .andWhere(
+            new Brackets((qb) => {
+              lines.forEach((line, index) => {
+                const skuId = line.skuId ?? null;
+                qb.orWhere(
+                  skuId === null
+                    ? `(inventory.productId = :productId${index} AND inventory.productSkuId IS NULL)`
+                    : `(inventory.productId = :productId${index} AND inventory.productSkuId = :skuId${index})`,
+                  {
+                    [`productId${index}`]: line.productId,
+                    [`skuId${index}`]: skuId,
+                  },
+                );
+              });
+            }),
+          )
+          .orderBy("inventory.id", "ASC")
+          .getMany();
+        const inventoryByLineKey = new Map(
+          rows.map((row) => [lineKey(row.productId, row.productSkuId), row]),
+        );
+
+        const reservationRepository =
+          manager.getRepository(InventoryReservation);
+        const existingReservations = rows.length
+          ? await reservationRepository.find({
+              where: {
+                reservationKey,
+                inventoryId: In(rows.map((row) => row.id)),
+              },
+            })
+          : [];
+        const reservationByInventoryId = new Map(
+          existingReservations.map((reservation) => [
+            Number(reservation.inventoryId),
+            reservation,
+          ]),
+        );
+
+        const pendingHolds: { inventory: Inventory; quantity: number }[] = [];
+        for (const line of lines) {
+          const inventory = inventoryByLineKey.get(
+            lineKey(line.productId, line.skuId),
+          );
+          if (!inventory) throw new ReserveShortfallError(line.productId);
+          const existing = reservationByInventoryId.get(Number(inventory.id));
+          if (existing) {
+            if (
+              existing.quantity !== line.quantity ||
+              existing.status !== InventoryReservationStatus.RESERVED
+            ) {
+              throw new ReserveShortfallError(line.productId);
+            }
+            continue;
+          }
+          if (inventory.availableStock < line.quantity) {
+            throw new ReserveShortfallError(line.productId);
+          }
+          pendingHolds.push({ inventory, quantity: line.quantity });
+        }
+        if (pendingHolds.length === 0) return;
+
+        const params: number[] = [];
+        const valueRows = pendingHolds.map(({ inventory, quantity }) => {
+          params.push(Number(inventory.id), quantity);
+          return `($${params.length - 1}::bigint, $${params.length}::int)`;
+        });
+        await manager.query(
+          `UPDATE inventory_v2 AS inv
+              SET available_stock = inv.available_stock - hold.quantity,
+                  reserved_stock = inv.reserved_stock + hold.quantity,
+                  updated_at = now()
+             FROM (VALUES ${valueRows.join(", ")}) AS hold(id, quantity)
+            WHERE inv.id = hold.id`,
+          params,
+        );
+        await reservationRepository.insert(
+          pendingHolds.map(({ inventory, quantity }) => ({
+            reservationKey,
+            inventoryId: inventory.id,
+            quantity,
+            status: InventoryReservationStatus.RESERVED,
+          })),
+        );
+        for (const { inventory, quantity } of pendingHolds) {
+          stockChanges.push({
+            productId: Number(inventory.productId),
+            availableStock: inventory.availableStock - quantity,
+          });
+        }
+      });
+    } catch (error) {
+      if (error instanceof ReserveShortfallError) {
+        return { isReserved: false, failedProductId: error.productId };
+      }
+      throw error;
+    }
+
+    for (const { productId, availableStock } of stockChanges) {
+      this.emitStockChanged(productId, availableStock);
+    }
+    return { isReserved: true, failedProductId: null };
   }
 
   private async transitionReservation(

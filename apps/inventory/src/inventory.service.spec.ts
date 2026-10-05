@@ -297,3 +297,202 @@ describe("InventoryService restock on approved return", () => {
     expect(getReservation()?.status).toBe(InventoryReservationStatus.RETURNED);
   });
 });
+
+/**
+ * SWEEP-1002-05: the per-line reserve cost ~7 serial PG round trips, and at the
+ * prod app→Aiven RTT a 20-line cart outran the gateway's 10s WRITE budget. The
+ * batch reserves every line in ONE transaction with a fixed statement count,
+ * and is all-or-nothing.
+ */
+describe("InventoryService batch reserve (SWEEP-1002-05)", () => {
+  const reservationKey = "00000000-0000-4000-8000-000000000005";
+
+  // PG returns bigint columns as strings — the batch has to key on them anyway.
+  const stockRow = (
+    id: number,
+    productId: number,
+    availableStock: number,
+    productSkuId: number | null = null,
+  ): Inventory =>
+    ({
+      id: String(id),
+      productId: String(productId),
+      productSkuId: productSkuId === null ? null : String(productSkuId),
+      availableStock,
+      reservedStock: 0,
+      isActive: true,
+    }) as unknown as Inventory;
+
+  const buildService = (
+    rows: Inventory[],
+    existingReservations: Partial<InventoryReservation>[] = [],
+  ): {
+    service: InventoryService;
+    query: jest.Mock;
+    insert: jest.Mock;
+    getMany: jest.Mock;
+    transaction: jest.Mock;
+  } => {
+    const getMany = jest.fn().mockResolvedValue(rows);
+    const queryBuilder = {
+      setLock: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getMany,
+    };
+    const insert = jest.fn().mockResolvedValue({});
+    const reservationRepository = {
+      find: jest.fn().mockResolvedValue(existingReservations),
+      insert,
+    };
+    const query = jest.fn().mockResolvedValue([]);
+    const manager = {
+      getRepository: jest.fn((entity: unknown) =>
+        entity === Inventory
+          ? { createQueryBuilder: jest.fn().mockReturnValue(queryBuilder) }
+          : reservationRepository,
+      ),
+      query,
+    };
+    const transaction = jest.fn(
+      (callback: (value: typeof manager) => Promise<unknown>) =>
+        callback(manager),
+    );
+    const repository = {
+      manager: { transaction },
+    } as unknown as Repository<Inventory>;
+    return {
+      service: new InventoryService(repository, null),
+      query,
+      insert,
+      getMany,
+      transaction,
+    };
+  };
+
+  it("holds every line with one locking read, one UPDATE and one INSERT", async () => {
+    const { service, query, insert, getMany } = buildService([
+      stockRow(1, 10, 5),
+      stockRow(2, 20, 3, 7),
+    ]);
+
+    await expect(
+      service.reserveStockMany(
+        [
+          { productId: 10, quantity: 2 },
+          { productId: 20, quantity: 3, skuId: 7 },
+        ],
+        reservationKey,
+      ),
+    ).resolves.toEqual({ isReserved: true, failedProductId: null });
+
+    expect(getMany).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenCalledTimes(1);
+    const [[, updateParams]] = query.mock.calls as Array<[string, number[]]>;
+    expect(updateParams).toEqual([1, 2, 2, 3]);
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        reservationKey,
+        inventoryId: "1",
+        quantity: 2,
+      }),
+      expect.objectContaining({
+        reservationKey,
+        inventoryId: "2",
+        quantity: 3,
+      }),
+    ]);
+  });
+
+  it("reserves nothing when one line is short, and names that line", async () => {
+    const { service, query, insert } = buildService([
+      stockRow(1, 10, 5),
+      stockRow(2, 20, 1),
+    ]);
+
+    await expect(
+      service.reserveStockMany(
+        [
+          { productId: 10, quantity: 2 },
+          { productId: 20, quantity: 3 },
+        ],
+        reservationKey,
+      ),
+    ).resolves.toEqual({ isReserved: false, failedProductId: 20 });
+    expect(query).not.toHaveBeenCalled();
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it("fails the batch on a line with no active stock row", async () => {
+    const { service, query } = buildService([stockRow(1, 10, 5)]);
+
+    await expect(
+      service.reserveStockMany(
+        [
+          { productId: 10, quantity: 1 },
+          { productId: 99, quantity: 1 },
+        ],
+        reservationKey,
+      ),
+    ).resolves.toEqual({ isReserved: false, failedProductId: 99 });
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("treats a retry under the same key as already reserved", async () => {
+    const { service, query, insert } = buildService(
+      [stockRow(1, 10, 3)],
+      [
+        {
+          inventoryId: "1" as unknown as number,
+          quantity: 2,
+          status: InventoryReservationStatus.RESERVED,
+        },
+      ],
+    );
+
+    await expect(
+      service.reserveStockMany(
+        [{ productId: 10, quantity: 2 }],
+        reservationKey,
+      ),
+    ).resolves.toEqual({ isReserved: true, failedProductId: null });
+    expect(query).not.toHaveBeenCalled();
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it("rejects a key whose existing hold was already released", async () => {
+    const { service } = buildService(
+      [stockRow(1, 10, 3)],
+      [
+        {
+          inventoryId: "1" as unknown as number,
+          quantity: 2,
+          status: InventoryReservationStatus.RELEASED,
+        },
+      ],
+    );
+
+    await expect(
+      service.reserveStockMany(
+        [{ productId: 10, quantity: 2 }],
+        reservationKey,
+      ),
+    ).resolves.toEqual({ isReserved: false, failedProductId: 10 });
+  });
+
+  it("rejects two lines for the same stock row before opening a transaction", async () => {
+    const { service, transaction } = buildService([stockRow(1, 10, 9)]);
+
+    await expect(
+      service.reserveStockMany(
+        [
+          { productId: 10, quantity: 1, skuId: null },
+          { productId: 10, quantity: 1 },
+        ],
+        reservationKey,
+      ),
+    ).resolves.toEqual({ isReserved: false, failedProductId: 10 });
+    expect(transaction).not.toHaveBeenCalled();
+  });
+});

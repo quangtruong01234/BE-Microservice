@@ -14,6 +14,8 @@ import {
 import { InventoryService } from "./inventory.service";
 import {
   CreateInventoryDto,
+  ReserveStockLine,
+  ReserveStockManyResult,
   UpdateInventoryDto,
   StockCheckResult,
 } from "./inventory.types";
@@ -92,6 +94,20 @@ export class InventoryController {
       data.productId,
       data.quantity,
       data.skuId,
+      data.reservationKey,
+    );
+  }
+
+  @MessagePattern(INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK_MANY)
+  async reserveStockMany(data: {
+    items: ReserveStockLine[];
+    reservationKey: string;
+  }): Promise<ReserveStockManyResult> {
+    this.logger.log(
+      `[INVENTORY-TCP] Reserve stock for ${data.items.length} line(s) under one key`,
+    );
+    return this.inventoryService.reserveStockMany(
+      data.items,
       data.reservationKey,
     );
   }
