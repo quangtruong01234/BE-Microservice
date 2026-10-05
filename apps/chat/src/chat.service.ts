@@ -20,6 +20,9 @@ import {
   SentMessageWithParticipants,
 } from "./chat.types";
 
+// SWEEP-1005-04: server-side cap on GET /api/chat/conversations.
+const CONVERSATION_LIST_LIMIT = 100;
+
 @Injectable()
 export class ChatService {
   private readonly logger = new Logger(ChatService.name);
@@ -96,10 +99,30 @@ export class ChatService {
   }
 
   async getConversations(userId: number): Promise<ConversationWithMeta[]> {
+    // SWEEP-1005-04: only the most recently active conversations, picked in
+    // SQL, so a seller who has chatted with every buyer does not load (and
+    // run the two grouped queries below over) every conversation on each call.
+    // Activity = the newest message, else the conversation creation time.
     const conversations = await this.conversationRepo
       .createQueryBuilder("c")
-      .where("c.user1_id = :userId OR c.user2_id = :userId", { userId })
-      .orderBy("c.created_at", "DESC")
+      .leftJoin(
+        (qb) =>
+          qb
+            .select("mm.conversation_id", "conversation_id")
+            .addSelect("MAX(mm.created_at)", "last_at")
+            .from(Message, "mm")
+            .innerJoin(Conversation, "cc", "cc.id = mm.conversation_id")
+            .where("(cc.user1_id = :userId OR cc.user2_id = :userId)", {
+              userId,
+            })
+            .groupBy("mm.conversation_id"),
+        "activity",
+        "activity.conversation_id = c.id",
+      )
+      .where("(c.user1_id = :userId OR c.user2_id = :userId)", { userId })
+      .orderBy("COALESCE(activity.last_at, c.created_at)", "DESC")
+      .addOrderBy("c.id", "DESC")
+      .limit(CONVERSATION_LIST_LIMIT)
       .getMany();
 
     if (conversations.length === 0) return [];

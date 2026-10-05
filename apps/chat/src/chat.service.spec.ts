@@ -199,3 +199,33 @@ describe("ChatService.cleanupOldMessages (SWEEP-1002-07)", () => {
     await expect(service.cleanupOldMessages()).resolves.toBeUndefined();
   });
 });
+
+describe("ChatService.getConversations (SWEEP-1005-04)", () => {
+  let conversationRepo: RepositoryMock<Conversation>;
+  let service: ChatService;
+
+  beforeEach(() => {
+    conversationRepo = createRepositoryMock<Conversation>();
+    service = new ChatService(
+      conversationRepo.asRepository(),
+      createRepositoryMock<Message>().asRepository(),
+    );
+  });
+
+  it("caps the list at the 100 most recently active conversations in SQL", async () => {
+    const queryBuilder = conversationRepo.createQueryBuilder() as unknown as {
+      orderBy: jest.Mock;
+      limit: jest.Mock;
+      take: jest.Mock;
+    };
+
+    await expect(service.getConversations(7)).resolves.toEqual([]);
+
+    expect(queryBuilder.limit).toHaveBeenCalledWith(100);
+    expect(queryBuilder.take).not.toHaveBeenCalled();
+    const [[orderExpression, direction]] = queryBuilder.orderBy.mock
+      .calls as Array<[string, string]>;
+    expect(orderExpression).toContain("activity.last_at");
+    expect(direction).toBe("DESC");
+  });
+});
