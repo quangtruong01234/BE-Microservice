@@ -144,8 +144,12 @@
     reset; a raw counter panel would not.
 - **Captcha (CAPTCHA-01, 2026-09-28)**: Cloudflare Turnstile on
   `POST /api/user/register` and `/forgot-password`, driven by two gateway env
-  vars in `local/nodeA/.env`. `TURNSTILE_SECRET_KEY` unset means off, which is
-  the prod state until the user creates the Turnstile site and keys. A secret
+  vars in `local/nodeA/.env`. `TURNSTILE_SECRET_KEY` unset means off. Prod
+  is ENFORCED since 2026-10-06 (secret set, `CAPTCHA_ENFORCE=true`; the
+  storefront bakes the public site key in at build time as
+  `VITE_TURNSTILE_SITE_KEY`, a Workers build var). Rolling back to shadow is
+  `CAPTCHA_ENFORCE=false` + `pm2 restart gateway`. A
+  secret
   with `CAPTCHA_ENFORCE` not `true` means shadow: tokens are verified and logged
   but never rejected. `CAPTCHA_ENFORCE=true` means a missing or refused token is
   a 400 `CAPTCHA_REQUIRED`. The guard reads both vars **per request**, but the

@@ -15,20 +15,20 @@ bash scripts/metrics.sh --all    # everything (~2 min)
 
 ## Code and API surface
 
-Commit `0364eeb` (2026-09-16) · measured 2026-09-21 · `bash scripts/metrics.sh --all`
+Commit `1ddcb97` (2026-10-06) · measured 2026-10-06 · `bash scripts/metrics.sh --all`
 
 | Metric | Value | How it is counted |
 |---|---:|---|
 | Microservices | 10 | `apps/*/` directories |
 | Shared libraries | 4 | `libs/*/` directories |
-| HTTP routes (gateway) | 155 | `@Get/@Post/@Put/@Patch/@Delete` sites in `apps/gateway/src` |
-| Gateway controllers | 20 | `*.controller.ts` in `apps/gateway/src` |
-| TCP message patterns | 153 | `@MessagePattern(` sites in `apps/` |
+| HTTP routes (gateway) | 170 | `@Get/@Post/@Put/@Patch/@Delete` sites in `apps/gateway/src` |
+| Gateway controllers | 21 | `*.controller.ts` in `apps/gateway/src` |
+| TCP message patterns | 174 | `@MessagePattern(` sites in `apps/` |
 | RabbitMQ event handlers | 22 | `@EventPattern(` sites in `apps/` |
-| TypeORM entities | 34 | `*.entity.ts` in `apps/` + `libs/` |
-| SQL migrations | 8 | `database/migrations/**/*.sql` |
-| Test suites (spec files) | 47 | `*.spec.ts` in `apps/` + `libs/` |
-| Documented behaviours | 58 | `kb:` anchors in `ai-docs/agent-context/known-behaviors.md` |
+| TypeORM entities | 36 | `*.entity.ts` in `apps/` + `libs/` |
+| SQL migrations | 16 | `database/migrations/**/*.sql` |
+| Test suites (spec files) | 82 | `*.spec.ts` in `apps/` + `libs/` |
+| Documented behaviours | 77 | `kb:` anchors in `ai-docs/agent-context/known-behaviors.md` |
 
 The gateway is the only HTTP-facing process, which is why the route count is
 scoped to it — the other nine services are unreachable from outside the VPC and
@@ -40,9 +40,13 @@ expose transport handlers only.
 
 | Metric | Value |
 |---|---:|
-| Suites passed | 47 / 47 |
-| Tests passed | 500 / 500 (100%) |
+| Suites passed | 83 / 83 |
+| Tests passed | 849 / 849 (100%) |
 | Tests failed | 0 |
+
+Jest runs one suite more than the spec-file count above: that count covers
+`apps/` + `libs/` only. The extra one is `test/utils/test-utils.spec.ts`, which tests the
+shared mock factories themselves.
 
 **These are unit tests only.** There is no end-to-end suite: a real one needs a
 live Redis + RabbitMQ + two Aiven databases inside CI, and this project is
@@ -59,10 +63,10 @@ stack instead, and the result of each is recorded in
 
 | Language | Files | Code |
 |---|---:|---:|
-| TypeScript | 309 | 35,145 |
+| TypeScript | 327 | 40,450 |
 | JavaScript | 6 | 1,951 |
-| SQL | 10 | 782 |
-| **Total** | **325** | **37,878** |
+| SQL | 18 | 1,068 |
+| **Total** | **351** | **43,469** |
 
 ---
 

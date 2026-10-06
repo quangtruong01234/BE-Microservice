@@ -106,8 +106,10 @@ money moves.
   Swagger) and it is rejected. Order state changes on the signed callback, never
   on the browser redirect.
 - **A role change mid-session.** As `demo.admin`, promote `demo.buyer` to
-  `shop`. The role lives in the JWT, so it takes effect on next login;
-  `GET /api/user/me` surfaces the drift so the UI can prompt a re-login.
+  `shop`. The role lives in the JWT, so the change revokes the buyer's
+  sessions. Their next request is a 401, and logging in again carries the new
+  role. A password change and `POST /api/user/logout-all` revoke sessions the
+  same way.
 
 Screenshots use demo data only; names, phone numbers and addresses are
 fictional.
@@ -240,9 +242,18 @@ git clone https://github.com/quangtruong01234/BE-Microservice.git
 cd BE-Microservice
 npm ci
 
-cp .env.example .env          # fill in DB credentials and secrets
-docker compose up -d          # Redis :6379, RabbitMQ :5672 / :15672
+cp .env.example .env                              # Docker Compose: Redis + RabbitMQ credentials
+cp local/nodeA/.env.example local/nodeA/.env      # Node A services: MySQL, JWT, Cloudinary, GHN, SMTP
+cp local/nodeB/.env.example local/nodeB/.env      # Node B services: PostgreSQL, ZaloPay, VNPay
+docker compose up -d                              # Redis :6379, RabbitMQ :5672 / :15672
 ```
+
+The services read **only** `local/nodeA/.env` or `local/nodeB/.env`. The root
+`.env` is for Compose alone. The root `.env.example` is the full variable
+reference, annotated. The per-node examples list just what dev needs. For
+production, start from `local/node{A,B}/.env.production.example` (see
+[`docs/deployment-runtime.md`](./docs/deployment-runtime.md) §4). `.env` is read once at boot, so
+restart the process after any change.
 
 Run the two node groups in separate terminals:
 
@@ -268,6 +279,57 @@ node scripts/seed/seed-products.mjs
 
 Demo accounts and a guided walkthrough are in [`docs/DEMO.md`](./docs/DEMO.md).
 
+### Optional integrations
+
+None of these stops the services from booting when its env is unset. Each one
+degrades as described below.
+
+| Integration | Env (file) | When unset |
+|---|---|---|
+| Captcha (Cloudflare Turnstile) | `TURNSTILE_SECRET_KEY`, `CAPTCHA_ENFORCE` (nodeA) | Off: register and forgot-password accept any request |
+| Mail (SMTP) | `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS` (nodeA) | Reset codes and order mails are logged, not sent |
+| Prometheus `/metrics` | `METRICS_TOKEN` (nodeA) | Open in dev; **404** in production |
+| RabbitMQ dead-letter queue | the RabbitMQ user needs the `policymaker` (or `administrator`) tag | The gateway logs one warning and boots without dead-lettering |
+| Media uploads | `CLOUDINARY_*` (nodeA) | Read per request: boot is fine, upload routes error |
+| Shipping (GHN) | `GHN_*` (nodeA) | Read per request: boot is fine, the GHN calls error |
+| Payments | `ZALOPAY_*`, `VNP_*` (nodeB) | Read per request: boot is fine, that payment method errors |
+
+### Captcha (Cloudflare Turnstile)
+
+`POST /api/user/register` and `POST /api/user/forgot-password` take an optional
+`captchaToken` in the body. Login deliberately has none. The gateway verifies
+the token with Cloudflare `siteverify`. There are three postures:
+
+| `TURNSTILE_SECRET_KEY` | `CAPTCHA_ENFORCE` | Posture | Behaviour |
+|---|---|---|---|
+| unset | — | **off** | Nothing is verified |
+| set | not `true` | **shadow** | Tokens that are sent get verified; a failure is logged as a WARN and never rejected |
+| set | `true` | **enforce** | A missing or failed token is `400` with `errorCode: "CAPTCHA_REQUIRED"` |
+
+Captcha **fails open**. A siteverify outage, a 3 s timeout, or a secret
+Cloudflare itself rejects lets the request through with a warning. It never
+locks users out of sign-up.
+
+Setup:
+
+1. Create a widget in the Cloudflare dashboard (Turnstile). Add every
+   storefront hostname to it, including `localhost` and the `*.workers.dev`
+   host if you use one.
+2. **Backend:** put the secret key in `local/nodeA/.env`
+   (`TURNSTILE_SECRET_KEY=…`), then restart the gateway (`pm2 restart gateway`
+   in production). Never commit the secret.
+3. **Storefront:** set the site key as `VITE_TURNSTILE_SITE_KEY`. Vite bakes it
+   in at **build time**, so it must be set as a build variable on the host and
+   then redeployed — a runtime variable does nothing.
+4. Roll out in this order: **secret only (shadow)** → **storefront sends
+   tokens** → `CAPTCHA_ENFORCE=true` + restart. If you enforce before the
+   storefront sends tokens, every sign-up fails with a 400.
+5. Rollback: `CAPTCHA_ENFORCE=false` + restart puts it back in shadow mode.
+
+For local testing, Cloudflare's test secrets need no widget:
+`1x0000000000000000000000000000000AA` always passes, and
+`2x0000000000000000000000000000000AA` always fails.
+
 ## Testing
 
 ```bash
@@ -279,7 +341,7 @@ npm run check:conventions # project invariants eslint cannot express
 bash scripts/metrics.sh --all   # regenerate every number quoted in the docs
 ```
 
-**47 suites / 500 tests, all passing** at the commit recorded in
+**83 suites / 849 tests, all passing** at the commit recorded in
 [`docs/METRICS.md`](./docs/METRICS.md) — counted by `scripts/metrics.sh`, not
 by hand.
 
@@ -290,10 +352,17 @@ imply coverage that did not exist; endpoints are verified instead by scripted
 `curl` runs against a live stack, recorded per change in
 `ai-docs/agent-handoff/CHANGELOG.md`.
 
-`check:conventions` deserves a word. It enforces three things a linter cannot
-express — every TCP client uses the resilient class, a message pattern has the
-same shape on both sides, and every microservice controller converts HTTP
-exceptions to RPC ones. Each of those was a real 500 or 502 in this codebase
+`check:conventions` deserves a word. It enforces what a linter cannot
+express:
+
+- every TCP client uses the resilient class;
+- a message pattern has the same shape on both sides and is bound to a
+  constant, never a string literal;
+- every microservice controller converts HTTP exceptions to RPC ones;
+- every RabbitMQ event that is published has a consumer;
+- every TCP pattern that is sent has a handler.
+
+It also checks that the knowledge-base anchors are well formed. Each of those was a real 500 or 502 in this codebase
 before it was mechanized.
 
 ## Deployment
@@ -329,7 +398,7 @@ is set up to make that work rather than to hide it.
   eslint, the convention checker and the unit suite all run in CI, and nothing
   merges red.
 - Decisions and their residual consequences are written down as they are made —
-  58 documented behaviours in `ai-docs/agent-context/known-behaviors.md`, each
+  77 documented behaviours in `ai-docs/agent-context/known-behaviors.md`, each
   recording what was chosen and what it costs, so neither I nor the agent
   re-litigates a settled question six weeks later.
 - The parts that need judgement — where the service boundaries fall, which

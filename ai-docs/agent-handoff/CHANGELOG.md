@@ -6,10 +6,27 @@
 
 ## Completed Milestones
 
+- **CAPTCHA-01 prod rollout, step 1 — shadow mode (2026-10-06, ops only, no
+  code).** The user created the Cloudflare Turnstile site and put
+  `TURNSTILE_SECRET_KEY` (with `CAPTCHA_ENFORCE=false`) in the box's
+  `local/nodeA/.env`, then restarted the gateway. Verified from outside: 4
+  empty-body registers with a bogus `captchaToken` vs 4 without both answered
+  the validation 400 with no `errorCode` (so not enforced), the token calls ~17
+  ms slower (siteverify is being called, so the secret is loaded); the gateway
+  log, read by the user, shows exactly 4 `Turnstile refused a token`
+  WARNs and no `invalid-input-secret`, so Cloudflare accepts the secret.
+  CAPTCHA-01 provenance moved to `verified=prod:2026-10-06`.
+  **Step 2 — enforce, same day.** The user set the storefront's
+  `VITE_TURNSTILE_SITE_KEY` build var, redeployed it, and set
+  `CAPTCHA_ENFORCE=true`. Verified: register with no token / a bogus token and
+  forgot-password with no token all answer 400 `CAPTCHA_REQUIRED`; the live
+  storefront `LoginPage` chunk carries the site key and the Turnstile script.
+  Rollback: `CAPTCHA_ENFORCE=false` + `pm2 restart gateway`.
+
 - **SWEEP-1005-01..04 — cancel completeness, batched release/consume, dead
   payments handler, capped conversation list (2026-10-05, `/sweep` fix mode,
   "do them all" after `/sweep audit` 2026-10-05). Release class A for -01/-02/-03,
-  B for -04. nodeA and nodeB must deploy together.** Not pushed.
+  B for -04. nodeA and nodeB must deploy together.** Deployed 2026-10-05 (Deploy run 37351597811).
   - **-01 Problem.** `finalizeCancellation` / `finalizeGhnCancellation`
     flipped the order to CANCELED, then called `releaseReservedItems(…, true)`,
     which threw a 503 on any failed line and skipped the voucher give-back, the

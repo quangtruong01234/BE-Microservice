@@ -195,6 +195,14 @@ Checklist for `.env`, `local/nodeA/.env`, and `local/nodeB/.env`:
 - GHN API URL, token, shop ID, and webhook secret are present on Node A.
 - ZaloPay and VNPay secrets and public callback/return URLs are present on
   Node B.
+- `METRICS_TOKEN` is set on Node A if a scraper reads `GET /metrics`. While it
+  is unset, that route answers 404 in production.
+- `TURNSTILE_SECRET_KEY` and `CAPTCHA_ENFORCE` on Node A follow the rollout
+  order in `README.md` § Captcha: secret first (shadow), then the storefront
+  build with `VITE_TURNSTILE_SITE_KEY`, and only then `CAPTCHA_ENFORCE=true`.
+- The RabbitMQ user has the `policymaker` (or `administrator`) tag, or the
+  gateway boots without the dead-letter policy. Check for the
+  `Dead-letter policy applied` line in the gateway log.
 - `SWAGGER_ENABLED=false` unless production Swagger is intentionally exposed.
 - No plaintext secrets are committed or copied into shared docs.
 

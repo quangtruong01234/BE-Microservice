@@ -76,7 +76,20 @@ Order picked by the user: F8 → F9 first, then F10..F12.
 
 ### Prod-owed
 
-- Nothing owed. `nodeA-20261005-001-add-notifications-user-index` was applied
+- [ ] **GHN-WEBHOOK-E2E-01 — prove a real GHN callback reaches prod
+  (unblocks OQ-2 step 4).** The portal is configured and the auth probe passes
+  (see OQ-2), but GHN has never actually called prod. Steps:
+  1. With the user's consent, place one test order on prod as shop1/admin1
+     from `test-accounts.md`, so a GHN sandbox waybill gets created. EC2 must
+     be up.
+  2. Move the waybill's status, or wait for GHN sandbox to move it.
+  3. Confirm `http_requests_total` shows a `POST /api/ghn/webhook` 200
+     (`/metrics` with `METRICS_TOKEN`, or Grafana), and that
+     `GET /api/order/:id/history` has the GHN row.
+  4. Cancel the test order. Then delete the `?token=` query branch in
+     `apps/gateway/src/ghn/ghn-webhook.controller.ts` and close OQ-2.
+  Do NOT place the order without asking first: it is a real prod order row.
+- No migration owed. `nodeA-20261005-001-add-notifications-user-index` was applied
   by the CD migrate step on 2026-10-05 (Deploy run 37301536206). The six nodeA
   migrations from 2026-09-28..2026-10-02 (export
   jobs, checkout voucher columns, notification product_public_id, order status
@@ -85,13 +98,9 @@ Order picked by the user: F8 → F9 first, then F10..F12.
   depends on them answered 200 on prod right after.
 
 DEPLOY-PG-01 was resolved 2026-09-16; both migration failure modes now live in
-`ops-runtime.md` (§CI/CD and §Database migrations). One config gap remains
-(MONITOR-01 closed 2026-10-03, see CHANGELOG):
-
-- **`TURNSTILE_SECRET_KEY` is UNSET on prod**, so CAPTCHA-01 is off there. It
-  is blocked on the user creating the Turnstile keys. Set the secret first
-  (shadow mode), and flip `CAPTCHA_ENFORCE=true` only after the storefront
-  sends tokens (`ops-runtime.md` §Captcha).
+`ops-runtime.md` (§CI/CD and §Database migrations). No config gap remains:
+MONITOR-01 closed 2026-10-03 and CAPTCHA-01 is ENFORCED on prod since
+2026-10-06 (see CHANGELOG).
 
 ### Worth a decision, not yet work
 
@@ -176,8 +185,8 @@ tracked under SWEEP-1005 below.
 
 ### Audit backlog (SWEEP-1005, `/sweep audit` 2026-10-05 — recorded, not fixed)
 
-All four fixed 2026-10-05 (local), see CHANGELOG; not pushed. -01/-02 touch
-nodeA AND nodeB, so they deploy together. Owed after that deploy: delete the
+All four fixed 2026-10-05, see CHANGELOG; deployed together (nodeA + nodeB)
+by Deploy run 37351597811 on 2026-10-05. Owed now: delete the
 orphaned single `INVENTORY_RESERVE_STOCK`, `INVENTORY_RELEASE_STOCK` and
 `INVENTORY_CONSUME_RESERVED_STOCK` handlers (`check:conventions` flags all
 three); this supersedes the SWEEP-1002-05 leftover.
@@ -215,8 +224,14 @@ pick one up. Do not re-derive them:
   `developer.ghn.vn`. GHN drops a 4xx callback with no retry, so the order is
   fixed: (1) add the header and keep `?token=`; (2) confirm the deprecation
   warn stops in gateway logs; (3) drop `?token=` from the URL; (4) only then
-  delete the query branch. Blocked on step 1, which needs the user's GHN login.
-  Full answer: `backend-handoff.md` § Open → `OQ-2 · answer`.
+  delete the query branch. Full answer: `backend-handoff.md` § Open →
+  `OQ-2 · answer`. **Progress 2026-10-06:** the sandbox portal Order endpoint
+  was EMPTY before (GHN had never called prod), so `?token=` was never in use
+  and steps 2–3 are moot. The user saved the portal config: `/api/ghn/webhook`,
+  header `x-ghn-webhook-token`, timeout 15s. Prod probe answered 200 with
+  the header and 401 without it or with a wrong one. Still owed: one real GHN
+  callback answering 200, then step 4 — tracked as GHN-WEBHOOK-E2E-01
+  (§Prod-owed).
 - **OQ-6:** target rate-limit numbers for login/register/upload/checkout
   (product decision) — also informs nginx `limit_req` tuning if FE fan-out
   trips 429.

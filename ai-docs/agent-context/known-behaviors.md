@@ -2490,7 +2490,7 @@ one line, quantity 8.
   stock; checkout's stock check is what refuses it, as for any over-sized line.
 
 ## Captcha on register / forgot-password is env-driven and fails open (CAPTCHA-01, 2026-09-28)
-<!-- kb: id=CAPTCHA-01; group=auth; files=apps/gateway/src/common/guards/captcha.guard.ts; sha=f2f3f6047cff; verified=local:2026-09-28; keys=captcha,captchaToken,turnstile,CAPTCHA_REQUIRED,CAPTCHA_ENFORCE,TURNSTILE_SECRET_KEY,siteverify,shadow mode,bot register,mã xác thực,chống bot,đăng ký hàng loạt; summary=Turnstile on register and forgot-password has three env postures (off / shadow / enforce); only enforce ever rejects, with a 400 CAPTCHA_REQUIRED, and a siteverify outage or a secret Cloudflare rejects fails OPEN. -->
+<!-- kb: id=CAPTCHA-01; group=auth; files=apps/gateway/src/common/guards/captcha.guard.ts; sha=f2f3f6047cff; verified=prod:2026-10-06; keys=captcha,captchaToken,turnstile,CAPTCHA_REQUIRED,CAPTCHA_ENFORCE,TURNSTILE_SECRET_KEY,siteverify,shadow mode,bot register,mã xác thực,chống bot,đăng ký hàng loạt; summary=Turnstile on register and forgot-password has three env postures (off / shadow / enforce); only enforce ever rejects, with a 400 CAPTCHA_REQUIRED, and a siteverify outage or a secret Cloudflare rejects fails OPEN. -->
 
 `POST /api/user/register` and `POST /api/user/forgot-password` carry
 `@UseGuards(CaptchaGuard)` (gateway), which verifies an optional body field
@@ -2500,8 +2500,8 @@ every returning user.
 
 - **Three postures, all env, no deploy to move between them** (read per request
   from `local/nodeA/.env`, so a gateway restart picks a change up):
-  - `TURNSTILE_SECRET_KEY` unset → **off**. Nothing is verified. This is prod
-    until the user creates the Turnstile site + keys in the Cloudflare dashboard.
+  - `TURNSTILE_SECRET_KEY` unset → **off**. Nothing is verified. This was prod
+    until 2026-10-06; prod is **enforced** since then.
     `CAPTCHA_ENFORCE=true` with no secret logs an ERROR per request and stays off
     — misconfiguration never locks users out.
   - secret set, `CAPTCHA_ENFORCE` anything but `"true"` → **shadow**. A token
@@ -2532,6 +2532,18 @@ every returning user.
   siteverify: off → token accepted and ignored; enforce + always-pass secret →
   no token 400 `CAPTCHA_REQUIRED`, dummy token passes through to the user service;
   enforce + always-fail secret → 400; shadow + always-fail secret → passes.
+- **Verified on prod 2026-10-06 (shadow, real secret):** `POST /api/user/register`
+  with an empty body answered the validation 400 (no `errorCode`) both with
+  and without a bogus `captchaToken`; the token calls ran ~17 ms slower
+  (siteverify round trip), and the gateway logged one `Turnstile refused a
+  token … allowed (CAPTCHA_ENFORCE is off)` WARN per bogus token — no
+  `invalid-input-secret`, so Cloudflare accepted the secret.
+- **Verified on prod 2026-10-06 (enforce):** `POST /api/user/register` with no
+  token and with a bogus token, and `POST /api/user/forgot-password` with no
+  token, each answered `400 { errorCode: "CAPTCHA_REQUIRED" }`. The live
+  storefront's `LoginPage` chunk carries a `0x4AAAA…` site key and the
+  Turnstile script URL. A real widget token passing end-to-end was NOT
+  exercised by the agent (it needs a browser).
 
 ## Self-service account deletion anonymizes, keeps content and orders, and is not atomic (ACCOUNT-DELETE-01, 2026-10-01)
 <!-- kb: id=ACCOUNT-DELETE-01; group=auth; files=apps/gateway/src/user/user.service.ts,apps/user/src/user.service.ts,apps/orders/src/orders.service.ts,apps/product/src/product.service.ts,apps/social/src/social.service.ts,apps/notification/src/notification.service.ts,apps/gateway/src/user/dto/user.dto.ts; sha=45480c0b8f96; verified=local:2026-10-01; keys=account deletion,delete account,deleteAccount,DELETE /api/user/me,anonymize,anonymise,deleted_usr,deleted_,deleted.invalid,purgeUserData,PURGE_USER_DATA,cancelOpenOrdersForUser,CANCEL_OPEN_ORDERS_FOR_USER,VERIFY_ACCOUNT_DELETION,ADMIN_CANNOT_SELF_DELETE,ACCOUNT_ALREADY_DELETED,right to erasure,Decree 13,xoá tài khoản,xóa tài khoản,xoa tai khoan,ẩn danh,an danh,huỷ đơn,huy don; summary=DELETE /api/user/me scrubs the user to deleted_<publicId> (name/avatar null, inactive, addresses gone, sessions revoked) but KEEPS posts, comments, reviews, chat and every order row; only PENDING..PROCESSING orders auto-cancel, the legs run in sequence and are not atomic, so a mid-way failure leaves canceled orders on a live account and the retry finishes the job; an admin cannot self-delete (403) and deleted_ is a reserved register prefix. -->
