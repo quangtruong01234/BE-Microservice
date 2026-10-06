@@ -74,6 +74,16 @@ Order picked by the user: F8 → F9 first, then F10..F12.
   `?unreadOnly=true`. 1 index-only migration. Class B, FE handoff written.
   Deployed 2026-10-05; read-all and `?unreadOnly` answered 200 on prod.
 
+`/sweep propose` 2026-10-07 (user pick: a real RAG project, free tier only):
+
+- [ ] **F16 PRODUCT-QA-01** — grounded product Q&A, two-session mode
+  (`feat/PRODUCT-QA-01-be` / `-fe`). New nodeB `assistant` service owns a
+  pgvector + hand-rolled BM25 index in PG, fed by product events; Gemini
+  free tier for embeddings + answer. Contract
+  `ai-docs/specs/PRODUCT-QA-01/contract.md` (draft); spec in the same folder.
+  Class B. Needs 1 nodeB migration and `GEMINI_API_KEY` on prod nodeB.
+- [ ] **F17 RAG-EVAL-01** — offline retrieval/answer eval set for F16 (after F16).
+
 ### Prod-owed
 
 - [ ] **GHN-WEBHOOK-E2E-01 — prove a real GHN callback reaches prod
