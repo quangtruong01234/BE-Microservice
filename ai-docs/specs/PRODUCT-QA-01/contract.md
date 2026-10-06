@@ -1,4 +1,4 @@
-<!-- contract: id=PRODUCT-QA-01; status=draft -->
+<!-- contract: id=PRODUCT-QA-01; status=agreed -->
 # PRODUCT-QA-01 — API contract
 
 > The single source of truth for the HTTP surface of `PRODUCT-QA-01`. The
@@ -144,3 +144,4 @@ Response `429`:
 - `2026-10-07` FE review round 1: `503` retry semantics and rate-limit slot
   use, plain-text `answer`, `[n]` marker grammar and the no-false-marker
   guarantee. No field or type changed.
+- `2026-10-07` agreed — FE approved round 1 at `c82e223`.
