@@ -76,21 +76,20 @@ Order picked by the user: F8 → F9 first, then F10..F12.
 
 `/sweep propose` 2026-10-07 (user pick: a real RAG project, free tier only):
 
-- [x] **F16 PRODUCT-QA-01** → **BE DONE 2026-10-07** (local, branch
-  `feat/PRODUCT-QA-01-be`, not pushed), see CHANGELOG. Class B. New nodeB
-  `assistant` service; contract `ai-docs/specs/PRODUCT-QA-01/contract.md`
-  (implemented). Ships with the FE branch; prod steps under §Prod-owed.
+- [x] **F16 PRODUCT-QA-01** → **BE DONE 2026-10-07**, see CHANGELOG. Class B.
+  New nodeB `assistant` service; contract
+  `ai-docs/specs/PRODUCT-QA-01/contract.md` (implemented). Deployed
+  2026-10-07 (Deploy run 37603854117); the FE ships after it. Prod steps
+  still owed under §Prod-owed.
 - [ ] **F17 RAG-EVAL-01** — offline retrieval/answer eval set for F16 (after F16).
 
 ### Prod-owed
 
-- [ ] **PRODUCT-QA-01 go-live (after the BE+FE merge deploys).**
-  1. Before the push: put `GEMINI_API_KEY` in the box's `local/nodeB/.env`
-     (never in the repo). Without it the assistant boots and answers
-     `NO_SOURCES`/503.
-  2. Confirm the CD migrate step applied `nodeB-20261007-001-add-rag-tables`.
-     If Aiven refused `CREATE EXTENSION vector`, the deploy stops before the
-     restart: enable pgvector in the Aiven console and re-run the deploy.
+- [ ] **PRODUCT-QA-01 go-live (BE deployed 2026-10-07; FE follows).**
+  1–2. DONE 2026-10-07: `GEMINI_API_KEY` is on the box, the CD migrate step
+     applied `nodeB-20261007-001-add-rag-tables` (Deploy run 37603854117),
+     pm2 `assistant` came up online, and an anonymous ask on prod answered
+     401 (route live).
   3. Check RAM headroom on the EC2 (`pm2 ls`): the assistant is an 11th
      process.
   4. Run `npm run rag:backfill` once (dry-run first), then watch `rag_documents`
