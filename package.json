@@ -99,10 +99,11 @@
   },
   "overrides": {
     "@nestjs/platform-express": {
-      "multer": "^2.3.0"
+      "multer": "^2.3.0",
+      "proxy-addr": "^2.0.8"
     },
     "@nestjs/swagger": {
-      "js-yaml": "5.2.3"
+      "js-yaml": "^5.4.3"
     },
     "typeorm": {
       "brace-expansion": "^2.1.3"
