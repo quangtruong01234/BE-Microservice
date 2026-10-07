@@ -90,10 +90,10 @@ Order picked by the user: F8 → F9 first, then F10..F12.
      applied `nodeB-20261007-001-add-rag-tables` (Deploy run 37603854117),
      pm2 `assistant` came up online, and an anonymous ask on prod answered
      401 (route live).
-  3. Check RAM headroom on the EC2 (`pm2 ls`): the assistant is an 11th
-     process.
-  4. Run `npm run rag:backfill` once (dry-run first), then watch `rag_documents`
-     drain from pending to indexed with no 429 storm in the assistant log.
+  3–4. DONE 2026-10-07 (17:12–17:14 UTC): `npm run rag:backfill` on the box
+     enqueued all 24 active products, the assistant log shows 24
+     `indexed` lines, every Gemini embed answered 200 (~0.5s) and there was
+     no 429, warn or error. `free -m`: 1.4 GB of 7.7 GB used.
   5. ⏳ PENDING RUNTIME TEST (PRODUCT-QA-01): ask once with the key unset or
      wrong and expect the exact 503 `ASSISTANT_UNAVAILABLE` body, while an
      unrelated 5xx stays `Internal server error`. Also check the ask p95 < 10s

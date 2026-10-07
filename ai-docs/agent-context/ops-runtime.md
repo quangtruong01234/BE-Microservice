@@ -225,7 +225,9 @@
   (reset + `npm ci` + build + restart + `/live`); the marker is deleted before
   `cd` on every run, so an early failure aborts loudly instead of resetting to a
   stale sha. Asserts Node major 22 on the box and sources `~/.nvm/nvm.sh`
-  (non-interactive SSH shell reads no login profile). **Env changes need no
+  only if it exists (non-interactive SSH shell reads no login profile). This
+  box has NO nvm (seen 2026-10-08): node is already on PATH in an SSH session,
+  so never tell anyone to `source ~/.nvm/nvm.sh` there. **Env changes need no
   manual pm2 step** — the workflow's `startOrRestart … --update-env` re-reads
   `ecosystem.config.js`, proven 2026-08-10 (see "Production runtime" above). It
   is a plain `pm2 restart` that replays the spawn-time snapshot; the workflow
