@@ -33,6 +33,8 @@ import {
   ProductDuplicateImageCheckDto,
   ProductRiskFeedbackDto,
   TrendingProductsQueryDto,
+  AskProductQuestionDto,
+  ProductAnswerDto,
 } from "./dto";
 import { CreateReviewDto, ReviewQueryDto } from "./dto/review.dto";
 import {
@@ -56,7 +58,7 @@ import {
   TrendingProduct,
 } from "./product.types";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
-import { PaginatedResponse } from "@app/common";
+import { PaginatedResponse, ProductAnswer } from "@app/common";
 
 @ApiTags("Products")
 @Controller("products")
@@ -493,6 +495,36 @@ export class ProductController {
   ): Promise<unknown> {
     const userId = (req as unknown as { user: { id: number } }).user.id;
     return this.productService.createProductReview(id, userId, dto);
+  }
+
+  @Post(":id/ask")
+  @RateLimit({ limit: 5, ttl: 60, per: "user" })
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: "Ask a question about a product (PRODUCT-QA-01)",
+    description:
+      "Answers only from the product's own description, SKUs and reviews, with numbered citations. When the sources do not support an answer it abstains (answer null, abstained true, citations []). Rate limited to 5 questions per minute per user.",
+  })
+  @ApiParam({ name: "id", description: "Product public id (prod_...)" })
+  @ApiBody({ type: AskProductQuestionDto })
+  @ApiResponse({ status: 200, type: ProductAnswerDto })
+  @ApiResponse({
+    status: 400,
+    description: "Malformed product id, or question not 3..300 characters.",
+  })
+  @ApiResponse({ status: 401, description: "Not logged in." })
+  @ApiResponse({ status: 404, description: "Product not found or inactive." })
+  @ApiResponse({ status: 429, description: "More than 5 questions a minute." })
+  @ApiResponse({
+    status: 503,
+    description:
+      "The assistant cannot answer right now (errorCode ASSISTANT_UNAVAILABLE); retry later.",
+  })
+  async askProductQuestion(
+    @Param("id", new ParsePublicIdPipe(PUBLIC_ID_PREFIXES.PRODUCT)) id: string,
+    @Body() dto: AskProductQuestionDto,
+  ): Promise<ProductAnswer> {
+    return this.productService.askProductQuestion(id, dto.question);
   }
 
   @Delete("reviews/:reviewId")

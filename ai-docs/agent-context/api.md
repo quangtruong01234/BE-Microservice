@@ -163,11 +163,28 @@ views, and invoices.
 | GET | `/api/products/:id/with-inventory` | — | Product + stock data |
 | GET | `/api/products/:id/stock-check` | — | Stock availability check |
 | GET | `/api/products/:id/skus` | — | Get SKUs for a product |
+| POST | `/api/products/:id/ask` | Cookie, 5/min per user | Grounded Q&A over the product's listing, SKUs and reviews (PRODUCT-QA-01) |
 
 > Standalone SKU mutation routes were removed (unused-API sweep 2026-07-06).
 > SKUs are edited via `PATCH /api/products/:id` with `variations` + `skuList` —
 > `skuList` is the FULL desired set, not a delta (see
 > `ai-docs/agent-context/known-behaviors.md`).
+
+### Product Q&A (`POST /api/products/:id/ask`)
+
+The full contract — DTO, response, `[n]` marker grammar, every status code —
+is `ai-docs/specs/PRODUCT-QA-01/contract.md`; do not restate it here. Shape:
+`{question}` (trimmed, 3..300) in, `{answer|null, abstained, abstainReason|null,
+citations[{index, source, snippet}]}` out, always 200 when an answer or an
+abstention was produced. `404` for a missing or inactive product (checked
+before the assistant is called), `503` with `errorCode: ASSISTANT_UNAVAILABLE`
+for any timeout, leg outage or Gemini quota/outage — that 503 keeps its
+message and code on prod (`PROD_PRESERVED_5XX_ERROR_CODES`). The gateway calls
+`assistant.ask` once with the WRITE budget and never retries it.
+
+The index is fed by `product.index_changed` (see RabbitMQ Events); products
+that predate the assistant are enqueued once with `npm run rag:backfill`
+(`ops-runtime.md` § Product Q&A assistant).
 
 ### Query Params for GET `/api/products/`
 ```
@@ -595,6 +612,11 @@ chat.send_message, chat.check_membership
 cart.addItem, cart.get, cart.updateItem, cart.removeItem, cart.clear
 ```
 
+### Assistant Patterns (`ASSISTANT_MESSAGE_PATTERNS`)
+```
+assistant.ask
+```
+
 ### Inventory Patterns (`INVENTORY_MESSAGE_PATTERNS`)
 ```
 inventory.create, inventory.find_all, inventory.find_one,
@@ -618,11 +640,13 @@ All event constants in `api/libs/common/src/constants/event.ts`.
 | `payment_completed` | `EVENT.PAYMENT_COMPLETED_EVENT` | Payments service | Orders (set PROCESSING + trigger GHN) |
 | `inventory.stock_changed` | `EVENT.INVENTORY_STOCK_CHANGED_EVENT` | Inventory service | Product service (sync stockQuantity) |
 | `product.wishlist_alert` | `EVENT.WISHLIST_ALERT_EVENT` | Product service (PRODUCT_EXCHANGE fanout) | Notification service (inventory's queue binds the exchange and acks it unhandled) |
+| `product.index_changed` | `EVENT.PRODUCT_INDEX_CHANGED_EVENT` | Product service (PRODUCT_EXCHANGE fanout) on product create/update/delete, review create/delete, brand/category moderation and account purge; `rag:backfill` sends it straight to the assistant queue | Assistant service (re-index one product) |
 | `social.comment_created` | `EVENT.COMMENT_CREATED_EVENT` | Social service | Notification service |
 | `social.reply_created` | `EVENT.REPLY_CREATED_EVENT` | Social service | Notification service |
 
 ### Queue Names (`QUEUES` in `api/libs/common/src/constants/queues.ts`)
 ```
 order_events_queue_nest, orders_rpc_queue, inventory_rpc_queue,
-inventory_events_queue, payments_rpc_queue, rewards_rpc_queue
+inventory_events_queue, payments_rpc_queue, rewards_rpc_queue,
+ASSISTANT_PRODUCT_SERVICE
 ```

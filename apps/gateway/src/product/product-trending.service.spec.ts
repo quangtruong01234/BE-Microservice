@@ -81,6 +81,7 @@ describe("ProductService.getTrendingProducts (RAIL-RANK-01)", () => {
       userClient as unknown as ClientProxy,
       ordersClient as unknown as ClientProxy,
       cached as unknown as CachedService,
+      { send: jest.fn() } as unknown as ClientProxy,
     );
     cached.get.mockResolvedValue(null);
     cached.set.mockResolvedValue("OK");

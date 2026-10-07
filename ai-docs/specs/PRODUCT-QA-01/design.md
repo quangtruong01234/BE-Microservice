@@ -1,4 +1,4 @@
-<!-- spec: id=PRODUCT-QA-01; files=apps/assistant/src/assistant.service.ts,apps/assistant/src/assistant.controller.ts,apps/assistant/src/rag-indexer.service.ts,libs/common/src/gemini/gemini.client.ts,libs/common/src/rag/rag-text.util.ts,apps/gateway/src/product/product.controller.ts,apps/gateway/src/product/product.service.ts,apps/gateway/src/common/guards/rate-limit.guard.ts,apps/gateway/src/common/decorators/rate-limit.decorator.ts,apps/gateway/src/common/filters/http-exception.filter.ts,apps/product/src/product.service.ts,apps/product/src/product.controller.ts,database/migrations/nodeB/20261007-001-add-rag-tables.sql; keys=product q&a,ask,rag,assistant,gemini,pgvector,bm25,citation,abstain,ASSISTANT_UNAVAILABLE,rate limit per user,hỏi đáp sản phẩm; status=approved -->
+<!-- spec: id=PRODUCT-QA-01; files=apps/assistant/src/assistant.service.ts,apps/assistant/src/assistant.controller.ts,apps/assistant/src/rag-indexer.service.ts,libs/common/src/gemini/gemini.client.ts,libs/common/src/rag/rag-text.util.ts,apps/gateway/src/product/product.controller.ts,apps/gateway/src/product/product.service.ts,apps/gateway/src/common/guards/rate-limit.guard.ts,apps/gateway/src/common/decorators/rate-limit.decorator.ts,apps/gateway/src/common/filters/http-exception.filter.ts,apps/product/src/product.service.ts,apps/product/src/product.controller.ts,database/migrations/nodeB/20261007-001-add-rag-tables.sql; keys=product q&a,ask,rag,assistant,gemini,pgvector,bm25,citation,abstain,ASSISTANT_UNAVAILABLE,rate limit per user,hỏi đáp sản phẩm; status=done -->
 # PRODUCT-QA-01 — Design
 
 The HTTP surface (route, fields, status codes, error bodies, answer-text rules)
@@ -13,7 +13,7 @@ it. Everything below is how the backend meets it.
 | Limiter reads options via `reflector.get(RATE_LIMIT_OPTIONS_KEY, handler)` | `apps/gateway/src/common/guards/rate-limit.guard.ts:45-48` | changed: also reads `per` | per-user mode |
 | Key `throttle:${METHOD}:${routePattern}:${identifier}`; the route pattern keeps `:id` | `rate-limit.guard.ts:67-71` | kept | Key is per route **pattern**, so one counter spans all products |
 | Identifier `user:<id>` if `request.user?.id`, else `ip:<ip>` | `rate-limit.guard.ts:135-147` | kept | Already right once the guard runs after JWT |
-| 429 body `{statusCode, message: RATE_LIMIT_EXCEEDED(limit,ttl), retryAfter}` | `rate-limit.guard.ts:77-87` | kept | Contract message matches. `retryAfter` is extra (Findings) |
+| 429 body `{statusCode, message: RATE_LIMIT_EXCEEDED(limit,ttl), retryAfter}` | `rate-limit.guard.ts:77-87` | kept | Contract message matches. the filter drops `retryAfter` on the wire (Findings) |
 | Prod Redis failure → 503 `RATE_LIMIT_UNAVAILABLE` (fail closed) | `rate-limit.guard.ts:96-110` | kept | Sanitized like any other 5xx, so no `ASSISTANT_UNAVAILABLE` |
 | `RateLimit(options)` = `SetMetadata` only | `apps/gateway/src/common/decorators/rate-limit.decorator.ts` | changed: `per:"user"` adds `UseGuards(CustomRateLimitGuard)` | per-user mode |
 | Prod: every `status >= 500` → `"Internal server error"`, `errorCode = null` | `apps/gateway/src/common/filters/http-exception.filter.ts:162-169` | changed: closed allow-list of one code | AC-9 |
@@ -465,8 +465,10 @@ success envelope. `citations` is always an array (SHAPE-01). The gateway
   `PATCH /api/user/:id` is limited 10/min "per user", but it is per IP for the
   reason above. Fix the entry's wording when this ships. Do not change the
   route.
-- **The 429 body carries `retryAfter`.** The contract example omits it. It is
-  pre-existing and additive, so the contract is not edited.
+- **The guard throws `retryAfter`, but the wire 429 does not carry it.**
+  `HttpExceptionFilter` rebuilds the envelope and drops the field, and no
+  `Retry-After` header is set (observed in TC-35). The contract example is
+  therefore exact; do not tell the FE to read `retryAfter`.
 - **The contract shows the 200 body bare.** On the wire it is `data` inside
   `ResponseInterceptor`'s envelope, the same as every other route. FE already
   unwraps `data`. No change.

@@ -738,3 +738,338 @@ describe("ProductService.createReview self-review block (REVIEW-VERIFIED-01)", (
     });
   });
 });
+
+describe("ProductService RAG source + index events (PRODUCT-QA-01)", () => {
+  type MockRepository = Record<string, jest.Mock>;
+
+  const buildService = (
+    overrides: {
+      productRepository?: MockRepository;
+      brandRepository?: MockRepository;
+      categoryRepository?: MockRepository;
+      reviewRepository?: MockRepository;
+      skuRepository?: MockRepository;
+      wishlistRepository?: MockRepository;
+      fanoutChannel?: unknown;
+    } = {},
+  ): ProductService =>
+    new ProductService(
+      (overrides.productRepository ?? {}) as unknown as Repository<Product>,
+      (overrides.brandRepository ?? {}) as unknown as Repository<Brand>,
+      (overrides.categoryRepository ?? {}) as unknown as Repository<Category>,
+      (overrides.reviewRepository ??
+        {}) as unknown as Repository<ProductReview>,
+      (overrides.skuRepository ?? {}) as unknown as Repository<ProductSku>,
+      (overrides.wishlistRepository ??
+        {}) as unknown as Repository<WishlistItem>,
+      {} as unknown as DataSource,
+      {
+        keys: jest.fn(() => Promise.resolve([])),
+        del: jest.fn(),
+      } as unknown as CachedService,
+      { destroyAssets: jest.fn() } as unknown as CloudinaryService,
+      {} as unknown as ProductImageHashService,
+      (overrides.fanoutChannel ?? null) as never,
+      { send: jest.fn(), connect: jest.fn() } as unknown as ClientProxy,
+    );
+
+  const liveChannel = (): { connection: object; publish: jest.Mock } => ({
+    connection: {},
+    publish: jest.fn(() => true),
+  });
+
+  const publishedProductIds = (channel: { publish: jest.Mock }): number[] =>
+    channel.publish.mock.calls.map((call: unknown[]) => {
+      expect(call[0]).toBe("product.fanout");
+      const envelope = JSON.parse((call[2] as Buffer).toString()) as {
+        pattern: string;
+        data: { productId: number };
+      };
+      expect(envelope.pattern).toBe("product.index_changed");
+      expect(Object.keys(envelope.data)).toEqual(["productId"]);
+      return envelope.data.productId;
+    });
+
+  describe("[TC-21] getRagSource", () => {
+    it("returns the documented shape with active SKU labels, numeric prices and newest non-empty reviews", async () => {
+      const productRepository = {
+        findOne: jest.fn().mockResolvedValue({
+          id: "12",
+          publicId: "prod_8fK2mQ7aLp3xRt9Z",
+          name: "Trail shoe",
+          description:
+            "<p>Light &amp; <b>grippy</b></p><ul><li>Size 42</li></ul>",
+          isActive: true,
+          userId: 31,
+          variations: [
+            { name: "Color", options: ["Red", "Blue"] },
+            { name: "Size", options: ["41", "42"] },
+          ],
+        }),
+      };
+      const skuRepository = {
+        find: jest.fn().mockResolvedValue([
+          { tierIdx: [1, 0], price: "250000.00", isActive: true },
+          { tierIdx: "[0,1]", price: "199000.00", isActive: true },
+        ]),
+      };
+      const reviewRepository = {
+        find: jest.fn().mockResolvedValue([
+          { comment: "  Great grip  ", rating: 5, userId: 7, id: 3 },
+          { comment: "   ", rating: 1, userId: 8, id: 2 },
+          { comment: "Runs small", rating: 4, userId: 9, id: 1 },
+        ]),
+      };
+      const service = buildService({
+        productRepository,
+        skuRepository,
+        reviewRepository,
+      });
+
+      const source = await service.getRagSource(12);
+
+      expect(source).toEqual({
+        productId: 12,
+        publicId: "prod_8fK2mQ7aLp3xRt9Z",
+        name: "Trail shoe",
+        descriptionText: "Light & grippy\nSize 42",
+        isActive: true,
+        skus: [
+          { label: "Color: Blue, Size: 41", price: 250000 },
+          { label: "Color: Red, Size: 42", price: 199000 },
+        ],
+        reviews: [
+          { comment: "Great grip", rating: 5 },
+          { comment: "Runs small", rating: 4 },
+        ],
+      });
+      expect(JSON.stringify(source)).not.toContain("userId");
+      const [skuQuery] = skuRepository.find.mock.calls[0] as [
+        Record<string, unknown>,
+      ];
+      expect(skuQuery.where).toMatchObject({ productId: 12, isActive: true });
+      const [reviewQuery] = reviewRepository.find.mock.calls[0] as [
+        Record<string, unknown>,
+      ];
+      expect(reviewQuery).toMatchObject({
+        where: { productId: 12 },
+        order: { createdAt: "DESC" },
+        take: 200,
+      });
+    });
+
+    it("labels a SKU without tiers as an empty label and keeps an inactive product's flag", async () => {
+      const service = buildService({
+        productRepository: {
+          findOne: jest.fn().mockResolvedValue({
+            id: 5,
+            publicId: null,
+            name: "Mug",
+            description: null,
+            isActive: false,
+            variations: null,
+          }),
+        },
+        skuRepository: {
+          find: jest
+            .fn()
+            .mockResolvedValue([{ tierIdx: [], price: 1000, isActive: true }]),
+        },
+        reviewRepository: { find: jest.fn().mockResolvedValue([]) },
+      });
+
+      await expect(service.getRagSource(5)).resolves.toEqual({
+        productId: 5,
+        publicId: null,
+        name: "Mug",
+        descriptionText: "",
+        isActive: false,
+        skus: [{ label: "", price: 1000 }],
+        reviews: [],
+      });
+    });
+
+    it("returns null for an unknown product id", async () => {
+      const service = buildService({
+        productRepository: { findOne: jest.fn().mockResolvedValue(null) },
+      });
+
+      await expect(service.getRagSource(404)).resolves.toBeNull();
+    });
+  });
+
+  describe("[TC-22] product.index_changed after each write", () => {
+    const deletableProductRepository = (): MockRepository => ({
+      findOne: jest.fn().mockResolvedValue({
+        id: 9,
+        imageUrls: [],
+        description: null,
+      }),
+      remove: jest.fn().mockResolvedValue(undefined),
+    });
+
+    it("publishes after a product delete", async () => {
+      const channel = liveChannel();
+      const service = buildService({
+        productRepository: deletableProductRepository(),
+        fanoutChannel: channel,
+      });
+
+      await service.deleteProduct(9);
+
+      expect(publishedProductIds(channel)).toEqual([9]);
+    });
+
+    it("publishes after a review create and a review delete", async () => {
+      const channel = liveChannel();
+      const reviewRepository = {
+        create: jest.fn((row: Partial<ProductReview>) => row),
+        save: jest.fn((row: Partial<ProductReview>) =>
+          Promise.resolve({ id: 1, ...row }),
+        ),
+        findOne: jest
+          .fn()
+          .mockResolvedValue({ id: 1, productId: 9, userId: 44 }),
+        remove: jest.fn().mockResolvedValue(undefined),
+        createQueryBuilder: jest.fn(() => ({
+          select: jest.fn().mockReturnThis(),
+          addSelect: jest.fn().mockReturnThis(),
+          where: jest.fn().mockReturnThis(),
+          getRawOne: jest.fn().mockResolvedValue({ avg: "4", count: "1" }),
+        })),
+      };
+      const service = buildService({
+        productRepository: {
+          findOne: jest.fn().mockResolvedValue({ id: 9, userId: 31 }),
+          update: jest.fn(),
+        },
+        reviewRepository,
+        fanoutChannel: channel,
+      });
+
+      await service.createReview({
+        userId: 44,
+        productId: 9,
+        rating: 4,
+        comment: "ok",
+      });
+      await service.deleteReview(1, 44);
+
+      expect(publishedProductIds(channel)).toEqual([9, 9]);
+    });
+
+    it("publishes once per product a brand reject deactivates", async () => {
+      const channel = liveChannel();
+      const productRepository = {
+        find: jest.fn().mockResolvedValue([{ id: "3" }, { id: "4" }]),
+        update: jest.fn().mockResolvedValue({ affected: 2 }),
+      };
+      const service = buildService({
+        productRepository,
+        brandRepository: {
+          findOne: jest.fn().mockResolvedValue({ id: 2, submittedBy: null }),
+          save: jest.fn((row: Partial<Brand>) => Promise.resolve(row)),
+        },
+        fanoutChannel: channel,
+      });
+
+      await service.reviewBrand(2, "reject");
+
+      expect(productRepository.update).toHaveBeenCalledWith(
+        { brandId: 2 },
+        { approvalBlocked: true, isActive: false },
+      );
+      expect(publishedProductIds(channel)).toEqual([3, 4]);
+    });
+
+    it("publishes nothing when a brand is approved", async () => {
+      const channel = liveChannel();
+      const service = buildService({
+        productRepository: {
+          find: jest.fn(),
+          update: jest.fn().mockResolvedValue({ affected: 2 }),
+        },
+        brandRepository: {
+          findOne: jest.fn().mockResolvedValue({ id: 2, submittedBy: null }),
+          save: jest.fn((row: Partial<Brand>) => Promise.resolve(row)),
+        },
+        fanoutChannel: channel,
+      });
+
+      await service.reviewBrand(2, "approve");
+
+      expect(channel.publish).not.toHaveBeenCalled();
+    });
+
+    it("publishes once per product a category reject deactivates", async () => {
+      const channel = liveChannel();
+      const service = buildService({
+        productRepository: {
+          createQueryBuilder: jest.fn(() => ({
+            innerJoin: jest.fn().mockReturnThis(),
+            select: jest.fn().mockReturnThis(),
+            getMany: jest.fn().mockResolvedValue([{ id: 6 }, { id: 8 }]),
+          })),
+          update: jest.fn().mockResolvedValue({ affected: 2 }),
+        },
+        categoryRepository: {
+          findOne: jest.fn().mockResolvedValue({ id: 4, submittedBy: null }),
+          save: jest.fn((row: Partial<Category>) => Promise.resolve(row)),
+        },
+        fanoutChannel: channel,
+      });
+
+      await service.reviewCategory(4, "reject");
+
+      expect(publishedProductIds(channel)).toEqual([6, 8]);
+    });
+
+    it("publishes once per listing purgeUserData deactivates", async () => {
+      const channel = liveChannel();
+      const productRepository = {
+        find: jest.fn().mockResolvedValue([{ id: "21" }, { id: "22" }]),
+        update: jest.fn().mockResolvedValue({ affected: 2 }),
+      };
+      const service = buildService({
+        productRepository,
+        wishlistRepository: {
+          delete: jest.fn().mockResolvedValue({ affected: 0 }),
+        },
+        fanoutChannel: channel,
+      });
+
+      await expect(service.purgeUserData(77)).resolves.toEqual({
+        deactivatedProductCount: 2,
+        deletedWishlistItemCount: 0,
+      });
+      expect(productRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { userId: 77, isActive: true } }),
+      );
+      expect(publishedProductIds(channel)).toEqual([21, 22]);
+    });
+
+    it("never fails the write on a missing, dead or throwing channel", async () => {
+      const throwingChannel = {
+        connection: {},
+        publish: jest.fn(() => {
+          throw new Error("channel closed");
+        }),
+      };
+      for (const fanoutChannel of [
+        null,
+        { connection: null, publish: jest.fn() },
+        throwingChannel,
+      ]) {
+        const service = buildService({
+          productRepository: deletableProductRepository(),
+          fanoutChannel,
+        });
+
+        await expect(service.deleteProduct(9)).resolves.toEqual({
+          success: true,
+        });
+      }
+      expect(throwingChannel.publish).toHaveBeenCalledTimes(1);
+    });
+  });
+});

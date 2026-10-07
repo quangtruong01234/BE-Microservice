@@ -1,3 +1,5 @@
+import { ASSISTANT_MESSAGE } from "./response-message.constant";
+
 /**
  * Stable, machine-readable error codes carried by the HTTP error envelope as
  * an OPTIONAL `errorCode` field, next to the human-readable `message`.
@@ -19,6 +21,12 @@
  *   class C, exactly like renaming a response field.
  * - The code is the machine signal, `message` stays the human one. Never make
  *   the client parse `message`.
+ * - In production every 5xx is sanitized: its message becomes
+ *   "Internal server error" and its code is DROPPED, because nothing about an
+ *   unexpected server failure is a stable contract. The only exceptions are the
+ *   codes listed in `PROD_PRESERVED_5XX_ERROR_CODES` below. Those keep their
+ *   code, and their message is replaced by the constant listed there, so an
+ *   upstream message can never leak through them.
  *
  * Propagation for a code thrown inside a microservice: pass an object response
  * to the exception (`new UnauthorizedException({ message, errorCode })`), and
@@ -80,6 +88,44 @@ export const ERROR_CODE = {
    * that URL and upload the file again as the current user.
    */
   MEDIA_NOT_OWNED: "MEDIA_NOT_OWNED",
+  /**
+   * `POST /api/products/:id/ask` (PRODUCT-QA-01): a 503 because the AI provider
+   * is over quota, failing or too slow, or the assistant service is down. The
+   * product page keeps working. The client must NOT retry automatically: the
+   * request already used a rate-limit slot, and the retry is the user's call.
+   */
+  ASSISTANT_UNAVAILABLE: "ASSISTANT_UNAVAILABLE",
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODE)[keyof typeof ERROR_CODE];
+
+/**
+ * The 5xx codes that survive the production sanitizer, each with the ONLY
+ * message it may carry there. Closed on purpose: a 5xx code is a contract the
+ * FE branches on, so it gets listed here deliberately, never by default.
+ */
+export const PROD_PRESERVED_5XX_ERROR_CODES: Readonly<
+  Partial<Record<ErrorCode, string>>
+> = {
+  ASSISTANT_UNAVAILABLE: ASSISTANT_MESSAGE.UNAVAILABLE,
+};
+
+/**
+ * The fixed production message for a preserved 5xx code, or `null` when the
+ * code is not on the list (and must be dropped). Own keys only, so a code such
+ * as "toString" never resolves through the prototype.
+ */
+export function getPreservedProd5xxMessage(
+  errorCode: string | null,
+): string | null {
+  if (
+    errorCode === null ||
+    !Object.prototype.hasOwnProperty.call(
+      PROD_PRESERVED_5XX_ERROR_CODES,
+      errorCode,
+    )
+  ) {
+    return null;
+  }
+  return PROD_PRESERVED_5XX_ERROR_CODES[errorCode as ErrorCode] ?? null;
+}

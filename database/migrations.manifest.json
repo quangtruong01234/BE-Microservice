@@ -203,6 +203,16 @@
       "destructive": false,
       "manualOnly": false,
       "enabled": true
+    },
+    {
+      "id": "nodeB-20261007-001-add-rag-tables",
+      "target": "nodeB",
+      "dialect": "postgres",
+      "file": "database/migrations/nodeB/20261007-001-add-rag-tables.sql",
+      "category": "schema",
+      "destructive": false,
+      "manualOnly": false,
+      "enabled": true
     }
   ]
 }

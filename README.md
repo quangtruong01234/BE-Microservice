@@ -3,7 +3,7 @@
 [![CI](https://github.com/quangtruong01234/BE-Microservice/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/quangtruong01234/BE-Microservice/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-Marketplace backend for TryBuy: a NestJS monorepo of **10 microservices** behind
+Marketplace backend for TryBuy: a NestJS monorepo of **11 microservices** behind
 a single HTTP gateway, talking over TCP RPC for commands and RabbitMQ for
 integration events, on MySQL + PostgreSQL + Redis.
 
@@ -149,11 +149,13 @@ flowchart TB
         INV["inventory :3002"]
         RWD["rewards :3004"]
         PAY["payments :3005"]
+        AST["assistant :3010"]
     end
 
     GW -- "TCP RPC" --> A
     GW -- "TCP RPC" --> INV
     GW -- "TCP RPC" --> PAY
+    GW -- "TCP RPC" --> AST
     A <-. "RabbitMQ events" .-> B
 
     A --- MY[("MySQL 8")]
@@ -163,6 +165,7 @@ flowchart TB
 
     ORD -.-> GHN["GHN shipping"]
     PAY -.-> PSP["ZaloPay · VNPay"]
+    AST -.-> GEM["Gemini API"]
 ```
 
 | Service | Port | DB | Responsibility |
@@ -177,6 +180,7 @@ flowchart TB
 | inventory | 3002 | PostgreSQL | Stock levels and the reservation ledger |
 | rewards | 3004 | PostgreSQL | Reward points — event-only (RabbitMQ consumer), not reachable through the gateway |
 | payments | 3005 | PostgreSQL | Payment records, ZaloPay and VNPay integration |
+| assistant | 3010 | PostgreSQL + pgvector | Grounded product Q&A: indexes product events, answers with Gemini and cites its sources |
 
 Shared libraries: `@app/common` (RabbitMQ, filters, resilience), `@app/cached`
 (Redis), `@app/database` (TypeORM factories), `@app/constant` (ports, message
@@ -244,7 +248,7 @@ npm ci
 
 cp .env.example .env                              # Docker Compose: Redis + RabbitMQ credentials
 cp local/nodeA/.env.example local/nodeA/.env      # Node A services: MySQL, JWT, Cloudinary, GHN, SMTP
-cp local/nodeB/.env.example local/nodeB/.env      # Node B services: PostgreSQL, ZaloPay, VNPay
+cp local/nodeB/.env.example local/nodeB/.env      # Node B services: PostgreSQL, ZaloPay, VNPay, Gemini
 docker compose up -d                              # Redis :6379, RabbitMQ :5672 / :15672
 ```
 
@@ -259,7 +263,7 @@ Run the two node groups in separate terminals:
 
 ```bash
 npm run start:nodeA    # gateway, orders, user, product, social, notification, chat
-npm run start:nodeB    # inventory, payments, rewards
+npm run start:nodeB    # inventory, payments, rewards, assistant
 ```
 
 Swagger is then at <http://localhost:3000/doc>, and `GET /health` reports
@@ -293,6 +297,7 @@ degrades as described below.
 | Media uploads | `CLOUDINARY_*` (nodeA) | Read per request: boot is fine, upload routes error |
 | Shipping (GHN) | `GHN_*` (nodeA) | Read per request: boot is fine, the GHN calls error |
 | Payments | `ZALOPAY_*`, `VNP_*` (nodeB) | Read per request: boot is fine, that payment method errors |
+| Product Q&A (Gemini) | `GEMINI_API_KEY` (nodeB) | The assistant boots and nothing gets indexed: an ask answers 200 abstained `NO_SOURCES` for a product never indexed, 503 for one indexed before the key went away |
 
 ### Captcha (Cloudflare Turnstile)
 
@@ -413,11 +418,11 @@ Start with [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for the design and
 
 ```
 .
-├── apps/                      # 10 microservices, one folder each
+├── apps/                      # 11 microservices, one folder each
 │   ├── gateway/               # the only HTTP/WebSocket process
 │   ├── orders/                # cart, orders, returns, vouchers, outbox
 │   ├── user/ product/ social/ notification/ chat/     # Node A, MySQL
-│   └── inventory/ payments/ rewards/                  # Node B, PostgreSQL
+│   └── inventory/ payments/ rewards/ assistant/       # Node B, PostgreSQL
 ├── libs/
 │   ├── common/                # RabbitMQ, filters, TCP resilience
 │   ├── cached/                # Redis module

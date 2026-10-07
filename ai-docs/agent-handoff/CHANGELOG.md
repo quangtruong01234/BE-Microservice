@@ -6,6 +6,53 @@
 
 ## Completed Milestones
 
+- **F16 PRODUCT-QA-01 — grounded product Q&A (2026-10-07, two-session mode,
+  branch `feat/PRODUCT-QA-01-be`). Release class B; 1 nodeB migration.** Spec
+  and agreed contract: `ai-docs/specs/PRODUCT-QA-01/`. Residuals:
+  `known-behaviors.md` → PRODUCT-QA-01. Ops/runbook: `ops-runtime.md` §
+  Product Q&A assistant.
+  - **Route.** `POST /api/products/:id/ask` (cookie, any role) takes
+    `{question}` (trimmed, 3..300) and answers `{answer, abstained,
+    abstainReason, citations[{index, source, snippet}]}`. A missing or
+    inactive product is a 404 before the assistant is called; any timeout,
+    dead leg or Gemini quota/outage is one `503 ASSISTANT_UNAVAILABLE`, kept on
+    prod through the new `PROD_PRESERVED_5XX_ERROR_CODES` allow-list (every
+    other 5xx is still sanitized).
+  - **Per-user rate limit.** `@RateLimit({ per: "user" })` re-runs
+    `CustomRateLimitGuard` at route level after `JwtAuthGuard`, keyed
+    `user:<id>` (5/60s on the new route). The global pass skips such routes; a
+    request is counted once. Every other `@RateLimit` is unchanged and still
+    IP-keyed — which also corrected the EMAIL-REAUTH-01 entry, which claimed
+    "per user".
+  - **New nodeB `assistant` service** (TCP 3010, own PG connection,
+    `synchronize:false`). It consumes `product.index_changed` (PRODUCT_EXCHANGE
+    → `ASSISTANT_PRODUCT_SERVICE`), pulls `product.rag_source` over TCP, chunks
+    name/description, SKU label+price and the newest reviews (PII-scrubbed,
+    ≤100 chunks), embeds them with Gemini (768-d) into `rag_chunks`, and skips
+    Gemini when the content hash is unchanged. A failed embed marks the row
+    pending; a 5-minute cron retries. An ask is hybrid retrieval (pgvector
+    cosine + an in-process BM25, fused by RRF), a two-step abstain gate
+    (`NO_SOURCES`, `LOW_CONFIDENCE`), and a JSON-mode Gemini answer whose
+    `[S n]` labels are renumbered into `[n]` citations.
+  - **Product service** publishes `product.index_changed` after create /
+    update / delete product, create / delete review, brand and category
+    rejection and account purge (best-effort, OUTBOX-SCOPE-01).
+  - **Migration** `nodeB-20261007-001-add-rag-tables`: `CREATE EXTENSION
+    vector` (the first extension on the PG database), `rag_documents`,
+    `rag_chunks`, no ANN index (≤100 chunks per product, filtered by
+    `product_id`).
+  - **Backfill** `npm run rag:backfill` (`--dry-run`, `--from-id=`,
+    `RAG_BACKFILL_DELAY_MS`, `RAG_BACKFILL_LIMIT`) enqueues every active
+    product straight to the assistant queue. Deviation from the spec: it reads
+    `local/nodeA/.env` (it needs the MySQL `products` table), so its env keys
+    live in the nodeA examples, not nodeB.
+  - **Verified locally** with a real free-tier key: unit TC-1..27 (each seen
+    red by a source mutation), runtime TC-30..41 (answer with citations, both
+    abstains, 400/401/404/429/503, PII redacted with nothing raw in the log,
+    hash skip, deactivate deletes, pending → indexed by the cron, paced
+    backfill, change-password still IP-keyed), and a malformed event reaching
+    `trybuy.dead_letter`. Prod legs owed: snapshot § Prod-owed.
+
 - **CAPTCHA-01 prod rollout, step 1 — shadow mode (2026-10-06, ops only, no
   code).** The user created the Cloudflare Turnstile site and put
   `TURNSTILE_SECRET_KEY` (with `CAPTCHA_ENFORCE=false`) in the box's

@@ -5,6 +5,8 @@ import {
 } from "@nestjs/common";
 import { ArgumentsHost } from "@nestjs/common";
 import { Request, Response } from "express";
+import { ERROR_CODE } from "libs/constant/error-code.constant";
+import { ASSISTANT_MESSAGE } from "libs/constant/response-message.constant";
 import { HttpExceptionFilter } from "./http-exception.filter";
 
 interface CapturedResponse {
@@ -144,5 +146,70 @@ describe("HttpExceptionFilter — errorCode (CHG-PW-02)", () => {
 
       expect(body).not.toHaveProperty("errorCode");
     });
+  });
+});
+
+describe("[TC-25] HttpExceptionFilter — prod 5xx allow-list (PRODUCT-QA-01)", () => {
+  const originalNodeEnv = process.env.NODE_ENV;
+  const assistantBusy = (): HttpException =>
+    new HttpException(
+      {
+        statusCode: 503,
+        error: "Service Unavailable",
+        message: "upstream said something internal",
+        errorCode: ERROR_CODE.ASSISTANT_UNAVAILABLE,
+      },
+      HttpStatus.SERVICE_UNAVAILABLE,
+    );
+
+  afterEach(() => {
+    process.env.NODE_ENV = originalNodeEnv;
+  });
+
+  it("[TC-25] in production a 503 ASSISTANT_UNAVAILABLE keeps the code and the constant message", () => {
+    process.env.NODE_ENV = "production";
+    const { statusCode, body } = runFilter(assistantBusy());
+
+    expect(statusCode).toBe(503);
+    expect(body?.errorCode).toBe("ASSISTANT_UNAVAILABLE");
+    expect(body?.message).toBe(ASSISTANT_MESSAGE.UNAVAILABLE);
+    expect(body?.error).toBe("Service Unavailable");
+  });
+
+  it("[TC-25] in production a 503 RATE_LIMIT_UNAVAILABLE and a plain 500 are still sanitized with errorCode dropped", () => {
+    process.env.NODE_ENV = "production";
+    const rateLimitDown = runFilter(
+      new HttpException(
+        { message: "redis down", errorCode: "RATE_LIMIT_UNAVAILABLE" },
+        HttpStatus.SERVICE_UNAVAILABLE,
+      ),
+    );
+    const crash = runFilter(new Error("boom"));
+
+    expect(rateLimitDown.body?.message).toBe("Internal server error");
+    expect(rateLimitDown.body).not.toHaveProperty("errorCode");
+    expect(crash.body?.message).toBe("Internal server error");
+    expect(crash.body).not.toHaveProperty("errorCode");
+  });
+
+  it("[TC-25] in production an errorCode naming an Object.prototype key is not on the allow-list", () => {
+    process.env.NODE_ENV = "production";
+    const { body } = runFilter(
+      new HttpException(
+        { message: "upstream detail", errorCode: "constructor" },
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      ),
+    );
+
+    expect(body?.message).toBe("Internal server error");
+    expect(body).not.toHaveProperty("errorCode");
+  });
+
+  it("[TC-25] non-production reports the thrown message and the code unchanged", () => {
+    process.env.NODE_ENV = "development";
+    const { body } = runFilter(assistantBusy());
+
+    expect(body?.message).toBe("upstream said something internal");
+    expect(body?.errorCode).toBe("ASSISTANT_UNAVAILABLE");
   });
 });

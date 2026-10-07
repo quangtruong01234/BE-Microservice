@@ -1,11 +1,16 @@
+import { HttpException, NotFoundException } from "@nestjs/common";
 import { ClientProxy } from "@nestjs/microservices";
-import { of, throwError } from "rxjs";
+import { defer, NEVER, of, throwError, TimeoutError } from "rxjs";
 import { CachedService } from "@app/cached";
 import {
   ORDER_MESSAGE_PATTERN,
   USER_MESSAGE_PATTERN,
 } from "libs/constant/message-pattern.constant";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
+import { ASSISTANT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-assistant.constant";
+import { ASSISTANT_MESSAGE } from "libs/constant/response-message.constant";
+import { ERROR_CODE } from "libs/constant/error-code.constant";
+import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 import { ProductService } from "./product.service";
 
 /**
@@ -37,6 +42,7 @@ describe("ProductService submittedBy exposure", () => {
       userClient as unknown as ClientProxy,
       ordersClient as unknown as ClientProxy,
       cached as unknown as CachedService,
+      { send: jest.fn() } as unknown as ClientProxy,
     );
   });
 
@@ -173,6 +179,7 @@ describe("ProductService getProductsWithInventory failure modes", () => {
       userClient as unknown as ClientProxy,
       ordersClient as unknown as ClientProxy,
       cached as unknown as CachedService,
+      { send: jest.fn() } as unknown as ClientProxy,
     );
     userClient.send.mockReturnValue(of([]));
   });
@@ -300,6 +307,7 @@ describe("ProductService seller enrichment failure modes", () => {
       userClient as unknown as ClientProxy,
       ordersClient as unknown as ClientProxy,
       cached as unknown as CachedService,
+      { send: jest.fn() } as unknown as ClientProxy,
     );
     productClient.send.mockReturnValue(of([liveProduct]));
     inventoryClient.send.mockReturnValue(of([]));
@@ -426,6 +434,7 @@ describe("ProductService review isVerifiedPurchase", () => {
       userClient as unknown as ClientProxy,
       ordersClient as unknown as ClientProxy,
       cached as unknown as CachedService,
+      { send: jest.fn() } as unknown as ClientProxy,
     );
   });
 
@@ -478,5 +487,169 @@ describe("ProductService review isVerifiedPurchase", () => {
 
     expect(reviews.data).toEqual([]);
     expect(ordersClient.send).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * PRODUCT-QA-01 [TC-26] — the gateway leg of POST /api/products/:id/ask: an
+ * unknown or inactive product is a 404 before the assistant is touched, and
+ * every "could not answer right now" collapses to the one contract 503.
+ */
+describe("[TC-26] askProductQuestion", () => {
+  const productClient = { send: jest.fn() };
+  const assistantClient = { send: jest.fn() };
+  const cached = { get: jest.fn(), set: jest.fn(), del: jest.fn() };
+  let service: ProductService;
+
+  const publicId = "prd_aaaaaaaaaaaaaaaa";
+  const question = "Có vừa laptop 15 inch không?";
+  const answer = {
+    answer: "Vừa laptop 15.6 inch [1].",
+    abstained: false,
+    abstainReason: null,
+    citations: [{ index: 1, source: "PRODUCT", snippet: "15.6 inch" }],
+  };
+  const transportError = (): Error =>
+    Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:3010"), {
+      code: "ECONNREFUSED",
+    });
+
+  const expectContract503 = async (call: Promise<unknown>): Promise<void> => {
+    const error: unknown = await call.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(HttpException);
+    const httpError = error as HttpException;
+    expect(httpError.getStatus()).toBe(503);
+    expect(httpError.getResponse()).toEqual({
+      statusCode: 503,
+      error: "Service Unavailable",
+      message: ASSISTANT_MESSAGE.UNAVAILABLE,
+      errorCode: ERROR_CODE.ASSISTANT_UNAVAILABLE,
+    });
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    productClient.send.mockReturnValue(of({ id: 9, isActive: true }));
+    assistantClient.send.mockReturnValue(of(answer));
+    service = new ProductService(
+      productClient as unknown as ClientProxy,
+      { send: jest.fn() } as unknown as ClientProxy,
+      { send: jest.fn() } as unknown as ClientProxy,
+      { send: jest.fn() } as unknown as ClientProxy,
+      cached as unknown as CachedService,
+      assistantClient as unknown as ClientProxy,
+    );
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it("sends the numeric product id and the question to the assistant", async () => {
+    await expect(service.askProductQuestion(publicId, question)).resolves.toBe(
+      answer,
+    );
+
+    expect(productClient.send).toHaveBeenCalledWith(
+      PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_ID,
+      publicId,
+    );
+    expect(assistantClient.send).toHaveBeenCalledWith(
+      ASSISTANT_MESSAGE_PATTERNS.ASK,
+      { productId: 9, question },
+    );
+  });
+
+  it("is a 404 for an unknown product and never calls the assistant", async () => {
+    productClient.send.mockReturnValue(of(null));
+
+    await expect(
+      service.askProductQuestion(publicId, question),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(assistantClient.send).not.toHaveBeenCalled();
+  });
+
+  it("is a 404 for an inactive product and never calls the assistant", async () => {
+    productClient.send.mockReturnValue(of({ id: 9, isActive: false }));
+
+    await expect(
+      service.askProductQuestion(publicId, question),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(assistantClient.send).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a TimeoutError", (): Error => new TimeoutError()],
+    ["a transport error", transportError],
+  ])(
+    "maps %s on the product leg to the contract 503",
+    async (_label, buildError) => {
+      productClient.send.mockReturnValue(throwError(buildError));
+
+      await expectContract503(service.askProductQuestion(publicId, question));
+      expect(assistantClient.send).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["a TimeoutError", (): unknown => new TimeoutError()],
+    ["a transport error", transportError],
+    [
+      "an RPC 503",
+      (): unknown => ({ statusCode: 503, message: "Gemini quota exhausted" }),
+    ],
+  ])(
+    "maps %s on the assistant leg to the contract 503",
+    async (_label, buildError) => {
+      assistantClient.send.mockReturnValue(throwError(buildError));
+
+      await expectContract503(service.askProductQuestion(publicId, question));
+    },
+  );
+
+  it("passes an RPC 400 from the assistant through unchanged", async () => {
+    assistantClient.send.mockReturnValue(
+      throwError(() => ({ statusCode: 400, message: "question too short" })),
+    );
+
+    const error: unknown = await service
+      .askProductQuestion(publicId, question)
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(HttpException);
+    expect((error as HttpException).getStatus()).toBe(400);
+  });
+
+  it("does not retry the assistant on a transport error", async () => {
+    // A retry re-subscribes to the same observable without a second send(),
+    // so count subscriptions, not send() calls.
+    let subscriptionCount = 0;
+    assistantClient.send.mockReturnValue(
+      defer(() => {
+        subscriptionCount += 1;
+        return throwError(transportError);
+      }),
+    );
+
+    await expectContract503(service.askProductQuestion(publicId, question));
+    expect(subscriptionCount).toBe(1);
+  });
+
+  it("waits the WRITE budget, not the READ one, before giving up", async () => {
+    jest.useFakeTimers();
+    assistantClient.send.mockReturnValue(NEVER);
+    let isSettled = false;
+    const pending = service
+      .askProductQuestion(publicId, question)
+      .finally(() => {
+        isSettled = true;
+      });
+    const outcome = expectContract503(pending);
+
+    await jest.advanceTimersByTimeAsync(TCP_TIMEOUT_MS.WRITE - 1);
+    expect(isSettled).toBe(false);
+    await jest.advanceTimersByTimeAsync(1);
+    await outcome;
+    expect(isSettled).toBe(true);
   });
 });

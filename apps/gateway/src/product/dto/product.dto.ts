@@ -8,11 +8,18 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Length,
   Matches,
   Max,
   Min,
 } from "class-validator";
-import { Type } from "class-transformer";
+import { Transform, Type } from "class-transformer";
+import {
+  ABSTAIN_REASONS,
+  AbstainReason,
+  RAG_CHUNK_SOURCES,
+  RagChunkSource,
+} from "@app/common";
 import { IsPublicId } from "../../common/validators/is-public-id.validator";
 import { PUBLIC_ID_PREFIXES } from "libs/constant/public-id.constant";
 
@@ -93,4 +100,64 @@ export class TrendingProductsQueryDto {
   @Max(20)
   @Type(() => Number)
   limit?: number = 5;
+}
+
+// ============================================================================
+// PRODUCT-QA-01 — grounded product Q&A (ai-docs/specs/PRODUCT-QA-01/contract.md)
+// ============================================================================
+
+export class AskProductQuestionDto {
+  @ApiProperty({
+    example: "Có vừa laptop 15 inch không?",
+    minLength: 3,
+    maxLength: 300,
+    description: "Free-text question, 3..300 characters after trim",
+  })
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === "string" ? value.trim() : value,
+  )
+  @IsString()
+  @Length(3, 300)
+  declare question: string;
+}
+
+export class ProductAnswerCitationDto {
+  @ApiProperty({ example: 1, description: "1-based [n] marker in answer" })
+  declare index: number;
+
+  @ApiProperty({ enum: RAG_CHUNK_SOURCES, example: "PRODUCT" })
+  declare source: RagChunkSource;
+
+  @ApiProperty({
+    example: "Ngăn chính chống sốc, vừa laptop tới 15.6 inch.",
+    description: "Verbatim excerpt of the indexed text, at most 300 chars",
+  })
+  declare snippet: string;
+}
+
+export class ProductAnswerDto {
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: "Có, ngăn chính vừa laptop tới 15.6 inch [1].",
+    description: "null exactly when abstained is true",
+  })
+  declare answer: string | null;
+
+  @ApiProperty({ example: false })
+  declare abstained: boolean;
+
+  @ApiProperty({
+    enum: ABSTAIN_REASONS,
+    nullable: true,
+    example: null,
+    description: "null exactly when abstained is false",
+  })
+  declare abstainReason: AbstainReason | null;
+
+  @ApiProperty({
+    type: [ProductAnswerCitationDto],
+    description: "Always an array; [] when abstained",
+  })
+  declare citations: ProductAnswerCitationDto[];
 }

@@ -28,6 +28,7 @@ describe("ProductService ownership", () => {
       userClient as unknown as ClientProxy,
       ordersClient as unknown as ClientProxy,
       cachedService as unknown as import("@app/cached").CachedService,
+      { send: jest.fn() } as unknown as ClientProxy,
     );
   });
 

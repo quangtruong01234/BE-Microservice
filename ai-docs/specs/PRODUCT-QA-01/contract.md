@@ -1,4 +1,4 @@
-<!-- contract: id=PRODUCT-QA-01; status=agreed -->
+<!-- contract: id=PRODUCT-QA-01; status=implemented -->
 # PRODUCT-QA-01 — API contract
 
 > The single source of truth for the HTTP surface of `PRODUCT-QA-01`. The

@@ -25,9 +25,13 @@ import {
   CloudinaryService,
   extractCloudinaryUrlsFromHtml,
   generatePublicId,
+  htmlToPlainText,
   isPublicId,
   isRmqPublisherLive,
   PaginatedResponse,
+  ProductIndexChangedEvent,
+  ProductRagSku,
+  ProductRagSource,
   escapeRichTextSearchTerm,
   sanitizeRichTextHtml,
   toContainsLikePattern,
@@ -86,6 +90,8 @@ import {
 const RISK_SCORING_BATCH_SIZE = 3;
 const RISK_SCORING_MAX_ATTEMPTS = 5;
 const RISK_SCORING_ERROR_MAX_LENGTH = 500;
+// PRODUCT-QA-01: the newest reviews the Q&A index may embed.
+const RAG_SOURCE_MAX_REVIEWS = 200;
 
 @Injectable()
 export class ProductService {
@@ -343,6 +349,116 @@ export class ProductService {
         `[PRODUCT] wishlist ${kind} alert for product ${productId} skipped: ${String(err)}`,
       );
     }
+  }
+
+  /**
+   * PRODUCT-QA-01 — tell the assistant to re-pull these products into the Q&A
+   * index. Best-effort after commit (OUTBOX-SCOPE-01): it never throws, so a
+   * dead channel cannot fail the write that triggered it; the assistant's
+   * retry cron and the backfill script cover a lost event.
+   */
+  private publishIndexChanged(productIds: readonly (number | string)[]): void {
+    if (productIds.length === 0) return;
+    try {
+      if (!this.fanoutChannel || !isRmqPublisherLive(this.fanoutChannel)) {
+        this.logger.warn(
+          `[PRODUCT] fanoutChannel unavailable — index_changed for ${productIds.length} product(s) skipped`,
+        );
+        return;
+      }
+      for (const productId of productIds) {
+        // BIGINT ids hydrate as strings; the event contract is a number.
+        const event: ProductIndexChangedEvent = {
+          productId: Number(productId),
+        };
+        this.fanoutChannel.publish(
+          EXCHANGE.PRODUCT_EXCHANGE,
+          EVENT.PRODUCT_INDEX_CHANGED_EVENT,
+          Buffer.from(
+            JSON.stringify({
+              pattern: EVENT.PRODUCT_INDEX_CHANGED_EVENT,
+              data: event,
+            }),
+          ),
+        );
+      }
+    } catch (err: unknown) {
+      this.logger.warn(
+        `[PRODUCT] index_changed for ${productIds.length} product(s) skipped: ${String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * PRODUCT-QA-01 — what the Q&A index may embed for one product, or `null`
+   * when the row is gone. Carries no user id, author, review id or seller
+   * field: the text leaves for an external embedding API.
+   */
+  async getRagSource(productId: number): Promise<ProductRagSource | null> {
+    const product = await this.productRepository.findOne({
+      where: { id: productId },
+      select: [
+        "id",
+        "publicId",
+        "name",
+        "description",
+        "isActive",
+        "variations",
+      ],
+    });
+    if (!product) return null;
+
+    const [skus, reviews] = await Promise.all([
+      this.skuRepository.find({
+        where: { productId, isActive: true },
+        select: ["id", "tierIdx", "price", "isActive"],
+        order: { id: "ASC" },
+      }),
+      this.reviewRepository.find({
+        where: {
+          productId,
+          comment: Raw((alias) => `TRIM(${alias}) <> ''`),
+        },
+        select: ["id", "comment", "rating", "createdAt"],
+        order: { createdAt: "DESC", id: "DESC" },
+        take: RAG_SOURCE_MAX_REVIEWS,
+      }),
+    ]);
+
+    const variations = product.variations ?? [];
+    const ragSkus = skus.map((sku): ProductRagSku => {
+      const tierIdx: unknown =
+        typeof sku.tierIdx === "string" ? JSON.parse(sku.tierIdx) : sku.tierIdx;
+      const label = (Array.isArray(tierIdx) ? tierIdx : [])
+        .map((optionIndex: unknown, variationIndex: number) => {
+          const variation = variations[variationIndex];
+          const option =
+            typeof optionIndex === "number"
+              ? variation?.options?.[optionIndex]
+              : undefined;
+          return variation && option !== undefined
+            ? `${variation.name}: ${option}`
+            : null;
+        })
+        .filter((pair): pair is string => pair !== null)
+        .join(", ");
+      return { label, price: Number(sku.price) };
+    });
+
+    return {
+      productId: Number(product.id),
+      publicId: product.publicId,
+      name: product.name,
+      descriptionText: htmlToPlainText(product.description ?? ""),
+      isActive: product.isActive,
+      skus: ragSkus,
+      reviews: reviews
+        .map((review) => ({
+          comment: (review.comment ?? "").trim(),
+          rating: review.rating,
+        }))
+        .filter((review) => review.comment.length > 0),
+    };
   }
 
   async getPriceSuggestion(
@@ -1303,6 +1419,7 @@ export class ProductService {
 
     await this.invalidateSearchCache();
     this.scheduleRiskRescore();
+    this.publishIndexChanged([saved.id]);
     return saved;
   }
 
@@ -1901,6 +2018,7 @@ export class ProductService {
         price: Number(updated.price),
       });
     }
+    this.publishIndexChanged([id]);
     return updated;
   }
 
@@ -1913,6 +2031,7 @@ export class ProductService {
     await this.productRepository.remove(product);
     await this.invalidateSearchCache();
     this.destroyDroppedImages(removedImageUrls, []);
+    this.publishIndexChanged([id]);
     return { success: true };
   }
 
@@ -1977,6 +2096,7 @@ export class ProductService {
     }
 
     await this.recalculateProductRating(dto.productId);
+    this.publishIndexChanged([dto.productId]);
     return review;
   }
 
@@ -1992,6 +2112,7 @@ export class ProductService {
     }
     await this.reviewRepository.remove(review);
     await this.recalculateProductRating(review.productId);
+    this.publishIndexChanged([review.productId]);
   }
 
   async findReviewsByProduct(
@@ -2080,6 +2201,11 @@ export class ProductService {
     const saved = await this.brandRepository.save(brand);
     await this.invalidateBrandListCache();
     if (saved.status === "rejected") {
+      // Selected first so each deactivated product leaves the Q&A index.
+      const blockedProducts = await this.productRepository.find({
+        where: { brandId: saved.id },
+        select: ["id"],
+      });
       const result = await this.productRepository.update(
         { brandId: saved.id },
         { approvalBlocked: true, isActive: false },
@@ -2087,6 +2213,7 @@ export class ProductService {
       this.logger.log(
         `Brand ${saved.id} rejected: blocked ${result.affected ?? 0} products`,
       );
+      this.publishIndexChanged(blockedProducts.map((product) => product.id));
     }
     if (saved.status === "active") {
       const result = await this.productRepository.update(
@@ -2221,6 +2348,7 @@ export class ProductService {
       this.logger.log(
         `Category ${saved.id} rejected: blocked ${affected.length} products`,
       );
+      this.publishIndexChanged(affected.map((product) => product.id));
     }
     if (saved.status === "active") {
       const affected = await this.productRepository
@@ -2333,6 +2461,11 @@ export class ProductService {
     deactivatedProductCount: number;
     deletedWishlistItemCount: number;
   }> {
+    // Selected first so each deactivated listing leaves the Q&A index.
+    const deactivatedProducts = await this.productRepository.find({
+      where: { userId, isActive: true },
+      select: ["id"],
+    });
     const deactivated = await this.productRepository.update(
       { userId, isActive: true },
       { isActive: false },
@@ -2342,6 +2475,7 @@ export class ProductService {
     if (deactivatedProductCount > 0) {
       await this.invalidateSearchCache();
     }
+    this.publishIndexChanged(deactivatedProducts.map((product) => product.id));
     return {
       deactivatedProductCount,
       deletedWishlistItemCount: deletedWishlist.affected ?? 0,

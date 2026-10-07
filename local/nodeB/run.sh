@@ -1,6 +1,6 @@
 #!/bin/bash
 # ================================
-# 🏗️ Start Node B (Inventory + Payments + Rewards)
+# 🏗️ Start Node B (Inventory + Payments + Rewards + Assistant)
 # ================================
 
 # Navigate to API directory
@@ -25,5 +25,5 @@ if [ ! -d "node_modules" ]; then
 fi
 
 # Start microservices using npm scripts
-echo "🚀 Starting Node B services (Inventory + Payments + Rewards)..."
+echo "🚀 Starting Node B services (Inventory + Payments + Rewards + Assistant)..."
 npm run start:nodeB

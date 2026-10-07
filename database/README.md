@@ -3,7 +3,8 @@
 TryBuy uses two external Aiven databases:
 
 - Node A: MySQL for orders, user, product, social, notification, and chat.
-- Node B: PostgreSQL for inventory, payments, and rewards.
+- Node B: PostgreSQL for inventory, payments, rewards, and assistant (the
+  only database using the `vector` (pgvector) extension).
 
 Production schema synchronization must remain disabled.
 

@@ -11,9 +11,12 @@ import {
 import { Reflector } from "@nestjs/core";
 import { COMMON_MESSAGE } from "libs/constant/response-message.constant";
 import { IS_PUBLIC_KEY } from "../decorators/public.decorator";
-import { RATE_LIMIT_OPTIONS_KEY } from "../decorators/rate-limit.decorator";
 import { isProduction, resolvePositiveIntegerEnv } from "../security";
-import { RequestWithRateLimit } from "./rate-limit.types";
+import {
+  RATE_LIMIT_OPTIONS_KEY,
+  RateLimitOptions,
+  RequestWithRateLimit,
+} from "./rate-limit.types";
 
 @Injectable()
 export class CustomRateLimitGuard implements CanActivate {
@@ -42,15 +45,26 @@ export class CustomRateLimitGuard implements CanActivate {
   ) {}
   async canActivate(context: ExecutionContext): Promise<boolean> {
     try {
-      const decoratorOptions = this.reflector.get<{
-        limit?: number;
-        ttl?: number;
-      }>(RATE_LIMIT_OPTIONS_KEY, context.getHandler());
+      const decoratorOptions = this.reflector.get<RateLimitOptions | undefined>(
+        RATE_LIMIT_OPTIONS_KEY,
+        context.getHandler(),
+      );
 
       const limit = decoratorOptions?.limit ?? this.defaultLimit;
       const ttl = decoratorOptions?.ttl ?? this.defaultTtl;
 
       const request = context.switchToHttp().getRequest<RequestWithRateLimit>();
+
+      // A request is counted once: the route-level run of a per:"user" route
+      // must not re-count what an earlier pass already counted.
+      if (request.rateLimit) {
+        return true;
+      }
+      // per:"user" is counted by the route-level run, after JwtAuthGuard. The
+      // global pass (no request.user yet) leaves it alone.
+      if (decoratorOptions?.per === "user" && !request.user?.id) {
+        return true;
+      }
 
       if (
         this.isPublicGetSkipEnabled &&

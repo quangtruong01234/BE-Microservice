@@ -250,7 +250,7 @@ If deploying split hosts later, start only the services assigned to that host:
 
 ```bash
 pm2 start ecosystem.config.js --env production --only "gateway,orders,user,product,social,notification,chat"
-pm2 start ecosystem.config.js --env production --only "inventory,payments,rewards"
+pm2 start ecosystem.config.js --env production --only "inventory,payments,rewards,assistant"
 ```
 
 ## 6. PM2 Startup And Save
@@ -414,6 +414,7 @@ secrets. Do not add Actions or GHCR in this runbook.
   `ZALOPAY_REDIRECT_URL`
 - `VNP_TMN_CODE`, `VNP_HASH_SECRET`, `VNP_URL`, `VNP_RETURN_URL`,
   `VNPAY_IPN_URL`
+- `GEMINI_API_KEY` (nodeB; product Q&A — see `ai-docs/agent-context/ops-runtime.md` § Product Q&A assistant)
 - Optional deploy notification webhook if desired later.
 
 ## References

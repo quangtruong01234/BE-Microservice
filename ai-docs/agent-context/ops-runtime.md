@@ -565,6 +565,48 @@ the seed script.
 - Residual behaviour (what dead-letters and what never does): `known-behaviors.md`
   → RMQ-DLQ-01.
 
+## Product Q&A assistant (PRODUCT-QA-01, 2026-10-07)
+
+- **Process:** nodeB `assistant`, TCP :3010, loads `local/nodeB/.env`, pm2 PG
+  pool 2 (`ecosystem.config.js`). One more Node process on the nodeB host —
+  check `free -m` headroom before the first deploy.
+- **Env (nodeB only, never sent to the FE):** `GEMINI_API_KEY` (AI Studio, free
+  tier). Unset ⇒ the assistant still boots, indexes nothing, and an ask answers
+  503 `ASSISTANT_UNAVAILABLE` (`NO_SOURCES` for a never-indexed product).
+  Optional overrides with their defaults are listed in
+  `local/nodeB/.env.example` (`GEMINI_EMBED_MODEL`, `GEMINI_MODEL`, the two
+  timeouts, `RAG_MIN_SIMILARITY`, `RAG_MAX_CHUNKS_PER_PRODUCT`,
+  `RAG_RETRY_BATCH`, `RAG_MAX_ATTEMPTS`). Free-tier traffic may be used by
+  Google for training: review text is indexed with phone numbers and emails
+  redacted, and nothing else about a user is sent.
+- **pgvector:** `nodeB-20261007-001-add-rag-tables` runs
+  `CREATE EXTENSION IF NOT EXISTS vector` — the first extension in the nodeB
+  database. If Aiven refuses it the whole file rolls back and nothing is
+  recorded. The assistant connection is `synchronize:false` everywhere, so the
+  tables exist only through that migration.
+- **Indexing:** event-driven from `product.index_changed`. A Gemini failure
+  leaves the product `pending`; a 5-minute cron retries up to
+  `RAG_RETRY_BATCH` pending rows (oldest first) until `RAG_MAX_ATTEMPTS`, after
+  which only the next write to that product retries it. An unchanged content
+  hash skips Gemini entirely.
+- **Backfill (once per environment, after the migration and with the
+  assistant up):** products written before the assistant existed have no row.
+  From the api root on the nodeA host (reads `local/nodeA/.env`:
+  `MYSQL_*`, `RABBITMQ_*`):
+
+  ```bash
+  npm run rag:backfill -- --dry-run    # count + queue depth, publishes nothing
+  npm run rag:backfill                 # one event per active product, 4s apart
+  npm run rag:backfill -- --from-id=N  # resume after an interruption
+  ```
+
+  `RAG_BACKFILL_DELAY_MS` (default 4000) paces it under the embed quota;
+  `RAG_BACKFILL_LIMIT` caps the count. It refuses to run when the
+  `ASSISTANT_PRODUCT_SERVICE` queue does not exist (the assistant has never
+  started on that broker). Re-running is safe — unchanged products skip Gemini.
+  Check progress with `SELECT status, count(*) FROM rag_documents GROUP BY status`.
+- Residual behaviour: `known-behaviors.md` → PRODUCT-QA-01.
+
 ## Payments
 
 - `payment_methods.is_active` controls active options; `PAYMENT_GATEWAY` env is

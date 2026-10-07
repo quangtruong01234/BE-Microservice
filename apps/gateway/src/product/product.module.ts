@@ -46,6 +46,14 @@ import {
           port: PORT_TCP.ORDERS_TCP_PORT,
         },
       },
+      {
+        name: NAME_SERVICE_TCP.ASSISTANT_SERVICE,
+        customClass: ResilientClientTCP,
+        options: {
+          host: TCP_HOST,
+          port: PORT_TCP.ASSISTANT_TCP_PORT,
+        },
+      },
     ]),
   ],
   controllers: [ProductController],

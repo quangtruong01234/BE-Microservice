@@ -65,11 +65,18 @@ describe("ProductService wishlist alerts (WISHLIST-ALERT-01)", () => {
   const publish = jest.fn();
   let service: ProductService;
 
+  // Every product write also emits product.index_changed (PRODUCT-QA-01);
+  // only the wishlist alerts are under test here.
   const publishedMessages = (): PublishedMessage[] =>
-    publish.mock.calls.map(
-      ([, , body]: [string, string, Buffer]) =>
-        JSON.parse(body.toString()) as PublishedMessage,
-    );
+    publish.mock.calls
+      .filter(
+        ([, routingKey]: [string, string, Buffer]) =>
+          routingKey !== EVENT.PRODUCT_INDEX_CHANGED_EVENT,
+      )
+      .map(
+        ([, , body]: [string, string, Buffer]) =>
+          JSON.parse(body.toString()) as PublishedMessage,
+      );
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -232,7 +239,7 @@ describe("ProductService wishlist alerts (WISHLIST-ALERT-01)", () => {
       await service.updateProduct(9, { name: "Renamed" });
       await flushAlert();
 
-      expect(publish).not.toHaveBeenCalled();
+      expect(publishedMessages()).toEqual([]);
     });
   });
 });

@@ -1,6 +1,7 @@
 import { extractCloudinaryUrlsFromHtml } from "../cloudinary/cloudinary-html.util";
 import {
   escapeRichTextSearchTerm,
+  htmlToPlainText,
   sanitizeRichTextHtml,
 } from "./rich-text-html.util";
 
@@ -241,5 +242,21 @@ describe("sanitizeRichTextHtml", () => {
     const cleaned = sanitizeRichTextHtml(hostile);
     expect(Date.now() - startedAt).toBeLessThan(2000);
     expect(cleaned).not.toContain("<a");
+  });
+});
+
+describe("htmlToPlainText (PRODUCT-QA-01)", () => {
+  it("[TC-10] htmlToPlainText turns block tags into newlines, strips tags and decodes basic entities", () => {
+    expect(
+      htmlToPlainText(
+        "<h2>Title</h2><p>Line &amp; <strong>one</strong></p>" +
+          "<ul><li><p>a</p></li><li>b&nbsp;c</li></ul>" +
+          "<p>x<br>y</p><p>&lt;3 &quot;q&quot; &#39;s&#39;</p>",
+      ),
+    ).toBe(
+      ["Title", "Line & one", "a", "b c", "x", "y", `<3 "q" 's'`].join("\n"),
+    );
+    expect(htmlToPlainText("plain R&D text")).toBe("plain R&D text");
+    expect(htmlToPlainText("")).toBe("");
   });
 });

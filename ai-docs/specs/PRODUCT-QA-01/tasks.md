@@ -17,7 +17,7 @@ file are in [`design.md`](design.md) § Files. The HTTP surface is
 | Risk | medium. pgvector is the first extension in this DB; if Aiven refuses it, the whole file rolls back and the CD migrate step fails before restart |
 | Verify | `npm run db:migrate:dry-run -- --target=nodeB`, then apply locally (`npm run db:migrate:nodeB`). Then `\d rag_chunks` shows `embedding vector(768)`. Re-running is a no-op (checksum ledger) |
 
-- [ ] Phase 0 done
+- [x] Phase 0 done
 
 ## Phase 1 — libs (constants, Gemini client, RAG text utils)
 
@@ -30,7 +30,7 @@ file are in [`design.md`](design.md) § Files. The HTTP surface is
 | Risk | low. Pure code and additive constants |
 | Verify | `npx tsc --noEmit` + `npx jest libs/common/src/rag libs/common/src/gemini libs/common/src/utils/rich-text-html` (TC-1..TC-11) + `npm run check:conventions`. `assistant.ask` has no handler and no sender yet; if the check flags it, note it and confirm it clears after Phase 4 |
 
-- [ ] Phase 1 done
+- [x] Phase 1 done
 
 ## Phase 2 — product service (emit + RAG source)
 
@@ -43,7 +43,7 @@ file are in [`design.md`](design.md) § Files. The HTTP surface is
 | Risk | medium. Eight write paths change. The emit must sit after the transaction commits and must never turn a successful write into an error |
 | Verify | `npx tsc --noEmit` + `npx jest apps/product/src/product.service.spec.ts` (TC-21, TC-22). Then start nodeA and PATCH a product as the shop role. The notification and inventory logs show no error, and `NOTIFICATION_PRODUCT_SERVICE` / `INVENTORY_PRODUCT_SERVICE` depth stays 0, because the unhandled event is acked (RMQ-DLQ-01) |
 
-- [ ] Phase 2 done
+- [x] Phase 2 done (runtime PATCH check folded into the Phase 3 live check)
 
 ## Phase 3 — assistant service (new, nodeB)
 
@@ -56,7 +56,7 @@ file are in [`design.md`](design.md) § Files. The HTTP surface is
 | Risk | high. This is a new process, the first nodeB → nodeA TCP client, the first pgvector use and an external API. It adds +2 PG connections against the free-tier ceiling |
 | Verify | `npx tsc --noEmit` + `npx jest apps/assistant` (TC-12..TC-20) + `npx nest build assistant`. Start nodeB with a real key. PATCH a product as the shop role, and its `rag_documents` row turns `indexed` with `rag_chunks` rows. This one live call also proves both model ids are served (requirements § Open questions). If one is not, set the env to the current free-tier id and record it in `ops-runtime.md` |
 
-- [ ] Phase 3 done
+- [x] Phase 3 done (2026-10-07 live: a seller PATCH indexed product 50 as 2 chunks of 768 dims; `gemini-embedding-2` and `gemini-3.5-flash-lite` are both served; a grounded ask returned a cited answer in 4.2 s, an unsupported claim LOW_CONFIDENCE, an unindexed product NO_SOURCES; an identical re-PATCH made no embed call. Every TC-12..20 test was seen red under a source mutation.)
 
 ## Phase 4 — gateway (limiter, sanitizer, route)
 
@@ -69,7 +69,7 @@ file are in [`design.md`](design.md) § Files. The HTTP surface is
 | Risk | medium. The guard and filter are global. AC-14 / TC-23 / TC-41 prove the default path is unchanged |
 | Verify | `npx tsc --noEmit` + `npx jest apps/gateway/src/common/guards/rate-limit.guard.spec.ts apps/gateway/src/common/decorators apps/gateway/src/common/filters apps/gateway/src/product` (TC-23..TC-27) + `npm run check:conventions` (now clean for `assistant.ask` and `product.rag_source`). Then runtime TC-30..TC-36, TC-41 |
 
-- [ ] Phase 4 done
+- [x] Phase 4 done (2026-10-07: TC-23..27 green and seen red; runtime TC-30..36 and TC-41 passed)
 
 ## Phase 5 — backfill script, env, docs
 
@@ -82,24 +82,28 @@ file are in [`design.md`](design.md) § Files. The HTTP surface is
 | Risk | low. Re-running only re-hashes, and unchanged products cost no Gemini call |
 | Verify | `npx tsc --noEmit` + TC-37..TC-40. Check that `git diff local/nodeB/` adds key names only. Then run `git grep` for the prod hostname per `git-workflow.md` |
 
-- [ ] Phase 5 done
+- [x] Phase 5 done (2026-10-07: runtime TC-37..40 passed; the backfill reads `local/nodeA/.env`, so its `RAG_BACKFILL_*` keys sit in the nodeA examples, not nodeB)
 
 ## Closing
 
-- [ ] Every [TC-n] in `tests.md` passes; every unit test was seen red first.
-- [ ] Self-test (`docs/AGENT-WORKFLOW.md` §3) and change-impact review (§4).
+- [x] Every [TC-n] in `tests.md` passes; every unit test was seen red first.
+- [x] Self-test (`docs/AGENT-WORKFLOW.md` §3) and change-impact review (§4).
   Unreached legs become `⏳ PENDING RUNTIME TEST (PRODUCT-QA-01)` notes (tests.md
   § Legs not covered).
-- [ ] `code-reviewer` report: PASS.
-- [ ] FE handoff: the two-session contract flow (`BE_DONE` on
+- [x] `code-reviewer` report: PASS (0 blockers). Its SHOULD-FIX was fixed: the
+  prod 5xx allow-list lookup now goes through `getPreservedProd5xxMessage()`
+  (own keys only), so an errorCode like `constructor` is sanitized — TC-25
+  gained that case, seen red first.
+- [x] FE handoff: the two-session contract flow (`BE_DONE` on
   `feat/PRODUCT-QA-01-be`). Note the 200 is `data` inside the standard envelope
-  and that 429 also carries `retryAfter`.
-- [ ] Release class **B** recorded. No release-gate hold.
-- [ ] Prod-owed in the snapshot:
+  and that the 429 carries NO `retryAfter` and no `Retry-After` header (the
+  gateway filter drops it; verified in TC-35), so the FE waits out the 60s window.
+- [x] Release class **B** recorded. No release-gate hold.
+- [x] Prod-owed in the snapshot:
   - `GEMINI_API_KEY` on prod nodeB (pm2 env).
   - Migration `nodeB-20261007-001-add-rag-tables` applied by CD.
   - `npm run rag:backfill` on prod once, after deploy.
-- [ ] `known-behaviors.md`:
+- [x] `known-behaviors.md`:
   - Add a new `PRODUCT-QA-01` entry with these residuals:
     - per-user limit counted before validation;
     - a stale index until the next write or the cron;
@@ -108,5 +112,5 @@ file are in [`design.md`](design.md) § Files. The HTTP surface is
     - IP-keying elsewhere.
   - Correct the EMAIL-REAUTH-01 "per user" wording (it is per IP).
   - Run `node .claude/hooks/kb-hint.mjs --index --write` and `npm run check:conventions`.
-- [ ] `design.md` anchor set to `status=done`; summary → `CHANGELOG.md`; F16
+- [x] `design.md` anchor set to `status=done`; summary → `CHANGELOG.md`; F16
   ticked in `snapshot.md`.
