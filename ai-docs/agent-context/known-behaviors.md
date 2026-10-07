@@ -1314,7 +1314,7 @@ Deliberate, and not bugs:
   deactivating a user — neither is a trigger today.
 
 ## Changing the email needs the current password (EMAIL-REAUTH-01, 2026-09-26)
-<!-- kb: id=EMAIL-REAUTH-01; group=auth; files=apps/user/src/user.service.ts; sha=0da41f63d852; verified=prod:2026-09-27; keys=email change,change email,currentPassword,re-auth,reauth,PATCH user,update profile,account takeover,đổi email,sửa hồ sơ,mật khẩu hiện tại; summary=PATCH /api/user/:id requires currentPassword only when email actually changes (missing is a 400, wrong is a 401 with INVALID_CURRENT_PASSWORD); an unchanged email is re-sendable without it and the route is throttled 10/min. -->
+<!-- kb: id=EMAIL-REAUTH-01; group=auth; files=apps/user/src/user.service.ts; sha=375ff2bafb3c; verified=prod:2026-09-27; keys=email change,change email,currentPassword,re-auth,reauth,PATCH user,update profile,account takeover,đổi email,sửa hồ sơ,mật khẩu hiện tại; summary=PATCH /api/user/:id requires currentPassword only when email actually changes (missing is a 400, wrong is a 401 with INVALID_CURRENT_PASSWORD); an unchanged email is re-sendable without it and the route is throttled 10/min. -->
 
 Why: reset codes are mailed to `users.email`, so before this a stolen session
 alone could point the email at the attacker and then take the password via
@@ -1331,7 +1331,9 @@ forgot-password. Behaviour, all deliberate:
   `EMAIL_TAKEN` answer is no longer an email-existence oracle for a bare session.
 - `currentPassword` is destructured off the DTO before `Object.assign` — it is
   never written to the entity or echoed back.
-- **`PATCH /api/user/:id` is now `@RateLimit({ limit: 10, ttl: 60 })`** per user,
+- **`PATCH /api/user/:id` is now `@RateLimit({ limit: 10, ttl: 60 })`** per IP
+  (the global guard runs before `JwtAuthGuard`, so it never sees the user —
+  only `per: "user"` routes are keyed by user id, see PRODUCT-QA-01),
   for every edit (not only email changes) — otherwise it would be an unthrottled
   password-guessing oracle next to the 5/min change-password.
 - Nothing is revoked on an email change — unlike a password change since
@@ -2866,3 +2868,56 @@ retry was a 400 CANNOT_CANCEL, so nothing ever finished the job.
   were all removed by the 5-day cleanup falls back to its creation time.
 - Verified on DEV 2026-10-05: two new conversations, a message in the older
   one, the list answered 200 with that one first.
+
+## Product Q&A answers only from the indexed listing, and the index lags (PRODUCT-QA-01, 2026-10-07)
+<!-- kb: id=PRODUCT-QA-01; group=products; files=apps/assistant/src/assistant.service.ts,apps/assistant/src/rag-indexer.service.ts,libs/common/src/rag/rag-text.util.ts; sha=d80837942080; verified=local:2026-10-07; keys=products/:id/ask,ask,product assistant,assistant,rag,rag_documents,rag_chunks,rag:backfill,pgvector,gemini,GEMINI_API_KEY,ASSISTANT_UNAVAILABLE,NO_SOURCES,LOW_CONFIDENCE,abstained,citations,product.index_changed,hỏi đáp sản phẩm,hoi dap san pham,trợ lý sản phẩm,câu hỏi về sản phẩm,hỏi sản phẩm; summary=POST /api/products/:id/ask answers only from the product's indexed name, description, SKU labels/prices and reviews (stock, brand and category are never indexed), counts every authenticated call against 5/min per user before validation, and reads an index that is only as fresh as the last successful product.index_changed — a Gemini failure leaves the product pending (NO_SOURCES or the old text) until the 5-minute retry or the next write; any timeout, outage or Gemini quota is one 503 ASSISTANT_UNAVAILABLE. -->
+
+Contract: `ai-docs/specs/PRODUCT-QA-01/contract.md`. Ops: `ops-runtime.md`
+§ Product Q&A assistant.
+
+**Residuals — do not "fix" these without re-reading the why:**
+
+- **What is indexed is deliberately narrow.** Name and description
+  paragraphs (PRODUCT), one `label — price ₫` line per active SKU (SKU), and
+  up to the newest reviews with a non-blank comment (REVIEW), capped at 100
+  chunks so the oldest reviews fall off first. Stock, the product-level price
+  of a product with no SKUs, brand, category and seller are NOT indexed, so a
+  question about them abstains `LOW_CONFIDENCE`. Stock changes too often to
+  re-embed on free tier; adding a field means a new hash for every product.
+- **Phone numbers and emails are scrubbed before Gemini sees them** in
+  product text and reviews (`[phone]`, `[email]`). The phone pattern is
+  bounded by non-digits so prices and years survive — an unusual phone
+  format can slip through.
+- **The index lags the catalog.** It is fed by the best-effort
+  `product.index_changed` publish (OUTBOX-SCOPE-01): a lost publish leaves
+  the old text until the next write to that product. A Gemini failure while
+  indexing marks the row `pending` — a never-indexed product answers
+  `NO_SOURCES`, an indexed one keeps answering from its old chunks — and the
+  5-minute cron retries up to `RAG_RETRY_BATCH` rows until `RAG_MAX_ATTEMPTS`;
+  after that only the next write retries. Products older than the assistant
+  need `npm run rag:backfill` once per environment.
+- **An unchanged content hash skips Gemini.** The hash covers the chunk text
+  plus the embed model and dimension, so a model change re-indexes everything
+  on the next event, and an identical PATCH costs nothing.
+- **The rate limit counts before validation.** `@RateLimit({ per: "user" })`
+  re-runs the guard after `JwtAuthGuard`, so a 400, 404 or 503 still uses one
+  of the 5 slots. This is the only route keyed by user id: every other
+  `@RateLimit` is counted by the global guard, which runs before
+  `JwtAuthGuard`, so it is keyed by IP even on authenticated routes. The 429
+  body carries no `retryAfter` and no `Retry-After` header.
+- **One 503 for every "not now".** A gateway timeout (WRITE budget, never
+  retried — a retry would spend a second generation), a dead product or
+  assistant leg, and a Gemini 429/5xx/timeout all become `503
+  ASSISTANT_UNAVAILABLE`. It keeps its message and code on prod through
+  `PROD_PRESERVED_5XX_ERROR_CODES`; every other 5xx is still sanitized.
+- **Bracketed numbers the model did not cite are rewritten.** Citation labels
+  are renumbered to `[n]`; an unresolvable label is dropped and any other
+  bracketed number (a quoted `[2024]`) becomes `(2024)`, so `/\[(\d+)\]/` only
+  ever matches a real citation.
+- **Inactive or deleted ⇒ the rows are deleted**, so re-activating a product
+  re-embeds it from scratch.
+- Verified on DEV 2026-10-07 (TC-30..41 in the spec's `tests.md`): answered
+  with citations, both abstain reasons, 400/404/429/503, PII scrubbed with
+  nothing raw in the assistant log, hash-skip on an identical PATCH, rows gone
+  on deactivate, pending → indexed by the cron after the key was restored, and
+  a paced backfill.

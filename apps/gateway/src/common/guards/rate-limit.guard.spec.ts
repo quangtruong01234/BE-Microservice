@@ -4,9 +4,12 @@ import { CachedService } from "@app/cached";
 import { IS_PUBLIC_KEY } from "../decorators/public.decorator";
 import { RATE_LIMIT_OPTIONS_KEY } from "../decorators/rate-limit.decorator";
 import { CustomRateLimitGuard } from "./rate-limit.guard";
+import { RateLimitInfo, RateLimitOptions } from "./rate-limit.types";
 
 interface MockRequestOptions {
   method?: string;
+  user?: { id: number };
+  rateLimit?: RateLimitInfo;
 }
 
 function createContext(options: MockRequestOptions = {}): ExecutionContext {
@@ -17,6 +20,8 @@ function createContext(options: MockRequestOptions = {}): ExecutionContext {
     ip: "127.0.0.1",
     headers: {},
     socket: { remoteAddress: "127.0.0.1" },
+    user: options.user,
+    rateLimit: options.rateLimit,
   };
   return {
     switchToHttp: () => ({ getRequest: () => request }),
@@ -27,7 +32,7 @@ function createContext(options: MockRequestOptions = {}): ExecutionContext {
 
 function createGuard(overrides: {
   isPublic: boolean;
-  decoratorOptions?: { limit?: number; ttl?: number };
+  decoratorOptions?: RateLimitOptions;
 }): { guard: CustomRateLimitGuard; increment: jest.Mock } {
   const increment = jest.fn().mockResolvedValue(1);
   const cachedService = {
@@ -101,5 +106,76 @@ describe("CustomRateLimitGuard RATE_LIMIT_SKIP_PUBLIC_GET", () => {
 
     await expect(guard.canActivate(createContext())).resolves.toBe(true);
     expect(increment).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('[TC-23] CustomRateLimitGuard per:"user"', () => {
+  it('[TC-23] a per:"user" route without request.user (the global pass) returns true and never increments', async () => {
+    const { guard, increment } = createGuard({
+      isPublic: false,
+      decoratorOptions: { limit: 5, ttl: 60, per: "user" },
+    });
+
+    await expect(
+      guard.canActivate(createContext({ method: "POST" })),
+    ).resolves.toBe(true);
+    expect(increment).not.toHaveBeenCalled();
+  });
+
+  it('[TC-23] a per:"user" route with request.user counts the user key', async () => {
+    const { guard, increment } = createGuard({
+      isPublic: false,
+      decoratorOptions: { limit: 5, ttl: 60, per: "user" },
+    });
+
+    await expect(
+      guard.canActivate(createContext({ method: "POST", user: { id: 42 } })),
+    ).resolves.toBe(true);
+    expect(increment).toHaveBeenCalledWith(
+      "throttle:POST:/api/products:user:42",
+      60,
+    );
+  });
+
+  it('[TC-23] a per:"user" route over its limit is a 429', async () => {
+    const { guard, increment } = createGuard({
+      isPublic: false,
+      decoratorOptions: { limit: 5, ttl: 60, per: "user" },
+    });
+    increment.mockResolvedValueOnce(6);
+
+    await expect(
+      guard.canActivate(createContext({ method: "POST", user: { id: 42 } })),
+    ).rejects.toMatchObject({ status: 429 });
+  });
+
+  it("[TC-23] a request already counted (request.rateLimit set) returns true without counting", async () => {
+    const { guard, increment } = createGuard({
+      isPublic: false,
+      decoratorOptions: { limit: 5, ttl: 60, per: "user" },
+    });
+    const rateLimit = { limit: 5, current: 1, remaining: 4, resetTime: 0 };
+
+    await expect(
+      guard.canActivate(
+        createContext({ method: "POST", user: { id: 42 }, rateLimit }),
+      ),
+    ).resolves.toBe(true);
+    expect(increment).not.toHaveBeenCalled();
+  });
+
+  it("[TC-23] no per is counted on the global pass with the ip key exactly as before", async () => {
+    const { guard, increment } = createGuard({
+      isPublic: false,
+      decoratorOptions: { limit: 10, ttl: 30 },
+    });
+
+    await expect(
+      guard.canActivate(createContext({ method: "POST" })),
+    ).resolves.toBe(true);
+    expect(increment).toHaveBeenCalledWith(
+      "throttle:POST:/api/products:ip:127.0.0.1",
+      30,
+    );
   });
 });

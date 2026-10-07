@@ -14,6 +14,7 @@ export const EVENT = {
   BRAND_REVIEWED_EVENT: "product.brand_reviewed",
   CATEGORY_REVIEWED_EVENT: "product.category_reviewed",
   WISHLIST_ALERT_EVENT: "product.wishlist_alert",
+  PRODUCT_INDEX_CHANGED_EVENT: "product.index_changed",
   SKU_UPSERTED_EVENT: "sku.upserted",
   NOTIFY_USER_PUSH_EVENT: "notification.user_push",
 };

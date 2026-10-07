@@ -7,7 +7,7 @@
   "license": "MIT",
   "scripts": {
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
-    "build": "npm run clean && nest build gateway && nest build orders && nest build user && nest build product && nest build social && nest build notification && nest build chat && nest build inventory && nest build payments && nest build rewards",
+    "build": "npm run clean && nest build gateway && nest build orders && nest build user && nest build product && nest build social && nest build notification && nest build chat && nest build inventory && nest build payments && nest build rewards && nest build assistant",
     "format": "prettier --write \"apps/**/*.ts\" \"libs/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",
@@ -29,6 +29,7 @@
     "start:prod:inventory": "node dist/apps/inventory/main",
     "start:prod:payments": "node dist/apps/payments/main",
     "start:prod:rewards": "node dist/apps/rewards/main",
+    "start:prod:assistant": "node dist/apps/assistant/main",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "lint:check": "eslint \"{src,apps,libs,test}/**/*.ts\"",
     "check:conventions": "node scripts/check-conventions.mjs && node .claude/hooks/kb-hint.mjs --check && node .claude/hooks/kb-hint.mjs --stale",
@@ -43,16 +44,18 @@
     "start:inventory": "nest start inventory --watch",
     "start:payments": "nest start payments --watch",
     "start:rewards": "nest start rewards --watch",
+    "start:assistant": "nest start assistant --watch",
     "start:product": "nest start product --watch",
     "start:social": "nest start social --watch",
     "start:notification": "nest start notification --watch",
     "start:chat": "nest start chat --watch",
     "start:nodeA": "concurrently -n GATEWAY,ORDERS,USER,PRODUCT,SOCIAL,NOTIF,CHAT -c blue,green,pink,yellow,cyan,magenta,white \"npm run start:gateway\" \"npm run start:orders\" \"npm run start:user\" \"npm run start:product\" \"npm run start:social\" \"npm run start:notification\" \"npm run start:chat\"",
-    "start:nodeB": "concurrently -n INVENTORY,PAYMENTS,REWARDS -c yellow,magenta,cyan \"npm run start:inventory\" \"npm run start:payments\" \"npm run start:rewards\"",
+    "start:nodeB": "concurrently -n INVENTORY,PAYMENTS,REWARDS,ASSISTANT -c yellow,magenta,cyan,green \"npm run start:inventory\" \"npm run start:payments\" \"npm run start:rewards\" \"npm run start:assistant\"",
     "db:migrate:nodeA": "node scripts/migrate-database.mjs --target=nodeA --mode=apply",
     "db:migrate:nodeB": "node scripts/migrate-database.mjs --target=nodeB --mode=apply",
     "db:migrate:status": "node scripts/migrate-database.mjs --mode=status",
-    "db:migrate:dry-run": "node scripts/migrate-database.mjs --mode=dry-run"
+    "db:migrate:dry-run": "node scripts/migrate-database.mjs --mode=dry-run",
+    "rag:backfill": "node scripts/rag-backfill.mjs"
   },
   "dependencies": {
     "@nestjs/axios": "^4.0.1",

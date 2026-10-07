@@ -347,3 +347,32 @@ export function sanitizeRichTextHtml(html: string): string {
   }
   return output.join("");
 }
+
+// Tags that end a line of text when rich text is flattened.
+const BLOCK_TAG_PATTERN =
+  /<\/?(?:p|h[1-6]|li|ul|ol|blockquote|pre|hr|div|tr|table)\b[^>]*>/gi;
+const LINE_BREAK_TAG_PATTERN = /<br\s*\/?>/gi;
+const DROPPED_BLOCK_PATTERN = /<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
+const ANY_TAG_PATTERN = /<[^>]*>/g;
+
+/**
+ * Flattens rich-text HTML into plain text: one line per block (paragraph,
+ * heading, list item, `<br>`), tags stripped, basic entities decoded, blank
+ * lines dropped. Used to feed a product description to the RAG index
+ * (PRODUCT-QA-01) — the output is text, never rendered as HTML.
+ */
+export function htmlToPlainText(html: string): string {
+  const withLineBreaks = html
+    .replace(DROPPED_BLOCK_PATTERN, "\n")
+    .replace(LINE_BREAK_TAG_PATTERN, "\n")
+    .replace(BLOCK_TAG_PATTERN, "\n")
+    .replace(ANY_TAG_PATTERN, "");
+  return (
+    decodeAttribute(withLineBreaks)
+      .split("\n")
+      // `\s` covers the no-break space a decoded `&nbsp;` leaves.
+      .map((line) => line.replace(/[^\S\n]+/g, " ").trim())
+      .filter((line) => line.length > 0)
+      .join("\n")
+  );
+}

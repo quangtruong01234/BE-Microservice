@@ -427,3 +427,7 @@ export const CHAT_MESSAGE = {
 export const NOTIFICATION_MESSAGE = {
   NOT_FOUND: "Notification not found",
 } as const;
+
+export const ASSISTANT_MESSAGE = {
+  UNAVAILABLE: "The product assistant is busy, please try again later",
+} as const;

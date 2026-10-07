@@ -13,7 +13,11 @@ import { WishlistItem } from "./entity/wishlist-item.entity";
 import { ProductImageHashService } from "./product-image-hash.service";
 
 describe("ProductService.purgeUserData (ACCOUNT-DELETE-01)", () => {
-  const productRepository = { update: jest.fn(), delete: jest.fn() };
+  const productRepository = {
+    find: jest.fn(),
+    update: jest.fn(),
+    delete: jest.fn(),
+  };
   const reviewRepository = { update: jest.fn(), delete: jest.fn() };
   const wishlistRepository = { delete: jest.fn() };
   const cachedService = { keys: jest.fn(), del: jest.fn() };
@@ -23,6 +27,7 @@ describe("ProductService.purgeUserData (ACCOUNT-DELETE-01)", () => {
     jest.clearAllMocks();
     cachedService.keys.mockResolvedValue(["products:search:a"]);
     wishlistRepository.delete.mockResolvedValue({ affected: 3 });
+    productRepository.find.mockResolvedValue([]);
     service = new ProductService(
       productRepository as unknown as Repository<Product>,
       {} as unknown as Repository<Brand>,

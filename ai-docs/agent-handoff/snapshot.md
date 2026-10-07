@@ -74,8 +74,31 @@ Order picked by the user: F8 → F9 first, then F10..F12.
   `?unreadOnly=true`. 1 index-only migration. Class B, FE handoff written.
   Deployed 2026-10-05; read-all and `?unreadOnly` answered 200 on prod.
 
+`/sweep propose` 2026-10-07 (user pick: a real RAG project, free tier only):
+
+- [x] **F16 PRODUCT-QA-01** → **BE DONE 2026-10-07** (local, branch
+  `feat/PRODUCT-QA-01-be`, not pushed), see CHANGELOG. Class B. New nodeB
+  `assistant` service; contract `ai-docs/specs/PRODUCT-QA-01/contract.md`
+  (implemented). Ships with the FE branch; prod steps under §Prod-owed.
+- [ ] **F17 RAG-EVAL-01** — offline retrieval/answer eval set for F16 (after F16).
+
 ### Prod-owed
 
+- [ ] **PRODUCT-QA-01 go-live (after the BE+FE merge deploys).**
+  1. Before the push: put `GEMINI_API_KEY` in the box's `local/nodeB/.env`
+     (never in the repo). Without it the assistant boots and answers
+     `NO_SOURCES`/503.
+  2. Confirm the CD migrate step applied `nodeB-20261007-001-add-rag-tables`.
+     If Aiven refused `CREATE EXTENSION vector`, the deploy stops before the
+     restart: enable pgvector in the Aiven console and re-run the deploy.
+  3. Check RAM headroom on the EC2 (`pm2 ls`): the assistant is an 11th
+     process.
+  4. Run `npm run rag:backfill` once (dry-run first), then watch `rag_documents`
+     drain from pending to indexed with no 429 storm in the assistant log.
+  5. ⏳ PENDING RUNTIME TEST (PRODUCT-QA-01): ask once with the key unset or
+     wrong and expect the exact 503 `ASSISTANT_UNAVAILABLE` body, while an
+     unrelated 5xx stays `Internal server error`. Also check the ask p95 < 10s
+     in Grafana after some real traffic.
 - [ ] **GHN-WEBHOOK-E2E-01 — prove a real GHN callback reaches prod
   (unblocks OQ-2 step 4).** The portal is configured and the auth probe passes
   (see OQ-2), but GHN has never actually called prod. Steps:
@@ -287,6 +310,7 @@ pick one up. Do not re-derive them:
 - XSS-DESC-01 — Product description is allow-list sanitized on WRITE (create and PATCH) by a dependency-free rebuild sanitizer, so the storefront may render it raw; rows written before 2026-09-25 are cleaned only on their next edit.
 - REVIEW-VERIFIED-01 — Reviewing without a COMPLETED order holding the product stays a 404 (not 403), a seller reviewing their own listing is a 403, and isVerifiedPurchase is resolved at read time — it flips to false after a refund/return and is null when the orders leg fails.
 - WISHLIST-ALERT-01 — A wishlisted SIMPLE product notifies its wishlisters (seller excluded, newest 1000) in-app when stock goes from <=0 to >0 or a PATCH lowers the price; one alert per product per 6h/24h window, claimed in Redis fail-closed, so a later wishlister or a second drop inside the window gets nothing; SKU products never alert.
+- PRODUCT-QA-01 — POST /api/products/:id/ask answers only from the product's indexed name, description, SKU labels/prices and reviews (stock, brand and category are never indexed), counts every authenticated call against 5/min per user before validation, and reads an index that is only as fresh as the last successful product.index_changed — a Gemini failure leaves the product pending (NO_SOURCES or the old text) until the 5-minute retry or the next write; any timeout, outage or Gemini quota is one 503 ASSISTANT_UNAVAILABLE.
 
 **Data shape / errors**
 - QUERY-ARRAY-01 — ?x[]= is a 400 by design; use repeated keys or a scalar, and wrap any new array query field with @Transform.

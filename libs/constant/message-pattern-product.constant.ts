@@ -52,6 +52,9 @@ export const PRODUCT_MESSAGE_PATTERNS = {
 
   // ACCOUNT-DELETE-01 — deactivate listings, drop wishlist rows.
   PURGE_USER_DATA: "product.purge_user_data",
+
+  // PRODUCT-QA-01 — the text the assistant indexes for one product.
+  PRODUCT_RAG_SOURCE: "product.rag_source",
 } as const;
 
 export type ProductMessagePattern =

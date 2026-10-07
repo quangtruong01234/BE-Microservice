@@ -15,6 +15,7 @@ import { ProductService } from "./product.service";
 import {
   HttpToRpcExceptionFilter,
   PaginatedResponse,
+  ProductRagSource,
   RmqService,
 } from "@app/common";
 import { ProductReview } from "./entity/product-review.entity";
@@ -369,6 +370,14 @@ export class ProductController {
     deletedWishlistItemCount: number;
   }> {
     return this.productService.purgeUserData(data.userId);
+  }
+
+  // PRODUCT-QA-01: the Q&A index's source pull (assistant → product).
+  @MessagePattern(PRODUCT_MESSAGE_PATTERNS.PRODUCT_RAG_SOURCE)
+  async getRagSource(
+    @Payload() data: { productId: number },
+  ): Promise<ProductRagSource | null> {
+    return this.productService.getRagSource(Number(data.productId));
   }
 
   @MessagePattern(PRODUCT_MESSAGE_PATTERNS.WISHLIST_LIST)

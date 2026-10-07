@@ -7,6 +7,7 @@ import {
   Logger,
 } from "@nestjs/common";
 import { Request, Response } from "express";
+import { getPreservedProd5xxMessage } from "libs/constant/error-code.constant";
 import { isProduction } from "../security";
 
 @Catch() // Catch all exceptions, not just HttpException
@@ -159,7 +160,14 @@ export class HttpExceptionFilter implements ExceptionFilter {
       status = HttpStatus.INTERNAL_SERVER_ERROR;
     }
 
-    if (isProduction() && status >= 500) {
+    const preservedMessage = getPreservedProd5xxMessage(errorCode);
+    if (isProduction() && status >= 500 && preservedMessage) {
+      // An allow-listed 5xx (PRODUCT-QA-01) keeps its code so the FE can tell
+      // "busy, retry" from a crash; the message is the constant, never the
+      // upstream text.
+      message = preservedMessage;
+      error = HttpExceptionFilter.reasonPhrase(status);
+    } else if (isProduction() && status >= 500) {
       message = "Internal server error";
       // Sanitize the message, but keep the label the status-derived phrase so
       // prod and dev report the same `error` for the same status

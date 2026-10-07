@@ -92,6 +92,15 @@
         "tsConfigPath": "apps/rewards/tsconfig.app.json"
       }
     },
+    "assistant": {
+      "type": "application",
+      "root": "apps/assistant",
+      "entryFile": "main",
+      "sourceRoot": "apps/assistant/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/assistant/tsconfig.app.json"
+      }
+    },
     "user": {
       "type": "application",
       "root": "apps/user",

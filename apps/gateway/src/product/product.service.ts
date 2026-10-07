@@ -1,9 +1,22 @@
-import { ForbiddenException, Injectable, Inject, Logger } from "@nestjs/common";
+import {
+  ForbiddenException,
+  HttpException,
+  HttpStatus,
+  Injectable,
+  Inject,
+  Logger,
+  NotFoundException,
+} from "@nestjs/common";
 import { ClientProxy } from "@nestjs/microservices";
-import { firstValueFrom, timeout, catchError } from "rxjs";
+import { firstValueFrom, timeout, catchError, TimeoutError } from "rxjs";
 import { NAME_SERVICE_TCP } from "libs/constant/port-tcp.constant";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
-import { PRODUCT_MESSAGE } from "libs/constant/response-message.constant";
+import {
+  ASSISTANT_MESSAGE,
+  PRODUCT_MESSAGE,
+} from "libs/constant/response-message.constant";
+import { ASSISTANT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-assistant.constant";
+import { ERROR_CODE } from "libs/constant/error-code.constant";
 import { INVENTORY_MESSAGE_PATTERNS } from "libs/constant/message-pattern-inventory.constant";
 import {
   ORDER_MESSAGE_PATTERN,
@@ -11,7 +24,10 @@ import {
 } from "libs/constant/message-pattern.constant";
 import { CreateReviewDto } from "./dto/review.dto";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
-import { retryOnTransportError } from "../common/exception/transport-error";
+import {
+  isTransportError,
+  retryOnTransportError,
+} from "../common/exception/transport-error";
 import { assertCloudinaryUrlsOwnedBy } from "../common/media/cloudinary-ownership";
 import {
   CreateProductDto,
@@ -26,7 +42,11 @@ import {
   ProductRiskQueryDto,
   ProductRiskBackfillDto,
 } from "./dto";
-import { PaginatedResponse } from "@app/common";
+import {
+  AskProductQuestionPayload,
+  PaginatedResponse,
+  ProductAnswer,
+} from "@app/common";
 import { CachedService } from "@app/cached";
 import {
   InventoryData,
@@ -61,6 +81,8 @@ export class ProductService {
     @Inject(NAME_SERVICE_TCP.ORDERS_SERVICE)
     private readonly ordersClient: ClientProxy,
     private readonly cached: CachedService,
+    @Inject(NAME_SERVICE_TCP.ASSISTANT_SERVICE)
+    private readonly assistantClient: ClientProxy,
   ) {}
 
   // SCALE-04: full-response micro-cache for the hot @Public product reads.
@@ -1924,6 +1946,109 @@ export class ProductService {
         "Product Service",
       );
     }
+  }
+
+  // ============================================================================
+  // PRODUCT Q&A (PRODUCT-QA-01)
+  // ============================================================================
+
+  /**
+   * PRODUCT-QA-01 — resolves the public id to an ACTIVE product (404
+   * otherwise, before the assistant is touched), then asks the assistant once.
+   * The assistant leg is WRITE-budgeted (it calls Gemini) and never retried: a
+   * retry would spend a second free-tier generation on the same question.
+   */
+  async askProductQuestion(
+    productId: string,
+    question: string,
+  ): Promise<ProductAnswer> {
+    const product = await this.fetchActiveProductForAsk(productId);
+    const askPayload: AskProductQuestionPayload = {
+      productId: Number(product.id),
+      question,
+    };
+    try {
+      return await firstValueFrom(
+        this.assistantClient
+          .send<ProductAnswer>(ASSISTANT_MESSAGE_PATTERNS.ASK, askPayload)
+          .pipe(timeout(TCP_TIMEOUT_MS.WRITE)),
+      );
+    } catch (error) {
+      this.throwAskError(
+        error,
+        `ask about product ID: ${productId}`,
+        "Assistant Service",
+      );
+    }
+  }
+
+  private async fetchActiveProductForAsk(
+    productId: string,
+  ): Promise<ProductData> {
+    let response: ProductData | null;
+    try {
+      response = await firstValueFrom(
+        this.productClient
+          .send<ProductData | null>(
+            PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_ID,
+            productId,
+          )
+          .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
+      );
+    } catch (error) {
+      this.throwAskError(
+        error,
+        `verify product ID: ${productId} for ask`,
+        "Product Service",
+      );
+    }
+    const product =
+      response?.items?.[0] ??
+      (response?.data as ProductData | undefined) ??
+      response;
+    if (!product || product.isActive === false) {
+      throw new NotFoundException(PRODUCT_MESSAGE.NOT_FOUND);
+    }
+    return product;
+  }
+
+  /**
+   * Every "could not get an answer right now" — a timeout, a leg that is
+   * down, or the assistant's own 503 (Gemini quota/outage) — is the one
+   * contract 503 the FE retries on. A 4xx passes through unchanged.
+   */
+  private throwAskError(
+    error: unknown,
+    operation: string,
+    serviceName: string,
+  ): never {
+    if (error instanceof TimeoutError || isTransportError(error)) {
+      this.logger.warn(`${serviceName} ${operation} unavailable`);
+      throw this.buildAssistantUnavailableException();
+    }
+    try {
+      MicroserviceErrorHandler.handleError(error, operation, serviceName);
+    } catch (mappedError: unknown) {
+      if (
+        mappedError instanceof HttpException &&
+        mappedError.getStatus() === Number(HttpStatus.SERVICE_UNAVAILABLE)
+      ) {
+        throw this.buildAssistantUnavailableException();
+      }
+      throw mappedError;
+    }
+  }
+
+  private buildAssistantUnavailableException(): HttpException {
+    return new HttpException(
+      {
+        statusCode: HttpStatus.SERVICE_UNAVAILABLE,
+        error: "Service Unavailable",
+        message: ASSISTANT_MESSAGE.UNAVAILABLE,
+        errorCode: ERROR_CODE.ASSISTANT_UNAVAILABLE,
+      },
+      HttpStatus.SERVICE_UNAVAILABLE,
+    );
   }
 
   // ============================================================================

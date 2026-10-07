@@ -12,7 +12,7 @@
 //   Node A: pm2 start ecosystem.config.js --env production \
 //             --only "gateway,orders,user,product,social,notification,chat"
 //   Node B: pm2 start ecosystem.config.js --env production \
-//             --only "inventory,payments,rewards"
+//             --only "inventory,payments,rewards,assistant"
 // Persist across reboots: pm2 startup, run the printed command, then pm2 save
 //
 // `cwd` is the api root (where this file lives), so each service's
@@ -70,7 +70,7 @@ const MYSQL_POOL = {
   notification: 4,
   chat: 6,
 };
-const PG_POOL = { inventory: 5, payments: 4, rewards: 3 };
+const PG_POOL = { inventory: 5, payments: 4, rewards: 3, assistant: 2 };
 
 // Public frontend origins, comma-separated. Injected by PM2 so the value is
 // version-controlled and ships with a deploy, instead of living only in the
@@ -129,5 +129,6 @@ module.exports = {
     service("inventory", { PG_POOL_SIZE: PG_POOL.inventory }),
     service("payments", { PG_POOL_SIZE: PG_POOL.payments, FRONTEND_URL }),
     service("rewards", { PG_POOL_SIZE: PG_POOL.rewards }),
+    service("assistant", { PG_POOL_SIZE: PG_POOL.assistant }),
   ],
 };

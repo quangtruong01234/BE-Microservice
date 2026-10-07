@@ -1,6 +1,8 @@
 export * from "./constants/payment-method.enum";
 export * from "./types/paginated-response";
 export * from "./types/wishlist-alert-event";
+export * from "./types/product-index-changed-event";
+export * from "./types/product-answer";
 export * from "./transformers/decimal-to-number.transformer";
 export * from "./common.module";
 export * from "./common.service";
@@ -28,3 +30,6 @@ export * from "./utils/like-term.util";
 
 export * from "./resilience/circuit-breaker";
 export * from "./resilience/resilient-client-tcp";
+
+export * from "./rag/rag-text.util";
+export * from "./gemini";

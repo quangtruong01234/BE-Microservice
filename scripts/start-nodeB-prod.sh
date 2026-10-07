@@ -1,6 +1,6 @@
 #!/bin/bash
 # Production startup script for Node B (EC2 #2)
-# Services: Inventory, Payments, Rewards
+# Services: Inventory, Payments, Rewards, Assistant
 
 echo "🚀 Starting Node B services in production..."
 
@@ -11,6 +11,7 @@ export NODE_ENV=production
 pm2 start dist/apps/inventory/main.js --name "inventory" --instances 1
 pm2 start dist/apps/payments/main.js --name "payments" --instances 1
 pm2 start dist/apps/rewards/main.js --name "rewards" --instances 1
+pm2 start dist/apps/assistant/main.js --name "assistant" --instances 1
 
 # Show PM2 status
 pm2 list
@@ -19,3 +20,4 @@ echo "✅ Node B services started successfully!"
 echo "Inventory: Available on configured port"
 echo "Payments: Available on configured port"
 echo "Rewards: Available on configured port"
+echo "Assistant: Available on configured port"

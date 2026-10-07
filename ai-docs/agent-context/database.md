@@ -5,7 +5,9 @@
 TryBuy uses external managed databases on Aiven:
 
 - **Node A MySQL**: orders, user, product, social, notification, and chat.
-- **Node B PostgreSQL**: inventory, payments, and rewards.
+- **Node B PostgreSQL**: inventory, payments, rewards, and assistant. The assistant
+  tables need the `vector` (pgvector) extension, created by
+  `nodeB-20261007-001-add-rag-tables`.
 - **Gateway**: no database provider.
 - **Redis/RabbitMQ**: Docker services, outside SQL migration scope.
 
@@ -20,6 +22,9 @@ Production must not rely on TypeORM schema synchronization.
 - User and product use the shared MySQL `DatabaseModule`; orders owns a MySQL root connection.
 - Inventory, payments, and rewards use the shared PostgreSQL `PostgresDatabaseModule`.
 - Social, notification, and chat explicitly use `synchronize:false`.
+- Assistant owns its own PostgreSQL connection with `synchronize:false` always, in every
+  environment: synchronize cannot express `vector(768)`, so `rag_*` exist only through the
+  migration — run `npm run db:migrate:nodeB` on a fresh dev database before `start:assistant`.
 
 ## Baseline cutoff and migration flow
 
@@ -89,6 +94,10 @@ Do not use the incremental runner to bootstrap an empty database. Import the mat
 - Inventory: `inventory_v2`, `inventory_reservations`
 - Payments: `payments`, `payment_methods`
 - Rewards: `reward_points`
+- Assistant: `rag_documents` (one row per product: content hash, `indexed`/`pending`,
+  retry attempts), `rag_chunks` (PRODUCT/SKU/REVIEW text + `vector(768)` embedding).
+  `product_id` is the nodeA `products.id`, logical only. No ANN index: retrieval is always
+  scoped to one product's <=100 chunks.
 
 ## ID convention
 
