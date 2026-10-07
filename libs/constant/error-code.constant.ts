@@ -95,6 +95,24 @@ export const ERROR_CODE = {
    * request already used a rate-limit slot, and the retry is the user's call.
    */
   ASSISTANT_UNAVAILABLE: "ASSISTANT_UNAVAILABLE",
+  /**
+   * `POST /api/cart` (CART-STOCK-01): a 409 because the product or the chosen
+   * SKU is deactivated. Nothing was added. The client should show the item as
+   * unavailable and must not retry.
+   */
+  PRODUCT_INACTIVE: "PRODUCT_INACTIVE",
+  /**
+   * `POST /api/cart` (CART-STOCK-01): a 409 because inventory has no stock left
+   * for this product / SKU (or no inventory row at all). Nothing was added.
+   */
+  OUT_OF_STOCK: "OUT_OF_STOCK",
+  /**
+   * `POST /api/cart` (CART-STOCK-01): a 409 because the quantity already in the
+   * cart line plus the requested quantity is more than the available stock.
+   * Nothing was added; the message names both numbers, and the client may
+   * offer to add up to the remainder.
+   */
+  QUANTITY_EXCEEDS_STOCK: "QUANTITY_EXCEEDS_STOCK",
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODE)[keyof typeof ERROR_CODE];

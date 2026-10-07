@@ -282,6 +282,14 @@ export const ORDER_MESSAGE = {
   CART_ITEM_NOT_FOUND: "Cart item not found",
   CART_LINE_QUANTITY_EXCEEDED: (max: number): string =>
     `A cart line cannot hold more than ${max} units`,
+  CART_PRODUCT_INACTIVE: "This product is no longer available",
+  CART_OUT_OF_STOCK: "This product is out of stock",
+  CART_QUANTITY_EXCEEDS_STOCK: (
+    inCart: number,
+    requested: number,
+    available: number,
+  ): string =>
+    `Only ${available} left in stock — the cart already holds ${inCart}, so ${requested} more cannot be added`,
   CANNOT_ACCESS_OTHERS_ORDERS: "You cannot access another user's orders",
   DUPLICATE_REQUEST_IN_PROGRESS:
     "A duplicate order request is already being processed",
