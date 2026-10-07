@@ -1,0 +1,32 @@
+name: Daily dependency audit
+
+# Runs the same blocking audit as CI every morning, so an advisory published
+# overnight turns this run red (and emails the owner) before the next push to
+# main is blocked by it. It only reads package-lock.json: no install, no deploy,
+# and it does not need the EC2 to be up.
+on:
+  schedule:
+    # 00:30 UTC = 07:30 VN, before the EC2 window opens (~08:00).
+    - cron: "30 0 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Audit production dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high

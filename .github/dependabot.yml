@@ -1,0 +1,24 @@
+# Dependabot security updates are enabled in the repository settings; this file
+# only shapes the PRs they open. Routine version bumps stay off
+# (open-pull-requests-limit: 0) — only a published advisory opens a PR.
+# Merging one deploys, so merge inside the EC2 window (~08:00–18:00 VN) or
+# re-run the Deploy workflow by hand once the box is up.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: daily
+      time: "07:00"
+      timezone: Asia/Ho_Chi_Minh
+    open-pull-requests-limit: 0
+    groups:
+      security-fixes:
+        applies-to: security-updates
+        patterns:
+          - "*"
+    commit-message:
+      prefix: chore(api)
+    labels:
+      - dependencies
+      - security

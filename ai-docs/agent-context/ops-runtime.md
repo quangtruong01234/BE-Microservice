@@ -195,9 +195,21 @@
   env values. No deploy, no Aiven, no migrations, no secrets. Audit split on
   purpose: `npm audit --omit=dev --audit-level=high` BLOCKS; the all-deps run is
   `continue-on-error` (the @nestjs/cli→@swc/cli→@xhmikosr build-tool chain is
-  permanently red). Two scoped `overrides` in `package.json` keep the blocking
-  gate green — `@nestjs/swagger`→`js-yaml 5.2.3`, `typeorm`→`brace-expansion
-  ^2.1.3` (drop an override once the parent ships a fixed pin).
+  permanently red). Three scoped `overrides` in `package.json` keep the blocking
+  gate green — `@nestjs/swagger`→`js-yaml ^5.4.3`, `@nestjs/platform-express`→
+  `proxy-addr ^2.0.8`, `typeorm`→`brace-expansion ^2.1.3` (drop an override
+  once the parent ships a fixed pin). The gate goes red with NO repo change
+  when an advisory is published against a locked version (2026-10-07: CI on
+  `a612495` failed, Deploy skipped). Two early warnings exist for that since
+  2026-10-07: `.github/workflows/audit.yml` runs the same blocking audit daily
+  at 07:30 VN (email on failure, also `workflow_dispatch`), and Dependabot
+  security updates (enabled in repo settings; `.github/dependabot.yml` keeps
+  version bumps off and groups fixes into one `chore(api)` PR). A Dependabot
+  fix needing an `overrides` entry cannot be opened by the bot — the daily
+  audit is the signal then. Merging a Dependabot PR deploys: do it inside the
+  EC2 window, or re-run Deploy by hand after the box is up.
+  Fixing locally: plain `npm audit fix`, never `--omit=dev` (it prunes every
+  devDependency out of `node_modules`).
 - **CD** (`.github/workflows/deploy.yml`, shipped 2026-08-03, **first successful
   production run 2026-08-06**, sha `19309f6`):
   SSHes into the EC2 and repeats the proven manual sequence — `git reset --hard
