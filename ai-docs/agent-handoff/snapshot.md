@@ -171,9 +171,7 @@ The one standing instruction:
 
 ### Audit backlog (SWEEP-1002, `/sweep audit` 2026-10-02 — recorded, not fixed)
 
-All seven items are closed and on prod (Deploy 37301536206, 2026-10-05). The
-one leftover (deleting the single `INVENTORY_RESERVE_STOCK` handler) is now
-tracked under SWEEP-1005 below.
+All seven items are closed and on prod (Deploy 37301536206, 2026-10-05).
 
 - ~~SWEEP-1002-01 — a timed-out checkout released its Idempotency-Key~~ →
   **DONE 2026-10-02** (local), see CHANGELOG. Deployed 2026-10-02. Class B.
@@ -192,10 +190,7 @@ tracked under SWEEP-1005 below.
   **DONE 2026-10-03** (local), see CHANGELOG. Class A, no migration, nodeA
   and nodeB both change (deployed together 2026-10-05). Prod RTT measured at
   ~100 ms, so a 20-line cart outran the 10s budget. It is now one
-  all-or-nothing `INVENTORY_RESERVE_STOCK_MANY` per seller. Owed now that it
-  is deployed: delete the single `INVENTORY_RESERVE_STOCK` handler, which was
-  kept one release for rollback and is flagged by `check:conventions` as an
-  orphan.
+  all-or-nothing `INVENTORY_RESERVE_STOCK_MANY` per seller.
 - ~~SWEEP-1002-06 — a WS `send_message`/`join` without `conversationId`
   landed in the FIRST conversation~~ → **DONE 2026-10-02** (local), see
   CHANGELOG. Class A. Deployed 2026-10-05.
@@ -208,10 +203,8 @@ tracked under SWEEP-1005 below.
 ### Audit backlog (SWEEP-1005, `/sweep audit` 2026-10-05 — recorded, not fixed)
 
 All four fixed 2026-10-05, see CHANGELOG; deployed together (nodeA + nodeB)
-by Deploy run 37351597811 on 2026-10-05. Owed now: delete the
-orphaned single `INVENTORY_RESERVE_STOCK`, `INVENTORY_RELEASE_STOCK` and
-`INVENTORY_CONSUME_RESERVED_STOCK` handlers (`check:conventions` flags all
-three); this supersedes the SWEEP-1002-05 leftover.
+by Deploy run 37351597811 on 2026-10-05. The orphaned single-line inventory
+handlers were deleted 2026-10-08 (local, not pushed), see CHANGELOG.
 
 - ~~SWEEP-1005-01 — a failed release on cancel skipped the voucher, GHN and
   `order_canceled` legs~~ → **DONE 2026-10-05**, see CHANGELOG. Class A.
@@ -280,6 +273,8 @@ pick one up. Do not re-derive them:
 - EXPORT-CSV-01 — The seller CSV export is one row per ORDER ITEM, and the four order-level money columns are written on each order's first row only so a column SUM does not double-count.
 - EXPORT-TZ-01 — Order timestamps and every from/to day window are Vietnam wall-clock computed in code, because the server TZ is UTC on prod and UTC+7 on dev — do NOT "fix" a zone bug by setting TZ or the connection timezone.
 - CART-UNIQ-01 — carts.user_id and cart_items (cart_id, product_id, COALESCE(sku_id,0)) are UNIQUE, so a racing add re-reads the winning cart or atomically increments the winning line; a line holds an integer 1..999 (a summed add past 999 is a 400, racing adds can overshoot by one request); skuId 0 means no SKU, and a concurrent remove-last-item can still drop an add.
+- CART-STOCK-01 — POST /api/cart answers 409 PRODUCT_INACTIVE for a deactivated product or SKU, OUT_OF_STOCK when inventory has 0 available (or no row), and QUANTITY_EXCEEDS_STOCK when the units already in that line plus the request exceed available stock; the check is gateway-only and fails OPEN on a cart-read or inventory error, PATCH /api/cart/items/:id is NOT checked, and checkout's reserve stays the real gate.
+- CHECKOUT-INACTIVE-01 — Checkout, voucher/validate and vouchers/available answer 400 "Product <id> is not available" for a line whose product is deactivated even when its SKU is still active, checked before the SKU's own checks, so one such line fails the whole basket (no errorCode, the cart keeps the line).
 - ORDER-TIMELINE-01 — GET /api/order/:id/history (owner or admin, a seller is a 403) merges placed, paid, local status changes and successful GHN webhook/sync rows oldest first; status changes exist only from 2026-10-02, are recorded best-effort after the write (a failed insert drops that event, never the transition), and consecutive identical GHN statuses collapse to one.
 - RETURN-PHOTO-01 — A return request takes up to 5 unique jpg/png/webp URLs from the trybuy/returns Cloudinary folder whose leaf starts with the caller's id (403 MEDIA_NOT_OWNED otherwise, before any TCP call), and a 400 carries errorCode RETURN_PHOTO_INVALID only when imageUrls is the sole failing field; orders stores none as NULL and every read emits imageUrls as an array ([] for legacy rows); the URLs are not checked to exist, are fixed once created, and are never deleted from Cloudinary.
 - IDEM-HOLD-01 — POST /api/order releases its Idempotency-Key only on a definite 4xx other than 408; a 408, a 5xx or a transport failure re-holds the key as in-progress for 300s, so a same-key retry inside that window is a 409 with errorCode ORDER_REQUEST_IN_PROGRESS even when no order was created, and the result is never replayed for an order that committed after the gateway gave up.

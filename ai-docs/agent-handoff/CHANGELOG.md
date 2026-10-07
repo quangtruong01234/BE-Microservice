@@ -6,6 +6,79 @@
 
 ## Completed Milestones
 
+- **CHECKOUT-INACTIVE-01 — a deactivated product could be ordered through an
+  active SKU (2026-10-08). Release class B, gateway only, no migration.**
+  Found during CART-STOCK-01. `OrderService.enrichOrderItems`
+  (`apps/gateway/src/order/order.service.ts`) checked `product.isActive`
+  only in its no-SKU branch, so an SKU line of a deactivated product priced
+  and ordered at 201. The SKU branch now throws the same 400
+  `Product <id> is not available` before the SKU checks. The helper is shared,
+  so `voucher/validate` and `vouchers/available` answer that 400 for such a
+  basket too. Class B, not C: it is the 400 shape the no-SKU branch and an
+  inactive SKU already produce, and the storefront shows any create 400 as the
+  form's root error (`CheckoutPage.tsx`, `checkoutSubmitErrorMessage`), so
+  no FE change is needed. KB: CHECKOUT-INACTIVE-01.
+  - Unit (`order.service.spec.ts`, "checkout product availability"): the
+    deactivated-product test was red first (the order reached
+    `CREATE_ORDER`), then green. A guard test asserts that an active product
+    with an active SKU still creates the order. Gateway order and cart specs:
+    4 suites / 38 tests passed. `tsc` clean.
+  - Runtime, local (DEV Aiven), product `prod_ffc802c681d211f1` SKU 23,
+    deactivated by its owner through `PATCH /api/products/:id`:
+    `POST /api/order` → 400 `Product prod_ffc802c681d211f1 is not available`;
+    `POST /api/order/vouchers/available` → the same 400. Reactivated → order
+    201 (`ord_C1lvplN50P2Vs97d`, then canceled 200), and available → 201.
+    The product was left active.
+
+- **SWEEP-1005 leftover — orphaned single-line inventory handlers deleted
+  (2026-10-08, `/sweep 2`). Release class A, nodeB only, no migration.** The
+  `INVENTORY_RESERVE_STOCK`, `INVENTORY_RELEASE_STOCK` and
+  `INVENTORY_CONSUME_RESERVED_STOCK` `@MessagePattern` handlers in
+  `apps/inventory/src/inventory.controller.ts` and their three pattern
+  constants are gone. They had no sender since SWEEP-1002-05 / SWEEP-1005-02
+  (both deployed 2026-10-05) and had been kept one release for rollback. The
+  `InventoryService.reserveStock/releaseStock/consumeReservedStock` methods
+  stay: the ledger specs (idempotent reserve/release, restock after consume)
+  drive them directly. Rollback note: nodeA from before SWEEP-1005 now needs
+  nodeB rolled back with it (CANCEL-RELEASE-01 updated).
+  - No new unit test: a deletion has no behaviour to pin. The red → green
+    signal is `check:conventions`, which flagged the three as orphan handlers
+    and now reports 0 warnings. `tsc` clean. Scoped jest for inventory,
+    orders and the gateway cart: 12 suites / 234 tests passed.
+  - Runtime, local, on the restarted inventory: a 1-unit COD checkout of a
+    simple product moved available stock 5 → 4 (`RESERVE_STOCK_MANY`), and
+    canceling it brought it back to 5 (`RELEASE_STOCK_MANY`).
+
+- **CAPTCHA-01 FE status entry closed (2026-10-08, confirm-only, no code).**
+  Enforce on prod is intentional (step 2 above, 2026-10-06). The FE's
+  "broken since `1ddcb97`, 2026-10-05" timeline does not hold: that commit is
+  docs only, and the guard is off until `TURNSTILE_SECRET_KEY` is set, which
+  first happened on 2026-10-06. Counting the enforced 400s would need the prod
+  gateway log; not done.
+
+- **CART-STOCK-01 — add-to-cart refuses inactive and out-of-stock lines
+  (2026-10-08, `/sweep 2`, from `backend-handoff.md`). Release class B, no
+  migration, gateway only.** Residuals: `known-behaviors.md` → CART-STOCK-01.
+  - `POST /api/cart` now answers 409 with an `errorCode` and adds nothing:
+    `PRODUCT_INACTIVE` (product or SKU `isActive: false`), `OUT_OF_STOCK`
+    (inventory `availableStock <= 0`, including no inventory row) and
+    `QUANTITY_EXCEEDS_STOCK` (units already in that exact line + the request
+    > available; the message names in-cart, requested and available).
+  - `CartGatewayService` gained the inventory TCP client; the existing line
+    quantity comes from `CART_GET` started in parallel with the SKU fetch,
+    then one `INVENTORY_CHECK_STOCK` (READ timeout). Both legs fail open with
+    a warn — checkout's reserve stays the authoritative gate. `PATCH
+    /api/cart/items/:id` is deliberately unchecked.
+  - Unit: `apps/gateway/src/cart/cart.service.spec.ts` (new, 8 tests; red 6 →
+    green 8). Runtime on local: inactive → 409 PRODUCT_INACTIVE; avail 0 → 409
+    OUT_OF_STOCK; avail 5: +3 → 201, +3 → 409 QUANTITY_EXCEEDS_STOCK "Only 5
+    left in stock — the cart already holds 3, so 3 more cannot be added", +2 →
+    201; an un-stocked SKU → 409 OUT_OF_STOCK; a stocked SKU → 201. The test
+    cart was restored afterwards.
+  - Found on the way, NOT fixed (recorded in snapshot): checkout's SKU branch
+    never checks `product.isActive`, so an existing cart line of a
+    deactivated product with active SKUs can still be ordered.
+
 - **F16 PRODUCT-QA-01 — grounded product Q&A (2026-10-07, two-session mode,
   branch `feat/PRODUCT-QA-01-be`). Release class B; 1 nodeB migration.** Spec
   and agreed contract: `ai-docs/specs/PRODUCT-QA-01/`. Residuals:

@@ -2491,6 +2491,74 @@ one line, quantity 8.
 - **The merge does not clamp to stock.** A merged line can exceed available
   stock; checkout's stock check is what refuses it, as for any over-sized line.
 
+## Add-to-cart refuses what inventory cannot cover — best-effort, add only (CART-STOCK-01, 2026-10-08)
+<!-- kb: id=CART-STOCK-01; group=orders; files=apps/gateway/src/cart/cart.service.ts; sha=f00de26b9b3b; verified=local:2026-10-08; keys=add to cart,addItem,POST /api/cart,PRODUCT_INACTIVE,OUT_OF_STOCK,QUANTITY_EXCEEDS_STOCK,assertLineInStock,findQuantityInCart,INVENTORY_CHECK_STOCK,inactive product,out of stock,reorder,buy now,hết hàng,het hang,tồn kho,ton kho,thêm vào giỏ,them vao gio,mua lại,mua lai,mua ngay,ngừng bán,ngung ban; summary=POST /api/cart answers 409 PRODUCT_INACTIVE for a deactivated product or SKU, OUT_OF_STOCK when inventory has 0 available (or no row), and QUANTITY_EXCEEDS_STOCK when the units already in that line plus the request exceed available stock; the check is gateway-only and fails OPEN on a cart-read or inventory error, PATCH /api/cart/items/:id is NOT checked, and checkout's reserve stays the real gate. -->
+
+Before this, `POST /api/cart` only validated that the product/SKU existed and
+had a price, so a deactivated or sold-out item landed in the cart and failed
+only at checkout (FE report: reorder and "Mua ngay" went through to a dead
+checkout). `CartGatewayService.addItem` now, after the existing 404/400
+checks and before `CART_ADD_ITEM`:
+
+- **`product.isActive === false` or `sku.isActive === false`** → 409
+  `PRODUCT_INACTIVE`, message `This product is no longer available`. One code
+  for both — the client action (mark the item unavailable) is the same.
+- **`INVENTORY_CHECK_STOCK`** (READ timeout, `skuId` sent only for a SKU line)
+  with `quantity = units already in this exact line + dto.quantity`. "This
+  exact line" is the orders-side key: same internal `productId` and the same
+  `skuId`-or-null (`skuId: 0` is "no SKU", as in CART-UNIQ-01). The existing
+  quantity comes from `CART_GET`, started in parallel with the SKU fetch.
+  - `availableStock <= 0` → 409 `OUT_OF_STOCK`. Inventory answers
+    `availableStock: 0` when the product/SKU has **no inventory row**, so a
+    SKU never stocked in inventory reads as out of stock — the same verdict
+    checkout's `assertStockAvailable` gives it.
+  - `availableStock < line total` → 409 `QUANTITY_EXCEEDS_STOCK`, message
+    `Only <available> left in stock — the cart already holds <inCart>, so
+    <requested> more cannot be added`. The numbers are in the message only:
+    `HttpExceptionFilter` always emits `data: null`.
+
+All three are emitted from the gateway as `ConflictException({ message,
+errorCode })`, so they survive like ORDER_REQUEST_IN_PROGRESS does. Nothing is
+written on a 409.
+
+**Residuals:**
+- **Fails OPEN.** A `CART_GET` failure counts the line as 0 (the request is
+  checked alone); an inventory timeout/outage/any error skips the check and
+  adds unchecked, logged as a warn. This gate only spares the user a dead-end
+  line — checkout's reserve is still the authority and is unchanged.
+- **Check-then-write, not a reservation.** Two racing adds, or stock sold
+  between the add and checkout, can still leave a line above stock. Expected.
+- **Only the add is gated.** `PATCH /api/cart/items/:id` sets a quantity with
+  no stock check, and lines added before 2026-10-08 are not re-validated —
+  checkout refuses both as before.
+- **The authority is inventory, not `products.stock_quantity`** (STOCK-SYNC-01
+  mirror) and not `product_skus.stock_quantity` — the latter is what checkout's
+  SKU branch compares, so for a SKU whose two numbers drift the cart and that
+  pre-check can disagree; the reserve (inventory) decides.
+- **Each add costs one inventory round trip plus one cart read** (parallel to
+  the SKU fetch) — measured locally at well under the 5s READ budget.
+
+## A deactivated product is not orderable through an active SKU (CHECKOUT-INACTIVE-01, 2026-10-08)
+<!-- kb: id=CHECKOUT-INACTIVE-01; group=orders; files=apps/gateway/src/order/order.service.ts; sha=cb5a7fca0eb5; verified=local:2026-10-08; keys=enrichOrderItems,NOT_AVAILABLE,is not available,inactive product,deactivated product,SKU of inactive product,checkout 400,voucher/validate,vouchers/available,ngừng bán,ngung ban,sản phẩm ngừng bán,san pham ngung ban,đặt hàng,dat hang,thanh toán,thanh toan; summary=Checkout, voucher/validate and vouchers/available answer 400 "Product <id> is not available" for a line whose product is deactivated even when its SKU is still active, checked before the SKU's own checks, so one such line fails the whole basket (no errorCode, the cart keeps the line). -->
+
+`OrderService.enrichOrderItems` checked `product.isActive` only in its no-SKU
+branch, so a cart line of a deactivated product whose SKUs were still active
+priced and ordered normally (201). The SKU branch now throws the same
+`BadRequestException(PRODUCT_MESSAGE.NOT_AVAILABLE(productId))`, before
+`SKU_NOT_AVAILABLE`, `SKU_NOT_OF_PRODUCT` and the SKU stock check.
+
+**Residuals:**
+- **Three routes share the helper:** `POST /api/order`,
+  `POST /api/order/voucher/validate` and `POST /api/order/vouchers/available`.
+  A basket holding such a line is a 400 on all three, the same as an inactive
+  no-SKU product or an inactive SKU already was. The voucher panel does not
+  skip the line: the whole call fails.
+- **A plain 400 with no errorCode**, like the other per-line checkout 400s. The
+  message names the public product id.
+- **The cart is not cleaned.** A line added before CART-STOCK-01, or one whose
+  product was deactivated after the add, stays in the cart until the buyer
+  removes it.
+
 ## Captcha on register / forgot-password is env-driven and fails open (CAPTCHA-01, 2026-09-28)
 <!-- kb: id=CAPTCHA-01; group=auth; files=apps/gateway/src/common/guards/captcha.guard.ts; sha=f2f3f6047cff; verified=prod:2026-10-06; keys=captcha,captchaToken,turnstile,CAPTCHA_REQUIRED,CAPTCHA_ENFORCE,TURNSTILE_SECRET_KEY,siteverify,shadow mode,bot register,mã xác thực,chống bot,đăng ký hàng loạt; summary=Turnstile on register and forgot-password has three env postures (off / shadow / enforce); only enforce ever rejects, with a 400 CAPTCHA_REQUIRED, and a siteverify outage or a secret Cloudflare rejects fails OPEN. -->
 
@@ -2841,10 +2909,12 @@ retry was a 400 CANNOT_CANCEL, so nothing ever finished the job.
 - **The return restock is still one call per line**, but fanned out in
   parallel with the WRITE timeout (`restockReturnedItem`); it keeps its own
   `inventory.restock_returned` pattern (RETURN-STOCK-01).
-- **The single-line handlers** (`INVENTORY_RELEASE_STOCK`,
+- **The single-line handlers are gone** (`INVENTORY_RELEASE_STOCK`,
   `INVENTORY_CONSUME_RESERVED_STOCK`, plus `INVENTORY_RESERVE_STOCK` from
-  SWEEP-1002-05) have no caller and are kept one release for rollback;
-  `check:conventions` flags them as orphans until they are deleted.
+  SWEEP-1002-05): kept one release for rollback, then deleted with their
+  pattern constants on 2026-10-08. Rolling nodeA back to before SWEEP-1005
+  (per-line calls) now needs nodeB rolled back with it. The `InventoryService` single-line methods remain
+  as the ledger primitives the unit specs drive; nothing calls them over TCP.
 - **nodeA and nodeB deploy together**: a new orders against an old inventory
   sends patterns nobody handles, every line counts as failed, and only the
   consumer (old, per-line) releases.
