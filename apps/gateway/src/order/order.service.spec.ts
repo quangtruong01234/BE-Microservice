@@ -364,6 +364,71 @@ describe("OrderService access control", () => {
     });
   });
 
+  // CHECKOUT-INACTIVE-01: a deactivated product cannot be ordered through
+  // one of its still-active SKUs.
+  describe("checkout product availability", () => {
+    const skuDto = {
+      paymentMethod: PaymentMethod.COD,
+      shippingAddress: "address",
+      items: [
+        {
+          productId: "prod_1111111111111111",
+          productName: "Product 1",
+          skuId: 7,
+          quantity: 1,
+        },
+      ],
+    };
+
+    const stubProductAndSku = (isProductActive: boolean): void => {
+      productClient.send.mockImplementation((pattern: string) => {
+        if (pattern === PRODUCT_MESSAGE_PATTERNS.PRODUCT_FIND_BY_ID) {
+          return of({
+            id: 1,
+            userId: 20,
+            price: null,
+            isActive: isProductActive,
+          });
+        }
+        if (pattern === PRODUCT_MESSAGE_PATTERNS.SKU_FIND_BY_ID) {
+          return of({
+            id: 7,
+            productId: 1,
+            price: 100,
+            stockQuantity: 5,
+            tierIdx: [0],
+            isActive: true,
+          });
+        }
+        return throwError(() => new Error(`Unexpected pattern: ${pattern}`));
+      });
+    };
+
+    it("rejects an active SKU of a deactivated product with 400", async () => {
+      stubProductAndSku(false);
+
+      await expect(service.createOrder(18, skuDto)).rejects.toMatchObject({
+        status: 400,
+        message: "Product prod_1111111111111111 is not available",
+      });
+      expect(ordersClient.send).not.toHaveBeenCalled();
+    });
+
+    it("still creates the order for an active SKU of an active product", async () => {
+      stubProductAndSku(true);
+      ordersClient.send.mockReturnValue(of({ id: 55, userId: 18 }));
+      userClient.send.mockReturnValue(of([]));
+
+      await service.createOrder(18, skuDto);
+      expect(ordersClient.send).toHaveBeenCalledWith(
+        ORDER_MESSAGE_PATTERN.CREATE_ORDER,
+        expect.objectContaining({
+          items: [expect.objectContaining({ skuId: 7, price: 100 })],
+        }),
+      );
+    });
+  });
+
   describe("analytics product ids (PRODTEST-0806 #4)", () => {
     const analytics = {
       from: "2026-08-01",

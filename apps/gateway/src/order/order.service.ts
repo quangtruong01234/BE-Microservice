@@ -299,6 +299,13 @@ export class OrderService {
             skuPromise,
             fetchProduct(item.productId),
           ]);
+          // CHECKOUT-INACTIVE-01: an active SKU does not make a deactivated
+          // product orderable — same 400 as the no-SKU branch below.
+          if (!product.isActive) {
+            throw new BadRequestException(
+              PRODUCT_MESSAGE.NOT_AVAILABLE(item.productId),
+            );
+          }
           if (!sku.isActive) {
             throw new BadRequestException(
               PRODUCT_MESSAGE.SKU_NOT_AVAILABLE(item.skuId),
