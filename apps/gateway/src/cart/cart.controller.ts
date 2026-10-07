@@ -31,6 +31,11 @@ export class CartController {
   @Post()
   @ApiOperation({ summary: "Add item to cart" })
   @ApiResponse({ status: 201, description: "Cart with updated items" })
+  @ApiResponse({
+    status: 409,
+    description:
+      "Nothing added. errorCode PRODUCT_INACTIVE (product or SKU deactivated), OUT_OF_STOCK (no available stock) or QUANTITY_EXCEEDS_STOCK (units already in the line + quantity > available stock; the message names both numbers). A failed stock check is skipped, not a 409 — checkout still re-checks.",
+  })
   async addItem(
     @Req() req: Request,
     @Body() dto: AddToCartDto,

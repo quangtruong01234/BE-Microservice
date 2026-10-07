@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { ConflictException, Injectable, Logger } from "@nestjs/common";
 import { ClientProxy } from "@nestjs/microservices";
 import { Inject } from "@nestjs/common";
 import { firstValueFrom, timeout, catchError } from "rxjs";
@@ -8,11 +8,21 @@ import {
   USER_MESSAGE_PATTERN,
 } from "libs/constant/message-pattern.constant";
 import { PRODUCT_MESSAGE_PATTERNS } from "libs/constant/message-pattern-product.constant";
-import { PRODUCT_MESSAGE } from "libs/constant/response-message.constant";
+import { INVENTORY_MESSAGE_PATTERNS } from "libs/constant/message-pattern-inventory.constant";
+import {
+  ORDER_MESSAGE,
+  PRODUCT_MESSAGE,
+} from "libs/constant/response-message.constant";
+import { ERROR_CODE } from "libs/constant/error-code.constant";
 import { MicroserviceErrorHandler } from "../common/exception/microservice-error.handler";
 import { retryOnTransportError } from "../common/exception/transport-error";
 import { AddToCartDto } from "./dto/cart.dto";
-import { ProductResponse, ProductSkuResponse } from "./cart.types";
+import {
+  CartResponse,
+  ProductResponse,
+  ProductSkuResponse,
+  StockCheckResponse,
+} from "./cart.types";
 import { TCP_TIMEOUT_MS } from "libs/constant/tcp-timeout.constant";
 
 @Injectable()
@@ -26,6 +36,8 @@ export class CartGatewayService {
     private readonly productClient: ClientProxy,
     @Inject(NAME_SERVICE_TCP.USER_SERVICE)
     private readonly userClient: ClientProxy,
+    @Inject(NAME_SERVICE_TCP.INVENTORY_SERVICE)
+    private readonly inventoryClient: ClientProxy,
   ) {}
 
   private async exposeUserIds(value: unknown): Promise<unknown> {
@@ -124,6 +136,93 @@ export class CartGatewayService {
     return this.exposeUserIds(expose(value));
   }
 
+  private throwCartConflict(message: string, errorCode: string): never {
+    throw new ConflictException({ message, errorCode });
+  }
+
+  /**
+   * Units of this exact line (product + SKU-or-none) already in the cart, so
+   * the stock gate checks what the line will hold, not the request alone.
+   * Fails open to 0: the add itself still runs, and checkout re-checks stock.
+   */
+  private async findQuantityInCart(
+    userId: number,
+    productId: number,
+    skuId: number | null,
+  ): Promise<number> {
+    try {
+      const cart = await firstValueFrom(
+        this.ordersClient
+          .send<CartResponse>(CART_MESSAGE_PATTERN.CART_GET, { userId })
+          .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
+      );
+      const line = cart?.items?.find(
+        (item) =>
+          Number(item.productId) === productId &&
+          (Number(item.skuId) || null) === skuId,
+      );
+      return line ? Number(line.quantity) : 0;
+    } catch (error: unknown) {
+      this.logger.warn(
+        `Cart read failed before the stock gate — checking the request quantity alone: ${String(error)}`,
+      );
+      return 0;
+    }
+  }
+
+  /**
+   * CART-STOCK-01: refuse an add the authoritative inventory cannot cover,
+   * instead of letting checkout fail on it later. Fails OPEN on an inventory
+   * error — checkout's reserve is the real gate, this one only saves the user
+   * a dead-end cart line.
+   */
+  private async assertLineInStock(
+    productId: number,
+    skuId: number | null,
+    quantityInCart: number,
+    quantity: number,
+  ): Promise<void> {
+    const lineQuantity = quantityInCart + quantity;
+    let stock: StockCheckResponse;
+    try {
+      stock = await firstValueFrom(
+        this.inventoryClient
+          .send<StockCheckResponse>(
+            INVENTORY_MESSAGE_PATTERNS.INVENTORY_CHECK_STOCK,
+            {
+              productId,
+              quantity: lineQuantity,
+              ...(skuId !== null && { skuId }),
+            },
+          )
+          .pipe(timeout(TCP_TIMEOUT_MS.READ), retryOnTransportError()),
+      );
+    } catch (error: unknown) {
+      this.logger.warn(
+        `Inventory check failed for product ${productId} — adding to cart unchecked: ${String(error)}`,
+      );
+      return;
+    }
+
+    const availableStock = Number(stock?.availableStock ?? 0);
+    if (availableStock <= 0) {
+      this.throwCartConflict(
+        ORDER_MESSAGE.CART_OUT_OF_STOCK,
+        ERROR_CODE.OUT_OF_STOCK,
+      );
+    }
+    if (availableStock < lineQuantity) {
+      this.throwCartConflict(
+        ORDER_MESSAGE.CART_QUANTITY_EXCEEDS_STOCK(
+          quantityInCart,
+          quantity,
+          availableStock,
+        ),
+        ERROR_CODE.QUANTITY_EXCEEDS_STOCK,
+      );
+    }
+  }
+
   async addItem(userId: number, dto: AddToCartDto): Promise<unknown> {
     let skuTierIdx: string | null = null;
     const product = await firstValueFrom(
@@ -141,6 +240,19 @@ export class CartGatewayService {
         ),
     );
     const internalProductId = Number(product.id);
+    // Started now so the read overlaps the SKU fetch; it never rejects.
+    const quantityInCartPromise = this.findQuantityInCart(
+      userId,
+      internalProductId,
+      dto.skuId || null,
+    );
+
+    if (!product.isActive) {
+      this.throwCartConflict(
+        ORDER_MESSAGE.CART_PRODUCT_INACTIVE,
+        ERROR_CODE.PRODUCT_INACTIVE,
+      );
+    }
 
     if (dto.skuId) {
       const sku = await firstValueFrom(
@@ -169,6 +281,13 @@ export class CartGatewayService {
         );
       }
 
+      if (!sku.isActive) {
+        this.throwCartConflict(
+          ORDER_MESSAGE.CART_PRODUCT_INACTIVE,
+          ERROR_CODE.PRODUCT_INACTIVE,
+        );
+      }
+
       skuTierIdx = Array.isArray(sku.tierIdx)
         ? JSON.stringify(sku.tierIdx)
         : sku.tierIdx;
@@ -184,6 +303,13 @@ export class CartGatewayService {
         );
       }
     }
+
+    await this.assertLineInStock(
+      internalProductId,
+      dto.skuId || null,
+      await quantityInCartPromise,
+      dto.quantity,
+    );
 
     try {
       const cart = await firstValueFrom(
