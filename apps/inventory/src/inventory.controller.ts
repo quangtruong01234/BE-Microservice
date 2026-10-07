@@ -82,24 +82,6 @@ export class InventoryController {
     );
   }
 
-  @MessagePattern(INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK)
-  async reserveStock(data: {
-    productId: number;
-    quantity: number;
-    skuId?: number;
-    reservationKey?: string;
-  }): Promise<boolean> {
-    this.logger.log(
-      `[INVENTORY-TCP] Reserve stock for product ${data.productId}, quantity ${data.quantity}`,
-    );
-    return this.inventoryService.reserveStock(
-      data.productId,
-      data.quantity,
-      data.skuId,
-      data.reservationKey,
-    );
-  }
-
   @MessagePattern(INVENTORY_MESSAGE_PATTERNS.INVENTORY_RESERVE_STOCK_MANY)
   async reserveStockMany(data: {
     items: ReserveStockLine[];
@@ -110,42 +92,6 @@ export class InventoryController {
     );
     return this.inventoryService.reserveStockMany(
       data.items,
-      data.reservationKey,
-    );
-  }
-
-  @MessagePattern(INVENTORY_MESSAGE_PATTERNS.INVENTORY_RELEASE_STOCK)
-  async releaseStock(data: {
-    productId: number;
-    quantity: number;
-    skuId?: number;
-    reservationKey?: string;
-  }): Promise<boolean> {
-    this.logger.log(
-      `[INVENTORY-TCP] Release stock for product ${data.productId}, quantity ${data.quantity}`,
-    );
-    return this.inventoryService.releaseStock(
-      data.productId,
-      data.quantity,
-      data.skuId,
-      data.reservationKey,
-    );
-  }
-
-  @MessagePattern(INVENTORY_MESSAGE_PATTERNS.INVENTORY_CONSUME_RESERVED_STOCK)
-  async consumeReservedStock(data: {
-    productId: number;
-    quantity: number;
-    skuId?: number;
-    reservationKey?: string;
-  }): Promise<boolean> {
-    this.logger.log(
-      `[INVENTORY-TCP] Consume reserved stock for product ${data.productId}, quantity ${data.quantity}`,
-    );
-    return this.inventoryService.consumeReservedStock(
-      data.productId,
-      data.quantity,
-      data.skuId,
       data.reservationKey,
     );
   }
