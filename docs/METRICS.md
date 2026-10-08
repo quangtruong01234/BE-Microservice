@@ -9,6 +9,7 @@ bash scripts/metrics.sh          # code + API surface (fast, no side effects)
 bash scripts/metrics.sh --tests  # also runs the unit suite and counts it
 bash scripts/metrics.sh --loc    # also runs `npx cloc`
 bash scripts/metrics.sh --all    # everything (~2 min)
+npm run metrics:prod -- --from <UTC> --to <UTC>   # real prod traffic, from Grafana
 ```
 
 ---
@@ -190,3 +191,90 @@ infer it from the fact that a restore command ran.**
 orders. Without it, checkout still fires **exactly one** request to validate the
 contract — which on a production target means one real order in the production
 database. Expect it, and clean it up.
+
+---
+
+## Production traffic (Grafana)
+
+Real requests served by the production gateway, read back from Grafana Cloud,
+which scrapes the gateway's `/metrics` every 60 s. Window
+**2026-10-07 18:50 → 2026-10-08 12:10 UTC**. That covers the frontend team's
+all-route functional test on prod, in two sessions: 10-07 18:55–19:59 and
+10-08 09:10–12:04. The window spans builds `96e87ca` and then `a5c4448` (Deploy
+run 37770061942, 11:29 UTC), and three gateway boots.
+
+```bash
+npm run metrics:prod -- --from 2026-10-07T18:50:00Z --to 2026-10-08T12:10:00Z
+```
+
+| Metric | Value |
+|---|---:|
+| Requests served (probes excluded) | **1,944** |
+| Distinct routes exercised (method + route) | **123** of 170 |
+| 2xx | 1,843 (94.80%) |
+| 4xx | 101 (5.20%) |
+| **5xx** | **0** |
+| Latency p50 / p95 / p99 (all routes) | **66 ms / 423 ms / 1.16 s** |
+| Busiest minute | 70 req |
+| Gateway RSS, max | 151 MiB |
+| Gateway CPU, mean / max (cores) | 0.008 / 0.015 |
+| Event-loop lag p99, max | 12 ms |
+| Probe requests excluded (`/health`, `/live`, `/ready`) | 197 |
+
+Status codes: `200` 1,726 · `201` 114 · `204` 3 · `400` 11 · `401` 47 ·
+`403` 6 · `404` 36 · `409` 1. The 4xx come from the test exercising guards and
+validation:
+
+- `401`: a wrong password on `POST /api/user/login`, and `GET /api/user/me`
+  while logged out.
+- `403`: admin-only lists, and another user's order.
+- `404`: 28 unmatched paths, plus a few ids that no longer exist.
+- `400`: validation rejects.
+- `409`: one add-to-cart that went over stock.
+
+There is no 5xx anywhere in the window.
+
+Busiest and slowest routes (slowest = at least 5 requests, ranked by p95):
+
+| Busiest | Requests | p95 |
+|---|---:|---:|
+| `GET /api/user/me` | 200 | 49 ms |
+| `GET /api/cart` | 166 | 96 ms |
+| `GET /api/notifications` | 157 | 205 ms |
+| `GET /api/chat/conversations` | 154 | 98 ms |
+| `GET /api/notifications/unread-count` | 148 | 85 ms |
+
+| Slowest | Requests | p50 | p95 |
+|---|---:|---:|---:|
+| `POST /api/user/forgot-password` | 6 | 3.13 s | 4.81 s |
+| `POST /api/order/shipping-fee` | 11 | 1.15 s | 3.62 s |
+| `POST /api/order` | 6 | 1.38 s | 2.39 s |
+| `POST /api/products/risk/duplicate-check` | 5 | 875 ms | 2.31 s |
+| `GET /api/order/:id/payment-url` | 5 | 313 ms | 2.13 s |
+
+The slow tail is made of routes that wait on an outside system: GHN quotes the
+shipping fee and creates the waybill at checkout, and forgot-password sends
+mail. The session reads that every storefront page fires (`/me`, cart,
+notifications, chat) stay under 210 ms at p95.
+
+**Read these numbers for what they are:**
+
+- **Functional test traffic, not a load test.** Peak was 70 requests in one
+  minute and at most one request in flight at a time. For capacity, see
+  [Throughput](#throughput) above.
+- **Gateway only, one process.** Time spent inside each microservice is part of
+  the gateway's latency, not reported separately.
+- **The percentiles are approximate.** They are interpolated from histogram
+  buckets that run from 10 ms to 10 s. A route with only a few samples has a
+  p99 that is really its slowest request, so the per-route p99 column is left
+  out.
+- **Counts come from raw samples, not `increase()`.** The box is stopped every
+  night, so most series start inside the window, and `increase()` drops each
+  series' first sample. Over the 10-08 session (09:05–12:10), the
+  dashboard-style `increase()` gives 1,307 requests where the sample replay
+  gives 1,453. The replay matches an independent per-minute recount, and its
+  p50 and p95 (67 ms, 440 ms) agree with the dashboard's (65 ms, 410 ms). A
+  counter restart is
+  detected per scrape step from `process_start_time_seconds`. Before that fix,
+  the first step after the 11:29 deploy still held the old process's total,
+  and the script counted the whole earlier run twice (2,802 instead of 1,453).

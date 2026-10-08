@@ -6,6 +6,35 @@
 
 ## Completed Milestones
 
+- **PROD-METRICS-01 — real production traffic numbers from Grafana in
+  METRICS.md and the README (2026-10-08). Release class A, docs + a read-only
+  script, no service code.**
+  - Tool: `scripts/grafana-report.mjs` (`npm run metrics:prod -- --from
+    <UTC> --to <UTC>`). It reads the gateway's scraped `/metrics` history
+    from Grafana Cloud with the Viewer token in `../.agent-local/prod-endpoints.md`
+    and prints the markdown that METRICS.md quotes.
+  - Bug found before quoting: `counterDeltas` flagged a restart when a boot
+    fell between two steps, but the first step after a boot still resolves to
+    the OLD process's last scrape. The script then counted that stale
+    cumulative total as fresh, which counted the whole earlier run twice. Over
+    10-08 09:05–12:10 that gave 2,802 requests and a fake busiest minute of
+    1,349 at the 11:29 deploy. Fix: compare `process_start_time_seconds` at
+    the same step as each counter sample. The result is 1,453 requests and a
+    peak of 70/min, which matches an independent per-minute recount
+    (1,453). The latency buckets go through the same function, so the fix
+    covers them too.
+  - Cross-check against the `trybuy-gateway` dashboard queries over the same
+    session: `increase()` gives 1,307 (lower, as expected, because it drops
+    each new series' first sample). Its p50/p95 of 65/410 ms agree with the
+    script's 67/440 ms.
+  - Window, picked by the user: 2026-10-07 18:50 → 2026-10-08 12:10 UTC,
+    covering both FE test sessions. Builds `96e87ca` → `a5c4448`. Result:
+    1,944 requests over 123 routes, 0 5xx, p50/p95/p99 66 ms/423 ms/1.16 s,
+    151 MiB max RSS.
+  - No unit test: `scripts/*.mjs` has no test harness. The fix was verified
+    against raw Grafana samples instead. prettier, eslint, `check:conventions`
+    and the hostname/token `git grep` are clean.
+
 - **VNPAY-TMN-71-01 — VNPay sandbox code 71 diagnosed; the provider page no
   longer shows the internal order id (2026-10-08). Release class A, payments
   (nodeB) only, no migration.** From FE prod route test 7.1: every VNPay

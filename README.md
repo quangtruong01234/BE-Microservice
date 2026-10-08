@@ -391,6 +391,14 @@ changes go out alone, breaking ones are held until every repo is ready.
 free-tier infrastructure, not a 24/7 service. The storefront and console stay
 up, but outside that window they cannot load data.
 
+**Real production traffic.** Over the frontend's all-route functional test
+(2026-10-07/08), Grafana recorded the production gateway serving **1,944
+requests across 123 of its 170 routes, with zero 5xx**. Latency was p50 66 ms,
+p95 423 ms, p99 1.16 s, and the gateway peaked at 151 MiB RSS. This is test
+traffic, not load. The window, the caveats and the per-route breakdown are in
+[`docs/METRICS.md`](./docs/METRICS.md#production-traffic-grafana), and
+`npm run metrics:prod` regenerates them.
+
 ## How AI is used in this project
 
 This backend was built with an AI coding agent in the loop, and the repository

@@ -83,6 +83,12 @@ Order picked by the user: F8 → F9 first, then F10..F12.
   still owed under §Prod-owed.
 - [ ] **F17 RAG-EVAL-01** — offline retrieval/answer eval set for F16 (after F16).
 
+User ask 2026-10-08:
+
+- [x] **PROD-METRICS-01** → **DONE 2026-10-08**, see CHANGELOG. Prod traffic
+  numbers from Grafana are in `docs/METRICS.md` §Production traffic and
+  summarised in `README.md` §Deployment (`npm run metrics:prod`).
+
 ### Prod-owed
 
 - [ ] **VNPAY-TMN-71-01 — VNPay sandbox rejects our terminal (code 71), user
@@ -93,7 +99,8 @@ Order picked by the user: F8 → F9 first, then F10..F12.
   `VNP_TMN_CODE` + `VNP_HASH_SECRET` in the nodeB env on the box and in
   `local/nodeB/.env`; (3) `pm2 restart payments`; (4) place a NEW VNPay order
   (old rows keep URLs signed with the old code) and expect the VNPay card page,
-  not code 71 — this re-runs FE prod route test 7.1.
+  not code 71 — this re-runs FE prod route test 7.1. The `ord_` id in
+  `vnp_OrderInfo` is on prod since 2026-10-08 (Deploy run 37770061942).
 - [ ] **PRODUCT-QA-01 go-live (BE deployed 2026-10-07; FE follows).**
   1–2. DONE 2026-10-07: `GEMINI_API_KEY` is on the box, the CD migrate step
      applied `nodeB-20261007-001-add-rag-tables` (Deploy run 37603854117),

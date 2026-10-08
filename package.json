@@ -55,7 +55,8 @@
     "db:migrate:nodeB": "node scripts/migrate-database.mjs --target=nodeB --mode=apply",
     "db:migrate:status": "node scripts/migrate-database.mjs --mode=status",
     "db:migrate:dry-run": "node scripts/migrate-database.mjs --mode=dry-run",
-    "rag:backfill": "node scripts/rag-backfill.mjs"
+    "rag:backfill": "node scripts/rag-backfill.mjs",
+    "metrics:prod": "node scripts/grafana-report.mjs"
   },
   "dependencies": {
     "@nestjs/axios": "^4.0.1",
