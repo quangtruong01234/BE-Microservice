@@ -124,6 +124,7 @@ describe("PaymentsService payment return URLs", () => {
       total: 3900,
       returnUrl:
         "https://shop.example.com/payment-result?order=ord_abcdefghijklmnop&method=vnpay",
+      publicId: "ord_abcdefghijklmnop",
     });
   });
 
@@ -143,6 +144,7 @@ describe("PaymentsService payment return URLs", () => {
       id: "111",
       total: 3900,
       returnUrl: "https://shop.example.com/payment-result?method=vnpay",
+      publicId: null,
     });
   });
 
@@ -182,6 +184,7 @@ describe("PaymentsService payment return URLs", () => {
         total: 3900,
         returnUrl:
           "http://localhost:5173/payment-result?order=ord_abcdefghijklmnop&method=vnpay",
+        publicId: "ord_abcdefghijklmnop",
       });
     },
   );

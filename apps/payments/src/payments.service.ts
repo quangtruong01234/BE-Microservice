@@ -125,6 +125,7 @@ export class PaymentsService {
           paymentMethod,
           publicOrderId,
         ),
+        publicId: publicOrderId,
       });
     this.logger.log("[PAYMENTS] createPayment done, appTransId=" + appTransId);
 

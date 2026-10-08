@@ -6,7 +6,10 @@ import {
   ProductCode,
   ReturnQueryFromVNPay,
 } from "vnpay";
-import { IPaymentStrategy } from "../payment-strategy.interface";
+import {
+  IPaymentStrategy,
+  buildPaymentDescription,
+} from "../payment-strategy.interface";
 import { getVNPayConfig } from "./vnpay.config";
 import { PaymentOrder } from "../payment-strategy.interface";
 
@@ -38,7 +41,7 @@ export class VNPayStrategy implements IPaymentStrategy {
       vnp_Amount: order.total,
       vnp_IpAddr: "127.0.0.1",
       vnp_TxnRef,
-      vnp_OrderInfo: `Payment for order ${order.id}`,
+      vnp_OrderInfo: buildPaymentDescription(order),
       vnp_OrderType: ProductCode.Other,
       vnp_ReturnUrl: order.returnUrl ?? config.returnUrl,
       vnp_Locale: VnpLocale.VN,

@@ -5,6 +5,7 @@ import {
   IPaymentStrategy,
   PaymentOrder,
   CallbackPayload,
+  buildPaymentDescription,
 } from "../payment-strategy.interface";
 import { ZaloPayCreateOrderResponse } from "./zalopay.types";
 
@@ -20,7 +21,7 @@ export class ZaloPayService implements IPaymentStrategy {
     const result = await this.createOrder(
       String(order.id),
       order.total,
-      `Payment for order ${order.id}`,
+      buildPaymentDescription(order),
       appTransId,
       order.returnUrl,
     );
