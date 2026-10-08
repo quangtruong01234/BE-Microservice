@@ -6,6 +6,41 @@
 
 ## Completed Milestones
 
+- **VNPAY-TMN-71-01 — VNPay sandbox code 71 diagnosed; the provider page no
+  longer shows the internal order id (2026-10-08). Release class A, payments
+  (nodeB) only, no migration.** From FE prod route test 7.1: every VNPay
+  checkout ended on `Error.html?code=71`.
+  - Diagnosis: 71 is "website not approved" for the terminal. Both our
+    terminals get it — prod `C8XARG2R` and local `JQNZCA3V` — while a bogus
+    terminal code gets 72. 71 comes back with a wrong signature too, and
+    whatever `vnp_ReturnUrl` / Referer is sent, so it is decided before any
+    check our code influences. The fix is a sandbox re-registration plus new
+    `VNP_TMN_CODE` / `VNP_HASH_SECRET` — tracked as a user action in
+    snapshot §Prod-owed; the codes are documented in `ops-runtime.md`
+    §Payments.
+  - Code (the entry's side note): `vnp_OrderInfo` and the ZaloPay
+    `description` were `Payment for order <numeric PK>` (a PUBID-01 leak on
+    the hosted page). A new `buildPaymentDescription`
+    (`apps/payments/src/payment-strategy.interface.ts`) uses the `ord_` id,
+    which `issueGatewayPaymentUrl` (`payments.service.ts`) now passes as
+    `PaymentOrder.publicId`; a multi-order payment, which has no public id,
+    gets `Payment for TryBuy order`. Used by `vnpay.service.ts` and
+    `zalopay.service.ts`.
+  - Not changed: `vnp_IpAddr` stays `127.0.0.1` (the URL is built in the RMQ
+    consumer, so a real IP needs it threaded through `order_created` — a
+    multi-service change for a sandbox-only field); `vnp_TxnRef` still
+    embeds the PK because callback matching depends on it.
+  - Unit: two new `VNPayStrategy.createPayment` tests in
+    `vnpay.service.spec.ts` were red against the old code (received
+    `Payment for order 51`), then green. `payments.service.spec.ts`
+    expectations now include `publicId`. `npx jest apps/payments`: 5 suites /
+    32 tests passed. `tsc`, eslint and `check:conventions` clean.
+  - Runtime, local (DEV): a VNPay order `ord_8hDrFnSJqBuJAPIC` → 201;
+    `GET /api/order/:id/payment-url` → 200, the decoded URL carries
+    `vnp_OrderInfo=Payment for order ord_8hDrFnSJqBuJAPIC` and the
+    `payment-result?order=ord_…&method=vnpay` return URL. Opening it → 302
+    `Error.html?code=71`, the same as prod, which confirms the terminal is
+    the blocker. The test order was canceled (200).
 - **CHECKOUT-INACTIVE-01 — a deactivated product could be ordered through an
   active SKU (2026-10-08). Release class B, gateway only, no migration.**
   Found during CART-STOCK-01. `OrderService.enrichOrderItems`

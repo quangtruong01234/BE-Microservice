@@ -627,6 +627,22 @@ the seed script.
   fully unused (strategy chosen per-request from `paymentMethod`).
 - `VNPAY_IPN_URL` in `vnpay.config.ts` is dead code — VNPay reads the IPN URL
   from the merchant portal, never from the request.
+- **VNPay sandbox redirect codes** (learned 2026-10-08, VNPAY-TMN-71-01):
+  `Error.html?code=71` = "Website này chưa được phê duyệt" — the terminal
+  (`VNP_TMN_CODE`) exists but is not approved. It is checked BEFORE the
+  signature (a wrong hash still gives 71) and does not depend on
+  `vnp_ReturnUrl` or the Referer, so no code or domain change fixes it.
+  `code=72` = unknown terminal. Fix for 71: re-register at
+  `sandbox.vnpayment.vn/devreg` (or fix the terminal's website in the merchant
+  portal), set the new `VNP_TMN_CODE` + `VNP_HASH_SECRET` in the nodeB env,
+  restart payments, and test with a NEW order — a payment row stores its URL
+  already signed with the old terminal.
+- `vnp_IpAddr` is always `127.0.0.1`: the URL is built in the RMQ
+  `order_created` consumer, which has no request context. Sending the real
+  client IP would mean threading it gateway → orders → the event → payments.
+  `vnp_TxnRef` (`<epochMs><orderPk>`) still embeds the numeric PK, because
+  `verifyCallback` matches the payment by it; `vnp_OrderInfo` / the ZaloPay
+  `description` carry only the public `ord_` id (none for a multi-order payment).
 
 ## Feature ops contracts
 

@@ -85,6 +85,15 @@ Order picked by the user: F8 → F9 first, then F10..F12.
 
 ### Prod-owed
 
+- [ ] **VNPAY-TMN-71-01 — VNPay sandbox rejects our terminal (code 71), user
+  action.** Every VNPay checkout ends on `Error.html?code=71` ("website not
+  approved"), on prod (`C8XARG2R`) AND locally (`JQNZCA3V`). Not a code bug —
+  see `ops-runtime.md` §Payments. Steps: (1) re-register at
+  `sandbox.vnpayment.vn/devreg` (or get the terminal approved); (2) set the new
+  `VNP_TMN_CODE` + `VNP_HASH_SECRET` in the nodeB env on the box and in
+  `local/nodeB/.env`; (3) `pm2 restart payments`; (4) place a NEW VNPay order
+  (old rows keep URLs signed with the old code) and expect the VNPay card page,
+  not code 71 — this re-runs FE prod route test 7.1.
 - [ ] **PRODUCT-QA-01 go-live (BE deployed 2026-10-07; FE follows).**
   1–2. DONE 2026-10-07: `GEMINI_API_KEY` is on the box, the CD migrate step
      applied `nodeB-20261007-001-add-rag-tables` (Deploy run 37603854117),
